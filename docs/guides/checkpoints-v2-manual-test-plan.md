@@ -255,7 +255,9 @@ git ls-remote origin 'refs/entire/checkpoints/v2/*'
 
 Expected:
 - Session restored and resume command printed.
-- Checkpoint data resolves from v2 (`/full/current`).
+- Checkpoint data resolves from v2:
+  - metadata from `refs/entire/checkpoints/v2/main`
+  - transcript content from `refs/entire/checkpoints/v2/full/current`
 
 ### Scenario 2: Local missing, remote present (Core)
 
@@ -276,7 +278,8 @@ Run:
 1. Execute `entire resume <feature-branch>`.
 
 Expected:
-- Resume fetches required data and succeeds when remote data exists.
+- Resume fetches the required v2 refs from remote and succeeds when remote data exists.
+- Resume should not require pre-existing local `refs/entire/checkpoints/v2/*` refs.
 
 ### Scenario 3: v1 fallback (Optional)
 
@@ -303,7 +306,11 @@ Expected:
 - What it does: reads checkpoint transcript data and explains context.
 - Use it for: understanding what changed and why at a checkpoint.
 
-Note: compact transcript behavior is supported for `entire explain`; broader v2 behavior continues to evolve.
+Current v2 behavior to validate manually:
+- explain prefers v2 checkpoint data when both v1 and v2 exist
+- default explain can use compact transcript data from `/main`
+- explain can fetch missing checkpoint refs from remote
+- explain still falls back to v1 when the checkpoint exists only in v1
 
 ### Scenario 1: Compact transcript path (Core)
 
@@ -320,8 +327,23 @@ Run:
 
 Expected:
 - Explain uses compact transcript from v2 `/main`.
+- Intent/prompt text should reflect the compact transcript content, not v1 fallback content.
 
-### Scenario 2: v1 fallback (current compatibility, Optional)
+### Scenario 2: Prefer v2 over v1 when dual-write data exists (Core)
+
+Setup:
+1. Create a dual-write checkpoint with `checkpoints_v2=true`.
+2. Confirm the checkpoint exists on both v1 and v2.
+3. If you want to make preference obvious, temporarily alter only the v1 transcript for that checkpoint in a disposable clone so the prompt text differs from the v2 compact transcript.
+
+Run:
+1. Execute `entire explain <checkpoint-id-or-target>`.
+
+Expected:
+- Explain prefers v2 checkpoint data instead of v1 when both exist.
+- Output intent/prompt text matches the v2 compact transcript.
+
+### Scenario 3: v1 fallback when checkpoint exists only in v1 (Optional)
 
 Setup:
 1. Use branch/checkpoint where data exists only in v1.
@@ -332,10 +354,35 @@ Run:
 Expected:
 - Explain succeeds via v1 fallback.
 
+### Scenario 4: Fetch missing refs from remote (Core)
+
+Setup:
+1. Create a dual-write checkpoint with `checkpoints_v2=true` and `push_v2_refs=true`.
+2. Push checkpoint refs to `origin`.
+3. In a disposable clone, delete local v1 and v2 checkpoint refs.
+
+Run:
+1. Execute `entire explain --checkpoint <checkpoint-id>`.
+
+Expected:
+- Explain fetches missing checkpoint refs from remote and succeeds.
+- Output should contain the expected prompt/intent text from the checkpoint.
+
+### Automated coverage note
+
+The following are intentionally left to automated tests rather than this manual guide:
+- malformed or partially missing v2 refs
+- default explain behavior when `/full/current` is missing but `/main` still exists
+- v2-only listing after deleting v1 metadata
+- fetch-on-miss safety when local checkpoint refs are ahead of remote
+- corruption, race, and ref-reconciliation scenarios
+
 ### Pass checklist
 
 - [ ] Compact transcript path validated.
+- [ ] v2-preferred read path validated.
 - [ ] v1 fallback validated.
+- [ ] Remote fetch path validated.
 
 ---
 
