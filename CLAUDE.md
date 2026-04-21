@@ -132,6 +132,8 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 
 `testutil.InitRepo` configures `user.name`, `user.email`, and disables GPG signing — safe for CI environments without global git config.
 
+**Prefer `testutil.InitRepo()` over direct `git.PlainInit()` in tests.** When a test in this repo needs an initialized repository, use `testutil.InitRepo(t, dir)` unless the test specifically needs lower-level initialization behavior that the helper cannot provide. Do not call `git.PlainInit()` directly and then create commits or run CLI git operations without also reproducing the helper's repo-local config.
+
 **Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
 
 ### Linting and Formatting
@@ -140,9 +142,17 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 mise run fmt && mise run lint
 ```
 
+`mise run fmt` can rewrite files. Treat `mise run fmt && mise run lint` as a single verification sequence: if formatting changes anything, run lint again on the formatted tree rather than assuming a previous lint result still applies.
+
 ### Before Every Commit (REQUIRED)
 
 **CI will fail if you skip these steps:**
+
+```bash
+mise run check
+```
+
+Equivalent expanded form:
 
 ```bash
 mise run fmt      # Format code (CI enforces gofmt)
@@ -150,7 +160,9 @@ mise run lint     # Lint check (CI enforces golangci-lint)
 mise run test:ci  # Run all tests (unit + integration)
 ```
 
-Or combined: `mise run fmt && mise run lint && mise run test:ci`
+`mise run check` runs the three commands above.
+
+Safety note: do not treat a clean `mise run lint` result as final unless it was run after the most recent `mise run fmt` pass.
 
 **Common CI failures from skipping this:**
 
@@ -261,6 +273,7 @@ if settings.IsSummarizeEnabled() {
 ### Logging vs User Output
 
 - **Internal/debug logging**: Use `logging.Debug/Info/Warn/Error(ctx, msg, attrs...)` from `cmd/entire/cli/logging/`. Writes to `.entire/logs/`.
+- **Enabling debug/perf logs locally**: Prefer adding `"log_level": "DEBUG"` to `.entire/settings.local.json` when you need detailed hook/perf logs. This file is gitignored, so it is a low-risk local-only change. `ENTIRE_LOG_LEVEL=debug` also works and takes precedence.
 - **User-facing output**: Use `fmt.Fprint*(cmd.OutOrStdout(), ...)` or `cmd.ErrOrStderr()`.
 
 Don't use `fmt.Print*` for operational messages (checkpoint saves, hook invocations, strategy decisions) - those should use the `logging` package.
@@ -350,6 +363,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Worktree-specific branches** - each git worktree gets its own shadow branch namespace, preventing conflicts
 - **Supports multiple concurrent sessions** - checkpoints from different sessions in the same directory interleave on the same shadow branch
 - Condenses session logs to permanent `entire/checkpoints/v1` branch on user commits
+- Uses the `post-rewrite` Git hook to keep local session linkage aligned after amend/rebase rewrites
 - Builds git trees in-memory using go-git plumbing APIs
 - Rewind restores files from shadow branch commit tree (does not use `git reset`)
 - **Location-independent transcript resolution** - transcript paths are always computed dynamically from the current repo location (via `agent.GetSessionDir` + `agent.ResolveSessionFile`), never stored in checkpoint metadata. This ensures restore/rewind works after repo relocation or across machines.
@@ -373,7 +387,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - `manual_commit_rewind.go` - Rewind implementation: file restoration from checkpoint trees
 - `manual_commit_git.go` - Git operations: checkpoint commits, tree building
 - `manual_commit_logs.go` - Session log retrieval and session listing
-- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, pre-push)
+- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, post-rewrite, pre-push)
 - `manual_commit_reset.go` - Shadow branch reset/cleanup functionality
 - `session_state.go` - Package-level session state functions (`LoadSessionState`, `SaveSessionState`, `ListSessionStates`, `FindMostRecentSession`)
 - `hooks.go` - Git hook installation

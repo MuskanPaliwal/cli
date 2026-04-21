@@ -1,10 +1,15 @@
 package checkpoint
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
@@ -196,6 +201,7 @@ func storeTree(repo *git.Repository, entries []object.TreeEntry) (plumbing.Hash,
 // Unchanged subdirectories retain their hashes — this is the key optimization
 // over FlattenTree + BuildTreeFromEntries for sparse changes.
 func ApplyTreeChanges(
+	ctx context.Context,
 	repo *git.Repository,
 	rootTreeHash plumbing.Hash,
 	changes []TreeChange,
@@ -224,12 +230,19 @@ func ApplyTreeChanges(
 
 	for i := range changes {
 		c := changes[i]
-		first, rest := splitFirstSegment(c.Path)
+		normalizedPath, err := normalizeGitTreePath(c.Path)
+		if err != nil {
+			logInvalidGitTreePath(ctx, "apply tree change", c.Path, err)
+			continue
+		}
+
+		first, rest := splitFirstSegment(normalizedPath)
 		if grouped[first] == nil {
 			grouped[first] = &dirChanges{}
 		}
 		if rest == "" {
 			cc := c
+			cc.Path = normalizedPath
 			grouped[first].fileChange = &cc
 		} else {
 			grouped[first].subChanges = append(grouped[first].subChanges, TreeChange{
@@ -263,7 +276,7 @@ func ApplyTreeChanges(
 			if existing, ok := entryMap[name]; ok && existing.Mode == filemode.Dir {
 				existingHash = existing.Hash
 			}
-			newSubHash, err := ApplyTreeChanges(repo, existingHash, dc.subChanges)
+			newSubHash, err := ApplyTreeChanges(ctx, repo, existingHash, dc.subChanges)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("failed to apply changes in %s: %w", name, err)
 			}
@@ -317,6 +330,50 @@ func WalkCheckpointShards(repo *git.Repository, tree *object.Tree, fn func(cpID 
 		}
 	}
 	return nil
+}
+
+func normalizeGitTreePath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("path is empty")
+	}
+
+	path = filepath.ToSlash(path)
+	if isAbsoluteGitTreePath(path) {
+		return "", errors.New("path must be relative")
+	}
+
+	parts := strings.Split(path, "/")
+	for _, part := range parts {
+		if part == "" {
+			return "", errors.New("path contains empty segment")
+		}
+		if part == "." || part == ".." {
+			return "", fmt.Errorf("path contains invalid segment %q", part)
+		}
+	}
+
+	return path, nil
+}
+
+func isAbsoluteGitTreePath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+
+	if len(path) >= 3 && path[1] == ':' && path[2] == '/' {
+		drive := path[0]
+		return (drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')
+	}
+
+	return false
+}
+
+func logInvalidGitTreePath(ctx context.Context, operation, path string, err error) {
+	logging.Warn(ctx, "skipping invalid git tree path",
+		slog.String("operation", operation),
+		slog.String("path", path),
+		slog.String("error", err.Error()),
+	)
 }
 
 // splitFirstSegment splits "a/b/c" into ("a", "b/c"), and "file.txt" into ("file.txt", "").

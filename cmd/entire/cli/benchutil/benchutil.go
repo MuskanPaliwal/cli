@@ -22,6 +22,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -415,6 +416,8 @@ func (br *BenchRepo) SeedMetadataBranch(b *testing.B, checkpointCount int) {
 			MessageCount:    20,
 			AvgMessageBytes: 300,
 		})
+		// Benchmark transcript fixtures are controlled synthetic data.
+		redactedTranscript := redact.AlreadyRedacted(transcript)
 
 		files := make([]string, 0, 5)
 		for j := range 5 {
@@ -425,7 +428,7 @@ func (br *BenchRepo) SeedMetadataBranch(b *testing.B, checkpointCount int) {
 			CheckpointID:     cpID,
 			SessionID:        sessionID,
 			Strategy:         br.Strategy,
-			Transcript:       transcript,
+			Transcript:       redactedTranscript,
 			Prompts:          []string{fmt.Sprintf("Implement feature %d", i)},
 			FilesTouched:     files,
 			CheckpointsCount: 3,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -27,11 +28,13 @@ func init() {
 // ClaudeCodeAgent implements the Agent interface for Claude Code.
 //
 //nolint:revive // ClaudeCodeAgent is clearer than Agent in this context
-type ClaudeCodeAgent struct{}
+type ClaudeCodeAgent struct {
+	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
+}
 
 // NewClaudeCodeAgent creates a new Claude Code agent instance.
 func NewClaudeCodeAgent() agent.Agent {
-	return &ClaudeCodeAgent{}
+	return &ClaudeCodeAgent{CommandRunner: exec.CommandContext}
 }
 
 // Name returns the agent registry key.

@@ -83,6 +83,11 @@ func (m *mockFullAgent) GenerateText(context.Context, string, string) (string, e
 	return "", nil
 }
 
+// TranscriptCompactor
+func (m *mockFullAgent) CompactTranscript(context.Context, string) (*CompactedTranscript, error) {
+	return &CompactedTranscript{}, nil
+}
+
 // HookResponseWriter
 func (m *mockFullAgent) WriteHookResponse(string) error { return nil }
 
@@ -289,6 +294,36 @@ func TestAsHookResponseWriter(t *testing.T) {
 		t.Parallel()
 		ag := &mockFullAgent{caps: DeclaredCaps{HookResponseWriter: false}}
 		_, ok := AsHookResponseWriter(ag)
+		if ok {
+			t.Error("expected false")
+		}
+	})
+}
+
+func TestAsTranscriptCompactor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsTranscriptCompactor(&mockBaseAgent{})
+		if ok {
+			t.Error("expected false")
+		}
+	})
+
+	t.Run("declared true", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{CompactTranscript: true}}
+		tc, ok := AsTranscriptCompactor(ag)
+		if !ok || tc == nil {
+			t.Error("expected true")
+		}
+	})
+
+	t.Run("declared false", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{CompactTranscript: false}}
+		_, ok := AsTranscriptCompactor(ag)
 		if ok {
 			t.Error("expected false")
 		}

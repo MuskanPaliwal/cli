@@ -8,12 +8,14 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -211,8 +213,9 @@ type WriteCommittedOptions struct {
 	// Branch is the branch name where the checkpoint was created (empty if detached HEAD)
 	Branch string
 
-	// Transcript is the session transcript content (full.jsonl)
-	Transcript []byte
+	// Transcript is the session transcript content (full.jsonl).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains user prompts from the session
 	Prompts []string
@@ -272,6 +275,11 @@ type WriteCommittedOptions struct {
 	// CheckpointTranscriptStart is written to both CommittedMetadata.CheckpointTranscriptStart
 	// and the deprecated CommittedMetadata.TranscriptLinesAtStart for backward compatibility.
 
+	// CompactTranscriptStart is the transcript.jsonl line offset at checkpoint start.
+	// V2 /main writes this to checkpoint_transcript_start; v1 continues to use
+	// CheckpointTranscriptStart (full.jsonl).
+	CompactTranscriptStart int
+
 	// TokenUsage contains the token usage for this checkpoint
 	TokenUsage *agent.TokenUsage
 
@@ -281,6 +289,12 @@ type WriteCommittedOptions struct {
 	// InitialAttribution is line-level attribution calculated at commit time
 	// comparing checkpoint tree (agent work) to committed tree (may include human edits)
 	InitialAttribution *InitialAttribution
+
+	// PromptAttributionsJSON is the raw PromptAttributions data, JSON-encoded.
+	// Persisted for diagnostic purposes — shows exactly which prompt recorded
+	// which "user" lines, enabling root cause analysis of attribution bugs.
+	// Uses json.RawMessage to avoid importing session package.
+	PromptAttributionsJSON json.RawMessage
 
 	// Summary is an optional AI-generated summary for this checkpoint.
 	// This field may be nil when:
@@ -307,8 +321,9 @@ type UpdateCommittedOptions struct {
 	// SessionID identifies which session slot to update within the checkpoint
 	SessionID string
 
-	// Transcript is the full session transcript (replaces existing)
-	Transcript []byte
+	// Transcript is the full session transcript (replaces existing).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains all user prompts (replaces existing)
 	Prompts []string
@@ -319,6 +334,47 @@ type UpdateCommittedOptions struct {
 	// CompactTranscript is the updated Entire Transcript Format bytes.
 	// If non-nil, replaces the existing transcript.jsonl on v2 /main.
 	CompactTranscript []byte
+
+	// PrecomputedBlobs, if non-nil, provides chunk blob hashes and the
+	// content-hash blob hash computed once for this transcript. When set,
+	// UpdateCommitted skips the per-call ChunkTranscript + zlib work and
+	// reuses these hashes. Used by finalizeAllTurnCheckpoints to avoid
+	// re-compressing identical content N times.
+	PrecomputedBlobs *PrecomputedTranscriptBlobs
+}
+
+// PrecomputedTranscriptBlobs holds blob hashes for a transcript that was
+// chunked and written to the object store once, for reuse across multiple
+// UpdateCommitted calls sharing the same transcript content.
+//
+// Blob hashes are content-addressed (SHA-1 of chunk bytes), so the same
+// PrecomputedTranscriptBlobs works for both v1 (full.jsonl) and v2
+// (raw_transcript) paths — only the tree-entry filename differs.
+//
+// Callers should avoid constructing this for empty transcripts; agent.ChunkTranscript
+// would otherwise produce a single zero-length chunk and a hash for an empty
+// blob, which downstream stores would never reference.
+type PrecomputedTranscriptBlobs struct {
+	// ChunkHashes are the blob hashes for each transcript chunk, in order.
+	// Always non-empty when built via PrecomputeTranscriptBlobs (a non-empty
+	// transcript chunks to at least one entry; callers should skip precompute
+	// for empty transcripts).
+	ChunkHashes []plumbing.Hash
+
+	// ContentHashBlob is the blob hash of the "sha256:<hex>" content-hash
+	// string for the transcript.
+	ContentHashBlob plumbing.Hash
+
+	// ContentHash is the "sha256:<hex>" string itself, so the short-circuit
+	// path can compare without re-reading the blob.
+	ContentHash string
+}
+
+// isUsable reports whether the precomputed blobs satisfy the invariants that
+// consumers depend on: a non-zero content-hash blob and at least one chunk
+// hash. Callers should fall back to the fresh-write path when this is false.
+func (p *PrecomputedTranscriptBlobs) isUsable() bool {
+	return p != nil && !p.ContentHashBlob.IsZero() && len(p.ChunkHashes) > 0
 }
 
 // CommittedInfo contains summary information about a committed checkpoint.
@@ -380,8 +436,9 @@ type CommittedMetadata struct {
 	// Agent identifies the agent that created this checkpoint (e.g., "Claude Code", "Cursor")
 	Agent types.AgentType `json:"agent,omitempty"`
 
-	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514")
-	Model string `json:"model,omitempty"`
+	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514").
+	// Always written to metadata (empty string when unknown) so consumers can rely on the field's presence.
+	Model string `json:"model"`
 
 	// TurnID correlates checkpoints from the same agent turn.
 	// When a turn's work spans multiple commits, each gets its own checkpoint
@@ -411,6 +468,10 @@ type CommittedMetadata struct {
 
 	// InitialAttribution is line-level attribution calculated at commit time
 	InitialAttribution *InitialAttribution `json:"initial_attribution,omitempty"`
+
+	// PromptAttributions is the raw per-prompt attribution data used to compute InitialAttribution.
+	// Diagnostic field — shows which prompt recorded which "user" lines.
+	PromptAttributions json.RawMessage `json:"prompt_attributions,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.
@@ -452,14 +513,15 @@ type SessionFilePaths struct {
 //
 //nolint:revive // Named CheckpointSummary to avoid conflict with existing Summary struct
 type CheckpointSummary struct {
-	CLIVersion       string             `json:"cli_version,omitempty"`
-	CheckpointID     id.CheckpointID    `json:"checkpoint_id"`
-	Strategy         string             `json:"strategy"`
-	Branch           string             `json:"branch,omitempty"`
-	CheckpointsCount int                `json:"checkpoints_count"`
-	FilesTouched     []string           `json:"files_touched"`
-	Sessions         []SessionFilePaths `json:"sessions"`
-	TokenUsage       *agent.TokenUsage  `json:"token_usage,omitempty"`
+	CLIVersion          string              `json:"cli_version,omitempty"`
+	CheckpointID        id.CheckpointID     `json:"checkpoint_id"`
+	Strategy            string              `json:"strategy"`
+	Branch              string              `json:"branch,omitempty"`
+	CheckpointsCount    int                 `json:"checkpoints_count"`
+	FilesTouched        []string            `json:"files_touched"`
+	Sessions            []SessionFilePaths  `json:"sessions"`
+	TokenUsage          *agent.TokenUsage   `json:"token_usage,omitempty"`
+	CombinedAttribution *InitialAttribution `json:"combined_attribution,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report

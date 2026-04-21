@@ -2,30 +2,63 @@ package summarize
 
 import (
 	"context"
-	"os"
-	"os/exec"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
-func TestClaudeGenerator_GitIsolation(t *testing.T) {
-	var capturedCmd *exec.Cmd
+type stubTextGenerator struct {
+	text string
+	err  error
+}
 
-	response := `{"result":"{\"intent\":\"test\",\"outcome\":\"test\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[]}"}`
+func (s *stubTextGenerator) GenerateText(context.Context, string, string) (string, error) {
+	return s.text, s.err
+}
+
+func (s *stubTextGenerator) Name() types.AgentName { return "stub" }
+
+func (s *stubTextGenerator) Type() types.AgentType { return "Stub" }
+
+func (s *stubTextGenerator) Description() string { return "stub" }
+
+func (s *stubTextGenerator) IsPreview() bool { return false }
+
+func (s *stubTextGenerator) DetectPresence(context.Context) (bool, error) { return true, nil }
+
+func (s *stubTextGenerator) ProtectedDirs() []string { return nil }
+
+func (s *stubTextGenerator) ReadTranscript(string) ([]byte, error) { return nil, nil }
+
+func (s *stubTextGenerator) ChunkTranscript(context.Context, []byte, int) ([][]byte, error) {
+	return nil, nil
+}
+
+func (s *stubTextGenerator) ReassembleTranscript([][]byte) ([]byte, error) { return nil, nil }
+
+func (s *stubTextGenerator) GetSessionID(*agent.HookInput) string { return "" }
+
+func (s *stubTextGenerator) GetSessionDir(string) (string, error) { return "", nil }
+
+func (s *stubTextGenerator) ResolveSessionFile(string, string) string { return "" }
+
+func (s *stubTextGenerator) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+	return &agent.AgentSession{}, nil
+}
+
+func (s *stubTextGenerator) WriteSession(context.Context, *agent.AgentSession) error { return nil }
+
+func (s *stubTextGenerator) FormatResumeCommand(string) string { return "" }
+
+func TestClaudeGenerator_TextGeneratorError(t *testing.T) {
+	t.Parallel()
 
 	gen := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			// Capture the command but return something that produces valid output
-			cmd := exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
-			capturedCmd = cmd
-			return cmd
-		},
+		TextGenerator: &stubTextGenerator{err: context.DeadlineExceeded},
 	}
-
-	// Set GIT_* vars that would normally be inherited from a git hook
-	t.Setenv("GIT_DIR", "/some/repo/.git")
-	t.Setenv("GIT_WORK_TREE", "/some/repo")
-	t.Setenv("GIT_INDEX_FILE", "/some/repo/.git/index")
 
 	input := Input{
 		Transcript: []Entry{
@@ -34,129 +67,73 @@ func TestClaudeGenerator_GitIsolation(t *testing.T) {
 	}
 
 	_, err := gen.Generate(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got: %v", err)
+	}
+}
+
+func TestClaudeGenerator_UsesDefaultTextGenerator(t *testing.T) {
+	t.Parallel()
+
+	originalFactory := defaultTextGeneratorFactory
+	defaultTextGeneratorFactory = func() (agent.TextGenerator, error) {
+		return &stubTextGenerator{
+			text: `{"intent":"default intent","outcome":"default outcome","learnings":{"repo":[],"code":[],"workflow":[]},"friction":[],"open_items":[]}`,
+		}, nil
+	}
+	t.Cleanup(func() {
+		defaultTextGeneratorFactory = originalFactory
+	})
+
+	gen := &ClaudeGenerator{}
+	input := Input{
+		Transcript: []Entry{
+			{Type: EntryTypeUser, Content: "Hello"},
+		},
+	}
+
+	summary, err := gen.Generate(context.Background(), input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if capturedCmd == nil {
-		t.Fatal("command was not captured")
+	if summary.Intent != "default intent" {
+		t.Fatalf("unexpected intent: %s", summary.Intent)
 	}
-
-	// Verify cmd.Dir is set to os.TempDir()
-	if capturedCmd.Dir != os.TempDir() {
-		t.Errorf("cmd.Dir = %q, want %q", capturedCmd.Dir, os.TempDir())
-	}
-
-	// Verify no GIT_* env vars in the command's environment
-	for _, env := range capturedCmd.Env {
-		if strings.HasPrefix(env, "GIT_") {
-			t.Errorf("found GIT_* env var in subprocess: %s", env)
-		}
-	}
-}
-
-func TestStripGitEnv(t *testing.T) {
-	env := []string{
-		"HOME=/Users/test",
-		"GIT_DIR=/repo/.git",
-		"PATH=/usr/bin",
-		"GIT_WORK_TREE=/repo",
-		"GIT_INDEX_FILE=/repo/.git/index",
-		"SHELL=/bin/zsh",
-	}
-
-	filtered := stripGitEnv(env)
-
-	expected := []string{
-		"HOME=/Users/test",
-		"PATH=/usr/bin",
-		"SHELL=/bin/zsh",
-	}
-
-	if len(filtered) != len(expected) {
-		t.Fatalf("got %d entries, want %d", len(filtered), len(expected))
-	}
-
-	for i, e := range filtered {
-		if e != expected[i] {
-			t.Errorf("filtered[%d] = %q, want %q", i, e, expected[i])
-		}
-	}
-}
-
-func TestClaudeGenerator_CommandNotFound(t *testing.T) {
-	gen := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			// Return a command that doesn't exist
-			return exec.CommandContext(ctx, "nonexistent-command-that-should-not-exist-12345")
-		},
-	}
-
-	input := Input{
-		Transcript: []Entry{
-			{Type: EntryTypeUser, Content: "Hello"},
-		},
-	}
-
-	_, err := gen.Generate(context.Background(), input)
-	if err == nil {
-		t.Fatal("expected error when command not found")
-	}
-
-	// The error message should indicate the command failed
-	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "executable file not found") {
-		t.Errorf("expected 'not found' error, got: %v", err)
-	}
-}
-
-func TestClaudeGenerator_NonZeroExit(t *testing.T) {
-	gen := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			// Return a command that will exit with non-zero status
-			return exec.CommandContext(ctx, "sh", "-c", "echo 'error message' >&2; exit 1")
-		},
-	}
-
-	input := Input{
-		Transcript: []Entry{
-			{Type: EntryTypeUser, Content: "Hello"},
-		},
-	}
-
-	_, err := gen.Generate(context.Background(), input)
-	if err == nil {
-		t.Fatal("expected error on non-zero exit")
-	}
-
-	if !strings.Contains(err.Error(), "exit 1") {
-		t.Errorf("expected exit code in error, got: %v", err)
+	if summary.Outcome != "default outcome" {
+		t.Fatalf("unexpected outcome: %s", summary.Outcome)
 	}
 }
 
 func TestClaudeGenerator_ErrorCases(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
-		cmdOutput     string
+		textOutput    string
 		expectedError string
 	}{
 		{
 			name:          "invalid JSON response",
-			cmdOutput:     "not valid json",
-			expectedError: "parse claude CLI response",
+			textOutput:    "not valid json",
+			expectedError: "parse summary JSON",
 		},
 		{
 			name:          "invalid summary JSON",
-			cmdOutput:     `{"result": "not a valid summary object"}`,
+			textOutput:    "not a valid summary object",
 			expectedError: "parse summary JSON",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			gen := &ClaudeGenerator{
-				CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-					return exec.CommandContext(ctx, "echo", tt.cmdOutput)
-				},
+				TextGenerator: &stubTextGenerator{text: tt.textOutput},
 			}
 
 			input := Input{
@@ -178,12 +155,10 @@ func TestClaudeGenerator_ErrorCases(t *testing.T) {
 }
 
 func TestClaudeGenerator_ValidResponse(t *testing.T) {
+	t.Parallel()
+
 	gen := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			// Use compact JSON to avoid newline issues with echo
-			response := `{"result":"{\"intent\":\"User wanted to fix a bug\",\"outcome\":\"Bug was fixed successfully\",\"learnings\":{\"repo\":[\"The repo uses Go modules\"],\"code\":[{\"path\":\"main.go\",\"line\":10,\"finding\":\"Entry point\"}],\"workflow\":[\"Run tests before committing\"]},\"friction\":[\"Slow CI pipeline\"],\"open_items\":[\"Add more tests\"]}"}`
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
-		},
+		TextGenerator: &stubTextGenerator{text: `{"intent":"User wanted to fix a bug","outcome":"Bug was fixed successfully","learnings":{"repo":["The repo uses Go modules"],"code":[{"path":"main.go","line":10,"finding":"Entry point"}],"workflow":["Run tests before committing"]},"friction":["Slow CI pipeline"],"open_items":["Add more tests"]}`},
 	}
 
 	input := Input{
@@ -223,12 +198,10 @@ func TestClaudeGenerator_ValidResponse(t *testing.T) {
 }
 
 func TestClaudeGenerator_MarkdownCodeBlock(t *testing.T) {
+	t.Parallel()
+
 	gen := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			// Return summary wrapped in markdown code block - use literal newlines escaped in the JSON string
-			response := `{"result":"` + "```json\\n{\\\"intent\\\":\\\"Test markdown extraction\\\",\\\"outcome\\\":\\\"Works\\\",\\\"learnings\\\":{\\\"repo\\\":[],\\\"code\\\":[],\\\"workflow\\\":[]},\\\"friction\\\":[],\\\"open_items\\\":[]}\\n```" + `"}`
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
-		},
+		TextGenerator: &stubTextGenerator{text: "```json\n{\"intent\":\"Test markdown extraction\",\"outcome\":\"Works\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[]}\n```"},
 	}
 
 	input := Input{
@@ -247,7 +220,59 @@ func TestClaudeGenerator_MarkdownCodeBlock(t *testing.T) {
 	}
 }
 
+func TestClaudeGenerator_GeneratedJSON(t *testing.T) {
+	t.Parallel()
+
+	gen := &ClaudeGenerator{
+		TextGenerator: &stubTextGenerator{text: `{"intent":"Array response intent","outcome":"Array response outcome","learnings":{"repo":[],"code":[],"workflow":[]},"friction":[],"open_items":[]}`},
+	}
+
+	input := Input{
+		Transcript: []Entry{
+			{Type: EntryTypeUser, Content: "Summarize this"},
+		},
+	}
+
+	summary, err := gen.Generate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if summary.Intent != "Array response intent" {
+		t.Errorf("unexpected intent: %s", summary.Intent)
+	}
+
+	if summary.Outcome != "Array response outcome" {
+		t.Errorf("unexpected outcome: %s", summary.Outcome)
+	}
+}
+
+func TestClaudeGenerator_InvalidGeneratedJSON(t *testing.T) {
+	t.Parallel()
+
+	gen := &ClaudeGenerator{
+		TextGenerator: &stubTextGenerator{text: `[{"type":"system","subtype":"init"},{"type":"assistant","message":"Working on it"}]`},
+	}
+
+	input := Input{
+		Transcript: []Entry{
+			{Type: EntryTypeUser, Content: "Summarize this"},
+		},
+	}
+
+	_, err := gen.Generate(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	if !strings.Contains(err.Error(), "parse summary JSON") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
 func TestBuildSummarizationPrompt(t *testing.T) {
+	t.Parallel()
+
 	transcriptText := "[User] Hello\n\n[Assistant] Hi"
 
 	prompt := buildSummarizationPrompt(transcriptText)
@@ -274,6 +299,8 @@ func TestBuildSummarizationPrompt(t *testing.T) {
 }
 
 func TestExtractJSONFromMarkdown(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -308,6 +335,7 @@ func TestExtractJSONFromMarkdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := extractJSONFromMarkdown(tt.input)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)

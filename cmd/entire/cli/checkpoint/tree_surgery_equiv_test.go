@@ -272,7 +272,7 @@ func flattenRebuildTree(
 		}
 	}
 
-	hash, err := BuildTreeFromEntries(repo, entries)
+	hash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		t.Fatalf("build tree: %v", err)
 	}
@@ -318,7 +318,7 @@ func flattenRebuildTaskMetadata(
 		Hash: blobHash,
 	}
 
-	hash, err := BuildTreeFromEntries(repo, entries)
+	hash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		t.Fatalf("build tree: %v", err)
 	}

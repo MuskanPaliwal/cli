@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -742,6 +743,14 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			continue
 		}
 		sessionFile := sessionAgent.ResolveSessionFile(sessionAgentDir, sessionID)
+		if resolver, ok := sessionAgent.(agent.RestoredSessionPathResolver); ok {
+			resolvedFile, resolveErr := resolver.ResolveRestoredSessionFile(sessionAgentDir, sessionID, content.Transcript)
+			if resolveErr != nil {
+				fmt.Fprintf(errW, "  Warning: failed to resolve restored session path for session %d (%s): %v (using fallback path)\n", i, sessionID, resolveErr)
+			} else {
+				sessionFile = resolvedFile
+			}
+		}
 
 		// Get first prompt for display
 		promptPreview := ExtractFirstPrompt(content.Prompts)
@@ -938,6 +947,10 @@ func StatusToText(status SessionRestoreStatus) string {
 // PromptOverwriteNewerLogs asks the user for confirmation to overwrite local
 // session logs that have newer timestamps than the checkpoint versions.
 func PromptOverwriteNewerLogs(errW io.Writer, sessions []SessionRestoreInfo) (bool, error) {
+	if !interactive.CanPromptInteractively() {
+		return false, errors.New("cannot prompt to overwrite local session logs in non-interactive mode; rerun with --force to overwrite or use a TTY to confirm")
+	}
+
 	// Separate conflicting and non-conflicting sessions
 	var conflicting, nonConflicting []SessionRestoreInfo
 	for _, s := range sessions {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/e2e/agents"
 	"github.com/entireio/cli/e2e/testutil"
 )
 
@@ -41,14 +42,17 @@ func TestMultiSessionManualCommit(t *testing.T) {
 // TestMultiSessionSequential: two prompts each commit separately, distinct checkpoints.
 func TestMultiSessionSequential(t *testing.T) {
 	testutil.ForEachAgent(t, 3*time.Minute, func(t *testing.T, s *testutil.RepoState, ctx context.Context) {
+		promptTimeout := 3 * time.Minute
 		_, err := s.RunPrompt(t, ctx,
-			"create a markdown file at docs/red.md about the colour red, then git add and git commit it with a short message. Do not ask for confirmation, just make the change. Do not include any trailers or metadata in the commit message. Do not use worktrees.")
+			"create a markdown file at docs/red.md about the colour red, then git add and git commit it with a short message. Do not ask for confirmation, just make the change. Do not include any trailers or metadata in the commit message. Do not use worktrees.",
+			agents.WithPromptTimeout(promptTimeout))
 		if err != nil {
 			t.Fatalf("agent prompt 1 failed: %v", err)
 		}
 
 		_, err = s.RunPrompt(t, ctx,
-			"create a markdown file at docs/blue.md about the colour blue, then git add and git commit it with a short message. Do not ask for confirmation, just make the change. Do not include any trailers or metadata in the commit message. Do not use worktrees.")
+			"create a markdown file at docs/blue.md about the colour blue, then git add and git commit it with a short message. Do not ask for confirmation, just make the change. Do not include any trailers or metadata in the commit message. Do not use worktrees.",
+			agents.WithPromptTimeout(promptTimeout))
 		if err != nil {
 			t.Fatalf("agent prompt 2 failed: %v", err)
 		}

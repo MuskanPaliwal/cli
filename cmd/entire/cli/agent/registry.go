@@ -172,6 +172,34 @@ func AllProtectedDirs() []string {
 	return dirs
 }
 
+// AllProtectedFiles returns the union of ProtectedFiles from all registered agents.
+func AllProtectedFiles() []string {
+	// Copy factories under the lock, then release before calling external code.
+	registryMu.RLock()
+	factories := make([]Factory, 0, len(registry))
+	for _, f := range registry {
+		factories = append(factories, f)
+	}
+	registryMu.RUnlock()
+
+	seen := make(map[string]struct{})
+	var files []string
+	for _, factory := range factories {
+		pf, ok := factory().(ProtectedFilesProvider)
+		if !ok {
+			continue
+		}
+		for _, file := range pf.ProtectedFiles() {
+			if _, ok := seen[file]; !ok {
+				seen[file] = struct{}{}
+				files = append(files, file)
+			}
+		}
+	}
+	slices.Sort(files)
+	return files
+}
+
 // Default returns the default agent.
 // Returns nil if the default agent is not registered.
 //

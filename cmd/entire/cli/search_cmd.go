@@ -27,9 +27,8 @@ func newSearchCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:    "search [query]",
-		Short:  "Search checkpoints using semantic and keyword matching",
-		Hidden: true,
+		Use:   "search [query]",
+		Short: "Search checkpoints using semantic and keyword matching",
 		Long: `Search checkpoints using hybrid search (semantic + keyword),
 powered by the Entire search service.
 
@@ -40,7 +39,8 @@ displayed in an interactive table. Use --json for machine-readable output.
 
 CLI queries also support inline filters like author:<name>, date:<week|month>,
 branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
-		Args: cobra.ArbitraryArgs,
+		Args:   cobra.ArbitraryArgs,
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			query := strings.Join(args, " ")

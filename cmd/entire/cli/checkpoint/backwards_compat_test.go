@@ -8,6 +8,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -56,7 +57,7 @@ func TestReadCommitted_MissingTokenUsage(t *testing.T) {
 		SessionID:    "test-session-old",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte("ancient transcript"),
+		Transcript:   redact.AlreadyRedacted([]byte("ancient transcript")),
 		AuthorName:   "Test Author",
 		AuthorEmail:  "test@example.com",
 		// TokenUsage is nil - simulates old checkpoint

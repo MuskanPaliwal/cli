@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,7 +25,7 @@ func TestGetV2MetadataTree_LocalRef(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -73,7 +74,7 @@ func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -106,7 +107,7 @@ func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T)
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})

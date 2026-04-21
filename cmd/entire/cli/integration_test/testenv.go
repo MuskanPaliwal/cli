@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -51,6 +52,8 @@ type TestEnv struct {
 	GeminiProjectDir   string
 	OpenCodeProjectDir string
 	SessionCounter     int
+	gitConfigSnapshot  string
+	gitConfigGuardSet  bool
 }
 
 // NewTestEnv creates a new isolated test environment.
@@ -241,6 +244,87 @@ func (env *TestEnv) InitRepo() {
 	if err := repo.SetConfig(cfg); err != nil {
 		env.T.Fatalf("failed to set repo config: %v", err)
 	}
+
+	env.setGitConfigBaseline()
+}
+
+func (env *TestEnv) setGitConfigBaseline() {
+	env.T.Helper()
+
+	configPath := env.gitConfigPath()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		env.T.Fatalf("failed to read %s: %v", configPath, err)
+	}
+
+	env.gitConfigSnapshot = string(data)
+	if env.gitConfigGuardSet {
+		return
+	}
+
+	env.gitConfigGuardSet = true
+	env.T.Cleanup(func() {
+		configPath := env.gitConfigPath()
+		currentData, err := os.ReadFile(configPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if _, statErr := os.Stat(env.RepoDir); errors.Is(statErr, os.ErrNotExist) {
+					return
+				}
+			}
+			env.T.Fatalf(".git/config guard failed: could not read %s during cleanup: %v", configPath, err)
+		}
+
+		current := string(currentData)
+		if normalizeGitConfigForGuard(current) == normalizeGitConfigForGuard(env.gitConfigSnapshot) {
+			return
+		}
+
+		env.T.Fatalf(
+			".git/config changed unexpectedly during integration test\nBaseline:\n%s\nCurrent:\n%s",
+			env.gitConfigSnapshot,
+			current,
+		)
+	})
+}
+
+// AcceptGitConfigChanges updates the .git/config guard baseline after verifying
+// the config matches the exact content the test intended to write.
+func (env *TestEnv) AcceptGitConfigChanges(expected string) {
+	env.T.Helper()
+
+	actual, err := os.ReadFile(env.gitConfigPath())
+	if err != nil {
+		env.T.Fatalf("failed to read %s: %v", env.gitConfigPath(), err)
+	}
+	if string(actual) != expected {
+		env.T.Fatalf(
+			".git/config did not match expected test mutation\nExpected:\n%s\nActual:\n%s",
+			expected,
+			string(actual),
+		)
+	}
+
+	env.gitConfigSnapshot = expected
+}
+
+func (env *TestEnv) gitConfigPath() string {
+	return filepath.Join(env.RepoDir, ".git", "config")
+}
+
+var gitConfigGuardRepositoryFormatVersionRE = regexp.MustCompile(`(?m)^([ \t]*)repositoryformatversion = [01]$`)
+
+var gitConfigGuardTransportPromisorRemoteRE = regexp.MustCompile(
+	`(?m)^\[remote "(?:(?:https?|ssh|file)://|/|[A-Za-z]:[\\/]|[^"\n]+@[^"\n]+:[^"\n]+).+"\]\n(?:[ \t]+promisor = true\n[ \t]+partialclonefilter = blob:none\n?|[ \t]+partialclonefilter = blob:none\n[ \t]+promisor = true\n?)`,
+)
+
+func normalizeGitConfigForGuard(content string) string {
+	content = gitConfigGuardRepositoryFormatVersionRE.ReplaceAllString(content, `${1}repositoryformatversion = <normalized>`)
+	// Deliberately ignore only the full promisor+partialclonefilter pair that
+	// git writes for transport-keyed remotes during filtered fetches. If git ever
+	// writes a partial section, the guard should still fail loudly.
+	content = gitConfigGuardTransportPromisorRemoteRE.ReplaceAllString(content, "")
+	return content
 }
 
 // InitEntire initializes the .entire directory with the specified strategy.
@@ -292,7 +376,13 @@ func (env *TestEnv) initEntireInternal(strategyOptions map[string]any) {
 		"enabled":   true,
 		"local_dev": true, // Note: git-triggered hooks won't work (path is relative); tests call hooks via getTestBinary() instead
 	}
-	if strategyOptions != nil {
+	if strategyOptions == nil {
+		strategyOptions = make(map[string]any)
+	}
+	if _, exists := strategyOptions["filtered_fetches"]; !exists {
+		strategyOptions["filtered_fetches"] = true
+	}
+	if len(strategyOptions) > 0 {
 		settings["strategy_options"] = strategyOptions
 	}
 	data, err := jsonutil.MarshalIndentWithNewline(settings, "", "  ")
@@ -911,6 +1001,47 @@ func (env *TestEnv) ReadFileFromRef(refName, filePath string) (string, bool) {
 	return content, true
 }
 
+// AssertCheckpointContainsSession verifies that the checkpoint summary includes
+// a session with the given session ID by reading per-session metadata from the
+// metadata branch.
+func (env *TestEnv) AssertCheckpointContainsSession(t *testing.T, summary checkpoint.CheckpointSummary, sessionID string) {
+	t.Helper()
+	for _, s := range summary.Sessions {
+		if env.sessionMetadataMatchesID(s.Metadata, sessionID) {
+			return
+		}
+	}
+	t.Errorf("Checkpoint did not include session %q", sessionID)
+}
+
+// AssertCheckpointExcludesSession verifies that the checkpoint summary does NOT
+// include a session with the given session ID.
+func (env *TestEnv) AssertCheckpointExcludesSession(t *testing.T, summary checkpoint.CheckpointSummary, sessionID string) {
+	t.Helper()
+	for _, s := range summary.Sessions {
+		if env.sessionMetadataMatchesID(s.Metadata, sessionID) {
+			t.Errorf("Checkpoint incorrectly included session %q", sessionID)
+			return
+		}
+	}
+}
+
+// sessionMetadataMatchesID reads session metadata from the metadata branch and
+// checks if it belongs to the given session ID.
+func (env *TestEnv) sessionMetadataMatchesID(metadataPath, sessionID string) bool {
+	// Strip leading slash — git tree paths are relative
+	cleanPath := strings.TrimPrefix(metadataPath, "/")
+	content, found := env.ReadFileFromBranch(paths.MetadataBranchName, cleanPath)
+	if !found {
+		return false
+	}
+	var meta checkpoint.CommittedMetadata
+	if err := json.Unmarshal([]byte(content), &meta); err != nil {
+		return false
+	}
+	return meta.SessionID == sessionID
+}
+
 // RefExists checks if a ref exists in the repository.
 func (env *TestEnv) RefExists(refName string) bool {
 	env.T.Helper()
@@ -1106,6 +1237,28 @@ func (env *TestEnv) GitCommitAmendWithShadowHooks(message string, files ...strin
 	postCmd.Env = env.gitHookEnv()
 	if output, err := postCmd.CombinedOutput(); err != nil {
 		env.T.Logf("post-commit (amend) output: %s", output)
+	}
+}
+
+// GitPostRewriteWithShadowHooks runs the git post-rewrite hook with the provided
+// old->new commit mappings. Each mapping is a pair of commit SHAs.
+func (env *TestEnv) GitPostRewriteWithShadowHooks(rewriteType string, mappings ...[2]string) {
+	env.T.Helper()
+
+	var input strings.Builder
+	for _, mapping := range mappings {
+		input.WriteString(mapping[0])
+		input.WriteByte(' ')
+		input.WriteString(mapping[1])
+		input.WriteByte('\n')
+	}
+
+	cmd := exec.Command(getTestBinary(), "hooks", "git", "post-rewrite", rewriteType)
+	cmd.Dir = env.RepoDir
+	cmd.Env = env.gitHookEnv()
+	cmd.Stdin = strings.NewReader(input.String())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		env.T.Fatalf("post-rewrite hook failed: %v\nOutput: %s", err, output)
 	}
 }
 
@@ -1742,6 +1895,8 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 		env.T.Fatalf("failed to push to %s: %v\n%s", remoteName, err, output)
 	}
 
+	env.setGitConfigBaseline()
+
 	return bareDir
 }
 
@@ -1812,6 +1967,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 
 	// Initialize Entire in the clone
 	cloneEnv.InitEntire()
+	cloneEnv.setGitConfigBaseline()
 
 	return cloneEnv
 }

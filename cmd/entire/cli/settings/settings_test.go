@@ -6,7 +6,40 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+const (
+	baseSettingsClaudeSonnet = `{"enabled": true, "summary_generation": {"provider": "claude-code", "model": "sonnet"}}`
+	providerCodex            = "codex"
+)
+
+// setupSettingsDir creates a temp repo directory with the provided settings
+// contents and chdirs into it. Pass empty strings to skip the base or local
+// file. DRYs up the merge/load integration tests that otherwise all repeat
+// the same ~12 lines of tmpdir + .entire + .git + chdir boilerplate.
+func setupSettingsDir(t *testing.T, base, local string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	if base != "" {
+		if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(base), 0o644); err != nil {
+			t.Fatalf("failed to write settings file: %v", err)
+		}
+	}
+	if local != "" {
+		if err := os.WriteFile(filepath.Join(entireDir, "settings.local.json"), []byte(local), 0o644); err != nil {
+			t.Fatalf("failed to write local settings file: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+	t.Chdir(tmpDir)
+}
 
 func TestLoad_RejectsUnknownKeys(t *testing.T) {
 	// Create a temporary directory
@@ -59,9 +92,12 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 		"local_dev": false,
 		"log_level": "debug",
 		"strategy_options": {"key": "value"},
+		"summary_generation": {"provider": "claude-code", "model": "sonnet"},
 		"telemetry": true,
 		"redaction": {"pii": {"enabled": true, "email": true, "phone": false}},
-		"external_agents": true
+		"external_agents": true,
+		"vercel": true,
+		"sign_checkpoint_commits": false
 	}`
 	if err := os.WriteFile(settingsFile, []byte(settingsContent), 0644); err != nil {
 		t.Fatalf("failed to write settings file: %v", err)
@@ -91,6 +127,15 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	if settings.Telemetry == nil || !*settings.Telemetry {
 		t.Error("expected telemetry to be true")
 	}
+	if settings.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be non-nil")
+	}
+	if settings.SummaryGeneration.Provider != "claude-code" {
+		t.Errorf("expected summary_generation.provider 'claude-code', got %q", settings.SummaryGeneration.Provider)
+	}
+	if settings.SummaryGeneration.Model != "sonnet" { //nolint:goconst // test literal
+		t.Errorf("expected summary_generation.model 'sonnet', got %q", settings.SummaryGeneration.Model)
+	}
 	if settings.Redaction == nil {
 		t.Fatal("expected redaction to be non-nil")
 	}
@@ -105,6 +150,12 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	}
 	if settings.Redaction.PII.Phone == nil || *settings.Redaction.PII.Phone {
 		t.Error("expected redaction.pii.phone to be false")
+	}
+	if !settings.Vercel {
+		t.Error("expected vercel to be true")
+	}
+	if settings.SignCheckpointCommits == nil || *settings.SignCheckpointCommits {
+		t.Error("expected sign_checkpoint_commits to be false")
 	}
 }
 
@@ -412,6 +463,38 @@ func TestLoad_ExternalAgentsField(t *testing.T) {
 	}
 }
 
+func TestLoad_MergesLocalOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled": true, "vercel": true}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.local.json"), []byte(`{"log_level": "debug"}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings.local.json: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+
+	t.Chdir(tmpDir)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !s.Vercel {
+		t.Error("expected vercel to be true")
+	}
+	if s.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want %q", s.LogLevel, "debug")
+	}
+}
+
 func TestMergeJSON_ExternalAgents(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -447,6 +530,141 @@ func TestMergeJSON_ExternalAgents(t *testing.T) {
 	}
 }
 
+func TestLoad_SummaryGenerationModelWithoutProviderRejected(t *testing.T) {
+	setupSettingsDir(t, `{"enabled": true, "summary_generation": {"model": "sonnet"}}`, "")
+
+	_, err := Load(context.Background())
+	if err == nil {
+		t.Fatal("expected error for summary_generation.model without provider")
+	}
+	if !strings.Contains(err.Error(), "summary_generation.model") || !strings.Contains(err.Error(), "without summary_generation.provider") {
+		t.Fatalf("unexpected error text: %v", err)
+	}
+}
+
+// TestLoad_MergedSettingsRejectsInvalidCombination verifies that the merged
+// result of base + local settings is validated, not just each file in
+// isolation. A base with no summary_generation and a local override that
+// sets only a model (no provider) produces a merged state that is invalid
+// per SummaryGenerationSettings.Validate(), and the load path must reject
+// it rather than letting it reach the provider-resolution code.
+func TestLoad_MergedSettingsRejectsInvalidCombination(t *testing.T) {
+	setupSettingsDir(t, `{"enabled": true}`, `{"summary_generation": {"model": "sonnet"}}`)
+
+	_, err := Load(context.Background())
+	if err == nil {
+		t.Fatal("expected error for merged model-without-provider combination")
+	}
+	if !strings.Contains(err.Error(), "merged settings invalid") {
+		t.Fatalf("expected wrapped 'merged settings invalid' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "summary_generation.model") {
+		t.Fatalf("expected inner error to mention summary_generation.model, got: %v", err)
+	}
+}
+
+func TestLoadFromFile_AcceptsModelWithoutProvider(t *testing.T) {
+	t.Parallel()
+
+	// A local override file may legitimately contain only a model; the
+	// provider comes from the project settings after merge. LoadFromFile
+	// must not reject this — validation happens post-merge in Load().
+	tmpDir := t.TempDir()
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	localFile := filepath.Join(entireDir, "settings.local.json")
+	if err := os.WriteFile(localFile, []byte(`{"summary_generation": {"model": "sonnet"}}`), 0o644); err != nil {
+		t.Fatalf("failed to write local settings: %v", err)
+	}
+
+	s, err := LoadFromFile(localFile)
+	if err != nil {
+		t.Fatalf("LoadFromFile should accept model-only file, got error: %v", err)
+	}
+	if s.SummaryGeneration == nil || s.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("expected model 'sonnet', got %+v", s.SummaryGeneration)
+	}
+}
+
+func TestSummaryGenerationSettings_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		s       *SummaryGenerationSettings
+		wantErr bool
+	}{
+		{name: "nil receiver is valid", s: nil, wantErr: false},
+		{name: "provider and model is valid", s: &SummaryGenerationSettings{Provider: "claude-code", Model: "sonnet"}, wantErr: false},
+		{name: "model without provider is invalid", s: &SummaryGenerationSettings{Model: "sonnet"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.s.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestMergeJSON_SummaryGeneration_ProviderSwitchClearsStaleModel verifies that
+// switching providers via a local override clears a model from the base that
+// was tuned to the old provider. Without this, local `{"provider":"codex"}`
+// on base `{"provider":"claude-code","model":"sonnet"}` would produce
+// `provider=codex, model=sonnet`, which codex would reject at CLI time.
+func TestMergeJSON_SummaryGeneration_ProviderSwitchClearsStaleModel(t *testing.T) {
+	setupSettingsDir(t, baseSettingsClaudeSonnet, `{"summary_generation": {"provider": "codex"}}`)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected SummaryGeneration to be non-nil")
+	}
+	if s.SummaryGeneration.Provider != providerCodex {
+		t.Errorf("SummaryGeneration.Provider = %q, want %q", s.SummaryGeneration.Provider, providerCodex)
+	}
+	if s.SummaryGeneration.Model != "" {
+		t.Errorf("SummaryGeneration.Model = %q, want \"\" (stale Claude model should be cleared on provider switch)", s.SummaryGeneration.Model)
+	}
+}
+
+// TestMergeJSON_SummaryGeneration_ProviderSwitchWithExplicitModelPreserved
+// checks the complementary case: if the override sets BOTH provider and model,
+// we preserve the explicit model rather than clearing it.
+func TestMergeJSON_SummaryGeneration_ProviderSwitchWithExplicitModelPreserved(t *testing.T) {
+	setupSettingsDir(t, baseSettingsClaudeSonnet, `{"summary_generation": {"provider": "codex", "model": "gpt-5"}}`)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.SummaryGeneration.Provider != "codex" || s.SummaryGeneration.Model != "gpt-5" {
+		t.Errorf("Provider/Model = %q/%q, want codex/gpt-5", s.SummaryGeneration.Provider, s.SummaryGeneration.Model)
+	}
+}
+
+// TestMergeJSON_SummaryGeneration_SameProviderPreservesModel confirms we only
+// clear the model on provider *change*, not on any provider override. A local
+// override that pins the provider to the same value as the base must not
+// clobber the base's model.
+func TestMergeJSON_SummaryGeneration_SameProviderPreservesModel(t *testing.T) {
+	setupSettingsDir(t, baseSettingsClaudeSonnet, `{"summary_generation": {"provider": "claude-code"}}`)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.SummaryGeneration.Provider != "claude-code" || s.SummaryGeneration.Model != "sonnet" {
+		t.Errorf("Provider/Model = %q/%q, want claude-code/sonnet", s.SummaryGeneration.Provider, s.SummaryGeneration.Model)
+	}
+}
+
 func TestIsCheckpointsV2Enabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
@@ -471,6 +689,17 @@ func TestIsCheckpointsV2Enabled_True(t *testing.T) {
 	}
 	if !s.IsCheckpointsV2Enabled() {
 		t.Error("expected IsCheckpointsV2Enabled to be true")
+	}
+}
+
+func TestIsCheckpointsV2Enabled_CheckpointsVersion2(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_version": 2},
+	}
+	if !s.IsCheckpointsV2Enabled() {
+		t.Error("expected IsCheckpointsV2Enabled to be true when checkpoints_version is 2")
 	}
 }
 
@@ -559,6 +788,37 @@ func TestIsCheckpointsV2Enabled_LocalOverride(t *testing.T) {
 	}
 }
 
+func TestCheckpointsVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{"unset defaults to one", nil, 1},
+		{"empty options defaults to one", map[string]any{}, 1},
+		{"integer 2", map[string]any{"checkpoints_version": 2}, 2},
+		{"float 2 from json", map[string]any{"checkpoints_version": float64(2)}, 2},
+		{"integer 3 falls back to default", map[string]any{"checkpoints_version": 3}, 1},
+		{"zero falls back to default", map[string]any{"checkpoints_version": 0}, 1},
+		{"negative falls back to default", map[string]any{"checkpoints_version": -1}, 1},
+		{"non-integer float falls back to default", map[string]any{"checkpoints_version": 2.5}, 1},
+		{"string 2", map[string]any{"checkpoints_version": "2"}, 2},
+		{"bool falls back to default", map[string]any{"checkpoints_version": true}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.CheckpointsVersion(); got != tt.want {
+				t.Errorf("CheckpointsVersion() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsPushV2RefsEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
@@ -575,6 +835,7 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 		opts     map[string]any
 		expected bool
 	}{
+		{"checkpoints_version 2 supersedes both", map[string]any{"checkpoints_v2": false, "push_v2_refs": false, "checkpoints_version": 2}, true},
 		{"both true", map[string]any{"checkpoints_v2": true, "push_v2_refs": true}, true},
 		{"only checkpoints_v2", map[string]any{"checkpoints_v2": true}, false},
 		{"only push_v2_refs", map[string]any{"push_v2_refs": true}, false},
@@ -592,6 +853,115 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 			}
 			if got := s.IsPushV2RefsEnabled(); got != tt.expected {
 				t.Errorf("IsPushV2RefsEnabled() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetFullTranscriptGenerationRetentionDays(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{
+			name: "defaults to sixty when missing",
+			opts: nil,
+			want: 60,
+		},
+		{
+			name: "returns configured integer",
+			opts: map[string]any{"full_transcript_generation_retention_days": 30},
+			want: 30,
+		},
+		{
+			name: "returns configured float from json decode",
+			opts: map[string]any{"full_transcript_generation_retention_days": float64(21)},
+			want: 21,
+		},
+		{
+			name: "returns default for wrong type",
+			opts: map[string]any{"full_transcript_generation_retention_days": "30"},
+			want: 60,
+		},
+		{
+			name: "returns default for zero",
+			opts: map[string]any{"full_transcript_generation_retention_days": 0},
+			want: 60,
+		},
+		{
+			name: "returns default for negative",
+			opts: map[string]any{"full_transcript_generation_retention_days": -5},
+			want: 60,
+		},
+		{
+			name: "returns default for non integral float",
+			opts: map[string]any{"full_transcript_generation_retention_days": 1.5},
+			want: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.GetFullTranscriptGenerationRetentionDays(); got != tt.want {
+				t.Fatalf("GetFullTranscriptGenerationRetentionDays() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsFilteredFetchesEnabled_DefaultsFalse(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{Enabled: true}
+	if s.IsFilteredFetchesEnabled() {
+		t.Error("expected IsFilteredFetchesEnabled to default to false")
+	}
+}
+
+func TestIsFilteredFetchesEnabled_True(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"filtered_fetches": true},
+	}
+	if !s.IsFilteredFetchesEnabled() {
+		t.Error("expected IsFilteredFetchesEnabled to be true")
+	}
+}
+
+func TestIsFilteredFetchesEnabled_WrongType(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"filtered_fetches": "yes"},
+	}
+	if s.IsFilteredFetchesEnabled() {
+		t.Error("expected IsFilteredFetchesEnabled to be false for non-bool value")
+	}
+}
+
+func TestSummaryTimeoutValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		seconds int
+		want    time.Duration
+	}{
+		{"Unset", 0, 0},
+		{"Negative", -5, 0},
+		{"Positive", 90, 90 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{SummaryTimeoutSeconds: tc.seconds}
+			if got := s.SummaryTimeoutValue(); got != tc.want {
+				t.Errorf("SummaryTimeoutValue() = %v; want %v", got, tc.want)
 			}
 		})
 	}

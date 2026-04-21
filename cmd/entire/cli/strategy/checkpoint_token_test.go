@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -23,17 +24,17 @@ func TestResolveTargetProtocol(t *testing.T) {
 
 	t.Run("HTTPS URL", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, protocolHTTPS, resolveTargetProtocol(context.Background(), "https://github.com/org/repo.git"))
+		assert.Equal(t, remote.ProtocolHTTPS, resolveTargetProtocol(context.Background(), "https://github.com/org/repo.git"))
 	})
 
 	t.Run("SSH SCP URL", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, protocolSSH, resolveTargetProtocol(context.Background(), "git@github.com:org/repo.git"))
+		assert.Equal(t, remote.ProtocolSSH, resolveTargetProtocol(context.Background(), "git@github.com:org/repo.git"))
 	})
 
 	t.Run("SSH protocol URL", func(t *testing.T) {
 		t.Parallel()
-		assert.Equal(t, protocolSSH, resolveTargetProtocol(context.Background(), "ssh://git@github.com/org/repo.git"))
+		assert.Equal(t, remote.ProtocolSSH, resolveTargetProtocol(context.Background(), "ssh://git@github.com/org/repo.git"))
 	})
 
 	t.Run("local path returns empty", func(t *testing.T) {
@@ -64,7 +65,7 @@ func TestResolveTargetProtocol_RemoteName(t *testing.T) {
 
 	t.Chdir(tmpDir)
 
-	assert.Equal(t, protocolHTTPS, resolveTargetProtocol(ctx, "origin"))
+	assert.Equal(t, remote.ProtocolHTTPS, resolveTargetProtocol(ctx, "origin"))
 }
 
 // Not parallel: uses t.Chdir()
@@ -84,7 +85,50 @@ func TestResolveTargetProtocol_SSHRemoteName(t *testing.T) {
 
 	t.Chdir(tmpDir)
 
-	assert.Equal(t, protocolSSH, resolveTargetProtocol(ctx, "origin"))
+	assert.Equal(t, remote.ProtocolSSH, resolveTargetProtocol(ctx, "origin"))
+}
+
+// Not parallel: uses t.Chdir()
+func TestResolveFetchTarget(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/repo.git")
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	t.Chdir(tmpDir)
+
+	t.Run("disabled returns remote name", func(t *testing.T) {
+		target, err := ResolveFetchTarget(ctx, "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "origin", target)
+	})
+
+	t.Run("enabled resolves remote to URL", func(t *testing.T) {
+		testutil.WriteFile(
+			t,
+			tmpDir,
+			".entire/settings.json",
+			`{"enabled": true, "strategy_options": {"filtered_fetches": true}}`,
+		)
+
+		target, err := ResolveFetchTarget(ctx, "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/org/repo.git", target)
+	})
+
+	t.Run("URL target stays unchanged", func(t *testing.T) {
+		target, err := ResolveFetchTarget(ctx, "https://github.com/org/repo.git")
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/org/repo.git", target)
+	})
 }
 
 func TestAppendCheckpointTokenEnv(t *testing.T) {
@@ -359,7 +403,7 @@ func TestCheckpointToken_GIT_TERMINAL_PROMPT_Coexistence(t *testing.T) {
 	t.Setenv(CheckpointTokenEnvVar, "coexist-token")
 
 	cmd := CheckpointGitCommand(context.Background(), "https://github.com/org/repo.git",
-		"fetch", "--no-tags", "https://github.com/org/repo.git", "refs/heads/main")
+		"fetch", "--no-tags", "--filter=blob:none", "https://github.com/org/repo.git", "refs/heads/main")
 	require.NotNil(t, cmd.Env)
 
 	// Simulate what fetchMetadataBranchIfMissing does: append GIT_TERMINAL_PROMPT

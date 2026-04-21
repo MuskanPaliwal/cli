@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/redact"
 )
 
 var defaultOpts = MetadataFields{
@@ -36,7 +38,7 @@ func TestCompact_SimpleConversation(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","input_tokens":100,"output_tokens":50,"content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestCompact_AssistantStripping(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Here's my answer."},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +70,7 @@ func TestCompact_AssistantThinkingOnly(t *testing.T) {
 	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"thinking","thinking":"hmm..."}]}}
 `)
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestCompact_UserWithToolResult(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestCompact_UserWithMultipleToolResults(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"continue"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +131,7 @@ func TestCompact_UserNoText(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"echo done"},"result":{"output":"done","status":"success"}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestCompact_AssistantStringContent(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t1","id":"m1","content":"just a string"}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +168,7 @@ func TestCompact_HumanTypeAlias(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"m1","content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -199,7 +201,7 @@ func TestCompact_AssistantTokenUsage(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t1","id":"m1","input_tokens":200,"output_tokens":75,"content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,7 +220,7 @@ func TestCompact_StreamingFragmentTokenMerge(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","input_tokens":100,"output_tokens":42,"content":[{"type":"text","text":"done"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,7 +238,7 @@ func TestCompact_NoUsageOmitsTokenFields(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t1","id":"m1","content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,7 +258,7 @@ func TestCompact_ReadToolResult_PreservesFileMetadata(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Read","input":{"file_path":"/repo/main.go"},"result":{"output":"package main\nfunc main() {}","status":"success","file":{"filePath":"/repo/main.go","numLines":2}}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,7 +276,7 @@ func TestCompact_GrepToolResult_PreservesMatchCount(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Grep","input":{"pattern":"TODO"},"result":{"output":"Found 5 files\na.go\nb.go","status":"success","matchCount":5}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,7 +294,7 @@ func TestCompact_EditToolResult_PreservesFilePath(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Edit","input":{"file_path":"/repo/main.go","old_string":"bad","new_string":"good"},"result":{"output":"","status":"success","file":{"filePath":"/repo/main.go"}}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +317,7 @@ func TestCompact_UserWithImages(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":[{"type":"text","text":"I see the screenshots."}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -335,7 +337,7 @@ func TestCompact_UserWithImageOnly(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + tinyPNG + `"}}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,7 +369,7 @@ func TestCompact_FullFixture_WithTruncation(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 	}
 
-	result, err := Compact([]byte(fixtureFullJSONL), opts)
+	result, err := Compact(redact.AlreadyRedacted([]byte(fixtureFullJSONL)), opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -390,7 +392,7 @@ func TestCompact_FullFixture_NoTruncation(t *testing.T) {
 		// Lines 5-6: file-history-snapshot, system — dropped
 	}
 
-	result, err := Compact([]byte(fixtureFullJSONL), defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted([]byte(fixtureFullJSONL)), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -405,7 +407,7 @@ func TestCompact_FieldOrder(t *testing.T) {
 	input := []byte(`{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello"}}
 `)
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,7 +435,7 @@ func TestCompact_CursorRoleOnly(t *testing.T) {
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Hi from Cursor!"}]}`,
 	}
 
-	result, err := Compact(input, cursorOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), cursorOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -453,7 +455,7 @@ func TestCompact_StripsIDEContextTags(t *testing.T) {
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"hello world"}]}`,
 	}
 
-	result, err := Compact(input, cursorOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), cursorOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -471,7 +473,7 @@ func TestCompact_StripsIDEContextTagsFromContentBlocks(t *testing.T) {
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"fix the bug\n\nalso this"}]}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -502,7 +504,7 @@ func TestCompact_MixedFormats(t *testing.T) {
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t5","content":[{"text":"human alias"}]}`,
 	}
 
-	result, err := Compact(input, cursorOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), cursorOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -512,7 +514,7 @@ func TestCompact_MixedFormats(t *testing.T) {
 func TestCompact_EmptyInput(t *testing.T) {
 	t.Parallel()
 
-	result, err := Compact([]byte{}, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted([]byte{}), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -526,7 +528,7 @@ func TestCompact_StartLineBeyondEnd(t *testing.T) {
 `)
 	opts := MetadataFields{Agent: "claude-code", CLIVersion: "0.5.1", StartLine: 100}
 
-	result, err := Compact(input, opts)
+	result, err := Compact(redact.AlreadyRedacted(input), opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -546,7 +548,7 @@ not valid json at all
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":"hi"}`,
 	}
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -562,7 +564,7 @@ func TestCompact_OnlyDroppedTypes(t *testing.T) {
 {"type":"system","message":{"content":"reminder"}}
 `)
 
-	result, err := Compact(input, defaultOpts)
+	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -584,7 +586,7 @@ func assertFixtureTransform(t *testing.T, opts MetadataFields, inputPath, expect
 		t.Fatalf("failed to read expected output %q: %v", expectedPath, err)
 	}
 
-	result, err := Compact(input, opts)
+	result, err := Compact(redact.AlreadyRedacted(input), opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -66,6 +66,60 @@ func TestCodexAgent_FormatResumeCommand(t *testing.T) {
 	require.Equal(t, "codex resume 550e8400-e29b-41d4-a716-446655440000", cmd)
 }
 
+func TestCodexAgent_GetSessionDir(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", fakeHome)
+
+	ag := &CodexAgent{}
+	dir, err := ag.GetSessionDir("")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(fakeHome, ".codex", "sessions"), dir)
+}
+
+func TestCodexAgent_ResolveSessionFile_SessionTreeLayout(t *testing.T) {
+	t.Parallel()
+
+	ag := &CodexAgent{}
+	sessionID := "019d6c43-1537-7343-9691-1f8cee04fe59"
+	sessionDir := t.TempDir()
+	dayDir := filepath.Join(sessionDir, "2026", "04", "08")
+	require.NoError(t, os.MkdirAll(dayDir, 0o750))
+
+	expected := filepath.Join(dayDir, "rollout-2026-04-08T10-43-48-"+sessionID+".jsonl")
+	require.NoError(t, os.WriteFile(expected, []byte(sampleRollout), 0o600))
+
+	result := ag.ResolveSessionFile(sessionDir, sessionID)
+	require.Equal(t, expected, result)
+}
+
+func TestCodexAgent_ResolveRestoredSessionFile(t *testing.T) {
+	t.Parallel()
+
+	ag := &CodexAgent{}
+	dir := t.TempDir()
+
+	path, err := ag.ResolveRestoredSessionFile(dir, "019d24c3-1111-2222-3333-444444444444", []byte(sampleRollout))
+	require.NoError(t, err)
+	require.Equal(t,
+		filepath.Join(dir, "2026", "03", "25", "rollout-2026-03-25T11-31-10-019d24c3-1111-2222-3333-444444444444.jsonl"),
+		path,
+	)
+}
+
+func TestCodexAgent_ResolveSessionFile_FindsNestedRollout(t *testing.T) {
+	t.Parallel()
+
+	ag := &CodexAgent{}
+	dir := t.TempDir()
+	want := filepath.Join(dir, "2026", "03", "25", "rollout-2026-03-25T11-31-10-019d24c3.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(want), 0o755))
+	require.NoError(t, os.WriteFile(want, []byte(sampleRollout), 0o600))
+
+	got := ag.ResolveSessionFile(dir, "019d24c3")
+	require.Equal(t, want, got)
+}
+
 func TestCodexAgent_ReadSession(t *testing.T) {
 	t.Parallel()
 	ag := &CodexAgent{}

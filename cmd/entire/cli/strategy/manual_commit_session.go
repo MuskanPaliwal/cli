@@ -148,6 +148,61 @@ func (s *ManualCommitStrategy) findSessionsForWorktree(ctx context.Context, work
 	return matching, nil
 }
 
+type rewritePair struct {
+	OldSHA string
+	NewSHA string
+}
+
+func remapRewriteSHA(sha string, rewrites []rewritePair) (string, bool) {
+	for _, pair := range rewrites {
+		if sha == pair.OldSHA {
+			return pair.NewSHA, true
+		}
+	}
+	return sha, false
+}
+
+func shadowBranchExistsForBaseCommit(repo *git.Repository, baseCommit, worktreeID string) bool {
+	if repo == nil || baseCommit == "" {
+		return false
+	}
+
+	refName := plumbing.NewBranchReferenceName(checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID))
+	_, err := repo.Reference(refName, true)
+	return err == nil
+}
+
+func (s *ManualCommitStrategy) remapSessionForRewrite(ctx context.Context, repo *git.Repository, state *SessionState, rewrites []rewritePair) (bool, error) {
+	if state == nil {
+		return false, nil
+	}
+
+	newBaseCommit, baseChanged := remapRewriteSHA(state.BaseCommit, rewrites)
+	newAttrBaseCommit, attrChanged := remapRewriteSHA(state.AttributionBaseCommit, rewrites)
+	if !baseChanged && !attrChanged {
+		return false, nil
+	}
+
+	hadShadowBranch := shadowBranchExistsForBaseCommit(repo, state.BaseCommit, state.WorktreeID)
+	if baseChanged {
+		changed, err := s.migrateShadowBranchToBaseCommit(ctx, repo, state, newBaseCommit)
+		if err != nil {
+			return false, fmt.Errorf("failed to migrate rewritten shadow branch: %w", err)
+		}
+		baseChanged = changed
+	}
+
+	// If a shadow branch existed, preserve AttributionBaseCommit so future
+	// attribution still diffs against the original checkpoint base captured on
+	// that branch. Without a shadow branch, keep attribution in sync with the
+	// rewritten commit lineage.
+	if attrChanged && !hadShadowBranch {
+		state.AttributionBaseCommit = newAttrBaseCommit
+	}
+
+	return baseChanged || attrChanged, nil
+}
+
 // findSessionsForCommit finds all sessions where base_commit matches the given SHA.
 func (s *ManualCommitStrategy) findSessionsForCommit(ctx context.Context, baseCommitSHA string) ([]*SessionState, error) {
 	allStates, err := s.listAllSessionStates(ctx)

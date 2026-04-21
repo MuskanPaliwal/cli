@@ -241,6 +241,7 @@ func TestGetGitAuthorRemovingLocalConfig(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(configWithoutUser), 0o644); err != nil {
 		t.Fatalf("failed to write .git/config: %v", err)
 	}
+	env.AcceptGitConfigChanges(configWithoutUser)
 
 	env.InitEntire()
 

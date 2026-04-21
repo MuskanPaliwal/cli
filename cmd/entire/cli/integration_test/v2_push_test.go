@@ -123,3 +123,47 @@ func TestV2Push_Disabled_NoV2Refs(t *testing.T) {
 	assert.True(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should still exist on remote")
 }
+
+// TestV2Push_Version2SkipsV1Branch verifies that the v1 metadata branch is not
+// pushed when checkpoints_version is set to 2; v2 ref pushing itself is covered
+// by TestV2Push_FullCycle.
+func TestV2Push_Version2SkipsV1Branch(t *testing.T) {
+	t.Parallel()
+	env := NewTestEnv(t)
+	defer env.Cleanup()
+
+	env.InitRepo()
+	env.WriteFile("README.md", "# Test")
+	env.WriteFile(".gitignore", ".entire/\n")
+	env.GitAdd("README.md")
+	env.GitAdd(".gitignore")
+	env.GitCommit("Initial commit")
+	env.GitCheckoutNewBranch("feature/checkpoints-v2-push-test")
+
+	env.InitEntireWithOptions(map[string]any{
+		"checkpoints_version": 2,
+	})
+
+	bareDir := env.SetupBareRemote()
+
+	session := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add feature"))
+
+	env.WriteFile("feature.go", "package main\n\nfunc Feature() {}")
+	session.CreateTranscript(
+		"Add feature",
+		[]FileChange{{Path: "feature.go", Content: "package main\n\nfunc Feature() {}"}},
+	)
+	require.NoError(t, env.SimulateStop(session.ID, session.TranscriptPath))
+
+	env.GitAdd("feature.go")
+	env.GitCommitWithShadowHooks("Add feature")
+
+	env.RunPrePush("origin")
+
+	assert.False(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
+		"v1 metadata branch should NOT exist on remote when checkpoints_version is 2")
+	// Smoke: v2 refs still land; full payload asserted in TestV2Push_FullCycle.
+	assert.True(t, bareRefExists(t, bareDir, paths.V2MainRefName),
+		"v2 /main ref should exist on remote after push")
+}

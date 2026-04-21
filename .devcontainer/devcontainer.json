@@ -1,0 +1,25 @@
+{
+  "name": "Entire CLI",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "vscode",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "gopls": {
+          "build.buildFlags": [
+            "-tags=e2e,integration"
+          ]
+        },
+        "go.testTags": "e2e,integration"
+      },
+      "extensions": [
+        "golang.Go",
+        "timonwong.shellcheck"
+      ]
+    }
+  }
+}

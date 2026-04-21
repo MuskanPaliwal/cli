@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -929,6 +930,41 @@ func TestInstallGitHook_BacksUpCustomHook(t *testing.T) {
 	}
 }
 
+func TestManagedGitHookNames_IncludesPostRewrite(t *testing.T) {
+	t.Parallel()
+
+	names := ManagedGitHookNames()
+	if !slices.Contains(names, "post-rewrite") {
+		t.Fatalf("ManagedGitHookNames() = %v, want post-rewrite included", names)
+	}
+}
+
+func TestInstallGitHook_InstallsPostRewrite(t *testing.T) {
+	_, hooksDir := initHooksTestRepo(t)
+
+	count, err := InstallGitHook(context.Background(), true, false, false)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+	if count == 0 {
+		t.Fatal("InstallGitHook() should install hooks")
+	}
+
+	hookPath := filepath.Join(hooksDir, "post-rewrite")
+	hookData, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("post-rewrite hook should exist: %v", err)
+	}
+
+	hookContent := string(hookData)
+	if !strings.Contains(hookContent, entireHookMarker) {
+		t.Error("installed post-rewrite hook should contain Entire marker")
+	}
+	if !strings.Contains(hookContent, `entire hooks git post-rewrite "$1" 2>/dev/null || true`) {
+		t.Errorf("installed post-rewrite hook content missing expected command:\n%s", hookContent)
+	}
+}
+
 func TestInstallGitHook_DoesNotOverwriteExistingBackup(t *testing.T) {
 	_, hooksDir := initHooksTestRepo(t)
 
@@ -1191,6 +1227,26 @@ func TestGenerateChainedContent(t *testing.T) {
 	expectedExec := `"$_entire_hook_dir/pre-push` + backupSuffix + `" "$@"`
 	if !strings.Contains(result, expectedExec) {
 		t.Errorf("chained content should execute backup with $@, got:\n%s", result)
+	}
+}
+
+func TestGenerateChainedContent_PostRewritePreservesStdinForBackup(t *testing.T) {
+	t.Parallel()
+
+	base := "#!/bin/sh\n# Entire CLI hooks\n# Post-rewrite hook: remap session linkage after amend/rebase rewrites\nentire hooks git post-rewrite \"$1\" 2>/dev/null || true\n"
+	result := generateChainedContent(base, "post-rewrite")
+
+	if !strings.Contains(result, `_entire_stdin="$(mktemp "${TMPDIR:-/tmp}/entire-post-rewrite.XXXXXX")"`) {
+		t.Fatalf("post-rewrite chained content should create temp stdin copy, got:\n%s", result)
+	}
+	if !strings.Contains(result, `cat > "$_entire_stdin"`) {
+		t.Fatalf("post-rewrite chained content should capture stdin once, got:\n%s", result)
+	}
+	if !strings.Contains(result, `entire hooks git post-rewrite "$1" < "$_entire_stdin" 2>/dev/null || true`) {
+		t.Fatalf("post-rewrite chained content should replay stdin into Entire handler, got:\n%s", result)
+	}
+	if !strings.Contains(result, `"$_entire_hook_dir/post-rewrite`+backupSuffix+`" "$@" < "$_entire_stdin"`) {
+		t.Fatalf("post-rewrite chained content should replay stdin into backup hook, got:\n%s", result)
 	}
 }
 

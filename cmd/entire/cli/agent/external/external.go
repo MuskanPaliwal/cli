@@ -92,6 +92,10 @@ func (e *Agent) ProtectedDirs() []string {
 	return e.info.ProtectedDirs
 }
 
+func (e *Agent) ProtectedFiles() []string {
+	return e.info.ProtectedFiles
+}
+
 // --- Agent interface: Transcript Storage ---
 
 func (e *Agent) ReadTranscript(sessionRef string) ([]byte, error) {
@@ -116,6 +120,24 @@ func (e *Agent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
 		return nil, fmt.Errorf("reassemble-transcript: marshal: %w", err)
 	}
 	return e.run(context.Background(), input, "reassemble-transcript")
+}
+
+func (e *Agent) CompactTranscript(ctx context.Context, sessionRef string) (*agent.CompactedTranscript, error) {
+	stdout, err := e.run(ctx, nil, "compact-transcript", "--session-ref", sessionRef)
+	if err != nil {
+		return nil, fmt.Errorf("compact-transcript: %w", err)
+	}
+
+	var resp CompactTranscriptResponse
+	if err := json.Unmarshal(stdout, &resp); err != nil {
+		return nil, fmt.Errorf("compact-transcript: invalid JSON: %w", err)
+	}
+
+	compacted, err := resp.toCompactedTranscript()
+	if err != nil {
+		return nil, err
+	}
+	return compacted, nil
 }
 
 // --- Agent interface: Legacy methods ---

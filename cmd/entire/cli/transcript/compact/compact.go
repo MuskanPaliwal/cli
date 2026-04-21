@@ -12,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/textutil"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
+	"github.com/entireio/cli/redact"
 )
 
 // MetadataFields provides metadata fields written to every output line.
@@ -68,6 +69,8 @@ type userTextBlock struct {
 }
 
 // Compact converts a full.jsonl transcript into the condensed transcript.jsonl format.
+// The input must be pre-redacted (via redact.JSONLBytes or
+// redact.AlreadyRedacted for trusted sources).
 //
 // The output format puts version, agent, and cli_version on every line,
 // merges streaming assistant fragments with the same message ID, and inlines
@@ -75,7 +78,9 @@ type userTextBlock struct {
 //
 //	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"user","ts":"...","content":"..."}
 //	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"assistant","ts":"...","id":"msg_xxx","content":[{"type":"text","text":"..."},{"type":"tool_use","id":"...","name":"...","input":{...},"result":{"output":"...","status":"..."}}]}
-func Compact(content []byte, opts MetadataFields) ([]byte, error) {
+func Compact(redacted redact.RedactedBytes, opts MetadataFields) ([]byte, error) {
+	content := redacted.Bytes()
+
 	// Formats that need detection on raw content before line truncation:
 	// - Single-object formats (OpenCode, Gemini): SliceFromLine would cut
 	//   a JSON object mid-value. They handle StartLine as a message-index offset.
@@ -96,6 +101,10 @@ func Compact(content []byte, opts MetadataFields) ([]byte, error) {
 	truncated := transcript.SliceFromLine(content, opts.StartLine)
 	if truncated == nil {
 		truncated = []byte{}
+	}
+
+	if isCopilotFormat(truncated) {
+		return compactCopilot(truncated, opts)
 	}
 
 	if isDroidFormat(truncated) {

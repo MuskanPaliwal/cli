@@ -37,10 +37,10 @@ func TestJSONLBytes_NoSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if string(result) != string(input) {
-		t.Errorf("expected unchanged input, got %q", result)
+	if string(result.Bytes()) != string(input) {
+		t.Errorf("expected unchanged input, got %q", result.Bytes())
 	}
-	if &result[0] != &input[0] {
+	if &result.Bytes()[0] != &input[0] {
 		t.Error("expected same underlying slice when no redaction needed")
 	}
 }
@@ -52,8 +52,35 @@ func TestJSONLBytes_WithSecret(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	expected := []byte(`{"type":"text","content":"REDACTED"}`)
-	if !bytes.Equal(result, expected) {
-		t.Errorf("got %q, want %q", result, expected)
+	if !bytes.Equal(result.Bytes(), expected) {
+		t.Errorf("got %q, want %q", result.Bytes(), expected)
+	}
+}
+
+func TestRedactedBytes_Bytes(t *testing.T) {
+	t.Parallel()
+	input := []byte(`{"type":"text","content":"hello"}`)
+	rb := AlreadyRedacted(input)
+	if !bytes.Equal(rb.Bytes(), input) {
+		t.Errorf("Bytes() = %q, want %q", rb.Bytes(), input)
+	}
+}
+
+func TestRedactedBytes_Len(t *testing.T) {
+	t.Parallel()
+	input := []byte(`some data`)
+	rb := AlreadyRedacted(input)
+	if rb.Len() != len(input) {
+		t.Errorf("Len() = %d, want %d", rb.Len(), len(input))
+	}
+}
+
+func TestAlreadyRedacted(t *testing.T) {
+	t.Parallel()
+	input := []byte(`some data`)
+	rb := AlreadyRedacted(input)
+	if !bytes.Equal(rb.Bytes(), input) {
+		t.Errorf("AlreadyRedacted() = %q, want %q", rb.Bytes(), input)
 	}
 }
 

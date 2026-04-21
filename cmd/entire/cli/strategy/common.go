@@ -23,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
@@ -35,6 +36,8 @@ import (
 const (
 	branchMain   = "main"
 	branchMaster = "master"
+	// originRemote is the default git remote name used for fetch/push fallbacks.
+	originRemote = "origin"
 	// Strategy name constants
 	StrategyNameManualCommit = "manual-commit"
 )
@@ -69,6 +72,9 @@ func EnsureSetup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
+	if err := vercelconfig.InitSettings(ctx); err != nil {
+		return fmt.Errorf("failed to initialize vercel settings: %w", err)
+	}
 	if err := EnsureMetadataBranch(repo); err != nil {
 		return fmt.Errorf("failed to ensure metadata branch: %w", err)
 	}
@@ -79,6 +85,71 @@ func EnsureSetup(ctx context.Context) error {
 		if _, err := InstallGitHook(ctx, true, localDev, absoluteHookPath); err != nil {
 			return fmt.Errorf("failed to install git hooks: %w", err)
 		}
+	}
+	return nil
+}
+
+// FetchTmpRefPrefix is the namespace for temporary refs used by fetch helpers
+// to land a fetched hash before safely promoting it to a final ref (via
+// PromoteTmpRefSafely). Prefer using the named constants below when possible.
+const FetchTmpRefPrefix = "refs/entire-fetch-tmp/"
+
+// V2MainFetchTmpRef is the staging ref for fetches that target V2MainRefName.
+// Shared between the cli package's origin-based fetches and the strategy
+// package's checkpoint_remote URL-based fetch — those code paths never run
+// concurrently (they are sequenced in explain and resume), so reusing one
+// staging ref is safe and avoids divergent conventions.
+const V2MainFetchTmpRef = FetchTmpRefPrefix + "v2-main"
+
+// PromoteTmpRefSafely reads tmpRefName (the ref a fetch just landed into),
+// advances destRefName to its hash via SafelyAdvanceLocalRef, then removes
+// the tmp ref. The cleanup is deferred so the tmp ref is reaped even when
+// the advance fails.
+//
+// label is a short human-readable name used in error messages (e.g.
+// "v2 /main", "entire/checkpoints/v1"). Typical use:
+//
+//	// fetch with refspec "+<src>:<V2MainFetchTmpRef>"
+//	return PromoteTmpRefSafely(ctx, V2MainFetchTmpRef, paths.V2MainRefName, "v2 /main")
+func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.ReferenceName, label string) error {
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open repository for %s promote: %w", label, err)
+	}
+	defer func() { _ = repo.Storer.RemoveReference(tmpRefName) }() //nolint:errcheck // cleanup is best-effort
+
+	tmpRef, err := repo.Reference(tmpRefName, true)
+	if err != nil {
+		return fmt.Errorf("%s not found after fetch (tmp ref %s missing): %w", label, tmpRefName, err)
+	}
+	if err := SafelyAdvanceLocalRef(ctx, repo, destRefName, tmpRef.Hash()); err != nil {
+		return fmt.Errorf("failed to advance local %s: %w", label, err)
+	}
+	return nil
+}
+
+// SafelyAdvanceLocalRef updates localRefName to point at targetHash, except
+// when the existing local ref is already at or ahead of targetHash. In that
+// case it leaves the local ref unchanged to avoid rewinding locally-ahead
+// work. Otherwise (local missing, behind, or diverged) it updates the ref to
+// targetHash.
+//
+// The ancestry check walks from the local ref (which has full history), so
+// callers that fetched with --depth=1 do not break the check.
+func SafelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash) error {
+	currentLocal, localErr := repo.Reference(localRefName, true)
+	if localErr == nil {
+		if currentLocal.Hash() == targetHash {
+			return nil
+		}
+		if IsAncestorOf(ctx, repo, targetHash, currentLocal.Hash()) {
+			return nil
+		}
+	}
+
+	newRef := plumbing.NewHashReference(localRefName, targetHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("failed to update local ref %s: %w", localRefName, err)
 	}
 	return nil
 }
@@ -377,6 +448,10 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 	if err != nil {
 		return fmt.Errorf("failed to store empty tree: %w", err)
 	}
+	emptyTreeHash, err = vercelconfig.MaybeMergeMetadataBranchConfig(repo, emptyTreeHash)
+	if err != nil {
+		return fmt.Errorf("failed to initialize metadata branch vercel config: %w", err)
+	}
 
 	// Create orphan commit (no parent)
 	now := time.Now()
@@ -410,7 +485,7 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 		return fmt.Errorf("failed to create metadata branch: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "✓ Created orphan branch '%s' for session metadata\n", paths.MetadataBranchName)
+	fmt.Fprintf(os.Stderr, "  ✓ Created orphan branch %s for session metadata\n", paths.MetadataBranchName)
 	return nil
 }
 
@@ -623,6 +698,28 @@ func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 	tree, err := commit.Tree()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata branch tree: %w", err)
+	}
+	return tree, nil
+}
+
+// GetV2MetadataBranchTree returns the tree object at the tip of the v2 /main ref.
+// The v2 /main ref uses the same sharded checkpoint layout as v1, so
+// ReadLatestSessionPromptFromCommittedTree works with either tree.
+func GetV2MetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	ref, err := repo.Reference(refName, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main reference: %w", err)
+	}
+
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main commit: %w", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main tree: %w", err)
 	}
 	return tree, nil
 }
@@ -1293,6 +1390,12 @@ func getTaskTranscriptFromTree(ctx context.Context, point RewindPoint) ([]byte, 
 // ErrBranchNotFound is returned by DeleteBranchCLI when the branch does not exist.
 var ErrBranchNotFound = errors.New("branch not found")
 
+// ErrRefNotFound is returned by DeleteRefCLI when the ref does not exist.
+var ErrRefNotFound = errors.New("ref not found")
+
+// ErrRefChanged is returned by DeleteRefCLI when the ref no longer points to the expected OID.
+var ErrRefChanged = errors.New("ref changed since inspection")
+
 // DeleteBranchCLI deletes a git branch using the git CLI.
 // Uses `git branch -D` instead of go-git's RemoveReference because go-git v5
 // doesn't properly persist deletions when refs are packed (.git/packed-refs)
@@ -1321,6 +1424,72 @@ func DeleteBranchCLI(ctx context.Context, branchName string) error {
 		return fmt.Errorf("failed to delete branch %s: %s: %w", branchName, strings.TrimSpace(string(output)), err)
 	}
 	return nil
+}
+
+// DeleteRefCLI deletes an arbitrary ref using the git CLI.
+// Uses `git update-ref -d` instead of go-git's RemoveReference because go-git
+// ref deletion is unreliable with packed refs and worktrees.
+//
+// When expectedOID is non-empty, it is passed to `git update-ref -d <ref> <old-oid>`
+// as a compare-and-swap guard: git will refuse the deletion if the ref no longer
+// points to expectedOID, and ErrRefChanged is returned.
+//
+// Returns ErrRefNotFound if the ref does not exist, allowing callers to use
+// errors.Is for idempotent deletion patterns.
+func DeleteRefCLI(ctx context.Context, refName string, expectedOID string) error {
+	exists, _, err := refStateCLI(ctx, refName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s", ErrRefNotFound, refName)
+	}
+
+	args := []string{"update-ref", "-d", refName}
+	if expectedOID != "" {
+		args = append(args, expectedOID)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return classifyDeleteRefFailure(ctx, refName, expectedOID, output, err)
+	}
+	return nil
+}
+
+func classifyDeleteRefFailure(ctx context.Context, refName string, expectedOID string, output []byte, updateErr error) error {
+	baseErr := fmt.Errorf("failed to delete ref %s: %s: %w", refName, strings.TrimSpace(string(output)), updateErr)
+
+	exists, currentOID, stateErr := refStateCLI(ctx, refName)
+	if stateErr != nil {
+		return baseErr
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s", ErrRefNotFound, refName)
+	}
+	if expectedOID != "" && currentOID != expectedOID {
+		return fmt.Errorf("%w: %s (expected %s)", ErrRefChanged, refName, expectedOID)
+	}
+
+	return baseErr
+}
+
+func refStateCLI(ctx context.Context, refName string) (exists bool, oid string, err error) {
+	check := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", refName)
+	if err := check.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("failed to check ref %s: %w", refName, err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", refName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, "", fmt.Errorf("failed to resolve ref %s: %s: %w", refName, strings.TrimSpace(string(output)), err)
+	}
+
+	return true, strings.TrimSpace(string(output)), nil
 }
 
 // branchExistsCLI checks if a branch exists using git CLI.
@@ -1416,40 +1585,6 @@ func ExtractSessionIDFromCommit(commit *object.Commit) string {
 // - treeNode, insertIntoTree, buildTreeObject (internal to checkpoint package)
 //
 // See push_common.go and session_test.go for usage examples.
-
-// createCommit creates a commit object
-func createCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) { //nolint:unparam // already present in codebase
-	now := time.Now()
-	sig := object.Signature{
-		Name:  authorName,
-		Email: authorEmail,
-		When:  now,
-	}
-
-	commit := &object.Commit{
-		TreeHash:  treeHash,
-		Author:    sig,
-		Committer: sig,
-		Message:   message,
-	}
-
-	// Add parent if not a new branch
-	if parentHash != plumbing.ZeroHash {
-		commit.ParentHashes = []plumbing.Hash{parentHash}
-	}
-
-	obj := repo.Storer.NewEncodedObject()
-	if err := commit.Encode(obj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to encode commit: %w", err)
-	}
-
-	hash, err := repo.Storer.SetEncodedObject(obj)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to store commit: %w", err)
-	}
-
-	return hash, nil
-}
 
 // getSessionDescriptionFromTree reads the first line of prompt.txt from a git tree.
 // This is the tree-based equivalent of getSessionDescription (which reads from filesystem).

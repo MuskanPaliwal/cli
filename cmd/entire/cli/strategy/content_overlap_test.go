@@ -750,7 +750,7 @@ func TestFilesWithRemainingAgentChanges_UncommittedDeletion(t *testing.T) {
 	require.NoError(t, err)
 	delete(entries, "to_delete.txt")
 
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	shadowCommitObj := &object.Commit{
@@ -1039,7 +1039,7 @@ func createShadowBranchWithContent(t *testing.T, repo *git.Repository, baseCommi
 	}
 
 	// Build tree from entries
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	// Create commit

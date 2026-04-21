@@ -31,6 +31,8 @@ const (
 	TranscriptFileNameLegacy      = "full.log"
 	CompactTranscriptFileName     = "transcript.jsonl"
 	CompactTranscriptHashFileName = "transcript_hash.txt"
+	V2RawTranscriptFileName       = "raw_transcript"
+	V2RawTranscriptHashFileName   = "raw_transcript_hash.txt"
 	MetadataFileName              = "metadata.json"
 	CheckpointFileName            = "checkpoint.json"
 	ContentHashFileName           = "content_hash.txt"

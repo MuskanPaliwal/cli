@@ -1,6 +1,7 @@
 package benchutil
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -73,7 +74,7 @@ func buildShardedMetadataTree(b *testing.B, repo *gogit.Repository, checkpointCo
 		}
 	}
 
-	hash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	hash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		b.Fatalf("build tree: %v", err)
 	}
@@ -98,7 +99,7 @@ func buildFlatFileTree(b *testing.B, repo *gogit.Repository, fileCount int) plum
 		}
 	}
 
-	hash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	hash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		b.Fatalf("build tree: %v", err)
 	}
@@ -138,7 +139,7 @@ func benchUpdateSubtreeTreeSurgery(priorCheckpoints int) func(*testing.B) {
 				Hash: newBlobs[i],
 			}
 		}
-		cpTreeHash, err := checkpoint.BuildTreeFromEntries(repo, cpEntries)
+		cpTreeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, cpEntries)
 		if err != nil {
 			b.Fatalf("build checkpoint tree: %v", err)
 		}
@@ -203,7 +204,7 @@ func benchUpdateSubtreeFlattenRebuild(priorCheckpoints int) func(*testing.B) {
 			}
 
 			// Rebuild entire tree
-			_, err = checkpoint.BuildTreeFromEntries(repo, entries)
+			_, err = checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 			if err != nil {
 				b.Fatalf("BuildTreeFromEntries: %v", err)
 			}
@@ -255,7 +256,7 @@ func benchApplyTreeChangesTreeSurgery(fileCount, changeCount int) func(*testing.
 
 		b.ResetTimer()
 		for range b.N {
-			_, err := checkpoint.ApplyTreeChanges(repo, rootTree, changes)
+			_, err := checkpoint.ApplyTreeChanges(context.Background(), repo, rootTree, changes)
 			if err != nil {
 				b.Fatalf("ApplyTreeChanges: %v", err)
 			}
@@ -307,7 +308,7 @@ func benchApplyTreeChangesFlattenRebuild(fileCount, changeCount int) func(*testi
 			}
 
 			// Rebuild
-			_, err = checkpoint.BuildTreeFromEntries(repo, entries)
+			_, err = checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 			if err != nil {
 				b.Fatalf("BuildTreeFromEntries: %v", err)
 			}

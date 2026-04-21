@@ -21,13 +21,15 @@ func BinPath() string {
 
 // RewindPoint represents a single entry from `entire rewind --list`.
 type RewindPoint struct {
-	ID             string `json:"id"`
-	Message        string `json:"message"`
-	MetadataDir    string `json:"metadata_dir"`
-	Date           string `json:"date"`
-	IsLogsOnly     bool   `json:"is_logs_only"`
-	CondensationID string `json:"condensation_id"`
-	SessionID      string `json:"session_id"`
+	ID               string `json:"id"`
+	Message          string `json:"message"`
+	MetadataDir      string `json:"metadata_dir"`
+	Date             string `json:"date"`
+	IsTaskCheckpoint bool   `json:"is_task_checkpoint"`
+	ToolUseID        string `json:"tool_use_id"`
+	IsLogsOnly       bool   `json:"is_logs_only"`
+	CondensationID   string `json:"condensation_id"`
+	SessionID        string `json:"session_id"`
 }
 
 // Enable runs `entire enable` for the given agent with telemetry disabled.
@@ -136,11 +138,21 @@ func Resume(dir, branch string) (string, error) {
 	return runOutput(dir, "resume", branch, "--force")
 }
 
+// ResumeWithEnv runs `entire resume <branch> --force` with extra env vars.
+func ResumeWithEnv(dir, branch string, extraEnv []string) (string, error) {
+	return runOutputEnv(dir, extraEnv, "resume", branch, "--force")
+}
+
 // runOutput executes an `entire` subcommand and returns (output, error).
 func runOutput(dir string, args ...string) (string, error) {
+	return runOutputEnv(dir, nil, args...)
+}
+
+func runOutputEnv(dir string, extraEnv []string, args ...string) (string, error) {
 	cmd := exec.Command(BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = append(append([]string{}, os.Environ()...), "ENTIRE_TEST_TTY=0")
+	cmd.Env = append(cmd.Env, extraEnv...)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

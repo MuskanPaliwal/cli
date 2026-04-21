@@ -252,11 +252,82 @@ func TestAllProtectedDirs(t *testing.T) {
 	})
 }
 
+func TestAllProtectedFiles(t *testing.T) {
+	// Save original registry state
+	originalRegistry := make(map[types.AgentName]Factory)
+	registryMu.Lock()
+	for k, v := range registry {
+		originalRegistry[k] = v
+	}
+	registry = make(map[types.AgentName]Factory)
+	registryMu.Unlock()
+
+	defer func() {
+		registryMu.Lock()
+		registry = originalRegistry
+		registryMu.Unlock()
+	}()
+
+	t.Run("empty registry returns empty", func(t *testing.T) {
+		files := AllProtectedFiles()
+		if len(files) != 0 {
+			t.Errorf("expected empty files, got %v", files)
+		}
+	})
+
+	t.Run("collects files from registered agents", func(t *testing.T) {
+		registryMu.Lock()
+		registry = make(map[types.AgentName]Factory)
+		registryMu.Unlock()
+
+		Register(types.AgentName("agent-no-files"), func() Agent {
+			return &mockAgent{}
+		})
+		Register(types.AgentName("agent-a"), func() Agent {
+			return &protectedDirAgent{files: []string{"a.json"}}
+		})
+		Register(types.AgentName("agent-b"), func() Agent {
+			return &protectedDirAgent{files: []string{"b.json", "shared.json"}}
+		})
+
+		files := AllProtectedFiles()
+		expected := []string{"a.json", "b.json", "shared.json"}
+		if len(files) != len(expected) {
+			t.Fatalf("expected %d files, got %d: %v", len(expected), len(files), files)
+		}
+		for i, file := range files {
+			if file != expected[i] {
+				t.Errorf("files[%d] = %q, want %q", i, file, expected[i])
+			}
+		}
+	})
+
+	t.Run("deduplicates across agents", func(t *testing.T) {
+		registryMu.Lock()
+		registry = make(map[types.AgentName]Factory)
+		registryMu.Unlock()
+
+		Register(types.AgentName("agent-x"), func() Agent {
+			return &protectedDirAgent{files: []string{"shared.json"}}
+		})
+		Register(types.AgentName("agent-y"), func() Agent {
+			return &protectedDirAgent{files: []string{"shared.json"}}
+		})
+
+		files := AllProtectedFiles()
+		if len(files) != 1 {
+			t.Errorf("expected 1 file (deduplicated), got %d: %v", len(files), files)
+		}
+	})
+}
+
 // protectedDirAgent is a mock that returns configurable protected dirs.
 type protectedDirAgent struct {
 	mockAgent
 
-	dirs []string
+	dirs  []string
+	files []string
 }
 
-func (p *protectedDirAgent) ProtectedDirs() []string { return p.dirs }
+func (p *protectedDirAgent) ProtectedDirs() []string  { return p.dirs }
+func (p *protectedDirAgent) ProtectedFiles() []string { return p.files }

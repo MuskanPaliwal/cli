@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/go-git/go-git/v6/x/plugin"
 	"github.com/spf13/cobra"
 )
 
@@ -68,16 +70,31 @@ func TestVersionFlag_ContainsExpectedInfo(t *testing.T) {
 	}
 }
 
+func TestRegisterObjectSigner_RegistersPlugin(t *testing.T) {
+	resetPluginEntry("object-signer")
+	registerObjectSignerOnce = sync.Once{}
+	t.Cleanup(func() {
+		resetPluginEntry("object-signer")
+		registerObjectSignerOnce = sync.Once{}
+	})
+
+	RegisterObjectSigner()
+
+	if !plugin.Has(plugin.ObjectSigner()) {
+		t.Fatal("expected object signer plugin to be registered")
+	}
+}
+
 func TestPersistentPostRun_SkipsHiddenParent(t *testing.T) {
 	t.Parallel()
 
 	root := NewRootCmd()
 
-	// Find the leaf command: entire hooks git post-commit
+	// Find the leaf command: entire hooks git post-rewrite
 	// This exercises the real command tree where "hooks" is Hidden but its descendants are not.
-	leaf, _, err := root.Find([]string{"hooks", "git", "post-commit"})
+	leaf, _, err := root.Find([]string{"hooks", "git", "post-rewrite"})
 	if err != nil {
-		t.Fatalf("could not find hooks git post-commit command: %v", err)
+		t.Fatalf("could not find hooks git post-rewrite command: %v", err)
 	}
 
 	if leaf.Hidden {

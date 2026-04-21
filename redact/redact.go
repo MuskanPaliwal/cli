@@ -28,6 +28,34 @@ const entropyThreshold = 4.5
 // RedactedPlaceholder is the replacement text used for redacted secrets.
 const RedactedPlaceholder = "REDACTED"
 
+// RedactedBytes represents transcript data that has been through secret
+// redaction. Consumers that require pre-redacted input (e.g., compact.Compact,
+// checkpoint stores) accept this type to enforce the contract at compile time.
+//
+// Produced by JSONLBytes (primary constructor) or trusted wrappers for data
+// previously persisted by checkpoint writers.
+type RedactedBytes struct {
+	data []byte
+}
+
+// Bytes returns the underlying byte slice.
+func (r RedactedBytes) Bytes() []byte {
+	return r.data
+}
+
+// Len returns the number of bytes in the redacted payload.
+func (r RedactedBytes) Len() int {
+	return len(r.data)
+}
+
+// AlreadyRedacted wraps transcript bytes known to already be redacted by a
+// prior write path. Use this ONLY for trusted sources such as persisted
+// checkpoint transcripts or controlled test fixtures. For fresh transcript
+// input, use JSONLBytes.
+func AlreadyRedacted(data []byte) RedactedBytes {
+	return RedactedBytes{data: data}
+}
+
 var (
 	gitleaksDetector     *detect.Detector
 	gitleaksDetectorOnce sync.Once
@@ -158,17 +186,18 @@ func Bytes(b []byte) []byte {
 	return []byte(redacted)
 }
 
-// JSONLBytes is a convenience wrapper around JSONLContent for []byte content.
-func JSONLBytes(b []byte) ([]byte, error) {
+// JSONLBytes redacts secrets in JSONL-formatted byte content and returns
+// the result as RedactedBytes, certifying the output has been through redaction.
+func JSONLBytes(b []byte) (RedactedBytes, error) {
 	s := string(b)
 	redacted, err := JSONLContent(s)
 	if err != nil {
-		return nil, err
+		return RedactedBytes{}, err
 	}
 	if redacted == s {
-		return b, nil
+		return RedactedBytes{data: b}, nil
 	}
-	return []byte(redacted), nil
+	return RedactedBytes{data: []byte(redacted)}, nil
 }
 
 // JSONLContent parses each line as JSON to determine which string values

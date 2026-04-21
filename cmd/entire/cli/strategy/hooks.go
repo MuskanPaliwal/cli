@@ -20,7 +20,7 @@ const backupSuffix = ".pre-entire"
 const chainComment = "# Chain: run pre-existing hook"
 
 // gitHookNames are the git hooks managed by Entire CLI
-var gitHookNames = []string{"prepare-commit-msg", "commit-msg", "post-commit", "pre-push"}
+var gitHookNames = []string{"prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite", "pre-push"}
 
 // ManagedGitHookNames returns the list of git hooks managed by Entire CLI.
 // This is useful for tests that need to manipulate hooks.
@@ -191,6 +191,14 @@ func buildHookSpecs(cmdPrefix string) []hookSpec {
 `, entireHookMarker, cmdPrefix),
 		},
 		{
+			name: "post-rewrite",
+			content: fmt.Sprintf(`#!/bin/sh
+# %s
+# Post-rewrite hook: remap session linkage after amend/rebase rewrites
+%s hooks git post-rewrite "$1" 2>/dev/null || true
+`, entireHookMarker, cmdPrefix),
+		},
+		{
 			name: "pre-push",
 			content: fmt.Sprintf(`#!/bin/sh
 # %s
@@ -334,12 +342,34 @@ func RemoveGitHook(ctx context.Context) (int, error) {
 // generateChainedContent appends a chain call to the base hook content,
 // so the pre-existing hook (backed up to .pre-entire) is called after our hook.
 func generateChainedContent(baseContent, hookName string) string {
+	if hookName == "post-rewrite" {
+		return generatePostRewriteChainedContent(baseContent)
+	}
+
 	return baseContent + fmt.Sprintf(`%s
 _entire_hook_dir="$(dirname "$0")"
 if [ -x "$_entire_hook_dir/%s%s" ]; then
     "$_entire_hook_dir/%s%s" "$@"
 fi
 `, chainComment, hookName, backupSuffix, hookName, backupSuffix)
+}
+
+func generatePostRewriteChainedContent(baseContent string) string {
+	const original = `entire hooks git post-rewrite "$1" 2>/dev/null || true`
+	const replacement = `entire hooks git post-rewrite "$1" < "$_entire_stdin" 2>/dev/null || true`
+
+	replayPrefix := `_entire_stdin="$(mktemp "${TMPDIR:-/tmp}/entire-post-rewrite.XXXXXX")"
+cat > "$_entire_stdin"
+trap 'rm -f "$_entire_stdin"' EXIT
+` + replacement
+
+	return strings.Replace(baseContent, original, replayPrefix, 1) + fmt.Sprintf(`
+%s
+_entire_hook_dir="$(dirname "$0")"
+if [ -x "$_entire_hook_dir/post-rewrite%s" ]; then
+    "$_entire_hook_dir/post-rewrite%s" "$@" < "$_entire_stdin"
+fi
+`, chainComment, backupSuffix, backupSuffix)
 }
 
 // hookCmdPrefix returns the command prefix for hook scripts and warning messages.

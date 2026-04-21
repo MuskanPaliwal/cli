@@ -40,6 +40,11 @@ func TestIsOutdated(t *testing.T) {
 		{"1.0.0-rc1", "1.0.0", true, "prerelease in current"},
 		{"1.0.0", "1.0.1-rc1", true, "prerelease in latest is still newer"},
 		{"1.0.0-dev-xxx", "1.0.1", false, "dev build skips version check"},
+
+		// Nightly-vs-nightly comparisons (same channel)
+		{"0.5.3-nightly.202604051159.abc1234", "0.5.3-nightly.202604061200.def5678", true, "older nightly is outdated by newer nightly"},
+		{"0.5.3-nightly.202604061200.def5678", "0.5.3-nightly.202604051159.abc1234", false, "newer nightly is not outdated by older nightly"},
+		{"0.5.3-nightly.202604061200.abc1234", "0.5.3-nightly.202604061200.abc1234", false, "same nightly is not outdated"},
 	}
 
 	for _, tt := range tests {
@@ -49,6 +54,77 @@ func TestIsOutdated(t *testing.T) {
 				t.Errorf("isOutdated(%q, %q) = %v, want %v", tt.current, tt.latest, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsNightly(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"0.5.3-nightly.202604061200.abc1234", true},
+		{"v0.5.3-nightly.202604061200.abc1234", true},
+		{"1.0.0", false},
+		{"v1.0.0", false},
+		{"1.0.0-rc1", false},
+		{"1.0.0-dev-xxx", false},
+		{"dev", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			t.Parallel()
+			if got := isNightly(tt.version); got != tt.want {
+				t.Errorf("isNightly(%q) = %v, want %v", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchLatestNightlyVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		releases := []GitHubRelease{
+			{TagName: "v0.5.4", Prerelease: false},
+			{TagName: "v0.5.4-nightly.202604061200.abc1234", Prerelease: true},
+			{TagName: "v0.5.4-nightly.202604051159.def5678", Prerelease: true},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		//nolint:errcheck // test helper
+		json.NewEncoder(w).Encode(releases)
+	}))
+	defer server.Close()
+
+	original := githubReleasesURL
+	githubReleasesURL = server.URL
+	t.Cleanup(func() { githubReleasesURL = original })
+
+	version, err := fetchLatestNightlyVersion(context.Background())
+	if err != nil {
+		t.Fatalf("fetchLatestNightlyVersion() error = %v", err)
+	}
+	if version != "v0.5.4-nightly.202604061200.abc1234" {
+		t.Errorf("fetchLatestNightlyVersion() = %q, want v0.5.4-nightly.202604061200.abc1234", version)
+	}
+}
+
+func TestFetchLatestNightlyVersion_NoNightlies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		releases := []GitHubRelease{
+			{TagName: "v0.5.4", Prerelease: false},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		//nolint:errcheck // test helper
+		json.NewEncoder(w).Encode(releases)
+	}))
+	defer server.Close()
+
+	original := githubReleasesURL
+	githubReleasesURL = server.URL
+	t.Cleanup(func() { githubReleasesURL = original })
+
+	_, err := fetchLatestNightlyVersion(context.Background())
+	if err == nil {
+		t.Fatal("fetchLatestNightlyVersion() expected error when no nightlies, got nil")
 	}
 }
 
@@ -235,49 +311,64 @@ func TestParseGitHubRelease(t *testing.T) {
 
 func TestUpdateCommand(t *testing.T) {
 	tests := []struct {
-		name     string
-		execPath func() (string, error)
-		want     string
+		name           string
+		currentVersion string
+		execPath       func() (string, error)
+		want           string
 	}{
 		{
-			name:     "homebrew cellar path",
-			execPath: func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew stable cellar path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "homebrew opt path",
-			execPath: func() (string, error) { return "/opt/homebrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew stable cask path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "linuxbrew path",
-			execPath: func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew nightly path uses cask command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire@nightly",
 		},
 		{
-			name:     "mise path",
-			execPath: func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
-			want:     "mise upgrade entire",
+			name:           "linuxbrew path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "username mise not detected as mise install",
-			execPath: func() (string, error) { return "/home/mise/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "mise path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
+			want:           "mise upgrade entire",
 		},
 		{
-			name:     "username homebrew not detected as brew install",
-			execPath: func() (string, error) { return "/home/homebrew/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "scoop path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return `C:\Users\test\scoop\apps\cli\current\entire.exe`, nil },
+			want:           "scoop update entire/cli",
 		},
 		{
-			name:     "unknown path falls back to curl",
-			execPath: func() (string, error) { return "/usr/local/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "unknown path stable falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 		{
-			name:     "executable error falls back to curl",
-			execPath: func() (string, error) { return "", errors.New("not found") },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "unknown path nightly falls back to nightly curl command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly",
+		},
+		{
+			name:           "executable error falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "", errors.New("not found") },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 	}
 
@@ -287,7 +378,7 @@ func TestUpdateCommand(t *testing.T) {
 			executablePath = tt.execPath
 			t.Cleanup(func() { executablePath = original })
 
-			if got := updateCommand(); got != tt.want {
+			if got := updateCommand(tt.currentVersion); got != tt.want {
 				t.Errorf("updateCommand() = %q, want %q", got, tt.want)
 			}
 		})

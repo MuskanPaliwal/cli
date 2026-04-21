@@ -2,11 +2,13 @@ package external
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -137,6 +139,7 @@ const validInfoJSON = `{
     "transcript_analyzer": true,
     "transcript_preparer": false,
     "token_calculator": false,
+    "compact_transcript": false,
     "text_generator": false,
     "hook_response_writer": false,
     "subagent_aware_extractor": false
@@ -447,6 +450,107 @@ esac
 	}
 }
 
+func TestExternalAgent_CompactTranscript(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	compacted := []byte("{\"v\":1}\n")
+	assetData := []byte("asset-bytes")
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "compact-capable",
+  "type": "Compact Capable",
+  "description": "Agent with transcript compaction",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"compact_transcript": true}
+}`
+	script := `#!/bin/sh
+case "$1" in
+  info)
+    echo '` + infoJSON + `'
+    ;;
+  compact-transcript)
+    if [ "$2" != "--session-ref" ]; then
+      echo "missing --session-ref" >&2
+      exit 1
+    fi
+    echo '{"transcript":"` + base64.StdEncoding.EncodeToString(compacted) + `","assets":[{"name":"img-001.png","media_type":"image/png","data":"` + base64.StdEncoding.EncodeToString(assetData) + `"}]}'
+    ;;
+  *)
+    echo "unknown subcommand: $1" >&2
+    exit 1
+    ;;
+esac
+`
+	binPath := testBinaryDir(t, script)
+	ea := newExternalAgent(t, binPath)
+
+	got, err := ea.CompactTranscript(context.Background(), "/tmp/session.jsonl")
+	if err != nil {
+		t.Fatalf("CompactTranscript: %v", err)
+	}
+	if string(got.Transcript) != string(compacted) {
+		t.Fatalf("CompactTranscript transcript = %q, want %q", got.Transcript, compacted)
+	}
+	if len(got.Assets) != 1 {
+		t.Fatalf("CompactTranscript assets len = %d, want 1", len(got.Assets))
+	}
+	if got.Assets[0].Name != "img-001.png" {
+		t.Fatalf("CompactTranscript asset name = %q, want img-001.png", got.Assets[0].Name)
+	}
+	if string(got.Assets[0].Data) != string(assetData) {
+		t.Fatalf("CompactTranscript asset data = %q, want %q", got.Assets[0].Data, assetData)
+	}
+}
+
+func TestExternalAgent_CompactTranscript_InvalidBase64(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "compact-capable",
+  "type": "Compact Capable",
+  "description": "Agent with transcript compaction",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"compact_transcript": true}
+}`
+	script := `#!/bin/sh
+case "$1" in
+  info)
+    echo '` + infoJSON + `'
+    ;;
+  compact-transcript)
+    echo '{"transcript":"!!!not-base64!!!"}'
+    ;;
+  *)
+    echo "unknown subcommand: $1" >&2
+    exit 1
+    ;;
+esac
+`
+	binPath := testBinaryDir(t, script)
+	ea := newExternalAgent(t, binPath)
+
+	_, err := ea.CompactTranscript(context.Background(), "/tmp/session.jsonl")
+	if err == nil {
+		t.Fatal("expected base64 decode error")
+	}
+	if !strings.Contains(err.Error(), "base64") {
+		t.Fatalf("expected base64 error, got: %v", err)
+	}
+}
+
 func TestWrap_HooksAndAnalyzer(t *testing.T) {
 	t.Parallel()
 
@@ -481,6 +585,9 @@ func TestWrap_HooksAndAnalyzer(t *testing.T) {
 	if _, ok := agent.AsTranscriptPreparer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptPreparer when transcript_preparer=false")
 	}
+	if _, ok := agent.AsTranscriptCompactor(wrapped); ok {
+		t.Error("Wrap() should not return TranscriptCompactor when compact_transcript=false")
+	}
 }
 
 func TestWrap_NoCapabilities(t *testing.T) {
@@ -514,6 +621,9 @@ func TestWrap_NoCapabilities(t *testing.T) {
 	}
 	if _, ok := agent.AsTranscriptAnalyzer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
+	}
+	if _, ok := agent.AsTranscriptCompactor(wrapped); ok {
+		t.Error("Wrap() should not return TranscriptCompactor when compact_transcript=false")
 	}
 }
 
@@ -662,6 +772,43 @@ func TestWrap_HooksAnalyzerPreparer(t *testing.T) {
 	}
 	if _, ok := agent.AsTokenCalculator(wrapped); ok {
 		t.Error("Wrap() should not return TokenCalculator when token_calculator=false")
+	}
+}
+
+func TestWrap_CompactTranscriptOnly(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "compact-only",
+  "type": "Compact Only",
+  "description": "Agent with compact transcript only",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"compact_transcript": true}
+}`
+
+	binPath := testBinaryDir(t, mockInfoScript(infoJSON))
+	ea := newExternalAgent(t, binPath)
+
+	wrapped, err := Wrap(ea)
+	if err != nil {
+		t.Fatalf("Wrap: %v", err)
+	}
+
+	if _, ok := agent.AsTranscriptCompactor(wrapped); !ok {
+		t.Error("Wrap() should return TranscriptCompactor when compact_transcript=true")
+	}
+	if _, ok := agent.AsHookSupport(wrapped); ok {
+		t.Error("Wrap() should not return HookSupport when hooks=false")
+	}
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); ok {
+		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
 	}
 }
 

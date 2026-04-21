@@ -768,10 +768,43 @@ func TestDisplayRestoredSessions_SingleSessionOutput(t *testing.T) {
 	if !strings.Contains(got, "✓ Restored session 2026-02-02-resume-output.\n") {
 		t.Fatalf("displayRestoredSessions() missing session header, got: %q", got)
 	}
-	if !strings.Contains(got, "\nTo continue this session, run:\n") {
+	if !strings.Contains(got, "\nTo continue this session:\n") {
 		t.Fatalf("displayRestoredSessions() missing continuation header, got: %q", got)
 	}
 	wantCommand := "  " + ag.FormatResumeCommand(session.SessionID) + "  # Implement auth\n"
+	if !strings.Contains(got, wantCommand) {
+		t.Fatalf("displayRestoredSessions() missing command %q in %q", wantCommand, got)
+	}
+}
+
+func TestDisplayRestoredSessions_CodexShowsResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	session := strategy.RestoredSession{
+		SessionID: "019d6d29-8cf7-7fe3-adc9-8c3e4d9d5603",
+		Agent:     "Codex",
+		Prompt:    "Can you take a look at the go code",
+		CreatedAt: time.Date(2026, time.April, 8, 18, 46, 0, 0, time.UTC),
+	}
+
+	ag, err := strategy.ResolveAgentForRewind(session.Agent)
+	if err != nil {
+		t.Fatalf("ResolveAgentForRewind() error = %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := displayRestoredSessions(&output, []strategy.RestoredSession{session}); err != nil {
+		t.Fatalf("displayRestoredSessions() error = %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "✓ Restored session 019d6d29-8cf7-7fe3-adc9-8c3e4d9d5603.\n") {
+		t.Fatalf("displayRestoredSessions() missing session header, got: %q", got)
+	}
+	if !strings.Contains(got, "\nTo continue this session:\n") {
+		t.Fatalf("displayRestoredSessions() missing continuation header, got: %q", got)
+	}
+	wantCommand := "  " + ag.FormatResumeCommand(session.SessionID) + "  # Can you take a look at the go code\n"
 	if !strings.Contains(got, wantCommand) {
 		t.Fatalf("displayRestoredSessions() missing command %q in %q", wantCommand, got)
 	}
@@ -801,7 +834,7 @@ func TestPrintMultiSessionResumeCommands_SingleSessionHasCheckmark(t *testing.T)
 	if !strings.Contains(got, "✓ Restored session 2026-02-02-rewind-single.\n") {
 		t.Fatalf("printMultiSessionResumeCommands() single session missing ✓ header, got: %q", got)
 	}
-	if !strings.Contains(got, "\nTo continue this session, run:\n") {
+	if !strings.Contains(got, "\nTo continue this session:\n") {
 		t.Fatalf("printMultiSessionResumeCommands() missing continuation line, got: %q", got)
 	}
 	wantCommand := "  " + ag.FormatResumeCommand("2026-02-02-rewind-single") + "  # Fix the bug\n"
@@ -839,7 +872,7 @@ func TestPrintMultiSessionResumeCommands_OutputMatchesResumeStyle(t *testing.T) 
 	printMultiSessionResumeCommands(&output, &errOutput, sessions)
 
 	got := output.String()
-	if !strings.Contains(got, "\n✓ Restored 2 sessions. To continue, run:\n") {
+	if !strings.Contains(got, "\n✓ Restored 2 sessions. To continue:\n") {
 		t.Fatalf("printMultiSessionResumeCommands() missing multi-session header, got: %q", got)
 	}
 	oldCommand := "  " + ag.FormatResumeCommand("2026-02-02-rewind-old") + "  # Old prompt\n"
@@ -852,5 +885,29 @@ func TestPrintMultiSessionResumeCommands_OutputMatchesResumeStyle(t *testing.T) 
 	}
 	if errOutput.Len() != 0 {
 		t.Fatalf("printMultiSessionResumeCommands() unexpected stderr: %q", errOutput.String())
+	}
+}
+
+// Not parallel: uses t.Chdir()
+func TestGetMetadataTree_SucceedsWithLocalBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+
+	// Create checkpoint metadata on the local metadata branch
+	sessionID := "2025-01-01-metadata-tree-test"
+	_ = createCheckpointOnMetadataBranch(t, repo, sessionID)
+
+	// No origin remote, no checkpoint_remote — only local branch
+	tree, freshRepo, err := getMetadataTree(context.Background())
+	if err != nil {
+		t.Fatalf("getMetadataTree() error = %v", err)
+	}
+	if tree == nil {
+		t.Fatal("getMetadataTree() returned nil tree")
+	}
+	if freshRepo == nil {
+		t.Fatal("getMetadataTree() returned nil repo")
 	}
 }

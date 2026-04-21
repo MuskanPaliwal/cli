@@ -41,9 +41,9 @@ type GenerationMetadata struct {
 	NewestCheckpointAt time.Time `json:"newest_checkpoint_at"`
 }
 
-// readGeneration reads generation.json from the given tree hash.
+// ReadGeneration reads generation.json from the given tree hash.
 // Returns a zero-value GenerationMetadata if the file doesn't exist (new/empty generation).
-func (s *V2GitStore) readGeneration(treeHash plumbing.Hash) (GenerationMetadata, error) {
+func (s *V2GitStore) ReadGeneration(treeHash plumbing.Hash) (GenerationMetadata, error) {
 	if treeHash == plumbing.ZeroHash {
 		return GenerationMetadata{}, nil
 	}
@@ -74,13 +74,13 @@ func (s *V2GitStore) readGeneration(treeHash plumbing.Hash) (GenerationMetadata,
 	return gen, nil
 }
 
-// readGenerationFromRef reads generation.json from the tree pointed to by the given ref.
-func (s *V2GitStore) readGenerationFromRef(refName plumbing.ReferenceName) (GenerationMetadata, error) {
+// ReadGenerationFromRef reads generation.json from the tree pointed to by the given ref.
+func (s *V2GitStore) ReadGenerationFromRef(refName plumbing.ReferenceName) (GenerationMetadata, error) {
 	_, treeHash, err := s.GetRefState(refName)
 	if err != nil {
 		return GenerationMetadata{}, fmt.Errorf("failed to get ref state: %w", err)
 	}
-	return s.readGeneration(treeHash)
+	return s.ReadGeneration(treeHash)
 }
 
 // marshalGenerationBlob marshals gen as generation.json and stores it as a git blob.
@@ -312,7 +312,7 @@ func (s *V2GitStore) rotateGeneration(ctx context.Context) error {
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	archiveCommitHash, err := CreateCommit(s.repo, archiveTreeHash, currentRef.Hash(), "Archive generation", authorName, authorEmail)
+	archiveCommitHash, err := CreateCommit(ctx, s.repo, archiveTreeHash, currentRef.Hash(), "Archive generation", authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("rotation: failed to create archive commit: %w", err)
 	}
@@ -324,12 +324,12 @@ func (s *V2GitStore) rotateGeneration(ctx context.Context) error {
 	}
 
 	// Phase 2: Create fresh orphan /full/current (empty tree, no generation.json)
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return fmt.Errorf("rotation: failed to build empty tree: %w", err)
 	}
 
-	orphanCommitHash, err := CreateCommit(s.repo, emptyTreeHash, plumbing.ZeroHash, "Start generation", authorName, authorEmail)
+	orphanCommitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, plumbing.ZeroHash, "Start generation", authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("rotation: failed to create orphan commit: %w", err)
 	}

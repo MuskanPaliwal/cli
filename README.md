@@ -38,20 +38,30 @@ With Entire, you can:
 
 - Git
 - macOS, Linux or Windows
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://help.openai.com/en/articles/11096431), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [OpenCode](https://opencode.ai/docs/cli/), [Cursor](https://www.cursor.com/), [Factory AI Droid](https://www.factory.ai/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot) installed and authenticated
+- [Supported agent](#agent-hook-configuration) installed and authenticated
 
 ## Quick Start
 
 ```bash
-# Install via Homebrew
+# Install stable via Homebrew
 brew tap entireio/tap
-brew install entireio/tap/entire
+brew install --cask entire
 
-# Or install via Scoop (Windows)
+# Or install nightly via Homebrew
+brew tap entireio/tap
+brew install --cask entire@nightly
+
+# Or install stable via install.sh
+curl -fsSL https://entire.io/install.sh | bash
+
+# Or install nightly via install.sh
+curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly
+
+# Or install stable via Scoop (Windows)
 scoop bucket add entire https://github.com/entireio/scoop-bucket.git
 scoop install entire/cli
 
-# Or install via Go
+# Or install via Go (development/manual setup)
 go install github.com/entireio/cli/cmd/entire@latest
 
 # Linux: Add Go binaries to PATH (add to ~/.zshrc or ~/.bashrc if not already configured)
@@ -64,6 +74,23 @@ cd your-project && entire enable
 entire status
 ```
 
+After the initial setup, use `entire configure` to add/remove agents or update setup-related options, and use `entire enable` / `entire disable` to toggle Entire on or off.
+
+## Release Channels
+
+Entire currently ships two release channels:
+
+- `stable`: recommended for most users. Stable releases change less often and are the default for Homebrew, Scoop, and `install.sh`.
+- `nightly`: prerelease builds for users who want the latest changes earlier. Nightlies are published more frequently and may include newer, less-proven changes than stable.
+
+How to use each channel:
+
+- Homebrew stable: `brew install --cask entire`
+- Homebrew nightly: `brew install --cask entire@nightly`
+- `install.sh` stable: `curl -fsSL https://entire.io/install.sh | bash`
+- `install.sh` nightly: `curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly`
+- Scoop: currently supports `stable` only via `scoop install entire/cli`
+
 ## Typical Workflow
 
 ### 1. Enable Entire in Your Repository
@@ -72,13 +99,18 @@ entire status
 entire enable
 ```
 
-This installs agent and git hooks to work with your AI agent (Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI). You'll be prompted to select which agents to enable. To enable a specific agent non-interactively, use `entire enable --agent <name>` (e.g., `entire enable --agent cursor`).
+On a repo that has not been enabled yet, `entire enable` runs the initial enable flow: it creates Entire settings, installs git hooks, and prompts you to choose which agent hooks to install. To enable a specific agent non-interactively, use `entire enable --agent <name>` (for example, `entire enable --agent cursor`).
+
+After setup:
+
+- Use `entire enable` to turn Entire back on if the repo is currently disabled.
+- Use `entire configure` to change which agents are installed or to update setup-related settings.
 
 The hooks capture session data as you work. Checkpoints are created when you or the agent make a git commit. Your code commits stay clean, Entire never creates commits on your active branch. All session metadata is stored on a separate `entire/checkpoints/v1` branch.
 
 ### 2. Work with Your AI Agent
 
-Just use Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI normally. Entire runs in the background, tracking your session:
+Just use one of your AI agents as before. Entire runs in the background, tracking your session:
 
 ```
 entire status  # Check current session status anytime
@@ -200,6 +232,7 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | Command          | Description                                                                                       |
 | ---------------- | ------------------------------------------------------------------------------------------------- |
 | `entire clean`   | Clean up session data and orphaned Entire data (use `--all` for repo-wide cleanup)                |
+| `entire configure` | Configure agents and setup options for the current repository                                  |
 | `entire disable` | Remove Entire hooks from repository                                                               |
 | `entire doctor`  | Fix or clean up stuck sessions                                                                    |
 | `entire enable`  | Enable Entire in your repository                                                                  |
@@ -226,11 +259,46 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 **Examples:**
 
 ```
-# Force reinstall hooks
+# First-time setup with a specific agent
+entire enable --agent claude-code
+
+# Re-enable a disabled repo
+entire enable
+
+# Re-enable and refresh hooks
 entire enable --force
 
 # Save settings locally (not committed to git)
 entire enable --local
+```
+
+`entire enable` is primarily for turning Entire on. On an unconfigured repo it will also bootstrap setup, but once the repo is already configured, `entire configure` is the clearer command for managing agents and setup options.
+
+### `entire configure`
+
+Use `entire configure` after the repo is already set up and you want to change the configuration without framing the action as an enable/disable toggle.
+
+Typical uses:
+
+- Add another agent
+- Remove an agent
+- Reinstall hooks for selected agents
+- Update settings such as `--checkpoint-remote` or `--skip-push-sessions`
+
+**Examples:**
+
+```bash
+# Add or remove agents interactively
+entire configure
+
+# Install or refresh hooks for one agent non-interactively
+entire configure --agent claude-code --force
+
+# Update setup settings on an existing repo
+entire configure --checkpoint-remote github:myorg/checkpoints-private
+
+# Remove one agent's hooks
+entire configure --remove claude-code
 ```
 
 ## Configuration
@@ -277,11 +345,11 @@ Each agent stores its hook configuration in its own directory. When you run `ent
 | ---------------- | ----------------------------- | ----------------- |
 | Claude Code      | `.claude/settings.json`       | JSON hooks config |
 | Codex            | `.codex/hooks.json`           | JSON hooks config |
-| Gemini CLI       | `.gemini/settings.json`       | JSON hooks config |
-| OpenCode         | `.opencode/plugins/entire.ts` | TypeScript plugin |
+| Copilot CLI      | `.github/hooks/entire.json`   | JSON hooks config |
 | Cursor           | `.cursor/hooks.json`          | JSON hooks config |
 | Factory AI Droid | `.factory/settings.json`      | JSON hooks config |
-| Copilot CLI      | `.github/hooks/entire.json`   | JSON hooks config |
+| Gemini CLI       | `.gemini/settings.json`       | JSON hooks config |
+| OpenCode         | `.opencode/plugins/entire.ts` | TypeScript plugin |
 
 You can enable multiple agents at the same time — each agent's hooks are independent. Entire detects which agents are active by checking for installed hooks, not by a setting in `settings.json`.
 
@@ -313,6 +381,21 @@ Entire derives the git URL automatically using the same protocol (SSH or HTTPS) 
 - Skip pushing if a fork is detected (push remote owner differs from checkpoint repo owner)
 - If the remote is unreachable, warn and continue without blocking your main push
 
+#### `ENTIRE_CHECKPOINT_TOKEN`
+
+`ENTIRE_CHECKPOINT_TOKEN` allows you to provide a dedicated token for checkpoint repository operations, without modifying the credentials used for your primary repository.
+
+When this environment variable is set, Entire behaves as follows:
+
+- Injects the token into HTTPS Git operations used for checkpoint fetch and push
+- If `checkpoint_remote` is configured:
+  - Prefers an HTTPS URL for the checkpoint remote when a token is present, even if the repository’s `origin` uses SSH
+- If `checkpoint_remote` is not configured:
+  - Falls back to using the default `origin` remote
+- If `checkpoint_remote` configuration cannot be loaded:
+  - Falls back to `origin`
+  - If `origin` is a valid SSH or HTTPS Git remote, Entire converts it to an HTTPS URL to enable token-based authentication
+
 ### Auto-Summarization
 
 When enabled, Entire automatically generates AI summaries for checkpoints at commit time. Summaries capture intent, outcome, learnings, friction points, and open items from the session.
@@ -338,102 +421,11 @@ When enabled, Entire automatically generates AI summaries for checkpoints at com
 
 Local settings override project settings field-by-field. When you run `entire status`, it shows both project and local (effective) settings.
 
-### Gemini CLI
+### Agent-Specific Steps & Limitations
 
-Gemini CLI support is currently in preview. Entire can work with [Gemini CLI](https://github.com/google-gemini/gemini-cli) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-To enable:
-
-```bash
-entire enable --agent gemini
-```
-
-All commands (`rewind`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
-
-If you run into any issues with Gemini CLI integration, please [open an issue](https://github.com/entireio/cli/issues).
-
-### Codex
-
-Codex support is currently in preview. Entire can work with [Codex](https://help.openai.com/en/articles/11096431) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-To enable:
-
-```bash
-entire enable --agent codex
-```
-
-This command will also create or update `.codex/config.toml` with `codex_hooks = true` to enable Codex hooks. If you configure Codex manually, make sure this flag is set in your `.codex/config.toml`.
-Or select Codex from the interactive agent picker when running `entire enable`.
-
-All commands (`rewind`, `resume`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
-
-If you run into any issues with Codex integration, please [open an issue](https://github.com/entireio/cli/issues).
-
-### OpenCode
-
-OpenCode support is currently in preview. Entire can work with [OpenCode](https://opencode.ai/docs/cli/) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-To enable:
-
-```bash
-entire enable --agent opencode
-```
-
-Or select OpenCode from the interactive agent picker when running `entire enable`.
-
-All commands (`rewind`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
-
-If you run into any issues with OpenCode integration, please [open an issue](https://github.com/entireio/cli/issues).
-
-### Cursor
-
-Cursor support is currently in preview. Entire can work with [Cursor](https://www.cursor.com/) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-Entire supports Cursor IDE and Cursor Agent CLI tool.
-
-To enable:
-
-```bash
-entire enable --agent cursor
-```
-
-Or select Cursor IDE from the interactive agent picker when running `entire enable`.
-
-Rewind is not available at this time, but other commands (`doctor`, `status` etc.) work the same as all other agents.
-
-If you run into any issues with Cursor integration, please [open an issue](https://github.com/entireio/cli/issues).
-
-### Factory AI Droid
-
-Factory AI Droid support is currently in preview. Entire can work with [Factory AI Droid](https://www.factory.ai/) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-To enable:
-
-```bash
-entire enable --agent factoryai-droid
-```
-
-Or select Factory AI Droid from the interactive agent picker when running `entire enable`.
-
-All commands (`rewind`, `resume`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
-
-If you run into any issues with Factory AI Droid integration, please [open an issue](https://github.com/entireio/cli/issues).
-
-### Copilot CLI
-
-GitHub Copilot CLI support is currently in preview. Entire can work with [GitHub Copilot CLI](https://docs.github.com/en/copilot) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
-
-To enable:
-
-```bash
-entire enable --agent copilot-cli
-```
-
-Or select Copilot CLI from the interactive agent picker when running `entire enable`.
-
-All commands (`rewind`, `resume`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
-
-If you run into any issues with Copilot CLI integration, please [open an issue](https://github.com/entireio/cli/issues).
+- When enabling Entire for Codex, the command will also create or update `.codex/config.toml` with `codex_hooks = true` to enable Codex hooks. If you configure Codex manually, make sure this flag is set in your `.codex/config.toml`. Or select Codex from the interactive agent picker when running `entire enable`.
+- Entire supports Cursor IDE and Cursor Agent CLI tool, but `entire rewind` is not available at this time. Other commands (`doctor`, `status` etc.) work the same as all other agents.
+- Entire supports Copilot CLI, but not Copilot in VS Code, in other IDEs, or on github.com.
 
 ## Security & Privacy
 
@@ -527,6 +519,21 @@ mise trust
 # Build the CLI
 mise run build
 ```
+
+### Dev Container
+
+The repo includes a `.devcontainer/` configuration that installs the system packages used by local development and CI (`git`, `tmux`, `gnome-keyring`, etc) and then bootstraps the repo's `mise` toolchain.
+
+Open the folder in a Dev Container, or start it from the `devcontainer` CLI as follows:
+
+```bash
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . bash -lc '.devcontainer/run-with-keyring.sh'
+```
+
+The container's `postCreateCommand` runs `mise trust --yes && mise install`, so Go, `golangci-lint`, `gotestsum`, `shellcheck`, and the canary E2E helper binaries are ready after creation. Use `.devcontainer/run-with-keyring.sh <command>` for commands that touch the Linux keyring, including `mise run test:ci`.
+
+If `ENTIRE_DEVCONTAINER_KEYRING_PASSWORD` is set in the environment, `.devcontainer/run-with-keyring.sh` uses that value to unlock the keyring non-interactively. If it is unset, the script generates a random password for the session automatically.
 
 ### Common Tasks
 

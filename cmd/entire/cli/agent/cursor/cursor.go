@@ -29,7 +29,9 @@ func init() {
 // CursorAgent implements the Agent interface for Cursor.
 //
 //nolint:revive // CursorAgent is clearer than Agent in this context
-type CursorAgent struct{}
+type CursorAgent struct {
+	CommandRunner agent.TextCommandRunner
+}
 
 // NewCursorAgent creates a new Cursor agent instance.
 func NewCursorAgent() agent.Agent {
@@ -148,14 +150,24 @@ func (c *CursorAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, 
 // or until the timeout expires.
 func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) error {
 	const (
-		maxWait      = 3 * time.Second
+		maxWait      = 5 * time.Second
 		pollInterval = 50 * time.Millisecond
 	)
 
 	logCtx := logging.WithComponent(ctx, "agent.cursor")
 
-	deadline := time.Now().Add(maxWait)
+	start := time.Now()
+	deadline := start.Add(maxWait)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	effectiveTimeout := deadline.Sub(start)
+
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("context ended while waiting for transcript: %w", err)
+		}
+
 		info, err := os.Stat(sessionRef)
 		if err == nil {
 			if info.Size() > 0 {
@@ -167,11 +179,24 @@ func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) 
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("failed to stat transcript %q: %w", sessionRef, err)
 		}
-		time.Sleep(pollInterval)
+
+		wait := pollInterval
+		if remaining := time.Until(deadline); remaining < wait {
+			wait = remaining
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fmt.Errorf("context ended while waiting for transcript: %w", ctx.Err())
+		case <-timer.C:
+		}
 	}
 
 	logging.Warn(logCtx, "transcript file not ready within timeout, proceeding",
-		slog.Duration("timeout", maxWait),
+		slog.Duration("timeout", effectiveTimeout),
 		slog.String("path", sessionRef),
 	)
 	return nil
@@ -205,7 +230,7 @@ func (c *CursorAgent) WriteSession(_ context.Context, session *agent.AgentSessio
 // FormatResumeCommand returns an instruction to resume a Cursor session.
 // Cursor is a GUI IDE, so there's no CLI command to resume a session directly.
 func (c *CursorAgent) FormatResumeCommand(_ string) string {
-	return "Open this project in Cursor to continue the session."
+	return "Open this project in Cursor."
 }
 
 // sanitizePathForCursor converts a path to Cursor's project directory format.

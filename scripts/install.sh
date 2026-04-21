@@ -4,6 +4,7 @@ set -euo pipefail
 
 GITHUB_REPO="entireio/cli"
 DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+DEFAULT_CHANNEL="stable"
 
 # Colors (disabled in non-interactive mode)
 if [[ -t 1 ]]; then
@@ -39,6 +40,16 @@ error() {
     exit 1
 }
 
+usage() {
+    cat <<EOF
+Usage: install.sh [--channel stable|nightly]
+
+Options:
+  --channel   Release channel to install (default: stable)
+  -h, --help  Show this help message
+EOF
+}
+
 detect_os() {
     local os
     os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -71,17 +82,35 @@ detect_arch() {
     esac
 }
 
-get_latest_version() {
-    local url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    local version
+fetch_github_json() {
+    local url="$1"
     local curl_opts=(-fsSL)
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         curl_opts+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
     fi
-    version=$(curl "${curl_opts[@]}" "$url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')
+
+    curl "${curl_opts[@]}" "$url" 2>/dev/null
+}
+
+get_latest_stable_version() {
+    local url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local version
+    version=$(fetch_github_json "$url" | grep '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')
 
     if [[ -z "$version" ]]; then
         error "Failed to fetch latest version from GitHub. Please check your internet connection."
+    fi
+
+    echo "$version"
+}
+
+get_latest_nightly_version() {
+    local url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
+    local version
+    version=$(fetch_github_json "$url" | grep '"tag_name"' | grep 'nightly' | head -n 1 | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')
+
+    if [[ -z "$version" ]]; then
+        error "Failed to fetch latest nightly version from GitHub. Please check your internet connection."
     fi
 
     echo "$version"
@@ -115,9 +144,37 @@ verify_checksum() {
 }
 
 main() {
+    local channel="${DEFAULT_CHANNEL}"
+    local version=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --channel)
+                shift
+                [[ $# -gt 0 ]] || error "--channel requires a value"
+                channel="$1"
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                error "Unknown argument: $1"
+                ;;
+        esac
+        shift
+    done
+
     if ! command -v curl &> /dev/null; then
         error "curl is required but not installed. Please install curl and try again."
     fi
+
+    case "$channel" in
+        stable|nightly) ;;
+        *)
+            error "Unsupported channel: ${channel}. Expected 'stable' or 'nightly'."
+            ;;
+    esac
 
     info "Installing Entire CLI..."
 
@@ -127,9 +184,12 @@ main() {
     arch=$(detect_arch)
     info "Detected platform: ${os}/${arch}"
 
-    info "Fetching latest version..."
-    local version
-    version=$(get_latest_version)
+    info "Fetching latest ${channel} version..."
+    if [[ "$channel" == "nightly" ]]; then
+        version=$(get_latest_nightly_version)
+    else
+        version=$(get_latest_stable_version)
+    fi
     # Strip leading 'v' if present
     version="${version#v}"
     info "Installing version: ${version}"

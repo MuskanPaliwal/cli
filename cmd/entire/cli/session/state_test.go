@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v6"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,36 +77,123 @@ func TestState_NormalizeAfterLoad(t *testing.T) {
 		assert.Equal(t, 200, state.CheckpointTranscriptStart)
 		assert.Equal(t, 0, state.TranscriptLinesAtStart)
 	})
+
+	t.Run("leaves_CompactTranscriptStart_zero_when_missing", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			CheckpointTranscriptStart: 120,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.Equal(t, 0, state.CompactTranscriptStart)
+	})
+
+	t.Run("preserves_existing_CompactTranscriptStart", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			CheckpointTranscriptStart: 120,
+			CompactTranscriptStart:    45,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.Equal(t, 45, state.CompactTranscriptStart)
+	})
+
+	t.Run("heals_stale_divergence_flag_when_attribution_aligned", func(t *testing.T) {
+		t.Parallel()
+		// DivergenceNoticeShown is only meaningful while attribution is diverged.
+		// A state file carrying notice=true with base==attribution must self-heal on load —
+		// otherwise a legitimate future divergence would be suppressed by the stale flag.
+		state := &State{
+			BaseCommit:            "aaaaaaa",
+			AttributionBaseCommit: "aaaaaaa",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.False(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be cleared when AttributionBaseCommit == BaseCommit")
+	})
+
+	t.Run("heals_stale_divergence_flag_when_attribution_empty", func(t *testing.T) {
+		t.Parallel()
+		// Empty AttributionBaseCommit gets backfilled to BaseCommit below; once aligned,
+		// the flag is meaningless and must clear.
+		state := &State{
+			BaseCommit:            "bbbbbbb",
+			AttributionBaseCommit: "",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.False(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be cleared when AttributionBaseCommit is empty/backfilled")
+	})
+
+	t.Run("preserves_divergence_flag_when_actually_diverged", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			BaseCommit:            "cccccc1",
+			AttributionBaseCommit: "cccccc0",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.True(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be preserved when attribution is genuinely diverged")
+	})
+}
+
+func TestState_RealignAttributionBase_ClearsDivergenceFlag(t *testing.T) {
+	t.Parallel()
+
+	state := &State{
+		BaseCommit:            "ccccccc",
+		AttributionBaseCommit: "aaaaaaa",
+		DivergenceNoticeShown: true,
+	}
+	state.RealignAttributionBase("ccccccc")
+
+	assert.Equal(t, "ccccccc", state.AttributionBaseCommit,
+		"AttributionBaseCommit must be updated to the new base")
+	assert.False(t, state.DivergenceNoticeShown,
+		"DivergenceNoticeShown must be cleared whenever attribution is realigned")
 }
 
 func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 	tests := []struct {
-		name     string
-		json     string
-		wantCTS  int // CheckpointTranscriptStart
-		wantStep int // StepCount
+		name        string
+		json        string
+		wantCTS     int // CheckpointTranscriptStart
+		wantCompact int // CompactTranscriptStart
+		wantStep    int // StepCount
 	}{
 		{
-			name:     "migrates old condensed_transcript_lines",
-			json:     `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
-			wantCTS:  42,
-			wantStep: 5,
+			name:        "migrates old condensed_transcript_lines",
+			json:        `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
+			wantCTS:     42,
+			wantCompact: 0,
+			wantStep:    5,
 		},
 		{
-			name:    "migrates old transcript_lines_at_start",
-			json:    `{"session_id":"s1","transcript_lines_at_start":75}`,
-			wantCTS: 75,
+			name:        "migrates old transcript_lines_at_start",
+			json:        `{"session_id":"s1","transcript_lines_at_start":75}`,
+			wantCTS:     75,
+			wantCompact: 0,
 		},
 		{
-			name:    "preserves new field over old",
-			json:    `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
-			wantCTS: 50,
+			name:        "preserves new field over old",
+			json:        `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
+			wantCTS:     50,
+			wantCompact: 0,
 		},
 		{
-			name:     "handles clean new format",
-			json:     `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
-			wantCTS:  25,
-			wantStep: 3,
+			name:        "handles clean new format",
+			json:        `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
+			wantCTS:     25,
+			wantCompact: 0,
+			wantStep:    3,
+		},
+		{
+			name:        "preserves explicit compact_transcript_start",
+			json:        `{"session_id":"s1","checkpoint_transcript_start":25,"compact_transcript_start":9}`,
+			wantCTS:     25,
+			wantCompact: 9,
 		},
 	}
 
@@ -117,6 +204,7 @@ func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 			state.NormalizeAfterLoad(context.Background())
 
 			assert.Equal(t, tt.wantCTS, state.CheckpointTranscriptStart)
+			assert.Equal(t, tt.wantCompact, state.CompactTranscriptStart)
 			assert.Equal(t, tt.wantStep, state.StepCount)
 			assert.Equal(t, 0, state.CondensedTranscriptLines, "deprecated field should be cleared")
 			assert.Equal(t, 0, state.TranscriptLinesAtStart, "deprecated field should be cleared")
@@ -462,8 +550,7 @@ func initTestRepo(t *testing.T) string {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
 	}
-	_, err := git.PlainInit(dir, false)
-	require.NoError(t, err)
+	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
 	ClearGitCommonDirCache()
 	return dir
@@ -527,15 +614,13 @@ func TestGetGitCommonDir_InvalidatesOnCwdChange(t *testing.T) {
 	if resolved, err := filepath.EvalSymlinks(dir1); err == nil {
 		dir1 = resolved
 	}
-	_, err := git.PlainInit(dir1, false)
-	require.NoError(t, err)
+	testutil.InitRepo(t, dir1)
 
 	dir2 := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(dir2); err == nil {
 		dir2 = resolved
 	}
-	_, err = git.PlainInit(dir2, false)
-	require.NoError(t, err)
+	testutil.InitRepo(t, dir2)
 
 	ClearGitCommonDirCache()
 

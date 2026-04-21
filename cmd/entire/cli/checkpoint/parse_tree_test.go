@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -84,6 +85,25 @@ func flattenTreeHelper(t *testing.T, repo *git.Repository, treeHash plumbing.Has
 	return result
 }
 
+// assertNoEmptyEntryNames recursively verifies that a tree contains no empty entry names.
+func assertNoEmptyEntryNames(t *testing.T, repo *git.Repository, treeHash plumbing.Hash, prefix string) {
+	t.Helper()
+
+	tree := mustTreeObject(t, repo, treeHash)
+	for _, entry := range tree.Entries {
+		fullPath := entry.Name
+		if prefix != "" {
+			fullPath = prefix + "/" + entry.Name
+		}
+		if entry.Name == "" {
+			t.Fatalf("tree %s contains empty entry name at %q", treeHash, fullPath)
+		}
+		if entry.Mode == filemode.Dir {
+			assertNoEmptyEntryNames(t, repo, entry.Hash, fullPath)
+		}
+	}
+}
+
 func TestSplitFirstSegment(t *testing.T) {
 	t.Parallel()
 
@@ -134,6 +154,131 @@ func TestStoreTree_RoundTrip(t *testing.T) {
 	}
 	if tree.Entries[0].Hash != blobHash {
 		t.Errorf("hash mismatch: got %s, want %s", tree.Entries[0].Hash, blobHash)
+	}
+}
+
+func TestApplyTreeChanges_SkipsInvalidPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		path        string
+		wantPresent string
+	}{
+		{
+			name:        "leading slash windows path",
+			path:        "/C:/Users/r/Vaults/Flowsign/.entire/metadata/test-session/full.jsonl",
+			wantPresent: "valid.txt",
+		},
+		{
+			name:        "drive letter windows path",
+			path:        "C:/Users/r/Vaults/Flowsign/.entire/metadata/test-session/full.jsonl",
+			wantPresent: "valid.txt",
+		},
+		{
+			name:        "empty segment",
+			path:        "dir//file.txt",
+			wantPresent: "valid.txt",
+		},
+		{
+			name:        "dot segment",
+			path:        "./dir/file.txt",
+			wantPresent: "valid.txt",
+		},
+		{
+			name:        "dot dot segment",
+			path:        "../dir/file.txt",
+			wantPresent: "valid.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo := mustInitBareRepo(t)
+			validBlob := storeBlob(t, repo, "valid")
+			invalidBlob := storeBlob(t, repo, "invalid")
+
+			treeHash, err := ApplyTreeChanges(context.Background(), repo, plumbing.ZeroHash, []TreeChange{
+				{
+					Path: "valid.txt",
+					Entry: &object.TreeEntry{
+						Mode: filemode.Regular,
+						Hash: validBlob,
+					},
+				},
+				{
+					Path: tt.path,
+					Entry: &object.TreeEntry{
+						Mode: filemode.Regular,
+						Hash: invalidBlob,
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("ApplyTreeChanges() error = %v", err)
+			}
+
+			assertNoEmptyEntryNames(t, repo, treeHash, "")
+			files := flattenTreeHelper(t, repo, treeHash, "")
+			if len(files) != 1 {
+				t.Fatalf("expected 1 valid file, got %d: %v", len(files), files)
+			}
+			if files[tt.wantPresent] != validBlob {
+				t.Fatalf("expected valid file %q to be preserved", tt.wantPresent)
+			}
+		})
+	}
+}
+
+func TestBuildTreeFromEntries_SkipsInvalidPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "leading slash windows path", path: "/C:/repo/file.txt"},
+		{name: "drive letter windows path", path: "C:/repo/file.txt"},
+		{name: "empty segment", path: "dir//file.txt"},
+		{name: "dot segment", path: "./file.txt"},
+		{name: "dot dot segment", path: "../file.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo := mustInitBareRepo(t)
+			validBlob := storeBlob(t, repo, "valid")
+			invalidBlob := storeBlob(t, repo, "invalid")
+
+			treeHash, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
+				"valid.txt": {
+					Name: "valid.txt",
+					Mode: filemode.Regular,
+					Hash: validBlob,
+				},
+				tt.path: {
+					Name: tt.path,
+					Mode: filemode.Regular,
+					Hash: invalidBlob,
+				},
+			})
+			if err != nil {
+				t.Fatalf("BuildTreeFromEntries() error = %v", err)
+			}
+
+			assertNoEmptyEntryNames(t, repo, treeHash, "")
+			files := flattenTreeHelper(t, repo, treeHash, "")
+			if len(files) != 1 {
+				t.Fatalf("expected 1 valid file, got %d: %v", len(files), files)
+			}
+			if files["valid.txt"] != validBlob {
+				t.Fatal("expected valid.txt to be preserved")
+			}
+		})
 	}
 }
 
@@ -452,7 +597,7 @@ func TestApplyTreeChanges_Empty(t *testing.T) {
 	})
 
 	// No changes should return the same hash
-	result, err := ApplyTreeChanges(repo, rootTree, nil)
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, nil)
 	if err != nil {
 		t.Fatalf("ApplyTreeChanges() error = %v", err)
 	}
@@ -471,7 +616,7 @@ func TestApplyTreeChanges_AddFile(t *testing.T) {
 		{Name: "existing.txt", Mode: filemode.Regular, Hash: blob1},
 	})
 
-	result, err := ApplyTreeChanges(repo, rootTree, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, []TreeChange{
 		{Path: "new.txt", Entry: &object.TreeEntry{
 			Name: "new.txt", Mode: filemode.Regular, Hash: blob2,
 		}},
@@ -503,7 +648,7 @@ func TestApplyTreeChanges_DeleteFile(t *testing.T) {
 		{Name: "keep.txt", Mode: filemode.Regular, Hash: blob1},
 	})
 
-	result, err := ApplyTreeChanges(repo, rootTree, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, []TreeChange{
 		{Path: "delete.txt", Entry: nil}, // nil Entry means delete
 	})
 	if err != nil {
@@ -537,7 +682,7 @@ func TestApplyTreeChanges_ModifyNestedFile(t *testing.T) {
 	})
 
 	// Modify src/handler.go
-	result, err := ApplyTreeChanges(repo, rootTree, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, []TreeChange{
 		{Path: "src/handler.go", Entry: &object.TreeEntry{
 			Name: "handler.go", Mode: filemode.Regular, Hash: blobNew,
 		}},
@@ -575,7 +720,7 @@ func TestApplyTreeChanges_MultipleDirectories(t *testing.T) {
 	})
 
 	// Modify dir1/a.txt and dir3/c.txt, leave dir2 untouched
-	result, err := ApplyTreeChanges(repo, rootTree, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, []TreeChange{
 		{Path: "dir1/a.txt", Entry: &object.TreeEntry{
 			Name: "a.txt", Mode: filemode.Regular, Hash: blobNew,
 		}},
@@ -614,7 +759,7 @@ func TestApplyTreeChanges_CreateNestedFromEmpty(t *testing.T) {
 	blob := storeBlob(t, repo, "deep-content")
 
 	// Start from empty tree
-	result, err := ApplyTreeChanges(repo, plumbing.ZeroHash, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, plumbing.ZeroHash, []TreeChange{
 		{Path: "a/b/c/file.txt", Entry: &object.TreeEntry{
 			Name: "file.txt", Mode: filemode.Regular, Hash: blob,
 		}},
@@ -649,7 +794,7 @@ func TestApplyTreeChanges_MixedOperations(t *testing.T) {
 		{Name: "modify.txt", Mode: filemode.Regular, Hash: blobOld},
 	})
 
-	result, err := ApplyTreeChanges(repo, rootTree, []TreeChange{
+	result, err := ApplyTreeChanges(context.Background(), repo, rootTree, []TreeChange{
 		// Delete
 		{Path: "delete.txt", Entry: nil},
 		// Modify
@@ -738,7 +883,7 @@ func TestUpdateSubtree_EquivalenceWithFlattenRebuild(t *testing.T) {
 		Mode: filemode.Regular,
 		Hash: newBlob,
 	}
-	flatResult, err := BuildTreeFromEntries(repo, flatEntries)
+	flatResult, err := BuildTreeFromEntries(context.Background(), repo, flatEntries)
 	if err != nil {
 		t.Fatalf("BuildTreeFromEntries() error = %v", err)
 	}

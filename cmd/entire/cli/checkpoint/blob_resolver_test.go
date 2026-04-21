@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -137,7 +138,7 @@ func TestCollectTranscriptBlobHashes_MultiSession(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte("second session transcript\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("second session transcript\n")),
 		Prompts:      []string{"second prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",

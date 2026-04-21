@@ -32,9 +32,11 @@ func (a *CursorCLI) Binary() string             { return "agent" }
 func (a *CursorCLI) EntireAgent() string        { return "cursor" }
 func (a *CursorCLI) TimeoutMultiplier() float64 { return 1.5 }
 
-// PromptPattern returns a regex matching the Cursor CLI's TUI input prompt.
-// The CLI shows a styled input box with placeholder text when ready for input.
-func (a *CursorCLI) PromptPattern() string { return `/ commands` }
+// PromptPattern returns a regex matching Cursor's ready-state prompt markers.
+// Cursor has used multiple startup/completion markers across releases.
+func (a *CursorCLI) PromptPattern() string {
+	return `(/ commands|Plan, search, build anything|Add a follow-up)`
+}
 
 func (a *CursorCLI) IsTransientError(out Output, err error) bool {
 	if err == nil {
@@ -119,7 +121,7 @@ func (a *CursorCLI) RunPrompt(ctx context.Context, dir string, prompt string, op
 	}
 
 	// Wait for the TUI to be ready.
-	if _, err := s.WaitFor(a.PromptPattern(), 30*time.Second); err != nil {
+	if _, err := s.WaitFor(a.PromptPattern(), 45*time.Second); err != nil {
 		return Output{Command: displayCmd, Stdout: s.Capture(), ExitCode: -1},
 			fmt.Errorf("waiting for startup prompt: %w", err)
 	}
@@ -130,11 +132,10 @@ func (a *CursorCLI) RunPrompt(ctx context.Context, dir string, prompt string, op
 			fmt.Errorf("sending prompt: %w", err)
 	}
 
-	// Wait for the "Add a follow-up" text that only appears after the agent
-	// finishes processing. We cannot reuse PromptPattern() ("/ commands")
-	// because that text is always visible in the status bar — even during
-	// the "Thinking" phase — causing WaitFor to settle prematurely when the
-	// model takes >2s to start producing visible output.
+	// Wait for the "Add a follow-up" completion marker that appears after the
+	// agent finishes processing. We cannot reuse PromptPattern() here because
+	// it matches ready-state UI markers that can already be visible while the
+	// model is still thinking, causing WaitFor to settle prematurely.
 	content, waitErr := s.WaitFor(`Add a follow-up`, timeout)
 	if waitErr != nil {
 		// Check for deadline exceeded to allow transient error detection.
@@ -159,7 +160,7 @@ func (a *CursorCLI) StartSession(ctx context.Context, dir string) (Session, erro
 	}
 
 	// Wait for the TUI to be ready (input prompt).
-	if _, err := s.WaitFor(a.PromptPattern(), 30*time.Second); err != nil {
+	if _, err := s.WaitFor(a.PromptPattern(), 45*time.Second); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("waiting for startup prompt: %w", err)
 	}
@@ -219,7 +220,7 @@ func (a *CursorCLI) acceptTrustDialogIfNeeded(s *TmuxSession) error {
 	// Race: either the trust dialog or the input prompt will appear first.
 	// Use a short timeout to check for the trust dialog without blocking
 	// too long if the workspace is already trusted.
-	content, err := s.WaitFor(`Trust this workspace|`+a.PromptPattern(), 30*time.Second)
+	content, err := s.WaitFor(`Trust this workspace|`+a.PromptPattern(), 45*time.Second)
 	if err != nil {
 		return fmt.Errorf("waiting for trust dialog or prompt: %w", err)
 	}

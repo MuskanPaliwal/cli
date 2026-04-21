@@ -204,3 +204,39 @@ func TestNewFeatureBranchEnv(t *testing.T) {
 		t.Error("README.md should exist")
 	}
 }
+
+func TestNormalizeGitConfigForGuard_IgnoresTransportPromisorRemote(t *testing.T) {
+	t.Parallel()
+
+	baseline := `[core]
+	repositoryformatversion = 0
+`
+	withURLPromisor := `[core]
+	repositoryformatversion = 1
+[remote "https://github.com/entireio/cli.git"]
+	promisor = true
+	partialclonefilter = blob:none
+`
+
+	if got, want := normalizeGitConfigForGuard(withURLPromisor), normalizeGitConfigForGuard(baseline); got != want {
+		t.Fatalf("normalizeGitConfigForGuard should ignore transport-keyed promisor remotes\nGot:\n%s\nWant:\n%s", got, want)
+	}
+}
+
+func TestNormalizeGitConfigForGuard_PreservesNamedRemotePromisor(t *testing.T) {
+	t.Parallel()
+
+	baseline := `[core]
+	repositoryformatversion = 0
+`
+	withOriginPromisor := `[core]
+	repositoryformatversion = 1
+[remote "origin"]
+	promisor = true
+	partialclonefilter = blob:none
+`
+
+	if normalizeGitConfigForGuard(withOriginPromisor) == normalizeGitConfigForGuard(baseline) {
+		t.Fatal("normalizeGitConfigForGuard should preserve named remote promisor changes")
+	}
+}

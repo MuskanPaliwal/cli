@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
 )
+
+const testModel = "gpt-4o"
 
 func TestParseHookEvent_SessionStart(t *testing.T) {
 	t.Parallel()
@@ -37,6 +40,40 @@ func TestParseHookEvent_SessionStart(t *testing.T) {
 	}
 	if event.Timestamp.IsZero() {
 		t.Error("expected non-zero timestamp")
+	}
+}
+
+func TestParseHookEvent_SessionStart_IncludesModel(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "sess-model", "transcript_path": "/tmp/t.jsonl", "model": "` + testModel + `"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Model != testModel {
+		t.Errorf("expected model %q, got %q", testModel, event.Model)
+	}
+}
+
+func TestParseHookEvent_SessionStart_EmptyModel(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "sess-no-model", "transcript_path": "/tmp/t.jsonl"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Model != "" {
+		t.Errorf("expected empty model, got %q", event.Model)
 	}
 }
 
@@ -67,15 +104,15 @@ func TestParseHookEvent_TurnStart_IncludesModel(t *testing.T) {
 	t.Parallel()
 
 	ag := &CursorAgent{}
-	input := `{"conversation_id": "sess-m", "transcript_path": "/tmp/t.jsonl", "prompt": "hi", "model": "gpt-4o"}`
+	input := `{"conversation_id": "sess-m", "transcript_path": "/tmp/t.jsonl", "prompt": "hi", "model": "` + testModel + `"}`
 
 	event, err := ag.ParseHookEvent(context.Background(), HookNameBeforeSubmitPrompt, strings.NewReader(input))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if event.Model != "gpt-4o" {
-		t.Errorf("expected model 'gpt-4o', got %q", event.Model)
+	if event.Model != testModel {
+		t.Errorf("expected model %q, got %q", testModel, event.Model)
 	}
 }
 
@@ -163,6 +200,23 @@ func TestParseHookEvent_SessionEnd(t *testing.T) {
 	}
 	if event.SessionID != "ending-session" {
 		t.Errorf("expected conversation_id 'ending-session', got %q", event.SessionID)
+	}
+}
+
+func TestParseHookEvent_SessionEnd_IncludesModel(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "end-model", "transcript_path": "/tmp/end.jsonl", "model": "` + testModel + `"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionEnd, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Model != testModel {
+		t.Errorf("expected model %q, got %q", testModel, event.Model)
 	}
 }
 
@@ -666,5 +720,21 @@ func TestPrepareTranscript_EmptyFileGrowsDuringPolling(t *testing.T) {
 	err := ag.PrepareTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("expected nil error when empty file grows during polling, got: %v", err)
+	}
+}
+
+func TestPrepareTranscript_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "missing.jsonl")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ag := &CursorAgent{}
+	err := ag.PrepareTranscript(ctx, path)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
 }

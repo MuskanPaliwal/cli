@@ -225,6 +225,31 @@ type FileChanges struct {
 	Deleted  []string // Deleted files (staged or unstaged)
 }
 
+// shouldIgnoreSessionTrackingPath returns true for repo files that belong to
+// Entire or the agent integration itself rather than user work.
+func shouldIgnoreSessionTrackingPath(relPath string) bool {
+	cleanPath := filepath.Clean(filepath.FromSlash(relPath))
+	if paths.IsInfrastructurePath(cleanPath) {
+		return true
+	}
+
+	for _, file := range agent.AllProtectedFiles() {
+		cleanFile := filepath.Clean(filepath.FromSlash(file))
+		if cleanPath == cleanFile {
+			return true
+		}
+	}
+
+	for _, dir := range agent.AllProtectedDirs() {
+		cleanDir := filepath.Clean(filepath.FromSlash(dir))
+		if paths.IsSubpath(cleanDir, cleanPath) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // DetectFileChanges returns categorized file changes from the current git status.
 //
 // previouslyUntracked controls new-file detection:
@@ -261,7 +286,7 @@ func DetectFileChanges(ctx context.Context, previouslyUntracked []string) (*File
 
 	var changes FileChanges
 	for file, st := range status {
-		if paths.IsInfrastructurePath(file) {
+		if shouldIgnoreSessionTrackingPath(file) {
 			continue
 		}
 
@@ -363,8 +388,8 @@ func FilterAndNormalizePaths(files []string, cwd string) []string {
 		if relPath == "" {
 			continue // outside repo
 		}
-		if paths.IsInfrastructurePath(relPath) {
-			continue // skip .entire directory
+		if shouldIgnoreSessionTrackingPath(relPath) {
+			continue
 		}
 		result = append(result, filepath.ToSlash(relPath))
 	}
@@ -420,8 +445,7 @@ func getUntrackedFilesForState(ctx context.Context) ([]string, error) {
 	untrackedFiles := []string{}
 	for file, st := range status {
 		if st.Worktree == git.Untracked {
-			// Exclude .entire directory
-			if !paths.IsInfrastructurePath(file) {
+			if !shouldIgnoreSessionTrackingPath(file) {
 				untrackedFiles = append(untrackedFiles, file)
 			}
 		}

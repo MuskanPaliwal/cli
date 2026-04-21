@@ -109,6 +109,11 @@ type State struct {
 	// against this value without reading the full transcript content.
 	CheckpointTranscriptSize int64 `json:"checkpoint_transcript_size,omitempty"`
 
+	// CompactTranscriptStart is the transcript.jsonl line offset where the current
+	// checkpoint cycle began. It parallels CheckpointTranscriptStart (full.jsonl)
+	// and is updated after each condensation.
+	CompactTranscriptStart int `json:"compact_transcript_start,omitempty"`
+
 	// Deprecated: CondensedTranscriptLines is replaced by CheckpointTranscriptStart.
 	// Kept for backward compatibility with existing state files.
 	// Use NormalizeAfterLoad() to migrate.
@@ -125,12 +130,29 @@ type State struct {
 	// sessions that have been condensed at least once. Cleared on new prompt.
 	LastCheckpointID id.CheckpointID `json:"last_checkpoint_id,omitempty"`
 
+	// LastCheckpointCommitHash is the exact commit SHA that carried
+	// LastCheckpointID at condensation time. Used by the reconcile path to
+	// distinguish "reset back to the condensed commit" (same SHA) from
+	// "cherry-picked / rebased a commit that happens to preserve the trailer"
+	// (different SHA). Without this guard, a cherry-picked checkpoint would
+	// falsely fire reconcile and drop the pinned AttributionBaseCommit,
+	// corrupting attribution math for uncondensed shadow-branch work.
+	// Empty for legacy state files — reconcile falls back to trailer-only
+	// matching for backward compatibility.
+	LastCheckpointCommitHash string `json:"last_checkpoint_commit_hash,omitempty"`
+
 	// FullyCondensed indicates this session has been condensed and has no remaining
 	// carry-forward files. PostCommit skips fully-condensed sessions entirely.
 	// Set after successful condensation when no files remain for carry-forward
 	// and the session phase is ENDED. Cleared on session reactivation (ENDED →
 	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
 	FullyCondensed bool `json:"fully_condensed,omitempty"`
+
+	// DivergenceNoticeShown indicates the prepare-commit-msg warning about
+	// attribution divergence has been shown. Set when the warning fires,
+	// cleared when AttributionBaseCommit realigns with BaseCommit (next
+	// successful condensation). Prevents repeated warnings on every commit.
+	DivergenceNoticeShown bool `json:"divergence_notice_shown,omitempty"`
 
 	// AttachedManually indicates this session was imported via `entire attach` rather
 	// than being captured by hooks during normal agent execution.
@@ -248,6 +270,24 @@ func (s *State) NormalizeAfterLoad(ctx context.Context) {
 	if s.AttributionBaseCommit == "" && s.BaseCommit != "" {
 		s.AttributionBaseCommit = s.BaseCommit
 	}
+
+	// DivergenceNoticeShown is only meaningful while attribution is actually
+	// diverged. Self-heal any state file where the flag outlived the divergence
+	// — otherwise a future legitimate divergence would be silently suppressed.
+	if s.DivergenceNoticeShown && s.AttributionBaseCommit == s.BaseCommit {
+		s.DivergenceNoticeShown = false
+	}
+}
+
+// RealignAttributionBase sets AttributionBaseCommit to newBase and clears any
+// bookkeeping whose meaning depends on attribution being diverged from the
+// shadow-branch base. Call this every time a code path intentionally brings
+// AttributionBaseCommit back in line with BaseCommit (condensation, reconcile,
+// post-commit base advance) so a stale DivergenceNoticeShown cannot suppress
+// the next legitimate divergence warning.
+func (s *State) RealignAttributionBase(newBase string) {
+	s.AttributionBaseCommit = newBase
+	s.DivergenceNoticeShown = false
 }
 
 // IsStale returns true when a session hasn't seen interaction for longer than

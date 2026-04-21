@@ -2,6 +2,8 @@ package compact
 
 import (
 	"testing"
+
+	"github.com/entireio/cli/redact"
 )
 
 func TestCompact_OpenCodeFixture(t *testing.T) {
@@ -32,7 +34,7 @@ func TestCompact_OpenCodeTokenUsage(t *testing.T) {
 		`{"v":1,"agent":"opencode","cli_version":"0.5.1","type":"assistant","ts":"2023-11-14T22:13:21Z","id":"msg-a1","input_tokens":150,"output_tokens":90,"content":[{"type":"text","text":"Hi there!"}]}`,
 	}
 
-	result, err := Compact(input, agentOpts("opencode"))
+	result, err := Compact(redact.AlreadyRedacted(input), agentOpts("opencode"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +69,7 @@ func TestCompact_OpenCodeStartLine(t *testing.T) {
 			`{"v":1,"agent":"opencode","cli_version":"0.5.1","type":"assistant","ts":"2023-11-14T22:13:21Z","id":"msg-a1","content":[{"type":"text","text":"Hi there!"}]}`,
 			`{"v":1,"agent":"opencode","cli_version":"0.5.1","type":"user","ts":"2023-11-14T22:13:22Z","content":[{"text":"bye"}]}`,
 		}
-		result, err := Compact(input, opts)
+		result, err := Compact(redact.AlreadyRedacted(input), opts)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -77,7 +79,7 @@ func TestCompact_OpenCodeStartLine(t *testing.T) {
 	t.Run("skip all messages", func(t *testing.T) {
 		t.Parallel()
 		opts := MetadataFields{Agent: "opencode", CLIVersion: "0.5.1", StartLine: 100}
-		result, err := Compact(input, opts)
+		result, err := Compact(redact.AlreadyRedacted(input), opts)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -102,7 +104,7 @@ func TestCompact_OpenCodeNoTokensOmitsFields(t *testing.T) {
 		`{"v":1,"agent":"opencode","cli_version":"0.5.1","type":"assistant","ts":"2023-11-14T22:13:21Z","id":"msg-a1","content":[{"type":"text","text":"no tokens here"}]}`,
 	}
 
-	result, err := Compact(input, agentOpts("opencode"))
+	result, err := Compact(redact.AlreadyRedacted(input), agentOpts("opencode"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

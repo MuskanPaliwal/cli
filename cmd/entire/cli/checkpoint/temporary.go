@@ -99,10 +99,14 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 		allDeletedFiles = result.Deleted
 		allDeletedFiles = append(allDeletedFiles, opts.DeletedFiles...)
 	} else {
-		// For subsequent checkpoints, only include modified/new files
-		allFiles = make([]string, 0, len(opts.ModifiedFiles)+len(opts.NewFiles))
-		allFiles = append(allFiles, opts.ModifiedFiles...)
-		allFiles = append(allFiles, opts.NewFiles...)
+		// For subsequent checkpoints, only include modified/new files.
+		// Filter out gitignored files — agent transcripts may report files like .env
+		// that exist on disk but are gitignored. Without filtering, secrets in gitignored
+		// files would leak into the shadow branch and could be pushed to remotes.
+		candidateFiles := make([]string, 0, len(opts.ModifiedFiles)+len(opts.NewFiles))
+		candidateFiles = append(candidateFiles, opts.ModifiedFiles...)
+		candidateFiles = append(candidateFiles, opts.NewFiles...)
+		allFiles = filterGitIgnoredFiles(ctx, s.repo, candidateFiles)
 		allDeletedFiles = opts.DeletedFiles
 	}
 
@@ -123,7 +127,7 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 	// Create checkpoint commit with trailers
 	commitMsg := trailers.FormatShadowCommit(opts.CommitMessage, opts.MetadataDir, opts.SessionID)
 
-	commitHash, err := s.createCommit(treeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
+	commitHash, err := s.createCommit(ctx, treeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
 	if err != nil {
 		return WriteTemporaryResult{}, fmt.Errorf("failed to create commit: %w", err)
 	}
@@ -259,10 +263,14 @@ func (s *GitStore) WriteTemporaryTask(ctx context.Context, opts WriteTemporaryTa
 		return plumbing.ZeroHash, fmt.Errorf("failed to get shadow branch: %w", err)
 	}
 
-	// Collect all files to include in the commit
-	allFiles := make([]string, 0, len(opts.ModifiedFiles)+len(opts.NewFiles))
-	allFiles = append(allFiles, opts.ModifiedFiles...)
-	allFiles = append(allFiles, opts.NewFiles...)
+	// Collect all files to include in the commit.
+	// Filter out gitignored files — subagent transcripts may report files like .env
+	// that exist on disk but are gitignored. Without filtering, secrets would leak
+	// into the shadow branch.
+	candidateFiles := make([]string, 0, len(opts.ModifiedFiles)+len(opts.NewFiles))
+	candidateFiles = append(candidateFiles, opts.ModifiedFiles...)
+	candidateFiles = append(candidateFiles, opts.NewFiles...)
+	allFiles := filterGitIgnoredFiles(ctx, s.repo, candidateFiles)
 
 	// Build new tree with code changes (no metadata dir yet)
 	newTreeHash, err := s.buildTreeWithChanges(ctx, baseTreeHash, allFiles, opts.DeletedFiles, "", "")
@@ -277,7 +285,7 @@ func (s *GitStore) WriteTemporaryTask(ctx context.Context, opts WriteTemporaryTa
 	}
 
 	// Create the commit
-	commitHash, err := s.createCommit(newTreeHash, parentHash, opts.CommitMessage, opts.AuthorName, opts.AuthorEmail)
+	commitHash, err := s.createCommit(ctx, newTreeHash, parentHash, opts.CommitMessage, opts.AuthorName, opts.AuthorEmail)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to create commit: %w", err)
 	}
@@ -306,13 +314,13 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 
 	if opts.IsIncremental {
 		// Incremental checkpoint: only add the checkpoint file
-		var incData []byte
-		var err error
+		var incData json.RawMessage
 		if opts.IncrementalData != nil {
-			incData, err = redact.JSONLBytes(opts.IncrementalData)
-			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("failed to redact incremental checkpoint: %w", err)
+			redacted, redactErr := redact.JSONLBytes(opts.IncrementalData)
+			if redactErr != nil {
+				return plumbing.ZeroHash, fmt.Errorf("failed to redact incremental checkpoint: %w", redactErr)
 			}
+			incData = json.RawMessage(redacted.Bytes())
 		}
 		incrementalCheckpoint := struct {
 			Type      string          `json:"type"`
@@ -385,9 +393,10 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 						slog.String("path", opts.SubagentTranscriptPath),
 						slog.String("error", jsonlErr.Error()),
 					)
-					redacted = redact.Bytes(agentContent)
+					agentContent = redact.Bytes(agentContent)
+				} else {
+					agentContent = redacted.Bytes()
 				}
-				agentContent = redacted
 				if blobHash, blobErr := CreateBlobFromContent(s.repo, agentContent); blobErr == nil {
 					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl"
 					changes = append(changes, TreeChange{
@@ -417,7 +426,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		})
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return ApplyTreeChanges(ctx, s.repo, baseTreeHash, changes)
 }
 
 // ListTemporaryCheckpoints lists all checkpoint commits on a shadow branch.
@@ -725,15 +734,26 @@ func (s *GitStore) buildTreeWithChanges(
 
 	// Deleted files → nil Entry means deletion
 	for _, file := range deletedFiles {
-		changes = append(changes, TreeChange{Path: file, Entry: nil})
+		relPath, relErr := normalizeRepoRelativeTreePath(repoRoot, file)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "delete shadow branch entry", file, relErr)
+			continue
+		}
+		changes = append(changes, TreeChange{Path: relPath, Entry: nil})
 	}
 
 	// Modified/new files → create blobs from disk
 	for _, file := range modifiedFiles {
-		absPath := filepath.Join(repoRoot, file)
+		relPath, relErr := normalizeRepoRelativeTreePath(repoRoot, file)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "add shadow branch entry", file, relErr)
+			continue
+		}
+
+		absPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
 		if !fileExists(absPath) {
 			// File disappeared since detection — treat as deletion
-			changes = append(changes, TreeChange{Path: file, Entry: nil})
+			changes = append(changes, TreeChange{Path: relPath, Entry: nil})
 			continue
 		}
 
@@ -744,7 +764,7 @@ func (s *GitStore) buildTreeWithChanges(
 		}
 
 		changes = append(changes, TreeChange{
-			Path: file,
+			Path: relPath,
 			Entry: &object.TreeEntry{
 				Mode: mode,
 				Hash: blobHash,
@@ -754,19 +774,24 @@ func (s *GitStore) buildTreeWithChanges(
 
 	// Metadata directory files
 	if metadataDir != "" && metadataDirAbs != "" {
-		metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataDir)
-		if metaErr != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
+		metadataRel, relErr := normalizeRepoRelativeTreePath(repoRoot, metadataDir)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "add metadata directory", metadataDir, relErr)
+		} else {
+			metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataRel)
+			if metaErr != nil {
+				return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
+			}
+			changes = append(changes, metaChanges...)
 		}
-		changes = append(changes, metaChanges...)
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return ApplyTreeChanges(ctx, s.repo, baseTreeHash, changes)
 }
 
 // createCommit creates a commit object.
-func (s *GitStore) createCommit(treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
-	return CreateCommit(s.repo, treeHash, parentHash, message, authorName, authorEmail)
+func (s *GitStore) createCommit(ctx context.Context, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
+	return CreateCommit(ctx, s.repo, treeHash, parentHash, message, authorName, authorEmail)
 }
 
 // Helper functions extracted from strategy/common.go
@@ -976,7 +1001,7 @@ func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) 
 
 // BuildTreeFromEntries builds a proper git tree structure from flattened file entries.
 // Exported for use by strategy package (push_common.go, session_test.go)
-func BuildTreeFromEntries(repo *git.Repository, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
+func BuildTreeFromEntries(ctx context.Context, repo *git.Repository, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
 	// Build a tree structure
 	root := &treeNode{
 		entries: make(map[string]*treeNode),
@@ -985,12 +1010,25 @@ func BuildTreeFromEntries(repo *git.Repository, entries map[string]object.TreeEn
 
 	// Insert all entries into the tree structure
 	for fullPath, entry := range entries {
-		parts := strings.Split(fullPath, "/")
+		normalizedPath, err := normalizeGitTreePath(fullPath)
+		if err != nil {
+			logInvalidGitTreePath(ctx, "build tree entry", fullPath, err)
+			continue
+		}
+		parts := strings.Split(normalizedPath, "/")
 		insertIntoTree(root, parts, entry)
 	}
 
 	// Recursively build tree objects from bottom up
 	return buildTreeObject(repo, root)
+}
+
+func normalizeRepoRelativeTreePath(repoRoot, path string) (string, error) {
+	if rel := paths.ToRelativePath(path, repoRoot); rel != "" && rel != "." {
+		return normalizeGitTreePath(rel)
+	}
+
+	return normalizeGitTreePath(path)
 }
 
 // insertIntoTree inserts a file entry into the tree structure.
@@ -1083,6 +1121,74 @@ func sortTreeEntries(entries []object.TreeEntry) {
 type changedFilesResult struct {
 	Changed []string // Files to include (modified, added, untracked, renamed, etc.)
 	Deleted []string // Files that were deleted (need to be excluded from checkpoint tree)
+}
+
+// filterGitIgnoredFiles removes gitignored files from the list using `git check-ignore`.
+// This prevents secrets in gitignored files (e.g., .env) from leaking into shadow branch
+// commits when agents report them as modified/new in their transcripts.
+// On failure, fails closed (returns nil) to avoid leaking secrets.
+func filterGitIgnoredFiles(ctx context.Context, repo *git.Repository, files []string) []string {
+	if len(files) == 0 {
+		return files
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		logging.Warn(logging.WithComponent(ctx, "checkpoint"),
+			"failed to inspect worktree for gitignore filtering, excluding all files from checkpoint",
+			slog.String("error", err.Error()))
+		return nil
+	}
+	repoRoot := wt.Filesystem.Root()
+
+	// Use git check-ignore to identify which files are ignored.
+	// Pass files via stdin (-z for NUL-separated, --stdin) to handle special characters.
+	// Use --no-index so even tracked files that still match ignore rules are filtered.
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "--no-index", "-z", "--stdin")
+	cmd.Dir = repoRoot
+	cmd.Stdin = strings.NewReader(strings.Join(files, "\x00") + "\x00")
+
+	output, err := cmd.Output()
+	if err != nil {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			// Exit code 1 means no files are ignored — all files are safe.
+			return files
+		}
+		// Any other failure (exit 128, git not found, etc.): fail closed.
+		// A missing checkpoint is better than leaked secrets.
+		logging.Warn(logging.WithComponent(ctx, "checkpoint"),
+			"git check-ignore failed, excluding all files from checkpoint",
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	// Parse NUL-separated output of ignored file names
+	ignored := make(map[string]struct{})
+	for _, name := range strings.Split(string(output), "\x00") {
+		if name != "" {
+			ignored[name] = struct{}{}
+		}
+	}
+
+	// Filter: keep only files that are not ignored
+	var kept []string
+	filteredCount := 0
+	for _, file := range files {
+		if _, isIgnored := ignored[file]; isIgnored {
+			filteredCount++
+			continue
+		}
+		kept = append(kept, file)
+	}
+
+	if filteredCount > 0 {
+		logging.Debug(logging.WithComponent(ctx, "checkpoint"),
+			"filtered gitignored files from checkpoint",
+			slog.Int("count", filteredCount))
+	}
+
+	return kept
 }
 
 // collectChangedFiles returns all changed files from git status for the first checkpoint.

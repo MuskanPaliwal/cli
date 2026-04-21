@@ -3,6 +3,8 @@ package compact
 import (
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/redact"
 )
 
 // --- Factory AI Droid tests ---
@@ -60,7 +62,7 @@ func TestCompact_FactoryDroidInlineCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			result, err := Compact(tc.input, droidOpts)
+			result, err := Compact(redact.AlreadyRedacted(tc.input), droidOpts)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -134,7 +136,7 @@ func TestCompact_DroidStartLine(t *testing.T) {
 		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"assistant","ts":"t3","id":"m3","content":[{"type":"text","text":"response"}]}`,
 	}
 
-	result, err := Compact(input, opts)
+	result, err := Compact(redact.AlreadyRedacted(input), opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

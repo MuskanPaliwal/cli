@@ -15,6 +15,8 @@ import (
 )
 
 func main() {
+	cli.RegisterObjectSigner()
+
 	// Create context that cancels on interrupt
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -33,7 +35,6 @@ func main() {
 	// Create and execute root command
 	rootCmd := cli.NewRootCmd()
 	err := rootCmd.ExecuteContext(ctx)
-
 	if err != nil {
 		var silent *cli.SilentError
 

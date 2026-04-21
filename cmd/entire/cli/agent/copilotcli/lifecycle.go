@@ -2,8 +2,8 @@ package copilotcli
 
 import (
 	"context"
+	"fmt"
 	"io"
-	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -41,100 +41,112 @@ func (c *CopilotCLIAgent) HookNames() []string {
 
 // ParseHookEvent translates a Copilot CLI hook into a normalized lifecycle Event.
 // Returns nil if the hook has no lifecycle significance (pass-through hooks).
+//
+// For VS Code payloads (detected via hookEventName), the event name is validated
+// against the CLI subcommand. Mismatches are silently skipped to avoid processing
+// a payload that doesn't match the hook being invoked.
 func (c *CopilotCLIAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
+	// Pass-through hooks: skip immediately without reading stdin.
 	switch hookName {
-	case HookNameUserPromptSubmitted:
-		return c.parseUserPromptSubmitted(ctx, stdin)
-	case HookNameSessionStart:
-		return c.parseSessionStart(stdin)
-	case HookNameAgentStop:
-		return c.parseAgentStop(ctx, stdin)
-	case HookNameSessionEnd:
-		return c.parseSessionEnd(stdin)
-	case HookNameSubagentStop:
-		return c.parseSubagentStop(stdin)
 	case HookNamePreToolUse, HookNamePostToolUse, HookNameErrorOccurred:
 		return nil, nil //nolint:nilnil // Pass-through hooks have no lifecycle action
+	}
+
+	// For lifecycle hooks, read and parse the envelope first so we can
+	// validate VS Code hookEventName before constructing an event.
+	env, err := c.readHookEnvelope(stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	// VS Code payloads: validate hookEventName matches the CLI subcommand.
+	if env.Host == HostVSCode && env.HookEventName != "" {
+		if !validateVSCodeEvent(env, hookName) {
+			logging.Debug(ctx, "copilot-cli: skipping VS Code event with mismatched hookEventName",
+				"hookEventName", env.HookEventName, "hookName", hookName)
+			return nil, nil //nolint:nilnil // Mismatched VS Code event — skip silently.
+		}
+	}
+
+	switch hookName {
+	case HookNameUserPromptSubmitted:
+		return c.buildUserPromptSubmitted(ctx, env), nil
+	case HookNameSessionStart:
+		return c.buildSessionStart(env), nil
+	case HookNameAgentStop:
+		return c.buildAgentStop(ctx, env), nil
+	case HookNameSessionEnd:
+		return c.buildSessionEnd(env), nil
+	case HookNameSubagentStop:
+		return c.buildSubagentStop(env), nil
 	default:
 		logging.Debug(ctx, "copilot-cli: ignoring unknown hook", "hook", hookName)
 		return nil, nil //nolint:nilnil // Unknown hooks have no lifecycle action
 	}
 }
 
-// --- Internal hook parsing functions ---
+// --- Internal event builders (envelope already parsed) ---
 
-func (c *CopilotCLIAgent) parseUserPromptSubmitted(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[userPromptSubmittedRaw](stdin)
-	if err != nil {
-		return nil, err
+func (c *CopilotCLIAgent) buildUserPromptSubmitted(ctx context.Context, env *hookEnvelope) *agent.Event {
+	transcriptRef := env.TranscriptPath
+	if transcriptRef == "" {
+		transcriptRef = c.resolveTranscriptRef(ctx, env.SessionID)
 	}
-
-	transcriptRef := c.resolveTranscriptRef(ctx, raw.SessionID)
 
 	return &agent.Event{
 		Type:       agent.TurnStart,
-		SessionID:  raw.SessionID,
+		SessionID:  env.SessionID,
 		SessionRef: transcriptRef,
-		Prompt:     raw.Prompt,
-		Timestamp:  time.Now(),
-	}, nil
+		Prompt:     env.Prompt,
+		Timestamp:  env.Timestamp,
+	}
 }
 
-func (c *CopilotCLIAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[sessionStartRaw](stdin)
-	if err != nil {
-		return nil, err
-	}
+func (c *CopilotCLIAgent) buildSessionStart(env *hookEnvelope) *agent.Event {
 	return &agent.Event{
 		Type:      agent.SessionStart,
-		SessionID: raw.SessionID,
-		Timestamp: time.Now(),
-	}, nil
+		SessionID: env.SessionID,
+		Timestamp: env.Timestamp,
+	}
 }
 
-func (c *CopilotCLIAgent) parseAgentStop(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[agentStopRaw](stdin)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract model from transcript (Copilot CLI hooks don't include model)
+func (c *CopilotCLIAgent) buildAgentStop(ctx context.Context, env *hookEnvelope) *agent.Event {
 	var model string
-	if raw.TranscriptPath != "" {
-		model = ExtractModelFromTranscript(ctx, raw.TranscriptPath)
+	if env.TranscriptPath != "" {
+		model = ExtractModelFromTranscript(ctx, env.TranscriptPath)
 	}
 
 	return &agent.Event{
 		Type:       agent.TurnEnd,
-		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionID:  env.SessionID,
+		SessionRef: env.TranscriptPath,
 		Model:      model,
-		Timestamp:  time.Now(),
-	}, nil
+		Timestamp:  env.Timestamp,
+	}
 }
 
-func (c *CopilotCLIAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[sessionEndRaw](stdin)
-	if err != nil {
-		return nil, err
-	}
+func (c *CopilotCLIAgent) buildSessionEnd(env *hookEnvelope) *agent.Event {
 	return &agent.Event{
 		Type:      agent.SessionEnd,
-		SessionID: raw.SessionID,
-		Timestamp: time.Now(),
-	}, nil
+		SessionID: env.SessionID,
+		Timestamp: env.Timestamp,
+	}
 }
 
-func (c *CopilotCLIAgent) parseSubagentStop(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[subagentStopRaw](stdin)
-	if err != nil {
-		return nil, err
-	}
+func (c *CopilotCLIAgent) buildSubagentStop(env *hookEnvelope) *agent.Event {
 	return &agent.Event{
 		Type:      agent.SubagentEnd,
-		SessionID: raw.SessionID,
-		Timestamp: time.Now(),
-	}, nil
+		SessionID: env.SessionID,
+		Timestamp: env.Timestamp,
+	}
+}
+
+func (c *CopilotCLIAgent) readHookEnvelope(stdin io.Reader) (*hookEnvelope, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read hook input: %w", err)
+	}
+	return parseHookEnvelope(data)
 }
 
 // resolveTranscriptRef computes the transcript path from the session ID.

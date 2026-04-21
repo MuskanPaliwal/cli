@@ -13,7 +13,17 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"golang.org/x/mod/semver"
+)
+
+const (
+	installManagerBrew    = "brew"
+	installManagerMise    = "mise"
+	installManagerScoop   = "scoop"
+	installManagerUnknown = "unknown"
+	installChannelStable  = "stable"
+	installChannelNightly = "nightly"
 )
 
 // CheckAndNotify performs a version check and notifies the user if a newer version is available.
@@ -42,8 +52,13 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 		return
 	}
 
-	// Fetch the latest version from GitHub API
-	latestVersion, err := fetchLatestVersion(ctx)
+	// Fetch the latest version from the appropriate channel
+	var latestVersion string
+	if isNightly(currentVersion) {
+		latestVersion, err = fetchLatestNightlyVersion(ctx)
+	} else {
+		latestVersion, err = fetchLatestVersion(ctx)
+	}
 
 	// Always update cache to avoid retrying on every CLI invocation
 	cache.LastCheckTime = time.Now()
@@ -200,6 +215,57 @@ func fetchLatestVersion(ctx context.Context) (string, error) {
 	return version, nil
 }
 
+// isNightly returns true if the version string is a nightly build.
+func isNightly(version string) bool {
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	return strings.Contains(semver.Prerelease(version), "nightly")
+}
+
+// fetchLatestNightlyVersion fetches the latest nightly version from the GitHub releases list.
+func fetchLatestNightlyVersion(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesURL+"?per_page=20", nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "entire-cli/"+versioninfo.Version)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching releases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	var releases []GitHubRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return "", fmt.Errorf("parsing JSON: %w", err)
+	}
+
+	for _, r := range releases {
+		if r.Prerelease && strings.Contains(r.TagName, "-nightly.") {
+			return r.TagName, nil
+		}
+	}
+
+	return "", errors.New("no nightly release found")
+}
+
 // parseGitHubRelease parses the GitHub API response and extracts the latest stable version.
 // Filters out prerelease versions.
 func parseGitHubRelease(body []byte) (string, error) {
@@ -247,33 +313,63 @@ func isOutdated(current, latest string) bool {
 // It's a variable so tests can override it.
 var executablePath = os.Executable
 
-// updateCommand returns the appropriate update instruction based on how the binary was installed.
-func updateCommand() string {
+func releaseChannel(version string) string {
+	if isNightly(version) {
+		return installChannelNightly
+	}
+	return installChannelStable
+}
+
+func installManagerForCurrentBinary() string {
 	execPath, err := executablePath()
 	if err != nil {
-		return "curl -fsSL https://entire.io/install.sh | bash"
+		return installManagerUnknown
 	}
 
-	// Resolve symlinks to find the real path (Homebrew symlinks from bin/ to Cellar/)
 	realPath, err := filepath.EvalSymlinks(execPath)
 	if err != nil {
 		realPath = execPath
 	}
+	normalizedPath := strings.ReplaceAll(filepath.ToSlash(realPath), "\\", "/")
 
-	if strings.Contains(realPath, "/Cellar/") || strings.Contains(realPath, "/opt/homebrew/") || strings.Contains(realPath, "/linuxbrew/") {
-		return "brew upgrade entire"
+	switch {
+	case strings.Contains(normalizedPath, "/Cellar/") ||
+		strings.Contains(normalizedPath, "/opt/homebrew/") ||
+		strings.Contains(normalizedPath, "/linuxbrew/") ||
+		strings.Contains(normalizedPath, "/Caskroom/"):
+		return installManagerBrew
+	case strings.Contains(normalizedPath, "/mise/installs/"):
+		return installManagerMise
+	case strings.Contains(normalizedPath, "/scoop/apps/"):
+		return installManagerScoop
+	default:
+		return installManagerUnknown
 	}
+}
 
-	if strings.Contains(realPath, "/mise/installs/") {
+// updateCommand returns the appropriate update instruction based on how the binary was installed.
+func updateCommand(currentVersion string) string {
+	switch installManagerForCurrentBinary() {
+	case installManagerBrew:
+		if releaseChannel(currentVersion) == installChannelNightly {
+			return "brew upgrade --cask entire@nightly"
+		}
+		return "brew upgrade --cask entire"
+	case installManagerMise:
 		return "mise upgrade entire"
+	case installManagerScoop:
+		return "scoop update entire/cli"
 	}
 
+	if releaseChannel(currentVersion) == installChannelNightly {
+		return "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly"
+	}
 	return "curl -fsSL https://entire.io/install.sh | bash"
 }
 
 // printNotification prints the version update notification to the user.
 func printNotification(w io.Writer, current, latest string) {
 	msg := fmt.Sprintf("\nA newer version of Entire CLI is available: %s (current: %s)\nRun '%s' to update.\n",
-		latest, current, updateCommand())
+		latest, current, updateCommand(current))
 	fmt.Fprint(w, msg)
 }

@@ -14,10 +14,39 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
 )
+
+func cleanLongDescription(ctx context.Context) string {
+	description := `Clean up Entire session data for the current HEAD commit.
+
+By default, cleans session state and shadow branches for the current HEAD:
+  - Session state files (.git/entire-sessions/<session-id>.json)
+  - Shadow branch (entire/<commit-hash>-<worktree-hash>)
+
+Use --all to clean all Entire session data across the repository:
+  - All session state files (.git/entire-sessions/)
+  - All shadow branches
+  - Temporary files (.entire/tmp/)`
+
+	s, err := settings.Load(ctx)
+	if err == nil && s.IsCheckpointsV2Enabled() {
+		description += fmt.Sprintf(`
+  - Archived v2 full transcripts older than the configured %d-day retention window`, s.GetFullTranscriptGenerationRetentionDays())
+	}
+
+	description += `
+
+Use --session <id> to clean a specific session only.
+
+Without --force, prompts for confirmation before deleting.
+Use --dry-run to preview what would be deleted without prompting.`
+
+	return description
+}
 
 func newCleanCmd() *cobra.Command {
 	var forceFlag bool
@@ -28,22 +57,7 @@ func newCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "Clean up Entire session data",
-		Long: `Clean up Entire session data for the current HEAD commit.
-
-By default, cleans session state and shadow branches for the current HEAD:
-  - Session state files (.git/entire-sessions/<session-id>.json)
-  - Shadow branch (entire/<commit-hash>-<worktree-hash>)
-
-Use --all to clean all Entire session data across the repository:
-  - All session state files (.git/entire-sessions/)
-  - All shadow branches
-  - Temporary files (.entire/tmp/)
-The entire/checkpoints/v1 branch itself is preserved.
-
-Use --session <id> to clean a specific session only.
-
-Without --force, prompts for confirmation before deleting.
-Use --dry-run to preview what would be deleted without prompting.`,
+		Long:  cleanLongDescription(context.Background()),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
@@ -258,10 +272,27 @@ func runCleanSession(ctx context.Context, cmd *cobra.Command, strat *strategy.Ma
 
 // runCleanAll cleans all session data across the repository.
 func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) error {
+	s, err := settings.Load(ctx)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to load settings: %v\n", err)
+		s = &settings.EntireSettings{}
+	}
+
 	// List all items (sessions, shadow branches) — not just orphaned ones
 	items, err := strategy.ListAllItems(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list items: %w", err)
+	}
+
+	if s.IsCheckpointsV2Enabled() {
+		v2Items, warnings, err := strategy.ListEligibleV2Generations(ctx, s)
+		if err != nil {
+			return fmt.Errorf("failed to list v2 generations: %w", err)
+		}
+		items = append(items, v2Items...)
+		for _, warning := range warnings {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s\n", warning)
+		}
 	}
 
 	// List temp files — skip active-session filter since --all deletes those sessions
@@ -272,6 +303,29 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 	}
 
 	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles)
+}
+
+// printSection prints a titled list of items if the slice is non-empty.
+func printSection(w io.Writer, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s (%d):\n", title, len(items))
+	for _, item := range items {
+		fmt.Fprintf(w, "  %s\n", item)
+	}
+	fmt.Fprintln(w)
+}
+
+// printResultSection prints a titled list with a leading newline, for post-deletion output.
+func printResultSection(w io.Writer, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s (%d):\n", title, len(items))
+	for _, item := range items {
+		fmt.Fprintf(w, "  %s\n", item)
+	}
 }
 
 // runCleanAllWithItems is the core logic for cleaning all items.
@@ -286,7 +340,7 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 	}
 
 	// Group items by type for display
-	var branches, states, checkpoints []strategy.CleanupItem
+	var branches, states, checkpoints, v2Generations []strategy.CleanupItem
 	for _, item := range items {
 		switch item.Type {
 		case strategy.CleanupTypeShadowBranch:
@@ -295,6 +349,8 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 			states = append(states, item)
 		case strategy.CleanupTypeCheckpoint:
 			checkpoints = append(checkpoints, item)
+		case strategy.CleanupTypeV2Generation:
+			v2Generations = append(v2Generations, item)
 		}
 	}
 
@@ -303,37 +359,11 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 		totalItems := len(items) + len(tempFiles)
 		fmt.Fprintf(w, "Found %d %s to clean:\n\n", totalItems, itemWord(totalItems))
 
-		if len(branches) > 0 {
-			fmt.Fprintf(w, "Shadow branches (%d):\n", len(branches))
-			for _, item := range branches {
-				fmt.Fprintf(w, "  %s\n", item.ID)
-			}
-			fmt.Fprintln(w)
-		}
-
-		if len(states) > 0 {
-			fmt.Fprintf(w, "Session states (%d):\n", len(states))
-			for _, item := range states {
-				fmt.Fprintf(w, "  %s\n", item.ID)
-			}
-			fmt.Fprintln(w)
-		}
-
-		if len(checkpoints) > 0 {
-			fmt.Fprintf(w, "Checkpoint metadata (%d):\n", len(checkpoints))
-			for _, item := range checkpoints {
-				fmt.Fprintf(w, "  %s\n", item.ID)
-			}
-			fmt.Fprintln(w)
-		}
-
-		if len(tempFiles) > 0 {
-			fmt.Fprintf(w, "Temp files (%d):\n", len(tempFiles))
-			for _, file := range tempFiles {
-				fmt.Fprintf(w, "  %s\n", file)
-			}
-			fmt.Fprintln(w)
-		}
+		printSection(w, "Shadow branches", cleanupItemIDs(branches))
+		printSection(w, "Session states", cleanupItemIDs(states))
+		printSection(w, "Checkpoint metadata", cleanupItemIDs(checkpoints))
+		printSection(w, "Archived v2 generations", cleanupItemIDs(v2Generations))
+		printSection(w, "Temp files", tempFiles)
 
 		if dryRun {
 			fmt.Fprintln(w, "Run without --dry-run to delete these items.")
@@ -370,64 +400,27 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 	deletedTempFiles, failedTempFiles := deleteTempFiles(ctx, tempFiles)
 
 	// Report results
-	totalDeleted := len(result.ShadowBranches) + len(result.SessionStates) + len(result.Checkpoints) + len(deletedTempFiles)
-	totalFailed := len(result.FailedBranches) + len(result.FailedStates) + len(result.FailedCheckpoints) + len(failedTempFiles)
+	totalDeleted := len(result.ShadowBranches) + len(result.SessionStates) + len(result.Checkpoints) + len(result.V2Generations) + len(deletedTempFiles)
+	totalFailed := len(result.FailedBranches) + len(result.FailedStates) + len(result.FailedCheckpoints) + len(result.FailedV2Refs) + len(failedTempFiles)
 
 	if totalDeleted > 0 {
 		fmt.Fprintf(w, "✓ Deleted %d %s:\n", totalDeleted, itemWord(totalDeleted))
 
-		if len(result.ShadowBranches) > 0 {
-			fmt.Fprintf(w, "\nShadow branches (%d):\n", len(result.ShadowBranches))
-			for _, branch := range result.ShadowBranches {
-				fmt.Fprintf(w, "  %s\n", branch)
-			}
-		}
+		printResultSection(w, "Shadow branches", result.ShadowBranches)
+		printResultSection(w, "Session states", result.SessionStates)
+		printResultSection(w, "Checkpoints", result.Checkpoints)
+		printResultSection(w, "Archived v2 generations", result.V2Generations)
 
-		if len(result.SessionStates) > 0 {
-			fmt.Fprintf(w, "\nSession states (%d):\n", len(result.SessionStates))
-			for _, state := range result.SessionStates {
-				fmt.Fprintf(w, "  %s\n", state)
-			}
-		}
-
-		if len(result.Checkpoints) > 0 {
-			fmt.Fprintf(w, "\nCheckpoints (%d):\n", len(result.Checkpoints))
-			for _, cp := range result.Checkpoints {
-				fmt.Fprintf(w, "  %s\n", cp)
-			}
-		}
-
-		if len(deletedTempFiles) > 0 {
-			fmt.Fprintf(w, "\nTemp files (%d):\n", len(deletedTempFiles))
-			for _, file := range deletedTempFiles {
-				fmt.Fprintf(w, "  %s\n", file)
-			}
-		}
+		printResultSection(w, "Temp files", deletedTempFiles)
 	}
 
 	if totalFailed > 0 {
 		fmt.Fprintf(errW, "\nFailed to delete %d %s:\n", totalFailed, itemWord(totalFailed))
 
-		if len(result.FailedBranches) > 0 {
-			fmt.Fprintf(errW, "\nShadow branches:\n")
-			for _, branch := range result.FailedBranches {
-				fmt.Fprintf(errW, "  %s\n", branch)
-			}
-		}
-
-		if len(result.FailedStates) > 0 {
-			fmt.Fprintf(errW, "\nSession states:\n")
-			for _, state := range result.FailedStates {
-				fmt.Fprintf(errW, "  %s\n", state)
-			}
-		}
-
-		if len(result.FailedCheckpoints) > 0 {
-			fmt.Fprintf(errW, "\nCheckpoints:\n")
-			for _, cp := range result.FailedCheckpoints {
-				fmt.Fprintf(errW, "  %s\n", cp)
-			}
-		}
+		printResultSection(errW, "Shadow branches", result.FailedBranches)
+		printResultSection(errW, "Session states", result.FailedStates)
+		printResultSection(errW, "Checkpoints", result.FailedCheckpoints)
+		printResultSection(errW, "Archived v2 generations", result.FailedV2Refs)
 
 		if len(failedTempFiles) > 0 {
 			fmt.Fprintf(errW, "\nTemp files:\n")
@@ -440,6 +433,15 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 	}
 
 	return nil
+}
+
+// cleanupItemIDs extracts IDs from a slice of CleanupItems.
+func cleanupItemIDs(items []strategy.CleanupItem) []string {
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	return ids
 }
 
 // listAllTempFiles returns all files in .entire/tmp/ without filtering.
