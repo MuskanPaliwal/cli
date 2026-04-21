@@ -388,8 +388,8 @@ The following are intentionally left to automated tests rather than this manual 
 
 ## 3) `entire doctor`
 
-- What it does: diagnoses and fixes disconnected `entire/checkpoints/v1` metadata branches and stuck sessions.
-- Use it for: recovering from session-state/shadow-branch issues and metadata-branch divergence.
+- What it does: diagnoses and fixes checkpoint/session issues, including v2-specific health checks.
+- Use it for: recovering from session-state/shadow-branch issues and spotting broken checkpoint metadata state.
 
 ### Scenario 1: No issues detected (Core)
 
@@ -415,9 +415,12 @@ git ls-remote origin refs/heads/entire/checkpoints/v1
 ```
 
 Expected:
-- Doctor reports no disconnected metadata issue and no stuck sessions.
+- Doctor reports a clean state for:
+  - legacy metadata connectivity
+  - v2 ref existence/count health when v2 is enabled
+  - stuck-session detection
 
-### Scenario 2: Stuck session handling (Optional)
+### Scenario 2: Stuck session handling (Core)
 
 Setup:
 1. Create a session in `ACTIVE` and make it stale (or create an `ENDED` session with uncondensed data).
@@ -438,6 +441,14 @@ Expected:
 - Doctor detects stuck sessions and applies selected remediation.
 - After condense/discard, corresponding session state/shadow-branch data is reduced or removed.
 
+### Automated coverage note
+
+The following are intentionally left to automated tests rather than this manual guide:
+- disconnected v2 `/main` repair paths
+- archived generation sequence/metadata edge cases
+- partial-ref inconsistencies and broken-object cases
+- metadata reconciliation and remote divergence corner cases
+
 ### Pass checklist
 
 - [ ] No-issue case reports clean status.
@@ -447,7 +458,7 @@ Expected:
 
 ## 4) `entire clean`
 
-- What it does: cleans session state and shadow branch data for current HEAD, or orphaned Entire data with `--all`.
+- What it does: cleans session state and shadow branch data for current HEAD, or repository-wide Entire artifacts with `--all`.
 - Use it for: removing stale session metadata and orphaned Entire artifacts.
 
 ### Scenario 1: Current HEAD cleanup (Core)
@@ -485,25 +496,31 @@ Expected:
 - Without `--force`, command warns and refuses to clean active session data.
 - With `--force`, command proceeds.
 
-### Scenario 3: Repository-wide orphan cleanup (`--all`, Optional)
+### Scenario 3: Repository-wide cleanup preview (`--all`, Optional)
 
 Setup:
-1. Create orphaned data (for example: old shadow branches or orphaned session-state files).
+1. Create repository-wide Entire data to clean (for example: old shadow branches, old session-state files, or archived v2 generations).
 
 Run:
 1. Execute `entire clean --all --dry-run`.
-2. Execute `entire clean --all`.
 
 Expected:
 - Dry-run previews orphaned items.
-- `--all` removes orphaned items and temporary files.
-- `entire/checkpoints/v1` branch is preserved.
+- Preview includes the kinds of items that would be removed.
+- Checkpoint metadata refs/branches are preserved.
+
+### Automated coverage note
+
+The following are intentionally left to automated tests rather than this manual guide:
+- archived generation retention edge cases
+- partial cleanup failures and recovery
+- low-level repository corruption scenarios
 
 ### Pass checklist
 
 - [ ] Current-HEAD cleanup behavior validated.
 - [ ] Active-session guard and `--force` behavior validated.
-- [ ] `--all` orphan cleanup behavior validated.
+- [ ] `--all` preview behavior validated.
 
 ---
 
@@ -512,15 +529,15 @@ Expected:
 - What it does: migrates v1 checkpoint storage into v2 split refs.
 - Use it for: upgrading repositories with existing v1 checkpoint history.
 
-Note: `entire migrate` is not implemented yet. Treat this section as a forward-looking validation plan and run it only after the command becomes available.
+Note: `entire migrate` is implemented as a hidden command. Run it explicitly as `entire migrate --checkpoints v2`.
 
-### Scenario 1: First migration run (Core, when command is available)
+### Scenario 1: First migration run (Core)
 
 Setup:
 1. Prepare repository with v1-only checkpoint history.
 
 Run:
-1. Execute `entire migrate`.
+1. Execute `entire migrate --checkpoints v2`.
 
 Checks:
 Run this block before migration:
@@ -550,16 +567,23 @@ git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
 # Read compact transcript (when available)
 git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
 # Read raw transcript
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/raw_transcript"
 ```
 
 Expected:
 - v1 checkpoints are migrated to v2 split refs.
 
+### Automated coverage note
+
+The following are intentionally left to automated tests rather than this manual guide:
+- idempotency and `--force` overwrite behavior
+- partial v2 repair/backfill cases
+- compact transcript generation failures
+- multi-session and task-metadata migration edge cases
+
 ### Pass checklist
 
 - [ ] Migration output correctness validated.
-- [ ] Idempotency and non-compaction checks moved to automated tests.
 
 ---
 
@@ -567,8 +591,6 @@ Expected:
 
 - What it does: attaches an existing agent transcript/session to checkpoint metadata when hooks did not capture it.
 - Use it for: recovering missed checkpoints or linking research sessions to the latest commit.
-
-Note: full checkpoints v2 behavior for `entire attach` is still in progress and will be updated soon.
 
 ### Scenario 1: Attach creates a new checkpoint and trailer (Core)
 
@@ -595,7 +617,38 @@ Expected:
 - Latest commit includes `Entire-Checkpoint: <id>` trailer (when amendment accepted/forced).
 - Session metadata is written to `entire/checkpoints/v1`.
 
-### Scenario 2: Attach adds session to existing checkpoint (Optional)
+### Scenario 2: Attach writes v2 artifacts when v2 is enabled (Core)
+
+Setup:
+1. Enable v2 mode in test settings (`checkpoints_v2=true`).
+2. Ensure repository has at least one commit.
+3. Ensure target session transcript exists on disk for the selected agent.
+4. Ensure latest commit does not already contain `Entire-Checkpoint` trailer.
+
+Run:
+1. Execute `entire attach <session-id>`.
+
+Checks:
+
+```bash
+# Read checkpoint ID from latest commit trailer
+git log -1 --pretty=%B
+checkpoint_id="<id-from-commit-trailer>"
+shard_path="$(scripts/checkpoint-shard-path "$checkpoint_id")"
+
+# Validate checkpoint metadata/session content on v2 main
+git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
+git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
+
+# Validate transcript artifacts on v2 full/current
+git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
+```
+
+Expected:
+- Attach writes the checkpoint to v2 as well as the normal attach destination.
+- Required v2 metadata and transcript artifacts are present for follow-up commands such as `resume` and `explain`.
+
+### Scenario 3: Attach adds session to existing checkpoint (Optional)
 
 Setup:
 1. Ensure latest commit already has `Entire-Checkpoint` trailer (this reuses that checkpoint; it does not block attaching additional sessions).
@@ -619,42 +672,19 @@ Expected:
 - Attach reports that it added to existing checkpoint.
 - Checkpoint now contains additional session data.
 
-### Scenario 3: Attached session appears correctly in v2 refs (future behavior, Optional)
+### Automated coverage note
 
-Setup:
-1. Enable v2 mode in test settings (`checkpoints_v2=true`).
-2. Start from a commit with an `Entire-Checkpoint` trailer.
-3. Attach a new session to that checkpoint.
-
-Run:
-1. Execute `entire attach <session-id>`.
-
-Checks:
-
-```bash
-# Read checkpoint ID from latest commit trailer
-git log -1 --pretty=%B
-# Set checkpoint id manually from trailer output
-checkpoint_id="<id-from-commit-trailer>"
-shard_path="$(scripts/checkpoint-shard-path "$checkpoint_id")"
-
-# Validate checkpoint metadata/session content on v2 main
-git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
-git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
-
-# Validate resumable transcript artifacts on v2 full/current
-git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
-```
-
-Expected:
-- Attached session is represented in v2 checkpoint metadata.
-- Required transcript artifacts are present in v2 refs for follow-up commands (`resume`/`explain`).
+The following are intentionally left to automated tests rather than this manual guide:
+- agent-specific transcript discovery edge cases
+- token usage extraction details
+- existing-checkpoint merge edge cases across multiple sessions
+- attach failure/recovery paths
 
 ### Pass checklist
 
 - [ ] New-checkpoint attach flow validated.
+- [ ] v2 attach write path validated.
 - [ ] Existing-checkpoint attach flow validated.
-- [ ] v2 ref representation for attached sessions validated.
 
 ---
 
@@ -675,6 +705,10 @@ Run:
 Expected:
 - Files and prompt/log context restore to selected checkpoint state.
 
+### Automated coverage note
+
+The deeper rewind matrix belongs in automated tests. Manual validation here is only a smoke test to ensure the main rewind workflow still works after v2 changes.
+
 ### Pass checklist
 
 - [ ] Rewind still restores expected files and prompt context.
@@ -694,12 +728,9 @@ Capture:
 
 Current manual validation is complete when:
 - `resume`, `doctor`, `clean`, and `rewind` pass applicable scenarios
-- `explain` compact transcript scenario passes
+- `explain` core scenarios pass
+- `attach` core scenarios pass
+- `migrate` core scenario passes when v1 data exists to migrate
 - remote fetch paths pass in missing-local situations
 
-### Future rollout gate
-
-Future manual validation is complete when:
-- `attach` v2 representation scenario passes with fully shipped v2 behavior
-- `migrate` scenario passes after the command is implemented
-- expanded edge-case/corruption checks remain covered by automated tests
+Expanded edge-case and corruption coverage should remain in automated tests rather than this manual plan.
