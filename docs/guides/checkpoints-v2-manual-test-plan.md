@@ -84,7 +84,7 @@ git show-ref --verify -- refs/entire/checkpoints/v2/main
 git show-ref --verify -- refs/entire/checkpoints/v2/full/current
 # List all local v2 raw refs (current + archived generations)
 git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/*'
-# Verify legacy v1 branch exists for fallback tests
+# Verify legacy v1 branch exists when running fallback or migration tests
 git show-ref --verify -- refs/heads/entire/checkpoints/v1
 ```
 
@@ -108,8 +108,6 @@ git ls-remote origin 'refs/entire/checkpoints/v2/*'
 ### Checkpoint shard helper
 
 Use this helper to derive `<shard_path>` from a checkpoint ID.
-
-Use the reusable executable script to determine the shard path.
 
 ```bash
 # Ensure helper directory exists
@@ -505,7 +503,7 @@ Run:
 1. Execute `entire clean --all --dry-run`.
 
 Expected:
-- Dry-run previews orphaned items.
+- Dry-run previews repository-wide Entire data.
 - Preview includes the kinds of items that would be removed.
 - Checkpoint metadata refs/branches are preserved.
 
@@ -717,7 +715,7 @@ The deeper rewind matrix belongs in automated tests. Manual validation here is o
 
 Capture:
 - executed command + full output
-- before/after `git show-ref` snapshots
+- before/after `git show-ref` snapshots when ref state is relevant
 - `git ls-remote` snapshots when remote behavior is involved
 - `git show` and `git ls-tree` evidence for expected files/paths
 - outcome classification: pass/fail/blocked with reason
