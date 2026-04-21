@@ -2,29 +2,33 @@
 
 ## Purpose
 
-This is the command-first manual QA plan for the checkpoints v2 migration. It is intended to be used throughout rollout without needing rewrites as additional command support lands.
+This is the command-first manual QA plan for the current checkpoints v2 implementation.
 
 Goals:
-- Validate v2 split-ref read/write behavior.
+- Validate current v2 split-ref write and read behavior.
 - Validate local-missing/remote-present fetch behavior.
-- Validate core cleanup and migration-readiness flows (with edge/corruption lifecycle cases covered by automated tests).
+- Validate cleanup, doctor, attach, and migration flows that now exist in the CLI.
 - Provide copy-paste test steps and evidence collection.
 
 ## v2 Invariants
 
-- Permanent metadata + compact transcripts: `refs/entire/checkpoints/v2/main`
-- Raw resumable logs: `refs/entire/checkpoints/v2/full/current`
-- Archived raw generations: `refs/entire/checkpoints/v2/full/<generation>`
-- v1 fallback remains available until v1 removal
+- Permanent metadata + compact transcripts live at `refs/entire/checkpoints/v2/main`
+- Active raw resumable transcripts live at `refs/entire/checkpoints/v2/full/current`
+- Archived raw transcript generations live at `refs/entire/checkpoints/v2/full/<generation>`
+- v1 compatibility still exists for fallback and migration scenarios unless running `checkpoints_version: 2`
+- v2 path layout differs by ref:
+  - `/main` contains `metadata.json`, session `metadata.json`, `prompt.txt`, `transcript.jsonl`, `transcript_hash.txt`
+  - `/full/current` contains `raw_transcript` and `raw_transcript_hash.txt`
 
 ## Current v2 command support status
 
-To reduce confusion during rollout:
-- `entire resume`: supported now for checkpoints v2 read-path validation.
-- `entire explain`: supported for compact transcript path validation.
-- `entire attach`: v2 representation checks are forward-looking; full v2 behavior will be updated soon.
-- `entire migrate`: command not implemented yet; validation is deferred until it lands.
-- `entire doctor`, `entire clean`, `entire rewind`: included as practical sanity/regression checks, not deep v2 feature validation.
+- `entire resume`: supports v2 reads and v1 fallback.
+- `entire explain`: supports v2 reads, compact transcript reads from `/main`, fetch-on-miss, and v1 fallback.
+- `entire attach`: writes v2 when checkpoints v2 is enabled, while still supporting v1 when not.
+- `entire migrate --checkpoints v2`: implemented and hidden; migrates v1 committed checkpoints into v2.
+- `entire doctor`: includes v2-specific health checks in addition to the legacy metadata-branch/session checks.
+- `entire clean`: includes v2 archived-generation cleanup in addition to session/shadow cleanup.
+- `entire rewind`: included mainly as a regression guard; it is not a primary v2 storage validation command.
 
 ## Global Test Setup
 
@@ -46,12 +50,30 @@ Set strategy options in `.entire/settings.json`:
   "strategy_options": {
     "checkpoints_v2": true,
     "push_v2_refs": true,
-    "generation_retention_days": 14
+    "full_transcript_generation_retention_days": 14
   }
 }
 ```
 
-Note: some strategy option keys are rollout-dependent and may become effective as command support lands.
+Notes:
+- `checkpoints_v2: true` enables dual-write/read behavior.
+- `push_v2_refs: true` pushes `refs/entire/checkpoints/v2/main` and `refs/entire/checkpoints/v2/full/current`.
+- `full_transcript_generation_retention_days` controls cleanup of archived `/full/<generation>` refs.
+- `checkpoints_version: 2` is also supported and is the stricter v2-only mode:
+
+```json
+{
+  "strategy_options": {
+    "checkpoints_version": 2,
+    "full_transcript_generation_retention_days": 14
+  }
+}
+```
+
+In `checkpoints_version: 2` mode:
+- v2 is always enabled
+- v2 refs are always pushed
+- new writes should skip v1
 
 ### Baseline checks (run before each command section)
 
@@ -124,12 +146,14 @@ git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
 git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
 # Read checkpoint summary metadata
 git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
-# Read compact transcript (when available)
+# Read compact transcript from /main
 git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
-# Read raw transcript
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
-# Read raw transcript content hash
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/content_hash.txt"
+# Read compact transcript hash from /main
+git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript_hash.txt"
+# Read raw transcript from /full/current
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/raw_transcript"
+# Read raw transcript hash from /full/current
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/raw_transcript_hash.txt"
 ```
 
 ### Archived generation checks
