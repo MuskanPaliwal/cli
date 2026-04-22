@@ -241,7 +241,7 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | `entire resume`  | Switch to a branch, restore latest checkpointed session metadata, and show command(s) to continue |
 | `entire rewind`  | Rewind to a previous checkpoint                                                                   |
 | `entire status`  | Show current session info                                                                         |
-| `entire sessions stop` | Mark one or more active sessions as ended                                                   |
+| `entire sessions` | View and manage agent sessions tracked by Entire                                                 |
 | `entire version` | Show Entire CLI version                                                                           |
 
 ### `entire enable` Flags
