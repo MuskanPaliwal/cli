@@ -497,12 +497,22 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	// Try origin first (fast treeless fetch, ~1-2s), then checkpoint_remote
 	// if configured and origin didn't have it. Fetch both v1 and v2 refs.
 	if len(matches) == 0 {
-		anyFetched := FetchMetadataTreeOnly(ctx) == nil
+		anyFetched := false
+		if settings.IsFilteredFetchesEnabled(ctx) {
+			anyFetched = FetchMetadataTreeOnly(ctx) == nil
+		} else {
+			anyFetched = FetchMetadataBranch(ctx) == nil
+		}
 		if !anyFetched {
 			anyFetched = FetchMetadataFromCheckpointRemote(ctx) == nil
 		}
 		if lookup.preferCheckpointsV2 {
-			v2Fetched := FetchV2MainTreeOnly(ctx) == nil
+			v2Fetched := false
+			if settings.IsFilteredFetchesEnabled(ctx) {
+				v2Fetched = FetchV2MainTreeOnly(ctx) == nil
+			} else {
+				v2Fetched = FetchV2MainRef(ctx) == nil
+			}
 			if !v2Fetched {
 				v2Fetched = FetchV2MetadataFromCheckpointRemote(ctx) == nil
 			}
