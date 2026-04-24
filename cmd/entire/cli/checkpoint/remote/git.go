@@ -45,7 +45,7 @@ type FetchOptions struct {
 // resolve the name to a URL (to avoid persisting promisor settings) should call
 // ResolveFetchTarget first and pass the resolved target as opts.Remote.
 func Fetch(ctx context.Context, opts FetchOptions) ([]byte, error) {
-	args := []string{"fetch"}
+	args := []string{"fetch", "--no-auto-gc"}
 	if opts.NoTags {
 		args = append(args, "--no-tags")
 	}
@@ -83,7 +83,7 @@ func Fetch(ctx context.Context, opts FetchOptions) ([]byte, error) {
 // The remote should be a URL (not a remote name) to avoid persisting promisor
 // settings onto the named remote. Use FetchURL to obtain the URL.
 func FetchBlobs(ctx context.Context, remote string, hashes []string) error {
-	args := []string{"fetch", "--no-tags", "--no-write-fetch-head", remote}
+	args := []string{"fetch", "--no-auto-gc", "--no-tags", "--no-write-fetch-head", remote}
 	args = append(args, hashes...)
 
 	cmd := newCommand(ctx, args...)
