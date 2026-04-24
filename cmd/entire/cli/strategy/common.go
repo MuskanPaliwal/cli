@@ -133,9 +133,6 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 // case it leaves the local ref unchanged to avoid rewinding locally-ahead
 // work. Otherwise (local missing, behind, or diverged) it updates the ref to
 // targetHash.
-//
-// The ancestry check walks from the local ref (which has full history), so
-// callers that fetched with --depth=1 do not break the check.
 func SafelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash) error {
 	currentLocal, localErr := repo.Reference(localRefName, true)
 	if localErr == nil {
