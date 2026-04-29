@@ -117,7 +117,7 @@ Each rule may declare an array of `{input, redacted}` pairs. On the next process
 
 ```
 WARN  redactor pack sample mismatch  pack=.entire/redactors/acme-internal.yaml
-      rule=acme-token sample="..." expected=true got=false
+      rule=acme-token sample_index=0 sample_length=42 expected=true got=false
 ```
 
 A failing sample never disables the rule — sample validation is informational. Use it to catch typos and false positives before they ship.
@@ -136,7 +136,7 @@ File an issue when the rule would benefit every Entire user (e.g., a major SaaS 
 
 ### Troubleshooting
 
-- **My rule doesn't redact anything.** Warnings about invalid patterns or sample mismatches appear on stderr the next time any `entire` command runs. Look for lines mentioning your label or pack path.
+- **My rule doesn't redact anything.** Warnings about invalid patterns or sample mismatches appear on stderr when Entire initializes redaction, such as hooks that write checkpoints or `entire doctor`. Look for lines mentioning your label or pack path.
 - **My pack file is silently ignored.** Filenames must end in `.yaml`, `.yml`, or `.json`. Other extensions are skipped.
 - **I want to disable a rule temporarily.** Comment it out (prefix the YAML key with `#`) or remove the entry from `custom_secrets`. The rule reloads on the next CLI invocation.
 

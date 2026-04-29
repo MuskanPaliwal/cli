@@ -161,6 +161,33 @@ rules:
 }`,
 			want: []string{"samplez"},
 		},
+		{
+			name:       "trailing json content",
+			sourcePath: "trailing-json.json",
+			body: `{
+  "name": "trailing-json",
+  "version": "1.0.0",
+  "rules": [{"id": "x", "regex": "X+"}]
+}
+{
+  "name": "second"
+}`,
+			want: []string{"trailing"},
+		},
+		{
+			name:       "multiple yaml documents",
+			sourcePath: "multiple-yaml.yaml",
+			body: `
+name: multiple-yaml
+version: 1.0.0
+rules:
+  - id: x
+    regex: 'X+'
+---
+name: second
+`,
+			want: []string{"trailing"},
+		},
 	}
 
 	for _, tc := range tests {

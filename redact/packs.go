@@ -3,7 +3,9 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -57,10 +59,22 @@ func ParsePack(data []byte, sourcePath string) (*Pack, error) {
 		if err := decoder.Decode(&pack); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
 		}
+		var extra any
+		if err := decoder.Decode(&extra); err == nil {
+			return nil, fmt.Errorf("parse %s: trailing content after pack", sourcePath)
+		} else if !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
+		}
 	default:
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		decoder.KnownFields(true)
 		if err := decoder.Decode(&pack); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err == nil {
+			return nil, fmt.Errorf("parse %s: trailing content after pack", sourcePath)
+		} else if !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
 		}
 	}
