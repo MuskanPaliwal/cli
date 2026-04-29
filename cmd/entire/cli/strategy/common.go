@@ -344,11 +344,10 @@ var (
 var initRedactionOnce sync.Once
 
 // EnsureRedactionConfigured loads redaction settings and configures the
-// redact package: PII detection (opt-in) and user-defined custom rules
-// (always, when present in settings).
+// redact package: PII detection (opt-in), inline custom_secrets, and rule
+// packs auto-discovered from .entire/redactors/.
 //
-// Must be called at each process entry point before checkpoint writes
-// (e.g., hook PersistentPreRunE, doctor PreRun).
+// Must be called at each process entry point before checkpoint writes.
 func EnsureRedactionConfigured() {
 	initRedactionOnce.Do(func() {
 		ctx := context.Background()
@@ -358,12 +357,9 @@ func EnsureRedactionConfigured() {
 			logging.Warn(logCtx, "failed to load settings for redaction", slog.String("error", err.Error()))
 			return
 		}
-		if s.Redaction == nil {
-			return
-		}
 
 		// 1. PII (existing, opt-in).
-		if s.Redaction.PII != nil && s.Redaction.PII.Enabled {
+		if s.Redaction != nil && s.Redaction.PII != nil && s.Redaction.PII.Enabled {
 			pii := s.Redaction.PII
 			cfg := redact.PIIConfig{
 				Enabled:        true,
@@ -376,10 +372,26 @@ func EnsureRedactionConfigured() {
 			redact.ConfigurePII(cfg)
 		}
 
-		// 2. Custom secret rules (new, always when set).
-		if len(s.Redaction.CustomSecrets) > 0 {
+		// 2. Inline + pack-based custom rules.
+		var inline map[string]string
+		if s.Redaction != nil {
+			inline = s.Redaction.CustomSecrets
+		}
+		packsDir, perr := paths.AbsPath(ctx, filepath.Join(paths.EntireDir, "redactors"))
+		if perr != nil {
+			logCtx := logging.WithComponent(ctx, "redaction")
+			logging.Warn(logCtx, "failed to resolve redactors path", slog.String("error", perr.Error()))
+			packsDir = filepath.Join(paths.EntireDir, "redactors")
+		}
+		packs, lerr := redact.LoadPacks(packsDir)
+		if lerr != nil {
+			logCtx := logging.WithComponent(ctx, "redaction")
+			logging.Warn(logCtx, "failed to load redactor packs", slog.String("error", lerr.Error()))
+		}
+		if len(inline) > 0 || len(packs) > 0 {
 			redact.ConfigureCustomRules(redact.CustomRulesConfig{
-				Inline: s.Redaction.CustomSecrets,
+				Inline: inline,
+				Packs:  packs,
 			})
 		}
 	})

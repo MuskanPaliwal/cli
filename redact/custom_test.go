@@ -1,6 +1,8 @@
 package redact
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +21,16 @@ func resetCustomRulesForTest(t *testing.T) {
 		customConfig = nil
 		customConfigMu.Unlock()
 	})
+}
+
+// captureSlogForTest installs a slog handler that writes JSON lines to buf.
+// Returns a restore function the caller defers. Tests use this to assert
+// that ConfigureCustomRules emits the right warnings for failing samples.
+func captureSlogForTest(buf *bytes.Buffer) func() {
+	prev := slog.Default()
+	h := slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	slog.SetDefault(slog.New(h))
+	return func() { slog.SetDefault(prev) }
 }
 
 func TestConfigureCustomRules_CompilesAndStoresRules(t *testing.T) {
@@ -176,4 +188,116 @@ func TestString_CustomRuleNotConfiguredIsNoop(t *testing.T) {
 func contains(t *testing.T, s, sub string) bool {
 	t.Helper()
 	return strings.Contains(s, sub)
+}
+
+func TestConfigureCustomRules_AcceptsPackRules(t *testing.T) {
+	resetCustomRulesForTest(t)
+
+	pack := &Pack{
+		Name:    "acme",
+		Version: "1.0.0",
+		Rules: []Rule{
+			{ID: "acme-token", Regex: `ACME_TOKEN_[A-Za-z0-9]{20,}`},
+		},
+		SourcePath: "acme.yaml",
+	}
+
+	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
+
+	cfg := getCustomRulesConfig()
+	if cfg == nil || len(cfg.rules) != 1 {
+		t.Fatalf("rules: want 1 from pack, have config=%v", cfg)
+	}
+}
+
+func TestConfigureCustomRules_SamplesPassEmitNoWarn(t *testing.T) {
+	resetCustomRulesForTest(t)
+
+	var buf bytes.Buffer
+	restore := captureSlogForTest(&buf)
+	defer restore()
+
+	pack := &Pack{
+		Name:    "ok",
+		Version: "1.0.0",
+		Rules: []Rule{
+			{
+				ID:    "match",
+				Regex: `T_[a-z]{6}`,
+				Samples: []Sample{
+					{Input: "T_abcdef", Redacted: true},
+					{Input: "T_short", Redacted: false},
+				},
+			},
+		},
+		SourcePath: "ok.yaml",
+	}
+
+	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
+
+	if strings.Contains(buf.String(), `"sample"`) {
+		t.Errorf("expected no sample warnings, got logs: %s", buf.String())
+	}
+}
+
+func TestConfigureCustomRules_SamplesFailEmitWarnButKeepRule(t *testing.T) {
+	resetCustomRulesForTest(t)
+
+	var buf bytes.Buffer
+	restore := captureSlogForTest(&buf)
+	defer restore()
+
+	pack := &Pack{
+		Name:    "bad-sample",
+		Version: "1.0.0",
+		Rules: []Rule{
+			{
+				ID:    "match",
+				Regex: `T_[a-z]{6}`,
+				Samples: []Sample{
+					{Input: "no_match", Redacted: true},
+				},
+			},
+		},
+		SourcePath: "bad-sample.yaml",
+	}
+
+	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
+
+	logs := buf.String()
+	if !strings.Contains(logs, `bad-sample.yaml`) {
+		t.Errorf("warn missing pack path: %s", logs)
+	}
+	if !strings.Contains(logs, `"rule":"match"`) {
+		t.Errorf("warn missing rule id: %s", logs)
+	}
+
+	cfg := getCustomRulesConfig()
+	if cfg == nil || len(cfg.rules) != 1 {
+		t.Fatalf("rule should remain active despite failing sample, have %v", cfg)
+	}
+}
+
+func TestString_PackSampleNotRedactedSurvivesAllLayers(t *testing.T) {
+	resetCustomRulesForTest(t)
+
+	const benign = "short and benign"
+
+	pack := &Pack{
+		Name:    "cross-check",
+		Version: "1.0.0",
+		Rules: []Rule{
+			{
+				ID:      "narrow",
+				Regex:   `WILL_NEVER_MATCH_THIS_BENIGN_TEXT`,
+				Samples: []Sample{{Input: benign, Redacted: false}},
+			},
+		},
+		SourcePath: "cross-check.yaml",
+	}
+	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
+
+	if got := String(benign); got != benign {
+		t.Errorf("benign sample unexpectedly redacted: input=%q output=%q", benign, got)
+	}
 }

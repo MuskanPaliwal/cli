@@ -1,0 +1,144 @@
+package redact
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Pack is a versioned bundle of redaction rules loaded from a single file
+// under .entire/redactors/. Both YAML and JSON encodings are accepted; the
+// schema is identical.
+type Pack struct {
+	Name        string `json:"name"                  yaml:"name"`
+	Version     string `json:"version"               yaml:"version"`
+	Description string `json:"description,omitempty" yaml:"description"`
+	Rules       []Rule `json:"rules"                 yaml:"rules"`
+
+	// SourcePath is the file the pack was loaded from. Populated by
+	// ParsePack; used in log lines so users can find the offending file.
+	SourcePath string `json:"-" yaml:"-"`
+}
+
+// Rule is a single redaction rule within a Pack.
+type Rule struct {
+	ID          string   `json:"id"                    yaml:"id"`
+	Description string   `json:"description,omitempty" yaml:"description"`
+	Regex       string   `json:"regex"                 yaml:"regex"`
+	Samples     []Sample `json:"samples,omitempty"     yaml:"samples"`
+}
+
+// Sample is a self-test entry for a Rule. The runner asserts whether the
+// rule's regex matching `Input` matches the `Redacted` expectation.
+type Sample struct {
+	Input    string `json:"input"    yaml:"input"`
+	Redacted bool   `json:"redacted" yaml:"redacted"`
+}
+
+// ParsePack decodes a single pack file. sourcePath is used both to pick
+// the encoding (YAML by default; JSON only when the extension is .json)
+// and to enforce that the pack's `name` matches the filename stem.
+func ParsePack(data []byte, sourcePath string) (*Pack, error) {
+	var pack Pack
+	switch strings.ToLower(filepath.Ext(sourcePath)) {
+	case ".json":
+		if err := json.Unmarshal(data, &pack); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
+		}
+	default:
+		if err := yaml.Unmarshal(data, &pack); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
+		}
+	}
+	pack.SourcePath = sourcePath
+	if err := validatePack(&pack); err != nil {
+		return nil, err
+	}
+	return &pack, nil
+}
+
+// validatePack enforces required fields and schema invariants. Regex
+// compilation is NOT performed here — that happens during ConfigureCustomRules
+// so failures emit the same warn-and-skip path as inline rules.
+func validatePack(p *Pack) error {
+	if p.Name == "" {
+		return fmt.Errorf("%s: missing required field 'name'", p.SourcePath)
+	}
+	if p.Version == "" {
+		return fmt.Errorf("%s: missing required field 'version'", p.SourcePath)
+	}
+	if len(p.Rules) == 0 {
+		return fmt.Errorf("%s: 'rules' must contain at least one entry", p.SourcePath)
+	}
+
+	// Name must match filename stem so log lines and discovery stay consistent.
+	stem := strings.TrimSuffix(filepath.Base(p.SourcePath), filepath.Ext(p.SourcePath))
+	if stem != p.Name {
+		return fmt.Errorf("%s: pack name %q does not match filename stem %q", p.SourcePath, p.Name, stem)
+	}
+
+	seen := make(map[string]struct{}, len(p.Rules))
+	for i, r := range p.Rules {
+		if r.ID == "" {
+			return fmt.Errorf("%s: rules[%d] missing required field 'id'", p.SourcePath, i)
+		}
+		if r.Regex == "" {
+			return fmt.Errorf("%s: rules[%d] (%s) missing required field 'regex'", p.SourcePath, i, r.ID)
+		}
+		if _, dup := seen[r.ID]; dup {
+			return fmt.Errorf("%s: duplicate rule id %q", p.SourcePath, r.ID)
+		}
+		seen[r.ID] = struct{}{}
+	}
+	return nil
+}
+
+// LoadPacks discovers and parses all rule packs in dir. Files with the
+// extensions .yaml, .yml, and .json are considered packs; other files are
+// ignored. A missing directory is treated as "no packs configured" and
+// returns no error. Per-file parse errors are slog.Warn'd and the file is
+// skipped — never fatal — so one bad file does not silence the rest.
+func LoadPacks(dir string) ([]*Pack, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read redactors dir %s: %w", dir, err)
+	}
+
+	var packs []*Pack
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".yaml", ".yml", ".json":
+		default:
+			continue
+		}
+
+		full := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(full) //nolint:gosec // path is from ReadDir on a configured dir
+		if err != nil {
+			slog.Warn("skipping unreadable redactor pack",
+				slog.String("path", full),
+				slog.String("error", err.Error()))
+			continue
+		}
+		pack, err := ParsePack(data, full)
+		if err != nil {
+			slog.Warn("skipping invalid redactor pack",
+				slog.String("path", full),
+				slog.String("error", err.Error()))
+			continue
+		}
+		packs = append(packs, pack)
+	}
+	return packs, nil
+}
