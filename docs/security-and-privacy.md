@@ -136,7 +136,7 @@ File an issue when the rule would benefit every Entire user (e.g., a major SaaS 
 
 ### Troubleshooting
 
-- **My rule doesn't redact anything.** Check Entire's logs (`tail -f .entire/logs/*.log`) for `slog.Warn` lines mentioning your label or pack path.
+- **My rule doesn't redact anything.** Warnings about invalid patterns or sample mismatches appear on stderr the next time any `entire` command runs. Look for lines mentioning your label or pack path.
 - **My pack file is silently ignored.** Filenames must end in `.yaml`, `.yml`, or `.json`. Other extensions are skipped.
 - **I want to disable a rule temporarily.** Comment it out (prefix the YAML key with `#`) or remove the entry from `custom_secrets`. The rule reloads on the next CLI invocation.
 

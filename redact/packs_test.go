@@ -199,6 +199,63 @@ func TestLoadPacks_MissingDirReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestLoadPacks_RejectsNonDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "redactors")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadPacks(path)
+	if err == nil {
+		t.Fatal("expected error for non-directory redactors path")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("error should mention non-directory path, got: %v", err)
+	}
+}
+
+// TestLoadPacks_DescendsIntoSubdirs verifies that packs in subdirectories
+// (e.g. the conventional .entire/redactors/local/ for personal/uncommitted
+// rules) are discovered. Without recursion, the docs' "personal-only"
+// distribution path would silently no-op.
+func TestLoadPacks_DescendsIntoSubdirs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mustWrite(t, dir, "team.yaml", `
+name: team
+version: 1.0.0
+rules:
+  - id: t
+    regex: 'T+'
+`)
+	if err := os.MkdirAll(filepath.Join(dir, "local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "local"), "personal.yaml", `
+name: personal
+version: 1.0.0
+rules:
+  - id: p
+    regex: 'P+'
+`)
+
+	packs, err := LoadPacks(dir)
+	if err != nil {
+		t.Fatalf("LoadPacks: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range packs {
+		got[p.Name] = true
+	}
+	if !got["team"] || !got["personal"] {
+		t.Errorf("expected team+personal packs, got %v", got)
+	}
+}
+
 func mustWrite(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {

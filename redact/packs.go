@@ -3,6 +3,7 @@ package redact
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -98,47 +99,61 @@ func validatePack(p *Pack) error {
 	return nil
 }
 
-// LoadPacks discovers and parses all rule packs in dir. Files with the
+// LoadPacks discovers and parses all rule packs in dir, including any
+// subdirectories (so the conventional .entire/redactors/local/ path for
+// personal/uncommitted rules is picked up automatically). Files with the
 // extensions .yaml, .yml, and .json are considered packs; other files are
 // ignored. A missing directory is treated as "no packs configured" and
 // returns no error. Per-file parse errors are slog.Warn'd and the file is
 // skipped — never fatal — so one bad file does not silence the rest.
 func LoadPacks(dir string) ([]*Pack, error) {
-	entries, err := os.ReadDir(dir)
+	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read redactors dir %s: %w", dir, err)
+		return nil, fmt.Errorf("stat redactors dir %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("redactors path %s is not a directory", dir)
 	}
 
 	var packs []*Pack
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			slog.Warn("skipping unreadable redactor pack path",
+				slog.String("path", path),
+				slog.String("error", err.Error()))
+			return nil
 		}
-		switch strings.ToLower(filepath.Ext(e.Name())) {
+		if d.IsDir() {
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(d.Name())) {
 		case ".yaml", ".yml", ".json":
 		default:
-			continue
+			return nil
 		}
 
-		full := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(full) //nolint:gosec // path is from ReadDir on a configured dir
+		data, err := os.ReadFile(path) //nolint:gosec // path comes from WalkDir under a configured dir
 		if err != nil {
 			slog.Warn("skipping unreadable redactor pack",
-				slog.String("path", full),
+				slog.String("path", path),
 				slog.String("error", err.Error()))
-			continue
+			return nil
 		}
-		pack, err := ParsePack(data, full)
+		pack, err := ParsePack(data, path)
 		if err != nil {
 			slog.Warn("skipping invalid redactor pack",
-				slog.String("path", full),
+				slog.String("path", path),
 				slog.String("error", err.Error()))
-			continue
+			return nil
 		}
 		packs = append(packs, pack)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("walk redactors dir %s: %w", dir, walkErr)
 	}
 	return packs, nil
 }
