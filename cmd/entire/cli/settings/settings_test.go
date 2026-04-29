@@ -972,3 +972,75 @@ func containsUnknownField(msg string) bool {
 	// Go's json package reports unknown fields with this message format
 	return strings.Contains(msg, "unknown field")
 }
+
+func TestLoadMerged_CustomSecretsPerKeyOverride(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := filepath.Join(dir, "settings.json")
+	local := filepath.Join(dir, "settings.local.json")
+
+	if err := os.WriteFile(base, []byte(`{
+  "redaction": {
+    "custom_secrets": {
+      "team_token":   "TEAM_[A-Za-z0-9]{16,}",
+      "shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{12,}"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte(`{
+  "redaction": {
+    "custom_secrets": {
+      "shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{20,}",
+      "personal":     "PERSONAL_[a-z]{32}"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := loadMergedSettings(base, local)
+	if err != nil {
+		t.Fatalf("loadMergedSettings: %v", err)
+	}
+
+	want := map[string]string{
+		"team_token":   "TEAM_[A-Za-z0-9]{16,}",
+		"shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{20,}",
+		"personal":     "PERSONAL_[a-z]{32}",
+	}
+	got := merged.Redaction.CustomSecrets
+	if len(got) != len(want) {
+		t.Fatalf("CustomSecrets size: want %d, have %d (%v)", len(want), len(got), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("CustomSecrets[%s]: want %q, have %q", k, v, got[k])
+		}
+	}
+}
+
+func TestLoadFromBytes_CustomSecrets(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{
+  "redaction": {
+    "custom_secrets": {
+      "acme_token": "ACME_TOKEN_[A-Za-z0-9]{20,}"
+    }
+  }
+}`)
+
+	got, err := LoadFromBytes(data)
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if got.Redaction == nil {
+		t.Fatalf("Redaction is nil")
+	}
+	if want, have := "ACME_TOKEN_[A-Za-z0-9]{20,}", got.Redaction.CustomSecrets["acme_token"]; want != have {
+		t.Errorf("CustomSecrets[acme_token]: want %q, have %q", want, have)
+	}
+}

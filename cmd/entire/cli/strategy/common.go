@@ -343,8 +343,10 @@ var (
 
 var initRedactionOnce sync.Once
 
-// EnsureRedactionConfigured loads PII redaction settings and configures the
-// redact package. No-op if PII is not enabled in settings.
+// EnsureRedactionConfigured loads redaction settings and configures the
+// redact package: PII detection (opt-in) and user-defined custom rules
+// (always, when present in settings).
+//
 // Must be called at each process entry point before checkpoint writes
 // (e.g., hook PersistentPreRunE, doctor PreRun).
 func EnsureRedactionConfigured() {
@@ -353,23 +355,33 @@ func EnsureRedactionConfigured() {
 		s, err := settings.Load(ctx)
 		if err != nil {
 			logCtx := logging.WithComponent(ctx, "redaction")
-			logging.Warn(logCtx, "failed to load settings for PII redaction", slog.String("error", err.Error()))
+			logging.Warn(logCtx, "failed to load settings for redaction", slog.String("error", err.Error()))
 			return
 		}
-		if s.Redaction == nil || s.Redaction.PII == nil || !s.Redaction.PII.Enabled {
+		if s.Redaction == nil {
 			return
 		}
-		pii := s.Redaction.PII
-		cfg := redact.PIIConfig{
-			Enabled:        true,
-			Categories:     make(map[redact.PIICategory]bool),
-			CustomPatterns: pii.CustomPatterns,
+
+		// 1. PII (existing, opt-in).
+		if s.Redaction.PII != nil && s.Redaction.PII.Enabled {
+			pii := s.Redaction.PII
+			cfg := redact.PIIConfig{
+				Enabled:        true,
+				Categories:     make(map[redact.PIICategory]bool),
+				CustomPatterns: pii.CustomPatterns,
+			}
+			cfg.Categories[redact.PIIEmail] = pii.Email == nil || *pii.Email
+			cfg.Categories[redact.PIIPhone] = pii.Phone == nil || *pii.Phone
+			cfg.Categories[redact.PIIAddress] = pii.Address != nil && *pii.Address
+			redact.ConfigurePII(cfg)
 		}
-		// Email and phone default to true when PII is enabled; address defaults to false.
-		cfg.Categories[redact.PIIEmail] = pii.Email == nil || *pii.Email
-		cfg.Categories[redact.PIIPhone] = pii.Phone == nil || *pii.Phone
-		cfg.Categories[redact.PIIAddress] = pii.Address != nil && *pii.Address
-		redact.ConfigurePII(cfg)
+
+		// 2. Custom secret rules (new, always when set).
+		if len(s.Redaction.CustomSecrets) > 0 {
+			redact.ConfigureCustomRules(redact.CustomRulesConfig{
+				Inline: s.Redaction.CustomSecrets,
+			})
+		}
 	})
 }
 

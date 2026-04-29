@@ -151,6 +151,13 @@ func (s *SummaryGenerationSettings) SetProvider(newProvider, newModel string) {
 // RedactionSettings configures redaction behavior beyond the default secret detection.
 type RedactionSettings struct {
 	PII *PIISettings `json:"pii,omitempty"`
+
+	// CustomSecrets is a label → RE2 regex map for user-defined credential
+	// shapes (custom env-var prefixes, internal service tokens, etc.). Each
+	// match is replaced with the bare "REDACTED" token used by the built-in
+	// secret layers, not the "[REDACTED_<LABEL>]" token used by PII. Failed
+	// regex compilations are logged via slog.Warn and the rule is skipped.
+	CustomSecrets map[string]string `json:"custom_secrets,omitempty"`
 }
 
 // PIISettings configures PII detection categories.
@@ -505,6 +512,19 @@ func mergeRedaction(dst *RedactionSettings, data json.RawMessage) error {
 		}
 		if err := mergePIISettings(dst.PII, piiRaw); err != nil {
 			return err
+		}
+	}
+	if csRaw, ok := raw["custom_secrets"]; ok {
+		var cs map[string]string
+		if err := json.Unmarshal(csRaw, &cs); err != nil {
+			return fmt.Errorf("parsing redaction.custom_secrets: %w", err)
+		}
+		if dst.CustomSecrets == nil {
+			dst.CustomSecrets = cs
+		} else {
+			for k, v := range cs {
+				dst.CustomSecrets[k] = v
+			}
 		}
 	}
 	return nil
