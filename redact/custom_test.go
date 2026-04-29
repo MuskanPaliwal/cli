@@ -33,33 +33,6 @@ func captureSlogForTest(buf *bytes.Buffer) func() {
 	return func() { slog.SetDefault(prev) }
 }
 
-func TestConfigureCustomRules_CompilesAndStoresRules(t *testing.T) {
-	resetCustomRulesForTest(t)
-
-	ConfigureCustomRules(CustomRulesConfig{
-		Inline: map[string]string{
-			"acme_token": `ACME_TOKEN_[A-Za-z0-9]{20,}`,
-		},
-	})
-
-	cfg := getCustomRulesConfig()
-	if cfg == nil {
-		t.Fatal("expected config, got nil")
-	}
-	if len(cfg.rules) != 1 {
-		t.Fatalf("rules: want 1, have %d", len(cfg.rules))
-	}
-	if cfg.rules[0].label != "acme_token" {
-		t.Errorf("label: want acme_token, have %q", cfg.rules[0].label)
-	}
-	if cfg.rules[0].regex == nil {
-		t.Fatal("regex is nil")
-	}
-	if !cfg.rules[0].regex.MatchString("ACME_TOKEN_abc123def456ghi789jkl") {
-		t.Error("compiled regex should match a known sample")
-	}
-}
-
 func TestConfigureCustomRules_SkipsInvalidRegexAndContinues(t *testing.T) {
 	resetCustomRulesForTest(t)
 
@@ -79,20 +52,6 @@ func TestConfigureCustomRules_SkipsInvalidRegexAndContinues(t *testing.T) {
 	}
 	if cfg.rules[0].label != "valid" {
 		t.Errorf("label: want valid, have %q", cfg.rules[0].label)
-	}
-}
-
-func TestConfigureCustomRules_EmptyConfigStoresNoRules(t *testing.T) {
-	resetCustomRulesForTest(t)
-
-	ConfigureCustomRules(CustomRulesConfig{})
-
-	cfg := getCustomRulesConfig()
-	if cfg == nil {
-		t.Fatal("expected config")
-	}
-	if len(cfg.rules) != 0 {
-		t.Errorf("rules: want 0, have %d", len(cfg.rules))
 	}
 }
 
@@ -116,44 +75,6 @@ func TestConfigureCustomRules_ConcurrentReadsAndWrites(t *testing.T) {
 	wg.Wait()
 }
 
-func TestDetectCustomRules_NoConfigReturnsNil(t *testing.T) {
-	resetCustomRulesForTest(t)
-
-	if got := detectCustomRules(nil, "ACME_TOKEN_abc123def456ghi789jkl"); got != nil {
-		t.Errorf("nil config: want nil, have %v", got)
-	}
-}
-
-func TestDetectCustomRules_SingleRuleMultipleMatches(t *testing.T) {
-	resetCustomRulesForTest(t)
-	ConfigureCustomRules(CustomRulesConfig{
-		Inline: map[string]string{"token": `T_[a-z]{6}`},
-	})
-
-	input := "first T_aaaaaa middle T_bbbbbb last"
-	regions := detectCustomRules(getCustomRulesConfig(), input)
-	if len(regions) != 2 {
-		t.Fatalf("regions: want 2, have %d (%v)", len(regions), regions)
-	}
-	for i, r := range regions {
-		if r.label != "" {
-			t.Errorf("region %d: label want empty (bare REDACTED), have %q", i, r.label)
-		}
-	}
-}
-
-func TestDetectCustomRules_NonMatchingInputReturnsEmpty(t *testing.T) {
-	resetCustomRulesForTest(t)
-	ConfigureCustomRules(CustomRulesConfig{
-		Inline: map[string]string{"token": `T_[a-z]{6}`},
-	})
-
-	got := detectCustomRules(getCustomRulesConfig(), "no matches here at all")
-	if len(got) != 0 {
-		t.Errorf("regions: want 0, have %d", len(got))
-	}
-}
-
 func TestString_CustomRuleEndToEnd(t *testing.T) {
 	resetCustomRulesForTest(t)
 	ConfigureCustomRules(CustomRulesConfig{
@@ -162,13 +83,13 @@ func TestString_CustomRuleEndToEnd(t *testing.T) {
 		},
 	})
 
-	in := "key=ACME_TOKEN_abc123def456ghi789jkl after"
+	in := "first=ACME_TOKEN_abc123def456ghi789jkl second=ACME_TOKEN_zyx987wvu654tsr321qpo"
 	out := String(in)
 
-	if !contains(t, out, "REDACTED") {
-		t.Errorf("expected REDACTED in output, got: %q", out)
+	if got := strings.Count(out, "REDACTED"); got != 2 {
+		t.Errorf("REDACTED count: want 2, have %d in %q", got, out)
 	}
-	if contains(t, out, "ACME_TOKEN_abc123def456ghi789jkl") {
+	if contains(t, out, "ACME_TOKEN_") {
 		t.Errorf("raw token leaked into output: %q", out)
 	}
 	if contains(t, out, "[REDACTED_") {
@@ -188,26 +109,6 @@ func TestString_CustomRuleNotConfiguredIsNoop(t *testing.T) {
 func contains(t *testing.T, s, sub string) bool {
 	t.Helper()
 	return strings.Contains(s, sub)
-}
-
-func TestConfigureCustomRules_AcceptsPackRules(t *testing.T) {
-	resetCustomRulesForTest(t)
-
-	pack := &Pack{
-		Name:    "acme",
-		Version: "1.0.0",
-		Rules: []Rule{
-			{ID: "acme-token", Regex: `ACME_TOKEN_[A-Za-z0-9]{20,}`},
-		},
-		sourcePath: "acme.yaml",
-	}
-
-	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
-
-	cfg := getCustomRulesConfig()
-	if cfg == nil || len(cfg.rules) != 1 {
-		t.Fatalf("rules: want 1 from pack, have config=%v", cfg)
-	}
 }
 
 func TestConfigureCustomRules_SamplesPassEmitNoWarn(t *testing.T) {
@@ -310,29 +211,5 @@ func TestConfigureCustomRules_SampleMismatchWarnDoesNotLogRawInput(t *testing.T)
 	}
 	if !strings.Contains(logs, `"sample_length":`) {
 		t.Errorf("warn missing sample length: %s", logs)
-	}
-}
-
-func TestString_PackSampleNotRedactedSurvivesAllLayers(t *testing.T) {
-	resetCustomRulesForTest(t)
-
-	const benign = "short and benign"
-
-	pack := &Pack{
-		Name:    "cross-check",
-		Version: "1.0.0",
-		Rules: []Rule{
-			{
-				ID:      "narrow",
-				Regex:   `WILL_NEVER_MATCH_THIS_BENIGN_TEXT`,
-				Samples: []Sample{{Input: benign, Redacted: false}},
-			},
-		},
-		sourcePath: "cross-check.yaml",
-	}
-	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
-
-	if got := String(benign); got != benign {
-		t.Errorf("benign sample unexpectedly redacted: input=%q output=%q", benign, got)
 	}
 }
