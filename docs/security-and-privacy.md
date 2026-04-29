@@ -44,6 +44,102 @@ All detected secrets are replaced with `REDACTED`.
 
 To reduce over-redaction, Entire preserves structural transcript fields such as IDs and paths, ignores common placeholder values, and redacts only credential values for bounded key/value forms. When a connection string contains a real (non-placeholder) password, it is redacted as a unit because partial fragments can still expose sensitive material; connection strings whose passwords are placeholders (e.g. `${DB_PASSWORD}`) are left intact.
 
+## Customizing redaction
+
+The built-in detectors handle well-known secret formats. For internal credential shapes that aren't covered (custom env-var prefixes, internal service tokens, project-specific session formats), Entire offers two extension surfaces. Both feed the same engine and run as their own layer between connection-string detection and bounded credential KV detection.
+
+### Surface 1: Inline `redaction.custom_secrets`
+
+Add a label → regex map under `redaction.custom_secrets` in `.entire/settings.json`:
+
+```json
+{
+  "redaction": {
+    "custom_secrets": {
+      "acme_token":  "ACME_TOKEN_[A-Za-z0-9]{20,}",
+      "internal_id": "INTERNAL_[a-z]{6}_[0-9]{4}"
+    }
+  }
+}
+```
+
+- The label is for diagnostics only; matches are replaced with the bare `REDACTED` token (matching the built-in secret layers, not the `[REDACTED_<LABEL>]` token used for PII).
+- Regexes follow [Go's RE2 syntax](https://pkg.go.dev/regexp/syntax). No lookarounds, no backreferences.
+- A failed compile is logged once at startup and the rule is skipped — it will never crash the redactor.
+- Override in `.entire/settings.local.json` for personal additions; entries merge per-key (override replaces the same key, leaves other keys intact).
+
+### Surface 2: Rule packs
+
+Drop a YAML or JSON file into `.entire/redactors/`:
+
+```yaml
+# .entire/redactors/acme-internal.yaml
+name: acme-internal              # MUST match the filename stem
+version: 1.0.0
+description: Internal ACME service tokens
+rules:
+  - id: acme-token
+    description: Long-lived ACME service tokens
+    regex: 'ACME_TOKEN_[A-Za-z0-9]{20,}'
+    samples:
+      - { input: "key=ACME_TOKEN_abc123def456ghi789jkl", redacted: true  }
+      - { input: "ACME_TOKEN_short",                     redacted: false }
+  - id: acme-session
+    regex: 'asess_[a-f0-9]{32}'
+```
+
+Equivalent JSON form:
+
+```json
+{
+  "name": "acme-internal",
+  "version": "1.0.0",
+  "rules": [
+    {
+      "id": "acme-token",
+      "regex": "ACME_TOKEN_[A-Za-z0-9]{20,}",
+      "samples": [
+        { "input": "key=ACME_TOKEN_abc123def456ghi789jkl", "redacted": true  },
+        { "input": "ACME_TOKEN_short",                     "redacted": false }
+      ]
+    }
+  ]
+}
+```
+
+**Required fields:** `name` (must equal the filename stem — `acme-internal.yaml` → `acme-internal`), `version` (any string; semver recommended), and `rules[]` (at least one entry, each with `id` and `regex`).
+
+**Optional fields:** `description` (pack-level and rule-level), and `rules[].samples[]` (see "Self-tests" below).
+
+### Self-tests via `samples[]`
+
+Each rule may declare an array of `{input, redacted}` pairs. On the next process startup after editing the pack, Entire runs each sample and emits a `slog.Warn` for any mismatch:
+
+```
+WARN  redactor pack sample mismatch  pack=.entire/redactors/acme-internal.yaml
+      rule=acme-token sample="..." expected=true got=false
+```
+
+A failing sample never disables the rule — sample validation is informational. Use it to catch typos and false positives before they ship.
+
+### Distribution
+
+- **Within a team:** commit `.entire/settings.json` and/or `.entire/redactors/*` to your repo. Teammates pull and the rules apply.
+- **Across teams:** copy the pack file or share a link to a gist; recipients drop the file into their `.entire/redactors/`.
+- **Personal-only:** put the file in `.entire/redactors/local/` — `entire enable` writes that path into `.entire/.gitignore` so personal rules don't pollute team commits.
+
+### When to write a rule vs. file an issue
+
+Write a rule for internal service tokens (`ACME_*`, `INTERNAL_*`), custom env-var prefixes the bundled detectors don't know about, and project-specific session formats.
+
+File an issue when the rule would benefit every Entire user (e.g., a major SaaS issued a new token format), when a built-in is producing false positives on common idioms in your codebase, or when a built-in is *not* catching a well-known shared format (we'd rather fix the built-in than have everyone ship the same custom rule).
+
+### Troubleshooting
+
+- **My rule doesn't redact anything.** Check Entire's logs (`tail -f .entire/logs/*.log`) for `slog.Warn` lines mentioning your label or pack path.
+- **My pack file is silently ignored.** Filenames must end in `.yaml`, `.yml`, or `.json`. Other extensions are skipped.
+- **I want to disable a rule temporarily.** Comment it out (prefix the YAML key with `#`) or remove the entry from `custom_secrets`. The rule reloads on the next CLI invocation.
+
 ## Limitations
 
 - **Best-effort.** Novel or low-entropy secrets (short passwords, predictable tokens) may not be caught.

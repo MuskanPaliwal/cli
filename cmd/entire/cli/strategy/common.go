@@ -1074,6 +1074,7 @@ func EnsureEntireGitignore(ctx context.Context) error {
 		"settings.local.json",
 		"metadata/",
 		"logs/",
+		"redactors/local/",
 	}
 
 	// Track what needs to be added
