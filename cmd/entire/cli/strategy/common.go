@@ -358,7 +358,7 @@ func EnsureRedactionConfigured() {
 			return
 		}
 
-		// 1. PII (existing, opt-in).
+		// PII detection (opt-in).
 		if s.Redaction != nil && s.Redaction.PII != nil && s.Redaction.PII.Enabled {
 			pii := s.Redaction.PII
 			cfg := redact.PIIConfig{
@@ -372,16 +372,17 @@ func EnsureRedactionConfigured() {
 			redact.ConfigurePII(cfg)
 		}
 
-		// 2. Inline + pack-based custom rules.
+		// Custom rules: inline + packs.
 		var inline map[string]string
 		if s.Redaction != nil {
 			inline = s.Redaction.CustomSecrets
 		}
-		packsDir, perr := paths.AbsPath(ctx, filepath.Join(paths.EntireDir, "redactors"))
+		packsRelPath := filepath.Join(paths.EntireDir, redact.RedactorsDirName)
+		packsDir, perr := paths.AbsPath(ctx, packsRelPath)
 		if perr != nil {
 			logCtx := logging.WithComponent(ctx, "redaction")
 			logging.Warn(logCtx, "failed to resolve redactors path", slog.String("error", perr.Error()))
-			packsDir = filepath.Join(paths.EntireDir, "redactors")
+			packsDir = packsRelPath
 		}
 		packs, lerr := redact.LoadPacks(packsDir)
 		if lerr != nil {
@@ -1074,7 +1075,7 @@ func EnsureEntireGitignore(ctx context.Context) error {
 		"settings.local.json",
 		"metadata/",
 		"logs/",
-		"redactors/local/",
+		redact.RedactorsDirName + "/local/",
 	}
 
 	// Track what needs to be added

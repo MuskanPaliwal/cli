@@ -199,7 +199,7 @@ func TestConfigureCustomRules_AcceptsPackRules(t *testing.T) {
 		Rules: []Rule{
 			{ID: "acme-token", Regex: `ACME_TOKEN_[A-Za-z0-9]{20,}`},
 		},
-		SourcePath: "acme.yaml",
+		sourcePath: "acme.yaml",
 	}
 
 	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
@@ -230,7 +230,7 @@ func TestConfigureCustomRules_SamplesPassEmitNoWarn(t *testing.T) {
 				},
 			},
 		},
-		SourcePath: "ok.yaml",
+		sourcePath: "ok.yaml",
 	}
 
 	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
@@ -259,7 +259,7 @@ func TestConfigureCustomRules_SamplesFailEmitWarnButKeepRule(t *testing.T) {
 				},
 			},
 		},
-		SourcePath: "bad-sample.yaml",
+		sourcePath: "bad-sample.yaml",
 	}
 
 	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
@@ -278,6 +278,41 @@ func TestConfigureCustomRules_SamplesFailEmitWarnButKeepRule(t *testing.T) {
 	}
 }
 
+func TestConfigureCustomRules_SampleMismatchWarnDoesNotLogRawInput(t *testing.T) {
+	resetCustomRulesForTest(t)
+
+	var buf bytes.Buffer
+	restore := captureSlogForTest(&buf)
+	defer restore()
+
+	const sample = "ACME_TOKEN_should_not_appear_in_logs_1234567890"
+	pack := &Pack{
+		Name:    "safe-logs",
+		Version: "1.0.0",
+		Rules: []Rule{
+			{
+				ID:      "sample",
+				Regex:   `NEVER_MATCHES`,
+				Samples: []Sample{{Input: sample, Redacted: true}},
+			},
+		},
+		sourcePath: "safe-logs.yaml",
+	}
+
+	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
+
+	logs := buf.String()
+	if strings.Contains(logs, sample) {
+		t.Fatalf("sample mismatch log leaked raw sample: %s", logs)
+	}
+	if !strings.Contains(logs, `"sample_index":0`) {
+		t.Errorf("warn missing sample index: %s", logs)
+	}
+	if !strings.Contains(logs, `"sample_length":`) {
+		t.Errorf("warn missing sample length: %s", logs)
+	}
+}
+
 func TestString_PackSampleNotRedactedSurvivesAllLayers(t *testing.T) {
 	resetCustomRulesForTest(t)
 
@@ -293,7 +328,7 @@ func TestString_PackSampleNotRedactedSurvivesAllLayers(t *testing.T) {
 				Samples: []Sample{{Input: benign, Redacted: false}},
 			},
 		},
-		SourcePath: "cross-check.yaml",
+		sourcePath: "cross-check.yaml",
 	}
 	ConfigureCustomRules(CustomRulesConfig{Packs: []*Pack{pack}})
 

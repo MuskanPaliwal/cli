@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RedactorsDirName is the .entire subdirectory used for user-defined rule packs.
+const RedactorsDirName = "redactors"
+
 // Pack is a versioned bundle of redaction rules loaded from a single file
 // under .entire/redactors/. Both YAML and JSON encodings are accepted; the
 // schema is identical.
@@ -21,9 +25,9 @@ type Pack struct {
 	Description string `json:"description,omitempty" yaml:"description"`
 	Rules       []Rule `json:"rules"                 yaml:"rules"`
 
-	// SourcePath is the file the pack was loaded from. Populated by
+	// sourcePath is the file the pack was loaded from. Populated by
 	// ParsePack; used in log lines so users can find the offending file.
-	SourcePath string `json:"-" yaml:"-"`
+	sourcePath string
 }
 
 // Rule is a single redaction rule within a Pack.
@@ -48,15 +52,19 @@ func ParsePack(data []byte, sourcePath string) (*Pack, error) {
 	var pack Pack
 	switch strings.ToLower(filepath.Ext(sourcePath)) {
 	case ".json":
-		if err := json.Unmarshal(data, &pack); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&pack); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
 		}
 	default:
-		if err := yaml.Unmarshal(data, &pack); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&pack); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", sourcePath, err)
 		}
 	}
-	pack.SourcePath = sourcePath
+	pack.sourcePath = sourcePath
 	if err := validatePack(&pack); err != nil {
 		return nil, err
 	}
@@ -68,31 +76,31 @@ func ParsePack(data []byte, sourcePath string) (*Pack, error) {
 // so failures emit the same warn-and-skip path as inline rules.
 func validatePack(p *Pack) error {
 	if p.Name == "" {
-		return fmt.Errorf("%s: missing required field 'name'", p.SourcePath)
+		return fmt.Errorf("%s: missing required field 'name'", p.sourcePath)
 	}
 	if p.Version == "" {
-		return fmt.Errorf("%s: missing required field 'version'", p.SourcePath)
+		return fmt.Errorf("%s: missing required field 'version'", p.sourcePath)
 	}
 	if len(p.Rules) == 0 {
-		return fmt.Errorf("%s: 'rules' must contain at least one entry", p.SourcePath)
+		return fmt.Errorf("%s: 'rules' must contain at least one entry", p.sourcePath)
 	}
 
 	// Name must match filename stem so log lines and discovery stay consistent.
-	stem := strings.TrimSuffix(filepath.Base(p.SourcePath), filepath.Ext(p.SourcePath))
+	stem := strings.TrimSuffix(filepath.Base(p.sourcePath), filepath.Ext(p.sourcePath))
 	if stem != p.Name {
-		return fmt.Errorf("%s: pack name %q does not match filename stem %q", p.SourcePath, p.Name, stem)
+		return fmt.Errorf("%s: pack name %q does not match filename stem %q", p.sourcePath, p.Name, stem)
 	}
 
 	seen := make(map[string]struct{}, len(p.Rules))
 	for i, r := range p.Rules {
 		if r.ID == "" {
-			return fmt.Errorf("%s: rules[%d] missing required field 'id'", p.SourcePath, i)
+			return fmt.Errorf("%s: rules[%d] missing required field 'id'", p.sourcePath, i)
 		}
 		if r.Regex == "" {
-			return fmt.Errorf("%s: rules[%d] (%s) missing required field 'regex'", p.SourcePath, i, r.ID)
+			return fmt.Errorf("%s: rules[%d] (%s) missing required field 'regex'", p.sourcePath, i, r.ID)
 		}
 		if _, dup := seen[r.ID]; dup {
-			return fmt.Errorf("%s: duplicate rule id %q", p.SourcePath, r.ID)
+			return fmt.Errorf("%s: duplicate rule id %q", p.sourcePath, r.ID)
 		}
 		seen[r.ID] = struct{}{}
 	}
@@ -107,23 +115,25 @@ func validatePack(p *Pack) error {
 // returns no error. Per-file parse errors are slog.Warn'd and the file is
 // skipped — never fatal — so one bad file does not silence the rest.
 func LoadPacks(dir string) ([]*Pack, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("stat redactors dir %s: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("redactors path %s is not a directory", dir)
-	}
-
 	var packs []*Pack
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if path == dir {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return fmt.Errorf("read redactors dir %s: %w", dir, err)
+			}
 			slog.Warn("skipping unreadable redactor pack path",
 				slog.String("path", path),
 				slog.String("error", err.Error()))
+			return nil
+		}
+		if path == dir && !d.IsDir() {
+			return fmt.Errorf("redactors path %s is not a directory", dir)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			slog.Warn("skipping symlinked redactor pack path", slog.String("path", path))
 			return nil
 		}
 		if d.IsDir() {

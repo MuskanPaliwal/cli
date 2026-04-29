@@ -6,11 +6,7 @@ import (
 	"sync"
 )
 
-// CustomRulesConfig is the user-supplied input to ConfigureCustomRules.
-//
-// Inline entries come from redaction.custom_secrets in settings.json.
-// Packs come from .entire/redactors/*.{yaml,yml,json} via LoadPacks.
-// Both feed the same compiled rule table.
+// CustomRulesConfig configures inline custom_secrets and parsed rule packs.
 type CustomRulesConfig struct {
 	// Inline maps a label (used only in logs/diagnostics) to a Go RE2 regex
 	// string. Failed compilations are logged via slog.Warn and dropped.
@@ -30,7 +26,6 @@ type compiledCustomRule struct {
 	regex *regexp.Regexp
 }
 
-// customRulesState is the package-level table read by detectCustomRules.
 type customRulesState struct {
 	rules []compiledCustomRule
 }
@@ -48,34 +43,31 @@ var (
 func ConfigureCustomRules(cfg CustomRulesConfig) {
 	state := &customRulesState{}
 
-	// Inline rules.
 	for label, pattern := range cfg.Inline {
-		compiled, err := regexp.Compile(pattern)
-		if err != nil {
-			slog.Warn("skipping invalid custom_secrets pattern",
-				slog.String("label", label),
-				slog.String("error", err.Error()))
-			continue
+		compiled, ok := compileCustomRule(
+			label,
+			pattern,
+			"skipping invalid custom_secrets pattern",
+			slog.String("label", label),
+		)
+		if ok {
+			state.rules = append(state.rules, compiled)
 		}
-		state.rules = append(state.rules, compiledCustomRule{label: label, regex: compiled})
 	}
 
-	// Pack rules.
 	for _, pack := range cfg.Packs {
 		for _, rule := range pack.Rules {
-			compiled, err := regexp.Compile(rule.Regex)
-			if err != nil {
-				slog.Warn("skipping invalid pack rule",
-					slog.String("pack", pack.SourcePath),
-					slog.String("rule", rule.ID),
-					slog.String("error", err.Error()))
-				continue
+			compiled, ok := compileCustomRule(
+				pack.Name+"."+rule.ID,
+				rule.Regex,
+				"skipping invalid pack rule",
+				slog.String("pack", pack.sourcePath),
+				slog.String("rule", rule.ID),
+			)
+			if ok {
+				state.rules = append(state.rules, compiled)
+				runRuleSamples(pack, rule, compiled.regex)
 			}
-			state.rules = append(state.rules, compiledCustomRule{
-				label: pack.Name + "." + rule.ID,
-				regex: compiled,
-			})
-			runRuleSamples(pack, rule, compiled)
 		}
 	}
 
@@ -84,17 +76,28 @@ func ConfigureCustomRules(cfg CustomRulesConfig) {
 	customConfig = state
 }
 
+func compileCustomRule(label, pattern, warning string, attrs ...any) (compiledCustomRule, bool) {
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+		slog.Warn(warning, attrs...)
+		return compiledCustomRule{}, false
+	}
+	return compiledCustomRule{label: label, regex: compiled}, true
+}
+
 // runRuleSamples checks each sample against the compiled regex and logs a
 // warning per mismatch. Failures never drop the rule — sample validation
 // is informational, not gating.
 func runRuleSamples(pack *Pack, rule Rule, compiled *regexp.Regexp) {
-	for _, s := range rule.Samples {
+	for i, s := range rule.Samples {
 		got := compiled.MatchString(s.Input)
 		if got != s.Redacted {
 			slog.Warn("redactor pack sample mismatch",
-				slog.String("pack", pack.SourcePath),
+				slog.String("pack", pack.sourcePath),
 				slog.String("rule", rule.ID),
-				slog.String("sample", s.Input),
+				slog.Int("sample_index", i),
+				slog.Int("sample_length", len(s.Input)),
 				slog.Bool("expected", s.Redacted),
 				slog.Bool("got", got))
 		}
@@ -116,7 +119,7 @@ func getCustomRulesConfig() *customRulesState {
 // "REDACTED" token used by the built-in secret layers, not the
 // "[REDACTED_<LABEL>]" token used by PII.
 func detectCustomRules(cfg *customRulesState, s string) []taggedRegion {
-	if cfg == nil || len(cfg.rules) == 0 {
+	if cfg == nil || len(cfg.rules) == 0 || s == "" {
 		return nil
 	}
 	var regions []taggedRegion

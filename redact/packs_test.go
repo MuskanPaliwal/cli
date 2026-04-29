@@ -149,6 +149,45 @@ rules:
 	}
 }
 
+func TestParsePack_RejectsUnknownYAMLField(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`
+name: unknown-yaml
+version: 1.0.0
+rules:
+  - id: x
+    regex: 'X+'
+    samplez: []
+`)
+	_, err := ParsePack(body, "unknown-yaml.yaml")
+	if err == nil {
+		t.Fatal("expected error for unknown YAML field")
+	}
+	if !strings.Contains(err.Error(), "samplez") {
+		t.Errorf("error should mention unknown field, got: %v", err)
+	}
+}
+
+func TestParsePack_RejectsUnknownJSONField(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+  "name": "unknown-json",
+  "version": "1.0.0",
+  "rules": [
+    {"id": "x", "regex": "X+", "samplez": []}
+  ]
+}`)
+	_, err := ParsePack(body, "unknown-json.json")
+	if err == nil {
+		t.Fatal("expected error for unknown JSON field")
+	}
+	if !strings.Contains(err.Error(), "samplez") {
+		t.Errorf("error should mention unknown field, got: %v", err)
+	}
+}
+
 func TestLoadPacks_ReadsMultipleFilesAndIgnoresOthers(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +253,33 @@ func TestLoadPacks_RejectsNonDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("error should mention non-directory path, got: %v", err)
+	}
+}
+
+func TestLoadPacks_SkipsSymlinkedPackFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.yaml")
+	if err := os.WriteFile(outside, []byte(`
+name: symlinked
+version: 1.0.0
+rules:
+  - id: x
+    regex: 'X+'
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "symlinked.yaml")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	packs, err := LoadPacks(dir)
+	if err != nil {
+		t.Fatalf("LoadPacks: %v", err)
+	}
+	if len(packs) != 0 {
+		t.Fatalf("symlinked pack should be skipped, loaded %d pack(s)", len(packs))
 	}
 }
 
