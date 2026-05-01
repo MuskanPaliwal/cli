@@ -344,7 +344,7 @@ var (
 var initRedactionOnce sync.Once
 
 // EnsureRedactionConfigured loads redaction settings and configures the
-// redact package: PII detection (opt-in), inline custom_secrets, and rule
+// redact package: PII detection (opt-in), inline custom_redactions, and rule
 // packs auto-discovered from .entire/redactors/.
 //
 // Must be called at each process entry point before checkpoint writes.
@@ -375,7 +375,7 @@ func EnsureRedactionConfigured() {
 		// Custom rules: inline + packs.
 		var inline map[string]string
 		if s.Redaction != nil {
-			inline = s.Redaction.CustomSecrets
+			inline = s.Redaction.CustomRedactions
 		}
 		packsRelPath := filepath.Join(paths.EntireDir, redact.RedactorsDirName)
 		packsDir, perr := paths.AbsPath(ctx, packsRelPath)

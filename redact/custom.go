@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// CustomRulesConfig configures inline custom_secrets and parsed rule packs.
+// CustomRulesConfig configures inline custom_redactions and parsed rule packs.
 type CustomRulesConfig struct {
 	// Inline maps a label (used only in logs/diagnostics) to a Go RE2 regex
 	// string. Failed compilations are logged via slog.Warn and dropped.
@@ -47,7 +47,7 @@ func ConfigureCustomRules(cfg CustomRulesConfig) {
 		compiled, ok := compileCustomRule(
 			label,
 			pattern,
-			"skipping invalid custom_secrets pattern",
+			"skipping invalid custom_redactions pattern",
 			slog.String("label", label),
 		)
 		if ok {

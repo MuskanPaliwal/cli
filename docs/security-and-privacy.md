@@ -46,16 +46,16 @@ To reduce over-redaction, Entire preserves structural transcript fields such as 
 
 ## Customizing redaction
 
-The built-in detectors handle well-known secret formats. For internal credential shapes that aren't covered (custom env-var prefixes, internal service tokens, project-specific session formats), Entire offers two extension surfaces. Both feed the same engine and run as their own layer between connection-string detection and bounded credential KV detection.
+The built-in detectors handle well-known secret formats. For anything else you don't want stored in transcripts — internal credential shapes the bundled scanners don't know about, project codenames, or specific words and phrases you'd rather keep out of session archives — Entire offers two extension surfaces. Both run plain regex matching against transcript content, so the rules can target any string pattern, not just credentials. Both feed the same engine and run as their own layer between connection-string detection and bounded credential KV detection.
 
-### Surface 1: Inline `redaction.custom_secrets`
+### Surface 1: Inline `redaction.custom_redactions`
 
-Add a label → regex map under `redaction.custom_secrets` in `.entire/settings.json`:
+Add a label → regex map under `redaction.custom_redactions` in `.entire/settings.json`:
 
 ```json
 {
   "redaction": {
-    "custom_secrets": {
+    "custom_redactions": {
       "acme_token":  "ACME_TOKEN_[A-Za-z0-9]{20,}",
       "internal_id": "INTERNAL_[a-z]{6}_[0-9]{4}"
     }
@@ -111,6 +111,27 @@ Equivalent JSON form:
 
 **Optional fields:** `description` (pack-level and rule-level), and `rules[].samples[]` (see "Self-tests" below).
 
+A pack does not have to target credentials. The same shape works for any string pattern you don't want stored in transcripts — for example, a project codename or a small word list:
+
+```yaml
+# .entire/redactors/local/private-words.yaml
+name: private-words
+version: 1.0.0
+description: Project codenames and personal words to keep out of transcripts
+rules:
+  - id: codename-falcon
+    description: Internal project codename
+    regex: '(?i)\bproject[- ]?falcon\b'
+    samples:
+      - { input: "rolling out Project Falcon next week", redacted: true  }
+      - { input: "the falcon flew over",                  redacted: false }
+  - id: personal-words
+    description: Words I'd rather not see archived
+    regex: '(?i)\b(word_one|word_two)\b'
+```
+
+Putting personal lists under `.entire/redactors/local/` keeps them out of team commits (see "Distribution" below).
+
 ### Self-tests via `samples[]`
 
 Each rule may declare an array of `{input, redacted}` pairs. On the next process startup after editing the pack, Entire runs each sample and emits a `slog.Warn` for any mismatch:
@@ -130,7 +151,12 @@ A failing sample never disables the rule — sample validation is informational.
 
 ### When to write a rule vs. file an issue
 
-Write a rule for internal service tokens (`ACME_*`, `INTERNAL_*`), custom env-var prefixes the bundled detectors don't know about, and project-specific session formats.
+Write a rule for:
+
+- Internal service tokens (`ACME_*`, `INTERNAL_*`) and custom env-var prefixes the bundled detectors don't know about.
+- Project-specific session formats.
+- Project codenames or other identifiers you don't want stored in transcripts.
+- Specific words or phrases you'd rather keep out of session archives.
 
 File an issue when the rule would benefit every Entire user (e.g., a major SaaS issued a new token format), when a built-in is producing false positives on common idioms in your codebase, or when a built-in is *not* catching a well-known shared format (we'd rather fix the built-in than have everyone ship the same custom rule).
 
@@ -138,7 +164,7 @@ File an issue when the rule would benefit every Entire user (e.g., a major SaaS 
 
 - **My rule doesn't redact anything.** Warnings about invalid patterns or sample mismatches appear on stderr when Entire initializes redaction, such as hooks that write checkpoints or `entire doctor`. Look for lines mentioning your label or pack path.
 - **My pack file is silently ignored.** Filenames must end in `.yaml`, `.yml`, or `.json`. Other extensions are skipped.
-- **I want to disable a rule temporarily.** Comment it out (prefix the YAML key with `#`) or remove the entry from `custom_secrets`. The rule reloads on the next CLI invocation.
+- **I want to disable a rule temporarily.** Comment it out (prefix the YAML key with `#`) or remove the entry from `custom_redactions`. The rule reloads on the next CLI invocation.
 
 ## Limitations
 

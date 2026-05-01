@@ -973,7 +973,7 @@ func containsUnknownField(msg string) bool {
 	return strings.Contains(msg, "unknown field")
 }
 
-func TestLoadMerged_CustomSecretsPerKeyOverride(t *testing.T) {
+func TestLoadMerged_CustomRedactionsPerKeyOverride(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -982,7 +982,7 @@ func TestLoadMerged_CustomSecretsPerKeyOverride(t *testing.T) {
 
 	if err := os.WriteFile(base, []byte(`{
   "redaction": {
-    "custom_secrets": {
+    "custom_redactions": {
       "team_token":   "TEAM_[A-Za-z0-9]{16,}",
       "shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{12,}"
     }
@@ -992,7 +992,7 @@ func TestLoadMerged_CustomSecretsPerKeyOverride(t *testing.T) {
 	}
 	if err := os.WriteFile(local, []byte(`{
   "redaction": {
-    "custom_secrets": {
+    "custom_redactions": {
       "shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{20,}",
       "personal":     "PERSONAL_[a-z]{32}"
     }
@@ -1011,23 +1011,23 @@ func TestLoadMerged_CustomSecretsPerKeyOverride(t *testing.T) {
 		"shared_token": "SHARED_[A-Z]{4}_[A-Za-z0-9]{20,}",
 		"personal":     "PERSONAL_[a-z]{32}",
 	}
-	got := merged.Redaction.CustomSecrets
+	got := merged.Redaction.CustomRedactions
 	if len(got) != len(want) {
-		t.Fatalf("CustomSecrets size: want %d, have %d (%v)", len(want), len(got), got)
+		t.Fatalf("CustomRedactions size: want %d, have %d (%v)", len(want), len(got), got)
 	}
 	for k, v := range want {
 		if got[k] != v {
-			t.Errorf("CustomSecrets[%s]: want %q, have %q", k, v, got[k])
+			t.Errorf("CustomRedactions[%s]: want %q, have %q", k, v, got[k])
 		}
 	}
 }
 
-func TestLoadFromBytes_CustomSecrets(t *testing.T) {
+func TestLoadFromBytes_CustomRedactions(t *testing.T) {
 	t.Parallel()
 
 	data := []byte(`{
   "redaction": {
-    "custom_secrets": {
+    "custom_redactions": {
       "acme_token": "ACME_TOKEN_[A-Za-z0-9]{20,}"
     }
   }
@@ -1040,7 +1040,7 @@ func TestLoadFromBytes_CustomSecrets(t *testing.T) {
 	if got.Redaction == nil {
 		t.Fatalf("Redaction is nil")
 	}
-	if want, have := "ACME_TOKEN_[A-Za-z0-9]{20,}", got.Redaction.CustomSecrets["acme_token"]; want != have {
-		t.Errorf("CustomSecrets[acme_token]: want %q, have %q", want, have)
+	if want, have := "ACME_TOKEN_[A-Za-z0-9]{20,}", got.Redaction.CustomRedactions["acme_token"]; want != have {
+		t.Errorf("CustomRedactions[acme_token]: want %q, have %q", want, have)
 	}
 }
