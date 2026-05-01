@@ -425,7 +425,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		CheckpointID:                opts.CheckpointID,
 		SessionID:                   opts.SessionID,
 		Strategy:                    opts.Strategy,
-		CreatedAt:                   time.Now().UTC(),
+		CreatedAt:                   checkpointCreatedAt(opts),
 		Branch:                      opts.Branch,
 		CheckpointsCount:            opts.CheckpointsCount,
 		FilesTouched:                opts.FilesTouched,
@@ -629,6 +629,13 @@ func (s *GitStore) reaggregateFromEntries(basePath string, sessionCount int, ent
 	}
 
 	return totalCount, allFiles, totalTokens, nil
+}
+
+func checkpointCreatedAt(opts WriteCommittedOptions) time.Time {
+	if opts.CreatedAt.IsZero() {
+		return time.Now().UTC()
+	}
+	return opts.CreatedAt.UTC()
 }
 
 // readJSONFromBlob reads JSON from a blob hash and decodes it to the given type.
@@ -966,7 +973,7 @@ func (s *GitStore) ReadSessionMetadata(ctx context.Context, checkpointID id.Chec
 	sessionPath := fmt.Sprintf("%s/%d", checkpointPath, sessionIndex)
 	sessionTree, err := ft.Tree(sessionPath)
 	if err != nil {
-		return nil, fmt.Errorf("session %d not found: %w", sessionIndex, err)
+		return nil, fmt.Errorf("%w: session %d not found: %w", ErrCheckpointNotFound, sessionIndex, err)
 	}
 
 	metadataFile, err := sessionTree.File(paths.MetadataFileName)
@@ -1012,7 +1019,7 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 	sessionDir := strconv.Itoa(sessionIndex)
 	sessionTree, err := checkpointTree.Tree(sessionDir)
 	if err != nil {
-		return nil, fmt.Errorf("session %d not found: %w", sessionIndex, err)
+		return nil, fmt.Errorf("%w: session %d not found: %w", ErrCheckpointNotFound, sessionIndex, err)
 	}
 
 	result := &SessionContent{}

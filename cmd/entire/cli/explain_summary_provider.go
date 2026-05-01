@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
@@ -16,7 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 var (
@@ -155,7 +154,7 @@ func promptForSummaryProvider(providers []checkpointSummaryProvider) (types.Agen
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Choose a summary provider").
-				Description("This choice will be saved. Use `entire configure` to change it later.").
+				Description("This choice will be saved. Use `entire configure --summarize-provider <name>` to change it later.").
 				Options(options...).
 				Value(&selected),
 		),
@@ -257,16 +256,19 @@ func persistSummaryProviderSelection(ctx context.Context, provider types.AgentNa
 	return flagFlipped, nil
 }
 
-func formatSummaryProviderDetails(provider *checkpointSummaryProvider) string {
+// summaryProviderRows builds the structured rows used by the summary-generation
+// success block. Returns nil for a nil provider so callers can append optional
+// provider info to a row slice without nil-checking themselves.
+func summaryProviderRows(provider *checkpointSummaryProvider) []explainRow {
 	if provider == nil {
-		return ""
+		return nil
 	}
-	displayModel := provider.Model
-	if displayModel == "" {
-		displayModel = "provider default"
+	model := provider.Model
+	if model == "" {
+		model = "provider default"
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Provider: %s\n", provider.DisplayName)
-	fmt.Fprintf(&b, "Model: %s\n", displayModel)
-	return b.String()
+	return []explainRow{
+		{Label: "provider", Value: provider.DisplayName},
+		{Label: "model", Value: model},
+	}
 }

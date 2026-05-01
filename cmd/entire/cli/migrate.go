@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -66,9 +65,14 @@ func newMigrateCmd() *cobra.Command {
 }
 
 type migrateResult struct {
-	migrated int
-	skipped  int
-	failed   int
+	total                        int
+	migrated                     int
+	skipped                      int
+	failed                       int
+	missingSessions              int
+	compactTranscriptSkipped     int
+	backfilledCompactTranscripts int
+	repaired                     int
 }
 
 func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool) error {
@@ -82,132 +86,195 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool
 	v1Store := checkpoint.NewGitStore(repo)
 	v2Store := checkpoint.NewV2GitStore(repo, migrateRemoteName)
 	out := cmd.OutOrStdout()
+	progressOut := cmd.ErrOrStderr()
 
-	result, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, out, force)
+	result, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, progressOut, force)
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(out, "\nMigration complete: %d migrated, %d skipped, %d failed\n",
-		result.migrated, result.skipped, result.failed)
+	printMigrateCompletion(out, result)
 	fmt.Fprintln(out, "Note: V2 checkpoints are stored as custom refs under refs/entire/checkpoints/v2/*, not as a branch visible in the GitHub UI.")
 	fmt.Fprintf(out, "To inspect pushed v2 checkpoint refs locally, run: git ls-remote %s \"refs/entire/checkpoints/v2/*\"\n", migrateRemoteName)
 	fmt.Fprintln(out, `You may also open a checkpoint's details in the Entire web app and click the "session logs" link to view the log files and metadata.`)
 
 	if result.failed > 0 {
-		fmt.Fprintf(out, "%d checkpoint(s) failed to migrate. Check .entire/logs/ for details.\n", result.failed)
 		return NewSilentError(fmt.Errorf("%d checkpoint(s) failed to migrate", result.failed))
 	}
 
 	return nil
 }
 
+const migrationLogFile = logging.LogsDir + "/entire.log"
+
+func printMigrateCompletion(out io.Writer, result *migrateResult) {
+	if result.total == 0 {
+		fmt.Fprintln(out, "Nothing to migrate: no v1 checkpoints found")
+		fmt.Fprintln(out)
+		return
+	}
+
+	fmt.Fprintf(out, "Migration complete: %d migrated, %d skipped, %d failed\n",
+		result.migrated, result.skipped, result.failed)
+
+	if result.hasLoggedDetails() {
+		fmt.Fprintf(out, "Details for skipped, missing, incomplete, or failed checkpoints were logged to %s.\n", migrationLogFile)
+	}
+
+	fmt.Fprintln(out)
+}
+
+func (r *migrateResult) hasLoggedDetails() bool {
+	return r.skipped > 0 || r.failed > 0 || r.missingSessions > 0 || r.compactTranscriptSkipped > 0
+}
+
 var (
 	errAlreadyMigrated          = errors.New("already migrated")
 	errTranscriptNotGeneratable = errors.New("transcript.jsonl could not be generated")
+	errNoMigratableSessions     = errors.New("no migratable v1 sessions")
 )
 
 const migrateRemoteName = "origin"
 
-func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, out io.Writer, force bool) (*migrateResult, error) {
+func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, progressOut io.Writer, force bool) (*migrateResult, error) {
 	v1List, err := v1Store.ListCommitted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list v1 checkpoints: %w", err)
 	}
 
 	if len(v1List) == 0 {
-		fmt.Fprintln(out, "Nothing to migrate: no v1 checkpoints found")
 		return &migrateResult{}, nil
 	}
 
-	if force {
-		fmt.Fprintln(out, "Force-migrating v1 checkpoints to v2 (overwriting existing)...")
-	} else {
-		fmt.Fprintln(out, "Migrating v1 checkpoints to v2...")
-	}
 	total := len(v1List)
-	result := &migrateResult{}
+	result := &migrateResult{total: total}
+	progress := startProgressBar(progressOut, "Migrating checkpoints", total)
+	defer progress.Finish()
 
-	for i, info := range v1List {
-		prefix := fmt.Sprintf("  [%d/%d] Migrating checkpoint %s...", i+1, total, info.CheckpointID)
+	for _, info := range v1List {
+		outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force)
+		result.missingSessions += outcome.missingSessions
+		result.backfilledCompactTranscripts += outcome.backfilledCompactTranscripts
+		if outcome.compactTranscriptSkipped {
+			result.compactTranscriptSkipped++
+		}
+		if outcome.repaired {
+			result.repaired++
+		}
 
-		if migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, out, prefix, force); migrateErr != nil {
+		if migrateErr != nil {
 			switch {
 			case errors.Is(migrateErr, errAlreadyMigrated):
-				fmt.Fprintf(out, "%s skipped (already in v2)\n", prefix)
+				logCheckpointMigrationSkip(ctx, info.CheckpointID, "already in v2", migrateErr)
 				result.skipped++
 			case errors.Is(migrateErr, errTranscriptNotGeneratable):
-				fmt.Fprintf(out, "%s in v2, but %s\n", prefix, migrateErr.Error())
+				logCheckpointMigrationSkip(ctx, info.CheckpointID, "transcript.jsonl could not be generated", migrateErr)
+				result.skipped++
+			case errors.Is(migrateErr, errNoMigratableSessions):
+				logCheckpointMigrationSkip(ctx, info.CheckpointID, "no migratable v1 sessions", migrateErr)
 				result.skipped++
 			default:
-				fmt.Fprintf(out, "%s failed\n", prefix)
 				logging.Error(ctx, "checkpoint migration failed",
 					slog.String("checkpoint_id", string(info.CheckpointID)),
 					slog.String("error", migrateErr.Error()),
 				)
 				result.failed++
 			}
+			progress.Increment()
 			continue
 		}
 
 		result.migrated++
+		progress.Increment()
 	}
 
 	return result, nil
 }
 
-func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, out io.Writer, prefix string, force bool) error {
+func logCheckpointMigrationSkip(ctx context.Context, checkpointID id.CheckpointID, reason string, err error) {
+	logging.Info(ctx, "checkpoint migration skipped",
+		slog.String("checkpoint_id", string(checkpointID)),
+		slog.String("reason", reason),
+		slog.String("error", err.Error()),
+	)
+}
+
+type migrateCheckpointOutcome struct {
+	missingSessions              int
+	compactTranscriptSkipped     bool
+	backfilledCompactTranscripts int
+	repaired                     bool
+}
+
+func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, force bool) (migrateCheckpointOutcome, error) {
+	var outcome migrateCheckpointOutcome
+
 	existing, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
-		return fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
+		return outcome, fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
 
 	// Already in v2 — when not forcing, check if any aspect of sessions are missing and backfill
 	if existing != nil && !force {
-		repaired, repairErr := repairPartialV2Checkpoint(ctx, repo, v1Store, v2Store, info, existing)
+		repaired, repairErr := repairPartialV2Checkpoint(ctx, v1Store, v2Store, info, existing)
 		if repairErr != nil {
-			return repairErr
+			return outcome, repairErr
 		}
+		outcome.repaired = repaired
 
 		currentV2, readCurrentErr := v2Store.ReadCommitted(ctx, info.CheckpointID)
 		if readCurrentErr != nil {
-			return fmt.Errorf("failed to re-read v2 checkpoint %s: %w", info.CheckpointID, readCurrentErr)
+			return outcome, fmt.Errorf("failed to re-read v2 checkpoint %s: %w", info.CheckpointID, readCurrentErr)
 		}
 		if currentV2 == nil {
-			return fmt.Errorf("v2 checkpoint %s disappeared during migration", info.CheckpointID)
+			return outcome, fmt.Errorf("v2 checkpoint %s disappeared during migration", info.CheckpointID)
 		}
 
 		// Clean up v1-named transcript files (full.jsonl, content_hash.txt) that older
 		// CLI versions may have written to /full/current before the rename to raw_transcript.
 		cleanupV1TranscriptFiles(ctx, repo, v2Store, info.CheckpointID, len(currentV2.Sessions))
 
-		backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, currentV2, out, prefix)
+		backfilled, backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, currentV2)
+		outcome.backfilledCompactTranscripts = backfilled
 		if errors.Is(backfillErr, errAlreadyMigrated) && repaired {
-			fmt.Fprintf(out, "%s repaired partial v2 checkpoint state\n", prefix)
-			return nil
+			return outcome, nil
 		}
 		if errors.Is(backfillErr, errTranscriptNotGeneratable) && repaired {
-			fmt.Fprintf(out, "%s repaired partial v2 checkpoint state (compact transcript not generated)\n", prefix)
-			return nil
+			outcome.compactTranscriptSkipped = true
+			return outcome, nil
 		}
-		return backfillErr
+		return outcome, backfillErr
+	}
+
+	if existing != nil && force {
+		if pruneErr := pruneV2CheckpointForForce(ctx, repo, v2Store, info.CheckpointID); pruneErr != nil {
+			return outcome, fmt.Errorf("failed to reset existing v2 checkpoint %s before force migration: %w", info.CheckpointID, pruneErr)
+		}
 	}
 
 	summary, err := v1Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
-		return fmt.Errorf("failed to read v1 summary: %w", err)
+		return outcome, fmt.Errorf("failed to read v1 summary: %w", err)
 	}
 	if summary == nil {
-		return fmt.Errorf("v1 checkpoint %s has no summary", info.CheckpointID)
+		return outcome, fmt.Errorf("v1 checkpoint %s has no summary", info.CheckpointID)
 	}
 
 	compactFailed := false
 	shouldCopyTaskMetadata := false
+	skippedMissingSessions := 0
+	migratedSessions := 0
+	v1ToV2SessionIdx := make(map[int]int, len(summary.Sessions))
 
 	for sessionIdx := range len(summary.Sessions) {
-		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
+		content, skipped, readErr := readV1SessionForMigration(ctx, v1Store, info.CheckpointID, sessionIdx)
+		if skipped {
+			skippedMissingSessions++
+			outcome.missingSessions++
+			continue
+		}
 		if readErr != nil {
-			return fmt.Errorf("failed to read v1 session %d: %w", sessionIdx, readErr)
+			return outcome, fmt.Errorf("failed to read v1 session %d: %w", sessionIdx, readErr)
 		}
 		if content.Metadata.IsTask {
 			shouldCopyTaskMetadata = true
@@ -223,14 +290,21 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 			compactFailed = true
 		}
 
-		if writeErr := v2Store.WriteCommitted(ctx, opts); writeErr != nil {
-			return fmt.Errorf("failed to write v2 session %d: %w", sessionIdx, writeErr)
+		v2SessionIdx, writeErr := v2Store.WriteCommittedWithSessionIndex(ctx, opts)
+		if writeErr != nil {
+			return outcome, fmt.Errorf("failed to write v2 session %d: %w", sessionIdx, writeErr)
 		}
+		v1ToV2SessionIdx[sessionIdx] = v2SessionIdx
+		migratedSessions++
+	}
+
+	if migratedSessions == 0 {
+		return outcome, fmt.Errorf("%w: v1 metadata lists %d session(s), but no transcript/session content exists for any of them", errNoMigratableSessions, len(summary.Sessions))
 	}
 
 	// Copy task metadata trees from v1 to v2 /full/current
 	if shouldCopyTaskMetadata {
-		if taskErr := copyTaskMetadataToV2(ctx, repo, v1Store, v2Store, info.CheckpointID, summary); taskErr != nil {
+		if taskErr := copyTaskMetadataToV2(ctx, repo, v1Store, v2Store, info.CheckpointID, summary, v1ToV2SessionIdx); taskErr != nil {
 			logging.Warn(ctx, "failed to copy task metadata to v2",
 				slog.String("checkpoint_id", string(info.CheckpointID)),
 				slog.String("error", taskErr.Error()),
@@ -239,21 +313,143 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	if compactFailed {
-		fmt.Fprintf(out, "%s done (compact transcript not generated)\n", prefix)
-	} else {
-		fmt.Fprintf(out, "%s done\n", prefix)
+		outcome.compactTranscriptSkipped = true
+		logging.Warn(ctx, "compact transcript not generated during checkpoint migration",
+			slog.String("checkpoint_id", string(info.CheckpointID)),
+			slog.Int("migrated_sessions", migratedSessions),
+		)
+	}
+	if skippedMissingSessions > 0 {
+		logging.Warn(ctx, "checkpoint migration skipped v1 sessions with missing transcript/session content",
+			slog.String("checkpoint_id", string(info.CheckpointID)),
+			slog.Int("missing_sessions", skippedMissingSessions),
+		)
 	}
 
+	return outcome, nil
+}
+
+func readV1SessionForMigration(ctx context.Context, v1Store *checkpoint.GitStore, checkpointID id.CheckpointID, sessionIdx int) (*checkpoint.SessionContent, bool, error) {
+	content, readErr := v1Store.ReadSessionContent(ctx, checkpointID, sessionIdx)
+	if readErr != nil {
+		if errors.Is(readErr, checkpoint.ErrNoTranscript) || errors.Is(readErr, checkpoint.ErrCheckpointNotFound) {
+			warnMissingV1Session(ctx, checkpointID, sessionIdx, readErr)
+			return nil, true, nil
+		}
+		return nil, false, fmt.Errorf("read v1 session content: %w", readErr)
+	}
+	return content, false, nil
+}
+
+func warnMissingV1Session(ctx context.Context, checkpointID id.CheckpointID, sessionIdx int, err error) {
+	logging.Warn(ctx, "skipping v1 session with missing transcript during checkpoint migration",
+		slog.String("checkpoint_id", checkpointID.String()),
+		slog.Int("session_index", sessionIdx),
+		slog.String("error", err.Error()),
+	)
+}
+
+func pruneV2CheckpointForForce(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID) error {
+	for _, refName := range []plumbing.ReferenceName{
+		plumbing.ReferenceName(paths.V2MainRefName),
+		plumbing.ReferenceName(paths.V2FullCurrentRefName),
+	} {
+		if err := pruneV2CheckpointRef(ctx, repo, v2Store, refName, cpID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary) (bool, error) {
+func pruneV2CheckpointRef(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, cpID id.CheckpointID) error {
+	parentHash, rootTreeHash, err := v2Store.GetRefState(refName)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return nil
+		}
+		return fmt.Errorf("failed to get v2 ref state for %s: %w", refName, err)
+	}
+
+	rootTree, err := repo.TreeObject(rootTreeHash)
+	if err != nil {
+		return fmt.Errorf("failed to read v2 tree for %s: %w", refName, err)
+	}
+	if _, err := rootTree.Tree(cpID.Path()); err != nil {
+		return nil //nolint:nilerr // Checkpoint is absent from this ref, so there is nothing to prune.
+	}
+
+	shardPrefix := string(cpID[:2])
+	shardSuffix := string(cpID[2:])
+	newRoot, err := pruneCheckpointFromRoot(repo, rootTreeHash, shardPrefix, shardSuffix)
+	if err != nil {
+		return fmt.Errorf("failed to remove checkpoint subtree from %s: %w", refName, err)
+	}
+	if newRoot == rootTreeHash {
+		return nil
+	}
+
+	commitHash, err := checkpoint.CreateCommit(ctx, repo, newRoot, parentHash,
+		fmt.Sprintf("Reset checkpoint before force migration: %s\n", cpID),
+		"Entire Migration", "migration@entire.dev")
+	if err != nil {
+		return fmt.Errorf("failed to create v2 prune commit for %s: %w", refName, err)
+	}
+
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
+		return fmt.Errorf("failed to update ref %s: %w", refName, err)
+	}
+	return nil
+}
+
+func pruneCheckpointFromRoot(repo *git.Repository, rootTreeHash plumbing.Hash, shardPrefix, shardSuffix string) (plumbing.Hash, error) {
+	newRoot, err := checkpoint.UpdateSubtree(repo, rootTreeHash,
+		[]string{shardPrefix},
+		nil,
+		checkpoint.UpdateSubtreeOptions{
+			MergeMode:   checkpoint.MergeKeepExisting,
+			DeleteNames: []string{shardSuffix},
+		},
+	)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to prune checkpoint from shard: %w", err)
+	}
+	if newRoot == rootTreeHash {
+		return newRoot, nil
+	}
+
+	newRootTree, err := repo.TreeObject(newRoot)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to read pruned root tree: %w", err)
+	}
+	shardTree, err := newRootTree.Tree(shardPrefix)
+	if err != nil {
+		return newRoot, nil //nolint:nilerr // The shard prefix was already absent after pruning.
+	}
+	if len(shardTree.Entries) > 0 {
+		return newRoot, nil
+	}
+
+	prunedRoot, err := checkpoint.UpdateSubtree(repo, rootTreeHash,
+		nil,
+		nil,
+		checkpoint.UpdateSubtreeOptions{
+			MergeMode:   checkpoint.MergeKeepExisting,
+			DeleteNames: []string{shardPrefix},
+		},
+	)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to prune empty shard prefix: %w", err)
+	}
+	return prunedRoot, nil
+}
+
+func repairPartialV2Checkpoint(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary) (bool, error) {
 	repaired := false
 
-	// Spot-check already present sessions: ensure required /full/current artifacts exist.
+	// Spot-check already present sessions: ensure required /full/* artifacts exist.
 	existingSessionCount := len(v2Summary.Sessions)
 	for sessionIdx := range existingSessionCount {
-		ok, checkErr := hasCurrentFullSessionArtifacts(repo, v2Store, info.CheckpointID, sessionIdx)
+		ok, checkErr := hasFullSessionArtifacts(v2Store, info.CheckpointID, sessionIdx)
 		if checkErr != nil {
 			return false, fmt.Errorf("failed to check v2 session %d artifacts: %w", sessionIdx, checkErr)
 		}
@@ -288,45 +484,18 @@ func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Stor
 	return repaired, nil
 }
 
-func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) (bool, error) {
-	_, rootTreeHash, err := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+func hasFullSessionArtifacts(v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) (bool, error) {
+	ok, err := v2Store.HasFullSessionArtifacts(cpID, sessionIdx)
 	if err != nil {
-		return false, nil //nolint:nilerr // Missing /full/current ref means required artifacts are absent.
+		return false, fmt.Errorf("failed to check v2 full artifacts for session %d: %w", sessionIdx, err)
 	}
-
-	rootTree, err := repo.TreeObject(rootTreeHash)
-	if err != nil {
-		return false, fmt.Errorf("failed to read /full/current tree: %w", err)
-	}
-
-	sessionPath := fmt.Sprintf("%s/%d", cpID.Path(), sessionIdx)
-	sessionTree, err := rootTree.Tree(sessionPath)
-	if err != nil {
-		return false, nil //nolint:nilerr // Missing session path means artifacts are absent, not a hard error.
-	}
-
-	hasTranscript := false
-	for _, entry := range sessionTree.Entries {
-		if entry.Name == paths.V2RawTranscriptFileName || strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+".") {
-			hasTranscript = true
-			break
-		}
-	}
-	if !hasTranscript {
-		return false, nil
-	}
-
-	if _, err := sessionTree.File(paths.V2RawTranscriptHashFileName); err != nil {
-		return false, nil //nolint:nilerr // Missing content hash indicates incomplete /full/current artifacts.
-	}
-
-	return true, nil
+	return ok, nil
 }
 
 // backfillCompactTranscripts checks sessions in an already-migrated v2 checkpoint
 // for missing transcript.jsonl and attempts to generate + write them from v1 data.
 // Returns errAlreadyMigrated if all sessions already have compact transcripts.
-func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary, out io.Writer, prefix string) error {
+func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary) (int, error) {
 	// Find sessions missing transcript.jsonl
 	var needsBackfill []int
 	for i, session := range v2Summary.Sessions {
@@ -336,7 +505,7 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 	}
 
 	if len(needsBackfill) == 0 {
-		return errAlreadyMigrated
+		return 0, errAlreadyMigrated
 	}
 
 	backfilled := 0
@@ -389,14 +558,12 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 
 	if backfilled == 0 {
 		if lastAgent != "" {
-			return fmt.Errorf("%w: agent %q", errTranscriptNotGeneratable, lastAgent)
+			return 0, fmt.Errorf("%w: agent %q", errTranscriptNotGeneratable, lastAgent)
 		}
-		return fmt.Errorf("%w: no agent type in metadata", errTranscriptNotGeneratable)
+		return 0, fmt.Errorf("%w: no agent type in metadata", errTranscriptNotGeneratable)
 	}
 
-	fmt.Fprintf(out, "%s added transcript.jsonl for %d session(s)\n", prefix, backfilled)
-
-	return nil
+	return backfilled, nil
 }
 
 func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.CommittedInfo, combinedAttribution *checkpoint.InitialAttribution) checkpoint.WriteCommittedOptions {
@@ -407,6 +574,7 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 	return checkpoint.WriteCommittedOptions{
 		CheckpointID: info.CheckpointID,
 		SessionID:    m.SessionID,
+		CreatedAt:    m.CreatedAt,
 		Strategy:     m.Strategy,
 		Branch:       m.Branch,
 		// content.Transcript comes from persisted checkpoint storage and is
@@ -520,7 +688,7 @@ func computeCompactOffset(ctx context.Context, fullTranscript, fullCompact []byt
 
 // copyTaskMetadataToV2 copies task metadata files (subagent transcripts, checkpoint JSONs)
 // from the v1 branch to the v2 /full/current ref via tree surgery.
-func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, summary *checkpoint.CheckpointSummary) error {
+func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, summary *checkpoint.CheckpointSummary, v1ToV2SessionIdx map[int]int) error {
 	// Resolve the v1 branch tree
 	v1Tree, err := resolveV1CheckpointTree(repo, cpID)
 	if err != nil {
@@ -530,8 +698,7 @@ func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoi
 	// Legacy v1 layout stores task metadata at checkpoint root: <cp>/tasks/<tool-use-id>/...
 	// Prefer attaching this tree to the latest session in v2.
 	if rootTasksTree, rootTasksErr := v1Tree.Tree("tasks"); rootTasksErr == nil {
-		if len(summary.Sessions) > 0 {
-			latestSessionIdx := len(summary.Sessions) - 1
+		if latestSessionIdx, ok := latestMigratedV2SessionIndex(v1ToV2SessionIdx); ok {
 			if spliceErr := spliceTasksTreeToV2(ctx, repo, v2Store, cpID, latestSessionIdx, rootTasksTree.Hash); spliceErr != nil {
 				return fmt.Errorf("latest session task tree splice failed: %w", spliceErr)
 			}
@@ -550,12 +717,30 @@ func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoi
 			continue // No tasks directory in this session
 		}
 
-		if spliceErr := spliceTasksTreeToV2(ctx, repo, v2Store, cpID, sessionIdx, tasksTree.Hash); spliceErr != nil {
+		v2SessionIdx, ok := v1ToV2SessionIdx[sessionIdx]
+		if !ok {
+			continue
+		}
+
+		if spliceErr := spliceTasksTreeToV2(ctx, repo, v2Store, cpID, v2SessionIdx, tasksTree.Hash); spliceErr != nil {
 			return fmt.Errorf("session %d task tree splice failed: %w", sessionIdx, spliceErr)
 		}
 	}
 
 	return nil
+}
+
+func latestMigratedV2SessionIndex(v1ToV2SessionIdx map[int]int) (int, bool) {
+	latest := -1
+	for _, v2SessionIdx := range v1ToV2SessionIdx {
+		if v2SessionIdx > latest {
+			latest = v2SessionIdx
+		}
+	}
+	if latest < 0 {
+		return -1, false
+	}
+	return latest, true
 }
 
 // resolveV1CheckpointTree reads the checkpoint subtree from the v1 branch.

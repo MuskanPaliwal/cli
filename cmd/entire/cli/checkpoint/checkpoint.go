@@ -207,6 +207,11 @@ type WriteCommittedOptions struct {
 	// SessionID is the session identifier
 	SessionID string
 
+	// CreatedAt is when the checkpoint was originally created.
+	// When zero, writers use the current time. Migration sets this to preserve
+	// the original v1 checkpoint time in v2 metadata and retention decisions.
+	CreatedAt time.Time
+
 	// Strategy is the name of the strategy that created this checkpoint
 	Strategy string
 

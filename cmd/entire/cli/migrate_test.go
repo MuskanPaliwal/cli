@@ -73,6 +73,34 @@ func buildTasksTreeHash(t *testing.T, repo *git.Repository, toolUseID string) pl
 	return treeHash
 }
 
+func addV1SessionTasksTree(t *testing.T, repo *git.Repository, cpID id.CheckpointID, sessionIdx int, toolUseID string) {
+	t.Helper()
+
+	tasksTreeHash := buildTasksTreeHash(t, repo, toolUseID)
+	tasksTree, err := repo.TreeObject(tasksTreeHash)
+	require.NoError(t, err)
+
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+
+	newRoot, err := checkpoint.UpdateSubtree(repo, commit.TreeHash,
+		[]string{string(cpID[:2]), string(cpID[2:]), strconv.Itoa(sessionIdx), "tasks"},
+		tasksTree.Entries,
+		checkpoint.UpdateSubtreeOptions{MergeMode: checkpoint.MergeKeepExisting},
+	)
+	require.NoError(t, err)
+
+	commitHash, err := checkpoint.CreateCommit(context.Background(), repo, newRoot, ref.Hash(),
+		"Add test session task metadata\n",
+		"Test", "test@test.com")
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)))
+}
+
 func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
@@ -97,6 +125,34 @@ func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, summary, "checkpoint should exist in v2 after migration")
 	assert.Equal(t, cpID, summary.CheckpointID)
+}
+
+func TestMigrateCheckpointsV2_PreservesCreatedAt(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	cpID := id.MustCheckpointID("b1c2d3e4f5a6")
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-created-at",
+		CreatedAt:    createdAt,
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("{\"type\":\"assistant\",\"message\":\"hello\"}\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.migrated)
+
+	content, err := v2Store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, err)
+	assert.True(t, content.Metadata.CreatedAt.Equal(createdAt))
 }
 
 func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
@@ -157,7 +213,7 @@ func TestMigrateCheckpointsV2_ForceOverwritesExisting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result3.migrated)
 	assert.Equal(t, 0, result3.skipped)
-	assert.Contains(t, stdout.String(), "Force-migrating")
+	assert.Empty(t, stdout.String())
 
 	// Verify checkpoint still readable in v2
 	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
@@ -238,6 +294,336 @@ func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
 	assert.GreaterOrEqual(t, len(summary.Sessions), 2, "should have at least 2 sessions")
 }
 
+func TestMigrateCheckpointsV2_SkipsV1SessionWithoutTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("445566778899")
+
+	writeV1Checkpoint(t, v1Store, cpID, "session-real",
+		[]byte("{\"type\":\"assistant\",\"message\":\"real session\"}\n"),
+		[]string{"real prompt"},
+	)
+
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-without-transcript",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"metadata-only prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated)
+	assert.Equal(t, 0, result.skipped)
+	assert.Equal(t, 0, result.failed)
+	assert.Equal(t, 1, result.missingSessions)
+
+	output := stdout.String()
+	assert.NotContains(t, output, "warning: skipping v1 session 1")
+	assert.NotContains(t, output, "Migrating checkpoint")
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 1)
+	assert.Equal(t, "/"+cpID.Path()+"/0/metadata.json", summary.Sessions[0].Metadata)
+}
+
+func TestMigrateCheckpointsV2_SkipsV1SessionWithMissingDirectory(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("4455667788aa")
+	writeV1Checkpoint(t, v1Store, cpID, "session-real",
+		[]byte("{\"type\":\"assistant\",\"message\":\"real session\"}\n"),
+		[]string{"real prompt"},
+	)
+	appendMissingV1SessionReference(t, repo, v1Store, cpID)
+
+	var stdout bytes.Buffer
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated)
+	assert.Equal(t, 0, result.skipped)
+	assert.Equal(t, 0, result.failed)
+	assert.Equal(t, 1, result.missingSessions)
+
+	output := stdout.String()
+	assert.NotContains(t, output, "warning: skipping v1 session 1")
+	assert.NotContains(t, output, "skipped 1 session(s) with missing transcript/session content")
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 1)
+	assert.Equal(t, "/"+cpID.Path()+"/0/metadata.json", summary.Sessions[0].Metadata)
+}
+
+func TestMigrateCheckpointsV2_TaskMetadataUsesMigratedSessionIndexAfterSkip(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("66778899aabb")
+
+	writeV1Checkpoint(t, v1Store, cpID, "session-real",
+		[]byte("{\"type\":\"assistant\",\"message\":\"real session\"}\n"),
+		[]string{"real prompt"},
+	)
+
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-without-transcript",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"metadata-only prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	err = v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-task",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("{\"type\":\"assistant\",\"message\":\"task session\"}\n")),
+		Prompts:      []string{"task prompt"},
+		IsTask:       true,
+		ToolUseID:    "toolu_root_shifted",
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+	addV1SessionTasksTree(t, repo, cpID, 2, "toolu_session_shifted")
+
+	var stdout bytes.Buffer
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated)
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 2)
+	assert.Equal(t, "/"+cpID.Path()+"/1/metadata.json", summary.Sessions[1].Metadata)
+
+	_, rootTreeHash, refErr := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, refErr)
+	rootTree, treeErr := repo.TreeObject(rootTreeHash)
+	require.NoError(t, treeErr)
+
+	_, err = rootTree.File(cpID.Path() + "/1/tasks/toolu_root_shifted/checkpoint.json")
+	require.NoError(t, err, "root task metadata should follow the shifted v2 session index")
+	_, err = rootTree.File(cpID.Path() + "/1/tasks/toolu_session_shifted/checkpoint.json")
+	require.NoError(t, err, "session task metadata should follow the shifted v2 session index")
+	_, err = rootTree.File(cpID.Path() + "/2/tasks/toolu_root_shifted/checkpoint.json")
+	require.Error(t, err, "task metadata must not be written under a non-existent v2 session")
+}
+
+func TestMigrateCheckpointsV2_SkipsCheckpointWhenAllV1SessionsMissingTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("5566778899bb")
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "metadata-only-session",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"metadata-only prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 0, result.migrated)
+	assert.Equal(t, 1, result.skipped)
+	assert.Equal(t, 0, result.failed)
+	assert.Equal(t, 1, result.missingSessions)
+
+	output := stdout.String()
+	assert.NotContains(t, output, "warning: skipping v1 session 0")
+	assert.NotContains(t, output, "skipped (no migratable v1 sessions")
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	assert.Nil(t, summary)
+}
+
+func TestMigrateCheckpointsV2_ForcePrunesSkippedV2Sessions(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("778899aabbcc")
+	writeV1Checkpoint(t, v1Store, cpID, "session-keep",
+		[]byte("{\"type\":\"assistant\",\"message\":\"keep\"}\n"),
+		[]string{"keep prompt"},
+	)
+	writeV1Checkpoint(t, v1Store, cpID, "session-stale",
+		[]byte("{\"type\":\"assistant\",\"message\":\"stale\"}\n"),
+		[]string{"stale prompt"},
+	)
+
+	var initialRun bytes.Buffer
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+
+	initialSummary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, initialSummary)
+	require.Len(t, initialSummary.Sessions, 2)
+
+	err = v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-stale",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"metadata-only stale prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, true)
+	require.NoError(t, rerunErr)
+	assert.Equal(t, 1, result2.migrated)
+	assert.Equal(t, 0, result2.skipped)
+	assert.Equal(t, 1, result2.missingSessions)
+	assert.NotContains(t, stdout.String(), "warning: skipping v1 session 1")
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 1)
+	assert.Equal(t, "/"+cpID.Path()+"/0/metadata.json", summary.Sessions[0].Metadata)
+
+	_, rootTreeHash, refErr := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, refErr)
+	rootTree, treeErr := repo.TreeObject(rootTreeHash)
+	require.NoError(t, treeErr)
+	_, err = rootTree.File(cpID.Path() + "/1/" + paths.V2RawTranscriptHashFileName)
+	require.Error(t, err, "force migration should remove stale full transcript data for skipped sessions")
+}
+
+func TestMigrateCheckpointsV2_ForcePruneRemovesEmptyShardWhenAllSessionsSkipped(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("8899aabbccdd")
+	writeV1Checkpoint(t, v1Store, cpID, "session-stale-only",
+		[]byte("{\"type\":\"assistant\",\"message\":\"stale only\"}\n"),
+		[]string{"stale prompt"},
+	)
+
+	var initialRun bytes.Buffer
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+
+	err = v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-stale-only",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"metadata-only stale prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var stdout bytes.Buffer
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, true)
+	require.NoError(t, rerunErr)
+	assert.Equal(t, 0, result2.migrated)
+	assert.Equal(t, 1, result2.skipped)
+	assert.Equal(t, 1, result2.missingSessions)
+	assert.NotContains(t, stdout.String(), "no migratable v1 sessions")
+
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	assert.Nil(t, summary)
+
+	assertNoV2ShardPrefix(t, repo, v2Store, plumbing.ReferenceName(paths.V2MainRefName), cpID)
+	assertNoV2ShardPrefix(t, repo, v2Store, plumbing.ReferenceName(paths.V2FullCurrentRefName), cpID)
+}
+
+func assertNoV2ShardPrefix(t *testing.T, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, cpID id.CheckpointID) {
+	t.Helper()
+
+	_, rootTreeHash, err := v2Store.GetRefState(refName)
+	require.NoError(t, err)
+
+	rootTree, err := repo.TreeObject(rootTreeHash)
+	require.NoError(t, err)
+
+	_, err = rootTree.Tree(string(cpID[:2]))
+	require.Error(t, err, "force prune should remove an empty shard prefix from %s", refName)
+}
+
+func appendMissingV1SessionReference(t *testing.T, repo *git.Repository, v1Store *checkpoint.GitStore, cpID id.CheckpointID) {
+	t.Helper()
+
+	ctx := context.Background()
+	summary, err := v1Store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	missingIndex := len(summary.Sessions)
+	missingBase := "/" + cpID.Path() + "/" + strconv.Itoa(missingIndex) + "/"
+	summary.Sessions = append(summary.Sessions, checkpoint.SessionFilePaths{
+		Metadata:    missingBase + paths.MetadataFileName,
+		Transcript:  missingBase + paths.TranscriptFileName,
+		ContentHash: missingBase + paths.ContentHashFileName,
+		Prompt:      missingBase + paths.PromptFileName,
+	})
+
+	metadataJSON, err := json.MarshalIndent(summary, "", "  ")
+	require.NoError(t, err)
+	metadataJSON = append(metadataJSON, '\n')
+
+	metadataHash, err := checkpoint.CreateBlobFromContent(repo, metadataJSON)
+	require.NoError(t, err)
+
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+
+	newTreeHash, err := checkpoint.UpdateSubtree(
+		repo,
+		commit.TreeHash,
+		[]string{string(cpID[:2]), string(cpID[2:])},
+		[]object.TreeEntry{{
+			Name: paths.MetadataFileName,
+			Mode: filemode.Regular,
+			Hash: metadataHash,
+		}},
+		checkpoint.UpdateSubtreeOptions{MergeMode: checkpoint.MergeKeepExisting},
+	)
+	require.NoError(t, err)
+
+	newCommitHash, err := checkpoint.CreateCommit(ctx, repo, newTreeHash, ref.Hash(), "test: stale v1 session reference\n", "Test", "test@test.com")
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, newCommitHash)))
+}
+
 func TestMigrateCheckpointsV2_NoV1Branch(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
@@ -248,7 +634,37 @@ func TestMigrateCheckpointsV2_NoV1Branch(t *testing.T) {
 	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.migrated)
-	assert.Contains(t, stdout.String(), "Nothing to migrate")
+	assert.Empty(t, stdout.String())
+}
+
+func TestPrintMigrateCompletion_LogPathForSkippedOrMissing(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	printMigrateCompletion(&stdout, &migrateResult{
+		total:           2,
+		migrated:        1,
+		skipped:         1,
+		missingSessions: 1,
+	})
+
+	output := stdout.String()
+	assert.Contains(t, output, "Migration complete: 1 migrated, 1 skipped, 0 failed")
+	assert.Contains(t, output, ".entire/logs/entire.log")
+}
+
+func TestPrintMigrateCompletion_CleanRunOmitsLogPath(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	printMigrateCompletion(&stdout, &migrateResult{
+		total:    1,
+		migrated: 1,
+	})
+
+	output := stdout.String()
+	assert.Contains(t, output, "Migration complete: 1 migrated, 0 skipped, 0 failed")
+	assert.NotContains(t, output, ".entire/logs/entire.log")
 }
 
 func TestMigrateCmd_InvalidFlag(t *testing.T) {
@@ -284,7 +700,8 @@ func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated)
-	assert.Contains(t, stdout.String(), "compact transcript not generated")
+	assert.Equal(t, 1, result.compactTranscriptSkipped)
+	assert.Empty(t, stdout.String())
 }
 
 func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
@@ -403,7 +820,8 @@ func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated, "backfill should count as migrated")
 	assert.Equal(t, 0, result.skipped)
-	assert.Contains(t, stdout.String(), "added transcript.jsonl")
+	assert.Equal(t, 1, result.backfilledCompactTranscripts)
+	assert.Empty(t, stdout.String())
 
 	// Verify transcript.jsonl now exists
 	summary2, err := v2Store.ReadCommitted(context.Background(), cpID)
@@ -505,14 +923,15 @@ func TestMigrateCheckpointsV2_RepairsMissingFullTranscriptBeforeBackfill(t *test
 	require.NoError(t, rerunErr)
 	assert.Equal(t, 1, result2.migrated)
 	assert.Equal(t, 0, result2.failed)
-	assert.Contains(t, rerun.String(), "repaired partial v2 checkpoint state")
+	assert.Equal(t, 1, result2.repaired)
+	assert.Empty(t, rerun.String())
 
 	content, readErr := v2Store.ReadSessionContent(context.Background(), cpID, 0)
 	require.NoError(t, readErr)
 	assert.NotEmpty(t, content.Transcript, "raw full transcript should be restored in /full/current")
 }
 
-func TestMigrateCheckpointsV2_RepairsCurrentFullEvenWhenArchiveExists(t *testing.T) {
+func TestMigrateCheckpointsV2_SkipsRepairWhenArchivedFullExists(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
 	v1Store, v2Store := newMigrateStores(repo)
@@ -543,16 +962,20 @@ func TestMigrateCheckpointsV2_RepairsCurrentFullEvenWhenArchiveExists(t *testing
 	require.NoError(t, archivedReadErr)
 	assert.NotEmpty(t, archivedRead.Transcript)
 
-	// Re-run migration: should still repair /full/current.
+	// Re-run migration: archived /full/* artifacts are sufficient, so it should
+	// not rehydrate old raw transcripts into /full/current.
 	var rerun bytes.Buffer
 	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &rerun, false)
 	require.NoError(t, rerunErr)
-	assert.Equal(t, 1, result2.migrated)
-	assert.Contains(t, rerun.String(), "repaired partial v2 checkpoint state")
+	assert.Equal(t, 0, result2.migrated)
+	assert.Equal(t, 1, result2.skipped)
+	assert.NotContains(t, rerun.String(), "repaired partial v2 checkpoint state")
 
-	ok, checkErr := hasCurrentFullSessionArtifacts(repo, v2Store, cpID, 0)
+	ok, checkErr := hasFullSessionArtifacts(v2Store, cpID, 0)
 	require.NoError(t, checkErr)
-	assert.True(t, ok, "expected /full/current artifacts to be restored")
+	assert.True(t, ok, "expected archived /full/* artifacts to count as present")
+	assert.False(t, hasCurrentFullSessionArtifactsForTest(t, repo, v2Store, cpID, 0),
+		"migration rerun must not copy archived artifacts back into /full/current")
 }
 
 func removeV2SessionTranscriptFiles(t *testing.T, repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) {
@@ -584,6 +1007,36 @@ func removeV2SessionTranscriptFiles(t *testing.T, repo *git.Repository, v2Store 
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)))
 }
 
+func hasCurrentFullSessionArtifactsForTest(t *testing.T, repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) bool {
+	t.Helper()
+
+	_, rootTreeHash, err := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, err)
+
+	rootTree, err := repo.TreeObject(rootTreeHash)
+	require.NoError(t, err)
+
+	sessionPath := cpID.Path() + "/" + strconv.Itoa(sessionIdx)
+	sessionTree, err := rootTree.Tree(sessionPath)
+	if err != nil {
+		return false
+	}
+
+	hasTranscript := false
+	for _, entry := range sessionTree.Entries {
+		if entry.Name == paths.V2RawTranscriptFileName || strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+".") {
+			hasTranscript = true
+			break
+		}
+	}
+	if !hasTranscript {
+		return false
+	}
+
+	_, err = sessionTree.File(paths.V2RawTranscriptHashFileName)
+	return err == nil
+}
+
 func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -606,6 +1059,14 @@ func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {
 	require.Len(t, opts.Prompts, 2)
 	assert.Equal(t, "first line\nwith newline", opts.Prompts[0])
 	assert.Equal(t, "second prompt", opts.Prompts[1])
+}
+
+func TestLatestMigratedV2SessionIndex_Empty(t *testing.T) {
+	t.Parallel()
+
+	latest, ok := latestMigratedV2SessionIndex(nil)
+	assert.Equal(t, -1, latest)
+	assert.False(t, ok)
 }
 
 func TestSpliceTasksTreeToV2_MergesTaskDirectories(t *testing.T) {
