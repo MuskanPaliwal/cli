@@ -4662,11 +4662,13 @@ func TestCommittedFilesExcludingMetadata(t *testing.T) {
 		".entire/settings.json": {},
 		".entire/.gitignore":    {},
 		".claude/settings.json": {},
+		".cursor/hooks.json":    {},
+		"opencode.json":         {},
 	}
 
 	result := committedFilesExcludingMetadata(input)
 
-	// .entire/ files should be excluded, everything else kept
+	// .entire/, agent ProtectedDirs, and agent ProtectedFiles all excluded.
 	resultSet := make(map[string]struct{}, len(result))
 	for _, f := range result {
 		resultSet[f] = struct{}{}
@@ -4674,10 +4676,12 @@ func TestCommittedFilesExcludingMetadata(t *testing.T) {
 
 	require.Contains(t, resultSet, "docs/blue.md")
 	require.Contains(t, resultSet, "docs/red.md")
-	require.Contains(t, resultSet, ".claude/settings.json")
 	require.NotContains(t, resultSet, ".entire/settings.json", ".entire/ should be excluded")
 	require.NotContains(t, resultSet, ".entire/.gitignore", ".entire/ should be excluded")
-	require.Len(t, result, 3)
+	require.NotContains(t, resultSet, ".claude/settings.json", ".claude/ should be excluded (claude-code ProtectedDirs)")
+	require.NotContains(t, resultSet, ".cursor/hooks.json", ".cursor/ should be excluded (cursor ProtectedDirs)")
+	require.NotContains(t, resultSet, "opencode.json", "opencode.json should be excluded (opencode ProtectedFiles)")
+	require.Len(t, result, 2)
 }
 
 func TestMarshalPromptAttributionsIncludingPending_IncludesPending(t *testing.T) {

@@ -950,13 +950,20 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 	return attribution
 }
 
-// committedFilesExcludingMetadata returns committed files with CLI metadata paths filtered out.
-// `.entire/` files are created by `entire enable`, not by the agent, and should not be
-// attributed as agent work when used as a fallback for sessions with no FilesTouched.
+// committedFilesExcludingMetadata returns committed files with CLI- and
+// agent-managed paths filtered out. Files under `.entire/`, `.git/`, agent
+// config directories (e.g. `.cursor/`, `.claude/`), and registered protected
+// files (e.g. `opencode.json`) are created by `entire enable` or the agent
+// integration itself, not by user-prompted work, so they should not appear in
+// files_touched when this fallback fires for sessions with no FilesTouched.
 func committedFilesExcludingMetadata(committedFiles map[string]struct{}) []string {
+	protectedFiles := agent.AllProtectedFiles()
 	result := make([]string, 0, len(committedFiles))
 	for f := range committedFiles {
-		if strings.HasPrefix(f, ".entire/") || strings.HasPrefix(f, paths.EntireMetadataDir+"/") {
+		if isProtectedPath(f) {
+			continue
+		}
+		if slices.Contains(protectedFiles, f) {
 			continue
 		}
 		result = append(result, f)

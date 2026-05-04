@@ -2636,7 +2636,7 @@ func formatBranchCheckpoints(w io.Writer, branchName string, points []strategy.R
 
 	if len(groups) == 0 {
 		sb.WriteString("No checkpoints found on this branch.\n")
-		sb.WriteString("Checkpoints will appear here after you save changes during a Claude session.\n")
+		sb.WriteString("Checkpoints will appear here after you save changes during an agent session.\n")
 		return sb.String()
 	}
 

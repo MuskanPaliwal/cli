@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v6"
@@ -284,7 +286,7 @@ func tryPushSessionsCommon(ctx context.Context, remoteName, branchName string) (
 	result, err := remote.Push(ctx, remoteName, branchName)
 	outputStr := result.Output
 	if err != nil {
-		return pushResult{}, classifyPushOutput(outputStr)
+		return pushResult{}, classifyPushFailure(ctx, outputStr, err)
 	}
 
 	return parsePushResult(outputStr), nil
@@ -306,16 +308,52 @@ func isProtectedRefRejection(output string) bool {
 		strings.Contains(output, "protected branch hook declined")
 }
 
+var errNonFastForward = errors.New("non-fast-forward")
+
+func isNonFastForwardRejection(output string) bool {
+	if strings.Contains(output, "non-fast-forward") {
+		return true
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "[rejected]") && strings.Contains(line, "(fetch first)") {
+			return true
+		}
+	}
+	return strings.Contains(output, "Updates were rejected because the tip of your current branch is behind") ||
+		strings.Contains(output, "Updates were rejected because the remote contains work that you do not have locally")
+}
+
 // classifyPushOutput maps failing push stderr to a typed error.
 func classifyPushOutput(output string) error {
 	if isProtectedRefRejection(output) {
 		return &protectedRefError{output: output}
 	}
-	if strings.Contains(output, "non-fast-forward") ||
-		strings.Contains(output, "rejected") {
-		return errors.New("non-fast-forward")
+	if isNonFastForwardRejection(output) {
+		return errNonFastForward
+	}
+	if strings.TrimSpace(output) == "" {
+		return errors.New("push failed")
 	}
 	return fmt.Errorf("push failed: %s", output)
+}
+
+func classifyPushFailure(ctx context.Context, output string, pushErr error) error {
+	if strings.TrimSpace(output) != "" {
+		if pushErr != nil {
+			logging.Debug(ctx, "git push failed",
+				slog.String("error", pushErr.Error()),
+				slog.String("output", output),
+			)
+		}
+		return classifyPushOutput(output)
+	}
+	if pushErr != nil {
+		logging.Debug(ctx, "git push failed without output",
+			slog.String("error", pushErr.Error()),
+		)
+		return fmt.Errorf("push failed: %w", pushErr)
+	}
+	return errors.New("push failed")
 }
 
 // printProtectedRefBlock explains that checkpoint syncing was blocked remotely.

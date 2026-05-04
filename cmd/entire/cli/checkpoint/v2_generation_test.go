@@ -349,7 +349,7 @@ func TestNextGenerationNumber_NoArchives(t *testing.T) {
 	repo := initTestRepo(t)
 	store := NewV2GitStore(repo, "origin")
 
-	next, err := store.nextGenerationNumber()
+	next, err := store.NextGenerationNumber()
 	require.NoError(t, err)
 	assert.Equal(t, 1, next)
 }
@@ -362,7 +362,7 @@ func TestNextGenerationNumber_WithExisting(t *testing.T) {
 	createArchivedRef(t, repo, 1)
 	createArchivedRef(t, repo, 2)
 
-	next, err := store.nextGenerationNumber()
+	next, err := store.NextGenerationNumber()
 	require.NoError(t, err)
 	assert.Equal(t, 3, next)
 }
@@ -502,6 +502,51 @@ func TestComputeGenerationCheckpointTimestamps_FallsBackToRawTranscript(t *testi
 	require.True(t, ok)
 	assert.True(t, gen.OldestCheckpointAt.Equal(oldest))
 	assert.True(t, gen.NewestCheckpointAt.Equal(newest))
+}
+
+func TestComputeGenerationTimestampsFromTrees_IgnoresMainMetadataWhenNil(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+
+	cpID := id.MustCheckpointID("aabbccddeeff")
+	mainCreatedAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-main-created-at",
+		CreatedAt:    mainCreatedAt,
+		Strategy:     "manual-commit",
+		Agent:        agent.AgentTypeClaudeCode,
+		Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"type":"assistant","timestamp":%q}`, mainCreatedAt.Format(time.RFC3339Nano)))),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	rawOldest := time.Date(2025, 12, 23, 10, 27, 44, 0, time.UTC)
+	rawNewest := time.Date(2025, 12, 23, 10, 31, 37, 0, time.UTC)
+	transcript := fmt.Sprintf(
+		"{\"type\":\"user\",\"timestamp\":%q}\n{\"type\":\"assistant\",\"timestamp\":%q}\n",
+		rawOldest.Format(time.RFC3339Nano),
+		rawNewest.Format(time.RFC3339Nano),
+	)
+	blobHash, err := CreateBlobFromContent(repo, []byte(transcript))
+	require.NoError(t, err)
+
+	rootTreeHash, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
+		cpID.Path() + "/0/" + paths.V2RawTranscriptFileName: {
+			Name: paths.V2RawTranscriptFileName,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		},
+	})
+	require.NoError(t, err)
+
+	gen, ok, err := store.ComputeGenerationTimestampsFromTrees(rootTreeHash, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.True(t, gen.OldestCheckpointAt.Equal(rawOldest))
+	assert.True(t, gen.NewestCheckpointAt.Equal(rawNewest))
 }
 
 func TestComputeGenerationCheckpointTimestamps_UnreadableCheckpointForcesFallback(t *testing.T) {

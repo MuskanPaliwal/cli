@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,68 @@ func createArchivedGenerationRef(t *testing.T, repo *git.Repository, generation 
 		},
 		"aa/bbccddeeff/0/" + paths.TranscriptFileName: {
 			Name: paths.TranscriptFileName,
+			Mode: filemode.Regular,
+			Hash: transcriptBlobHash,
+		},
+	}
+
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
+	if err != nil {
+		t.Fatalf("failed to build archived generation tree: %v", err)
+	}
+
+	commitHash, err := checkpoint.CreateCommit(context.Background(), repo, treeHash, plumbing.ZeroHash, "archived generation", "test", "test@test.com")
+	if err != nil {
+		t.Fatalf("failed to create archived generation commit: %v", err)
+	}
+
+	refName := plumbing.ReferenceName(paths.V2FullRefPrefix + generation)
+	ref := plumbing.NewHashReference(refName, commitHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		t.Fatalf("failed to create archived generation ref %s: %v", refName, err)
+	}
+}
+
+func createArchivedGenerationRefWithRawTranscript(
+	t *testing.T,
+	repo *git.Repository,
+	generation string,
+	cpID id.CheckpointID,
+	generationOldest time.Time,
+	generationNewest time.Time,
+	rawOldest time.Time,
+	rawNewest time.Time,
+) {
+	t.Helper()
+
+	gen := checkpoint.GenerationMetadata{
+		OldestCheckpointAt: generationOldest.UTC(),
+		NewestCheckpointAt: generationNewest.UTC(),
+	}
+	genJSON, err := json.Marshal(gen)
+	if err != nil {
+		t.Fatalf("failed to marshal generation metadata: %v", err)
+	}
+	genBlobHash, err := checkpoint.CreateBlobFromContent(repo, genJSON)
+	if err != nil {
+		t.Fatalf("failed to create generation blob: %v", err)
+	}
+
+	transcript := `{"type":"user","timestamp":` + strconv.Quote(rawOldest.UTC().Format(time.RFC3339Nano)) + "}\n" +
+		`{"type":"assistant","timestamp":` + strconv.Quote(rawNewest.UTC().Format(time.RFC3339Nano)) + "}\n"
+	transcriptBlobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(transcript))
+	if err != nil {
+		t.Fatalf("failed to create transcript blob: %v", err)
+	}
+
+	entries := map[string]object.TreeEntry{
+		paths.GenerationFileName: {
+			Name: paths.GenerationFileName,
+			Mode: filemode.Regular,
+			Hash: genBlobHash,
+		},
+		cpID.Path() + "/0/" + paths.V2RawTranscriptFileName: {
+			Name: paths.V2RawTranscriptFileName,
 			Mode: filemode.Regular,
 			Hash: transcriptBlobHash,
 		},
@@ -1001,7 +1064,7 @@ func TestCleanCmd_All_DryRunListsRemoteOnlyEligibleV2Generations(t *testing.T) {
 	}
 }
 
-func TestCleanCmd_All_UsesCheckpointTimeForV2GenerationRetention(t *testing.T) {
+func TestCleanCmd_All_UsesRawTranscriptTimeForV2GenerationRetention(t *testing.T) {
 	repo, _ := setupCleanTestRepo(t)
 
 	wt, err := repo.Worktree()
@@ -1013,9 +1076,10 @@ func TestCleanCmd_All_UsesCheckpointTimeForV2GenerationRetention(t *testing.T) {
 	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {"checkpoints_v2": true, "full_transcript_generation_retention_days": 14}}`)
 
 	cpID := id.MustCheckpointID("aabbccddeeff")
-	checkpointCreatedAt := time.Now().AddDate(0, 0, -20)
-	createV2MainMetadataRef(t, repo, cpID, checkpointCreatedAt)
-	createArchivedGenerationRef(t, repo, "0000000000005", time.Now(), time.Now())
+	createV2MainMetadataRef(t, repo, cpID, time.Now())
+	createArchivedGenerationRefWithRawTranscript(t, repo, "0000000000005", cpID,
+		time.Now(), time.Now(),
+		time.Now().AddDate(0, 0, -20), time.Now().AddDate(0, 0, -15))
 
 	cmd := newCleanCmd()
 	var stdout, stderr bytes.Buffer
@@ -1032,7 +1096,7 @@ func TestCleanCmd_All_UsesCheckpointTimeForV2GenerationRetention(t *testing.T) {
 		t.Fatalf("expected archived v2 generation section, got: %s", output)
 	}
 	if !strings.Contains(output, "0000000000005") {
-		t.Fatalf("expected generation to be eligible by checkpoint created_at, got: %s", output)
+		t.Fatalf("expected generation to be eligible by raw transcript timestamps, got: %s", output)
 	}
 }
 

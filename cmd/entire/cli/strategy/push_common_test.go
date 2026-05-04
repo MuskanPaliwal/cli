@@ -3,6 +3,7 @@ package strategy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1538,13 +1539,40 @@ func TestClassifyPushOutput(t *testing.T) {
 
 		var perr *protectedRefError
 		assert.NotErrorAs(t, err, &perr)
+		require.ErrorIs(t, err, errNonFastForward)
 		assert.EqualError(t, err, "non-fast-forward")
+	})
+
+	t.Run("fetch-first maps to NFF error", func(t *testing.T) {
+		t.Parallel()
+		err := classifyPushOutput("!\trefs/heads/main:refs/heads/main\t[rejected] (fetch first)")
+
+		assert.ErrorIs(t, err, errNonFastForward)
+	})
+
+	t.Run("generic rejected output stays generic", func(t *testing.T) {
+		t.Parallel()
+		err := classifyPushOutput("remote: rejected credentials")
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errNonFastForward)
+		assert.ErrorContains(t, err, "push failed: remote: rejected credentials")
 	})
 
 	t.Run("other output is wrapped as push failed", func(t *testing.T) {
 		t.Parallel()
 		err := classifyPushOutput("fatal: Could not resolve host")
 		assert.ErrorContains(t, err, "push failed: fatal: Could not resolve host")
+	})
+
+	t.Run("empty output preserves push error", func(t *testing.T) {
+		t.Parallel()
+		pushErr := errors.New("exit status 128")
+		err := classifyPushFailure(context.Background(), "", pushErr)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, pushErr)
+		assert.ErrorContains(t, err, "push failed")
 	})
 }
 

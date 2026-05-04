@@ -156,6 +156,20 @@ func (s *V2GitStore) AddGenerationJSONToTree(rootTreeHash plumbing.Hash, gen Gen
 // present in a /full/* tree. It prefers created_at from v2 /main metadata and
 // falls back to top-level transcript event timestamps for older or partial v2 data.
 func (s *V2GitStore) ComputeGenerationCheckpointTimestamps(rootTreeHash plumbing.Hash) (GenerationMetadata, bool, error) {
+	mainTree, mainTreeErr := s.v2MainTree()
+	if mainTreeErr != nil {
+		mainTree = nil
+	}
+	return s.ComputeGenerationTimestampsFromTrees(rootTreeHash, mainTree)
+}
+
+// ComputeGenerationTimestampsFromTrees walks every checkpoint in rootTreeHash
+// and aggregates per-checkpoint timestamps. When mainTree is non-nil, /main
+// metadata.json is consulted before falling back to the raw transcript inside
+// the checkpoint's full-tree. Returns found=false when any checkpoint cannot
+// produce a timestamp; callers decide their own fallback (e.g. read existing
+// generation.json, recompute from in-memory data, or surface an error).
+func (s *V2GitStore) ComputeGenerationTimestampsFromTrees(rootTreeHash plumbing.Hash, mainTree *object.Tree) (GenerationMetadata, bool, error) {
 	if rootTreeHash == plumbing.ZeroHash {
 		return GenerationMetadata{}, false, nil
 	}
@@ -163,11 +177,6 @@ func (s *V2GitStore) ComputeGenerationCheckpointTimestamps(rootTreeHash plumbing
 	rootTree, err := s.repo.TreeObject(rootTreeHash)
 	if err != nil {
 		return GenerationMetadata{}, false, fmt.Errorf("failed to read generation tree: %w", err)
-	}
-
-	mainTree, mainTreeErr := s.v2MainTree()
-	if mainTreeErr != nil {
-		mainTree = nil
 	}
 
 	var gen GenerationMetadata
@@ -294,7 +303,7 @@ func (s *V2GitStore) checkpointTimestampRangeFromMain(mainTree *object.Tree, cpI
 		if err := json.Unmarshal([]byte(metadataContent), &metadata); err != nil || metadata.CreatedAt.IsZero() {
 			continue
 		}
-		mergeGenerationTime(&gen, &found, metadata.CreatedAt.UTC())
+		MergeGenerationTime(&gen, &found, metadata.CreatedAt.UTC())
 	}
 	return gen, found
 }
@@ -337,7 +346,7 @@ func timestampRangeFromTranscript(transcript []byte) (GenerationMetadata, bool) 
 			}
 			if jsonErr := json.Unmarshal(trimmed, &event); jsonErr == nil && event.Timestamp != "" {
 				if ts, parseErr := time.Parse(time.RFC3339Nano, event.Timestamp); parseErr == nil {
-					mergeGenerationTime(&gen, &found, ts.UTC())
+					MergeGenerationTime(&gen, &found, ts.UTC())
 				}
 			}
 		}
@@ -353,11 +362,13 @@ func timestampRangeFromTranscript(transcript []byte) (GenerationMetadata, bool) 
 }
 
 func mergeGenerationRange(dst *GenerationMetadata, found *bool, src GenerationMetadata) {
-	mergeGenerationTime(dst, found, src.OldestCheckpointAt)
-	mergeGenerationTime(dst, found, src.NewestCheckpointAt)
+	MergeGenerationTime(dst, found, src.OldestCheckpointAt)
+	MergeGenerationTime(dst, found, src.NewestCheckpointAt)
 }
 
-func mergeGenerationTime(gen *GenerationMetadata, found *bool, ts time.Time) {
+// MergeGenerationTime expands the generation timestamp envelope to include ts.
+// The found flag is set the first time a non-zero timestamp is observed.
+func MergeGenerationTime(gen *GenerationMetadata, found *bool, ts time.Time) {
 	if ts.IsZero() {
 		return
 	}
@@ -411,9 +422,9 @@ func (s *V2GitStore) ListArchivedGenerations() ([]string, error) {
 	return archived, nil
 }
 
-// nextGenerationNumber returns the next sequential generation number for archiving.
+// NextGenerationNumber returns the next sequential generation number for archiving.
 // Scans existing archived refs and returns max+1. Returns 1 if no archives exist.
-func (s *V2GitStore) nextGenerationNumber() (int, error) {
+func (s *V2GitStore) NextGenerationNumber() (int, error) {
 	archived, err := s.ListArchivedGenerations()
 	if err != nil {
 		return 0, err
@@ -461,7 +472,7 @@ func (s *V2GitStore) rotateGeneration(ctx context.Context) error {
 		return fmt.Errorf("rotation: failed to read /full/current ref: %w", err)
 	}
 
-	archiveNumber, err := s.nextGenerationNumber()
+	archiveNumber, err := s.NextGenerationNumber()
 	if err != nil {
 		return fmt.Errorf("rotation: failed to determine next generation number: %w", err)
 	}
