@@ -16,10 +16,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
-// Integration tests for the early-dispatch path in cmd/entire/main.go.
-// They build and exec the real binary so the wiring (pre-Cobra dispatch,
-// exit-code propagation, stdio passthrough, signal handling) is exercised
-// end-to-end — unit tests in cmd/entire/cli/plugin_test.go can't.
+// Integration tests for external-command resolution in cmd/entire/main.go.
+// They build and exec the real binary so the pre-Cobra routing (exit-code
+// propagation, stdio passthrough, signal handling) is exercised end-to-end
+// — unit tests in cmd/entire/cli/plugin_test.go can't.
 
 // writePluginScript writes a shell script that records argv and exits
 // with exitCode. Skips the calling test on Windows.
@@ -55,7 +55,7 @@ func pathWith(dir string) []string {
 	return append(env, "PATH="+dir)
 }
 
-func TestPluginDispatch_HappyPath(t *testing.T) {
+func TestExternalCommand_HappyPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	argFile := filepath.Join(dir, "argv.txt")
@@ -85,7 +85,7 @@ func TestPluginDispatch_HappyPath(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_ExitCodePropagation(t *testing.T) {
+func TestExternalCommand_ExitCodePropagation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writePluginScript(t, dir, "entire-failing", filepath.Join(dir, "argv.txt"), 42)
@@ -108,7 +108,7 @@ func TestPluginDispatch_ExitCodePropagation(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_BuiltinWins(t *testing.T) {
+func TestExternalCommand_BuiltinWins(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	// If the shadowing plugin ran, the parent's exit code would be 99
@@ -132,7 +132,7 @@ func TestPluginDispatch_BuiltinWins(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_PluginNotFound(t *testing.T) {
+func TestExternalCommand_PluginNotFound(t *testing.T) {
 	t.Parallel()
 	// PATH deliberately points at an empty dir so no plugin can resolve.
 	dir := t.TempDir()
@@ -154,7 +154,7 @@ func TestPluginDispatch_PluginNotFound(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_FlagAfterPluginNameNotEatenByCobra(t *testing.T) {
+func TestExternalCommand_FlagAfterPluginNameNotEatenByCobra(t *testing.T) {
 	t.Parallel()
 	// Once we're routing to a plugin, flag-shaped args must reach the
 	// child verbatim — Cobra's --help/--version handlers must not see them.
@@ -180,7 +180,7 @@ func TestPluginDispatch_FlagAfterPluginNameNotEatenByCobra(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_StdinPassthrough(t *testing.T) {
+func TestExternalCommand_StdinPassthrough(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin shell-script harness only runs on Unix")
@@ -210,7 +210,7 @@ func TestPluginDispatch_StdinPassthrough(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
+func TestExternalCommand_EnvVarsForwarded(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin shell-script harness only runs on Unix")
@@ -278,7 +278,7 @@ func parseEnvLines(t *testing.T, contents string) map[string]string {
 	return m
 }
 
-func TestPluginDispatch_NonExecutableReportsLaunchError(t *testing.T) {
+func TestExternalCommand_NonExecutableReportsLaunchError(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("executable bit semantics tested on Unix only")
@@ -306,7 +306,7 @@ func TestPluginDispatch_NonExecutableReportsLaunchError(t *testing.T) {
 	}
 }
 
-func TestPluginDispatch_AgentProtocolBinarySkipped(t *testing.T) {
+func TestExternalCommand_AgentProtocolBinarySkipped(t *testing.T) {
 	t.Parallel()
 	// `entire-agent-*` is reserved for the protocol — never dispatched as
 	// a passthrough plugin even when present on PATH.

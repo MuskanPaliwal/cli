@@ -105,7 +105,7 @@ func TestIsAgentProtocolBinary(t *testing.T) {
 func TestResolvePlugin_FlagAsFirstArg(t *testing.T) {
 	t.Parallel()
 	if _, _, ok := resolvePlugin(newTestRoot(), []string{"--help"}); ok {
-		t.Fatal("flags must not trigger plugin dispatch")
+		t.Fatal("flags must not trigger external-command lookup")
 	}
 }
 

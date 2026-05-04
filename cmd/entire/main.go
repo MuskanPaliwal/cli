@@ -33,7 +33,7 @@ func main() {
 	// Create and execute root command
 	rootCmd := cli.NewRootCmd()
 
-	if handled, code := cli.MaybeDispatchPlugin(ctx, rootCmd, os.Args[1:]); handled {
+	if handled, code := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
 		cancel()
 		os.Exit(code)
 	}

@@ -18,24 +18,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Plugin dispatch — kubectl-style. When the user invokes `entire <name>` and
-// <name> isn't a built-in subcommand, look for an `entire-<name>` binary on
-// PATH and exec it with the remaining args. Stdio and exit codes pass
-// through. Binaries matching the agent protocol prefix are ignored here —
-// they're handled by the external agent registry.
+// External-command resolution, kubectl-style. When the user invokes
+// `entire <name>` and <name> isn't a built-in subcommand, look for an
+// `entire-<name>` binary on PATH and exec it with the remaining args.
+// Stdio and exit codes pass through. Binaries matching the agent
+// protocol prefix are reserved for the external agent registry and
+// skipped here.
 const (
 	pluginBinaryPrefix      = "entire-"
 	agentPluginBinaryPrefix = "entire-agent-"
 )
 
-// MaybeDispatchPlugin returns (true, exitCode) when an external plugin
-// handled the invocation. On launch failure (e.g. missing executable bit)
-// returns (true, 1) after printing to stderr. On no-match returns (false, 0)
-// so the caller can fall through to Cobra.
+// MaybeRunPlugin returns (true, exitCode) when an external command was
+// resolved and run. On launch failure (e.g. missing executable bit)
+// returns (true, 1) after printing to stderr. On no-match returns
+// (false, 0) so the caller can fall through to Cobra.
 //
 // Telemetry and the version-check notice mirror Cobra's PersistentPostRun
 // behavior for built-ins: both fire only on a successful (exit-0) run.
-func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int) {
+func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int) {
 	binPath, pluginArgs, ok := resolvePlugin(rootCmd, args)
 	if !ok {
 		return false, 0

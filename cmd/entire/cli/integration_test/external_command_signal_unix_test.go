@@ -16,7 +16,7 @@ import (
 // SIGINT to the parent must reach the plugin so it can clean up — not
 // just be SIGKILL'd by the runtime. Guards both signal paths: terminal
 // (via process group) and parent's context-cancel handler.
-func TestPluginDispatch_SigintReachesPlugin(t *testing.T) {
+func TestExternalCommand_SigintReachesPlugin(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	signalFile := filepath.Join(dir, "got-sigint.txt")
