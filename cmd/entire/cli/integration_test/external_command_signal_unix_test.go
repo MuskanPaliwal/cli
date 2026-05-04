@@ -4,13 +4,15 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 )
 
 // SIGINT to the parent must reach the plugin so it can clean up — not
@@ -37,7 +39,7 @@ func TestExternalCommand_SigintReachesPlugin(t *testing.T) {
 		t.Fatalf("write plugin: %v", err)
 	}
 
-	cmd := exec.Command(getTestBinary(), "trapint")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "trapint")
 	cmd.Env = pathWith(dir)
 	var pStderr bytes.Buffer
 	cmd.Stdout = &bytes.Buffer{}

@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
@@ -61,7 +63,7 @@ func TestExternalCommand_HappyPath(t *testing.T) {
 	argFile := filepath.Join(dir, "argv.txt")
 	writePluginScript(t, dir, "entire-pgr", argFile, 0)
 
-	cmd := exec.Command(getTestBinary(), "pgr", "hello", "--flag", "value")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "pgr", "hello", "--flag", "value")
 	cmd.Env = pathWith(dir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -90,7 +92,7 @@ func TestExternalCommand_ExitCodePropagation(t *testing.T) {
 	dir := t.TempDir()
 	writePluginScript(t, dir, "entire-failing", filepath.Join(dir, "argv.txt"), 42)
 
-	cmd := exec.Command(getTestBinary(), "failing")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "failing")
 	cmd.Env = pathWith(dir)
 	cmd.Stdout = &bytes.Buffer{}
 	cmd.Stderr = &bytes.Buffer{}
@@ -115,7 +117,7 @@ func TestExternalCommand_BuiltinWins(t *testing.T) {
 	// (writePluginScript bakes that in via the requested code).
 	writePluginScript(t, dir, "entire-version", filepath.Join(dir, "argv.txt"), 99)
 
-	cmd := exec.Command(getTestBinary(), "version")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "version")
 	cmd.Env = pathWith(dir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -137,7 +139,7 @@ func TestExternalCommand_PluginNotFound(t *testing.T) {
 	// PATH deliberately points at an empty dir so no plugin can resolve.
 	dir := t.TempDir()
 
-	cmd := exec.Command(getTestBinary(), "definitely-not-a-real-plugin-or-builtin")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "definitely-not-a-real-plugin-or-builtin")
 	cmd.Env = pathWith(dir)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -162,7 +164,7 @@ func TestExternalCommand_FlagAfterPluginNameNotEatenByCobra(t *testing.T) {
 	argFile := filepath.Join(dir, "argv.txt")
 	writePluginScript(t, dir, "entire-passthrough", argFile, 0)
 
-	cmd := exec.Command(getTestBinary(), "passthrough", "--help", "--version", "subcmd")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "passthrough", "--help", "--version", "subcmd")
 	cmd.Env = pathWith(dir)
 	cmd.Stdout = &bytes.Buffer{}
 	cmd.Stderr = &bytes.Buffer{}
@@ -192,7 +194,7 @@ func TestExternalCommand_StdinPassthrough(t *testing.T) {
 		t.Fatalf("write plugin: %v", err)
 	}
 
-	cmd := exec.Command(getTestBinary(), "stdincat")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "stdincat")
 	cmd.Env = pathWith(dir)
 	cmd.Stdin = strings.NewReader("hello from parent stdin\n")
 	cmd.Stdout = &bytes.Buffer{}
@@ -238,7 +240,7 @@ func TestExternalCommand_EnvVarsForwarded(t *testing.T) {
 		t.Fatalf("write plugin: %v", err)
 	}
 
-	cmd := exec.Command(getTestBinary(), "envcheck")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "envcheck")
 	cmd.Env = pathWith(pluginDir)
 	cmd.Dir = resolvedRepo
 	cmd.Stdout = &bytes.Buffer{}
@@ -291,7 +293,7 @@ func TestExternalCommand_NonExecutableReportsLaunchError(t *testing.T) {
 		t.Fatalf("write plugin: %v", err)
 	}
 
-	cmd := exec.Command(getTestBinary(), "noexec")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "noexec")
 	cmd.Env = pathWith(dir)
 	var stderr bytes.Buffer
 	cmd.Stdout = &bytes.Buffer{}
@@ -313,7 +315,7 @@ func TestExternalCommand_AgentProtocolBinarySkipped(t *testing.T) {
 	dir := t.TempDir()
 	writePluginScript(t, dir, "entire-agent-foo", filepath.Join(dir, "argv.txt"), 0)
 
-	cmd := exec.Command(getTestBinary(), "agent-foo")
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "agent-foo")
 	cmd.Env = pathWith(dir)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
