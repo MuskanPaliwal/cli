@@ -32,6 +32,9 @@ const (
 // handled the invocation. On launch failure (e.g. missing executable bit)
 // returns (true, 1) after printing to stderr. On no-match returns (false, 0)
 // so the caller can fall through to Cobra.
+//
+// Telemetry and the version-check notice mirror Cobra's PersistentPostRun
+// behavior for built-ins: both fire only on a successful (exit-0) run.
 func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int) {
 	binPath, pluginArgs, ok := resolvePlugin(rootCmd, args)
 	if !ok {
@@ -39,8 +42,10 @@ func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []str
 	}
 	pluginName := args[0]
 	exitCode = runPlugin(ctx, binPath, pluginArgs)
-	maybeTrackPluginInvocation(ctx, pluginName)
-	versioncheck.CheckAndNotify(ctx, os.Stdout, versioninfo.Version)
+	if exitCode == 0 {
+		maybeTrackPluginInvocation(ctx, pluginName)
+		versioncheck.CheckAndNotify(ctx, os.Stdout, versioninfo.Version)
+	}
 	return true, exitCode
 }
 
