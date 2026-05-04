@@ -13,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/telemetry"
+	"github.com/entireio/cli/cmd/entire/cli/versioncheck"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +40,7 @@ func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []str
 	pluginName := args[0]
 	exitCode = runPlugin(ctx, binPath, pluginArgs)
 	maybeTrackPluginInvocation(ctx, pluginName)
+	versioncheck.CheckAndNotify(ctx, os.Stdout, versioninfo.Version)
 	return true, exitCode
 }
 
