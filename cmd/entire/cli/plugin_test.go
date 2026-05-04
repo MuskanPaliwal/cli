@@ -1,0 +1,150 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+)
+
+// writePluginBinary creates a shell script that records its argv to argFile and
+// exits with the requested code. Returns the binary's absolute path.
+func writePluginBinary(t *testing.T, dir, name, argFile string, exitCode int) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("plugin shell-script harness only runs on Unix")
+	}
+	path := filepath.Join(dir, name)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %q\nexit %d\n", argFile, exitCode)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write plugin %s: %v", path, err)
+	}
+	return path
+}
+
+// withPathDir prepends dir to PATH for the duration of the test.
+func withPathDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func newTestRoot() *cobra.Command {
+	root := &cobra.Command{Use: "entire"}
+	root.AddCommand(&cobra.Command{Use: "session", Run: func(*cobra.Command, []string) {}})
+	root.AddCommand(&cobra.Command{Use: "agent", Run: func(*cobra.Command, []string) {}})
+	return root
+}
+
+func TestResolvePlugin_FoundOnPath(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+	dir := t.TempDir()
+	binPath := writePluginBinary(t, dir, "entire-pgr", filepath.Join(dir, "args.txt"), 0)
+	withPathDir(t, dir)
+
+	got, args, ok := resolvePlugin(newTestRoot(), []string{"pgr", "--flag", "value"})
+	if !ok {
+		t.Fatal("expected plugin to resolve")
+	}
+	if got != binPath {
+		t.Errorf("binPath: got %q, want %q", got, binPath)
+	}
+	if want := []string{"--flag", "value"}; !equalStrings(args, want) {
+		t.Errorf("plugin args: got %v, want %v", args, want)
+	}
+}
+
+func TestResolvePlugin_BuiltinWins(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+	dir := t.TempDir()
+	writePluginBinary(t, dir, "entire-session", filepath.Join(dir, "args.txt"), 0)
+	withPathDir(t, dir)
+
+	if _, _, ok := resolvePlugin(newTestRoot(), []string{"session", "list"}); ok {
+		t.Fatal("built-in 'session' must take precedence over entire-session plugin")
+	}
+}
+
+func TestResolvePlugin_NotFound(t *testing.T) {
+	t.Parallel()
+	if _, _, ok := resolvePlugin(newTestRoot(), []string{"nope-no-such-plugin"}); ok {
+		t.Fatal("missing plugin must not resolve")
+	}
+}
+
+func TestResolvePlugin_RejectsAgentPrefix(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+	dir := t.TempDir()
+	writePluginBinary(t, dir, "entire-agent-foo", filepath.Join(dir, "args.txt"), 0)
+	withPathDir(t, dir)
+
+	// Reserved name pattern — refuse before even hitting PATH.
+	if _, _, ok := resolvePlugin(newTestRoot(), []string{"agent-foo"}); ok {
+		t.Fatal("agent-foo must not resolve as a passthrough plugin")
+	}
+}
+
+func TestIsAgentProtocolBinary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/usr/local/bin/entire-agent-foo", true},
+		{"/usr/local/bin/entire-agent-foo.exe", true},
+		{"/usr/local/bin/entire-pgr", false},
+		{"entire-pgr", false},
+		{"entire-agent-bar.bat", true},
+	}
+	for _, tc := range cases {
+		if got := isAgentProtocolBinary(tc.path); got != tc.want {
+			t.Errorf("isAgentProtocolBinary(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestResolvePlugin_FlagAsFirstArg(t *testing.T) {
+	t.Parallel()
+	if _, _, ok := resolvePlugin(newTestRoot(), []string{"--help"}); ok {
+		t.Fatal("flags must not trigger plugin dispatch")
+	}
+}
+
+func TestResolvePlugin_PathTraversal(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"../evil", `..\evil`, "foo/bar"} {
+		if _, _, ok := resolvePlugin(newTestRoot(), []string{name}); ok {
+			t.Errorf("name %q must not resolve", name)
+		}
+	}
+}
+
+func TestRunPlugin_ExitCodePropagation(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+	dir := t.TempDir()
+	binPath := writePluginBinary(t, dir, "entire-exit42", filepath.Join(dir, "args.txt"), 42)
+
+	code := runPlugin(context.Background(), binPath, []string{"a", "b"}, nil, os.Stderr, os.Stderr)
+	if code != 42 {
+		t.Errorf("exit code: got %d, want 42", code)
+	}
+	contents, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("read argfile: %v", err)
+	}
+	if got := strings.TrimSpace(string(contents)); got != "a\nb" {
+		t.Errorf("argv: got %q, want %q", got, "a\nb")
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
