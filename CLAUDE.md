@@ -10,7 +10,7 @@ This repo contains the CLI for Entire.
 
 ### Commands (`cmd/`)
 
-- `entire/`: Main CLI entry point
+- `entire/`: Main CLI entry point. Also home to kubectl-style plugin dispatch (`entire <name>` → `entire-<name>` on PATH) — see [Plugin Dispatch](docs/architecture/plugin-dispatch.md).
 - `entire/cli`: CLI utilities and helpers (Cobra commands, helpers, group roots)
 - `entire/cli/commands`: actual command implementations
 - `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md) and [Agent Implementation Guide](docs/architecture/agent-guide.md)
