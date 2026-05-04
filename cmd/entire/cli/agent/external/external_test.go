@@ -876,8 +876,8 @@ func TestStripExeExt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := stripExeExt(tt.in); got != tt.want {
-				t.Errorf("stripExeExt(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := StripExeExt(tt.in); got != tt.want {
+				t.Errorf("StripExeExt(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

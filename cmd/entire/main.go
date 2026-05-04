@@ -33,9 +33,6 @@ func main() {
 	// Create and execute root command
 	rootCmd := cli.NewRootCmd()
 
-	// Kubectl-style plugin dispatch: `entire <name>` → exec `entire-<name>`
-	// on PATH when <name> isn't a built-in. Built-ins always win; agent
-	// protocol binaries (entire-agent-*) are skipped here.
 	if handled, code := cli.MaybeDispatchPlugin(ctx, rootCmd, os.Args[1:]); handled {
 		cancel()
 		os.Exit(code)

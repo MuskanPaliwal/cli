@@ -14,17 +14,13 @@ import (
 	"testing"
 )
 
-// These tests exercise the early-dispatch path in cmd/entire/main.go: the
-// real `entire` binary is invoked with `entire <name>` arguments, and we
-// verify a kubectl-style `entire-<name>` plugin on PATH is exec'd before
-// Cobra handles the args. Coverage here complements the unit tests in
-// cmd/entire/cli/plugin_test.go, which test resolvePlugin/runPlugin in
-// isolation but cannot validate the main() wiring or exit-code propagation
-// of the actual binary.
+// Integration tests for the early-dispatch path in cmd/entire/main.go.
+// They build and exec the real binary so the wiring (pre-Cobra dispatch,
+// exit-code propagation, stdio passthrough, signal handling) is exercised
+// end-to-end — unit tests in cmd/entire/cli/plugin_test.go can't.
 
-// writePluginScript creates a shell script plugin at dir/<binaryName> that
-// records its argv to argFile (one line per arg) and exits with exitCode.
-// On non-Unix platforms the test calling this is skipped.
+// writePluginScript writes a shell script that records argv and exits
+// with exitCode. Skips the calling test on Windows.
 func writePluginScript(t *testing.T, dir, binaryName, argFile string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -44,9 +40,8 @@ func writePluginScript(t *testing.T, dir, binaryName, argFile string, exitCode i
 	return path
 }
 
-// pathWith prepends dir to the current PATH and returns a slice suitable for
-// passing as cmd.Env (as opposed to mutating the test process environment,
-// which would break parallel tests).
+// pathWith returns os.Environ with dir prepended to PATH. Returning a
+// fresh env slice (rather than t.Setenv) keeps tests parallel-safe.
 func pathWith(dir string) []string {
 	env := os.Environ()
 	for i, kv := range env {
@@ -114,15 +109,9 @@ func TestPluginDispatch_ExitCodePropagation(t *testing.T) {
 func TestPluginDispatch_BuiltinWins(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// A plugin shadowing a real built-in must NOT be invoked. If the plugin
-	// runs, it exits 99 with sentinel output we can detect.
-	body := "#!/bin/sh\necho 'plugin-shadowed-builtin'\nexit 99\n"
-	if runtime.GOOS == "windows" {
-		t.Skip("plugin shell-script harness only runs on Unix")
-	}
-	if err := os.WriteFile(filepath.Join(dir, "entire-version"), []byte(body), 0o755); err != nil { //nolint:gosec // test fixture
-		t.Fatalf("write plugin: %v", err)
-	}
+	// If the shadowing plugin ran, the parent's exit code would be 99
+	// (writePluginScript bakes that in via the requested code).
+	writePluginScript(t, dir, "entire-version", filepath.Join(dir, "argv.txt"), 99)
 
 	cmd := exec.Command(getTestBinary(), "version")
 	cmd.Env = pathWith(dir)
@@ -133,8 +122,8 @@ func TestPluginDispatch_BuiltinWins(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("entire version failed: %v\nstderr: %s", err, stderr.String())
 	}
-	if strings.Contains(stdout.String(), "plugin-shadowed-builtin") {
-		t.Errorf("built-in version was shadowed by entire-version plugin\nstdout: %s", stdout.String())
+	if _, err := os.Stat(filepath.Join(dir, "argv.txt")); err == nil {
+		t.Errorf("entire-version plugin was invoked but built-in must take precedence\nstdout: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Entire CLI") {
 		t.Errorf("expected built-in version output, got: %s", stdout.String())
@@ -165,9 +154,8 @@ func TestPluginDispatch_PluginNotFound(t *testing.T) {
 
 func TestPluginDispatch_FlagAfterPluginNameNotEatenByCobra(t *testing.T) {
 	t.Parallel()
-	// Cobra normally interprets --help itself. The dispatcher runs before
-	// Cobra parses, so once we're routing to a plugin everything (including
-	// flag-shaped args) must reach the child verbatim.
+	// Once we're routing to a plugin, flag-shaped args must reach the
+	// child verbatim — Cobra's --help/--version handlers must not see them.
 	dir := t.TempDir()
 	argFile := filepath.Join(dir, "argv.txt")
 	writePluginScript(t, dir, "entire-passthrough", argFile, 0)
@@ -251,8 +239,7 @@ func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
 	if !strings.HasPrefix(out, "ENTIRE_CLI_VERSION=") {
 		t.Fatalf("env line missing prefix: %q", out)
 	}
-	// Just confirm the variable is set to *something* non-empty — value
-	// depends on build-time linker flags and will be "dev" in tests.
+	// Value depends on build-time linker flags; just check it's non-empty.
 	if strings.TrimPrefix(out, "ENTIRE_CLI_VERSION=") == "" {
 		t.Errorf("ENTIRE_CLI_VERSION was empty")
 	}
@@ -260,10 +247,8 @@ func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
 
 func TestPluginDispatch_AgentProtocolBinarySkipped(t *testing.T) {
 	t.Parallel()
-	// `entire agent-foo` must not be routed to entire-agent-foo (which is a
-	// protocol binary, not a passthrough plugin). Cobra should see "agent-foo"
-	// as an unknown command — the literal `agent` group exists, but
-	// `agent-foo` is not a subcommand of agent and not a passthrough name.
+	// `entire-agent-*` is reserved for the protocol — never dispatched as
+	// a passthrough plugin even when present on PATH.
 	dir := t.TempDir()
 	writePluginScript(t, dir, "entire-agent-foo", filepath.Join(dir, "argv.txt"), 0)
 
@@ -277,5 +262,10 @@ func TestPluginDispatch_AgentProtocolBinarySkipped(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "argv.txt")); err == nil {
 		t.Error("entire-agent-foo was invoked but must have been skipped")
+	}
+	// Should fall through to Cobra's unknown-command path, not be eaten silently.
+	if !strings.Contains(stderr.String(), "unknown command") &&
+		!strings.Contains(stderr.String(), "Invalid usage") {
+		t.Errorf("expected Cobra unknown-command error, got stderr: %s", stderr.String())
 	}
 }

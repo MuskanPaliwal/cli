@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/telemetry"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
@@ -28,22 +28,23 @@ const (
 )
 
 // MaybeDispatchPlugin returns (true, exitCode) when an external plugin
-// handled the invocation, and (false, 0) otherwise (in which case the caller
-// should fall through to normal Cobra execution).
+// handled the invocation. On launch failure (e.g. missing executable bit)
+// returns (true, 1) after printing to stderr. On no-match returns (false, 0)
+// so the caller can fall through to Cobra.
 func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int) {
 	binPath, pluginArgs, ok := resolvePlugin(rootCmd, args)
 	if !ok {
 		return false, 0
 	}
 	pluginName := args[0]
-	exitCode = runPlugin(ctx, binPath, pluginArgs, os.Stdin, os.Stdout, os.Stderr)
+	exitCode = runPlugin(ctx, binPath, pluginArgs)
 	maybeTrackPluginInvocation(ctx, pluginName)
 	return true, exitCode
 }
 
 // maybeTrackPluginInvocation fires telemetry only for plugins on the
-// official allowlist and only when telemetry is opted in via settings.
-// Third-party plugin names are never sent.
+// official allowlist. Third-party plugin names are never sent — see
+// IsOfficialPlugin for the rationale.
 func maybeTrackPluginInvocation(ctx context.Context, pluginName string) {
 	if !IsOfficialPlugin(pluginName) {
 		return
@@ -58,9 +59,6 @@ func maybeTrackPluginInvocation(ctx context.Context, pluginName string) {
 	telemetry.TrackPluginDetached(pluginName, s.Enabled, versioninfo.Version)
 }
 
-// resolvePlugin decides whether args should be routed to an external plugin.
-// It is split out from MaybeDispatchPlugin so tests can exercise resolution
-// without spawning a subprocess.
 func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, pluginArgs []string, ok bool) {
 	if len(args) == 0 {
 		return "", nil, false
@@ -83,9 +81,6 @@ func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, plugi
 	return binPath, args[1:], true
 }
 
-// isPluginCandidate filters out args that obviously aren't plugin invocations:
-// flags, empty strings, and names that would map onto agent protocol binaries
-// or contain path separators.
 func isPluginCandidate(name string) bool {
 	if name == "" {
 		return false
@@ -93,6 +88,7 @@ func isPluginCandidate(name string) bool {
 	if strings.HasPrefix(name, "-") {
 		return false
 	}
+	// `agent-*` is reserved for the external agent protocol.
 	if strings.HasPrefix(name, "agent-") {
 		return false
 	}
@@ -102,43 +98,25 @@ func isPluginCandidate(name string) bool {
 	return true
 }
 
-// isAgentProtocolBinary returns true when the binary name is reserved for the
-// external agent protocol. We check both the literal name and the
-// extension-stripped form so a user with `entire-agent-foo.exe` on Windows
-// still gets filtered out.
+// isAgentProtocolBinary returns true when the binary name is reserved for
+// the external agent protocol. Strip Windows extensions first so
+// `entire-agent-foo.exe` is also recognized.
 func isAgentProtocolBinary(binPath string) bool {
-	base := filepath.Base(binPath)
-	if strings.HasPrefix(base, agentPluginBinaryPrefix) {
-		return true
-	}
-	if strings.HasPrefix(stripPluginExeExt(base), agentPluginBinaryPrefix) {
-		return true
-	}
-	return false
-}
-
-// stripPluginExeExt mirrors agent/external/discovery.stripExeExt for plugin
-// name normalization on Windows.
-func stripPluginExeExt(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".exe", ".bat", ".cmd":
-		return strings.TrimSuffix(name, filepath.Ext(name))
-	}
-	return name
+	base := external.StripExeExt(filepath.Base(binPath))
+	return strings.HasPrefix(base, agentPluginBinaryPrefix)
 }
 
 // runPlugin executes the resolved plugin binary, propagating its exit code.
-// On context cancellation the child is sent SIGINT (with a short grace
-// window before the runtime falls back to SIGKILL), so plugins get a chance
-// to clean up. Terminal signals (Ctrl+C) reach the child directly through
-// the foreground process group as well.
-func runPlugin(ctx context.Context, binPath string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+// On context cancellation the child gets SIGINT (with a 5s grace before the
+// runtime falls back to SIGKILL) so plugins can clean up. Terminal signals
+// reach the child directly via the shared process group.
+func runPlugin(ctx context.Context, binPath string, args []string) int {
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "ENTIRE_CLI_VERSION="+versioninfo.Version)
 	if repoRoot, err := paths.WorktreeRoot(ctx); err == nil {
 		cmd.Env = append(cmd.Env, "ENTIRE_REPO_ROOT="+repoRoot)
@@ -149,7 +127,9 @@ func runPlugin(ctx context.Context, binPath string, args []string, stdin io.Read
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintf(stderr, "entire: failed to run plugin %s: %v\n", filepath.Base(binPath), err)
+		// Prefix with the plugin name so users can tell parent vs child
+		// errors apart in mixed stderr.
+		fmt.Fprintf(os.Stderr, "Failed to run plugin %s: %v\n", filepath.Base(binPath), err)
 		return 1
 	}
 	return 0

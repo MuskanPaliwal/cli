@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// writePluginBinary creates a shell script that records its argv to argFile and
-// exits with the requested code. Returns the binary's absolute path.
+// writePluginBinary writes a shell script that records argv to argFile.
+// Skips the calling test on Windows.
 func writePluginBinary(t *testing.T, dir, name, argFile string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -27,7 +27,6 @@ func writePluginBinary(t *testing.T, dir, name, argFile string, exitCode int) st
 	return path
 }
 
-// withPathDir prepends dir to PATH for the duration of the test.
 func withPathDir(t *testing.T, dir string) {
 	t.Helper()
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -79,7 +78,6 @@ func TestResolvePlugin_RejectsAgentPrefix(t *testing.T) { //nolint:paralleltest 
 	writePluginBinary(t, dir, "entire-agent-foo", filepath.Join(dir, "args.txt"), 0)
 	withPathDir(t, dir)
 
-	// Reserved name pattern — refuse before even hitting PATH.
 	if _, _, ok := resolvePlugin(newTestRoot(), []string{"agent-foo"}); ok {
 		t.Fatal("agent-foo must not resolve as a passthrough plugin")
 	}
@@ -120,11 +118,12 @@ func TestResolvePlugin_PathTraversal(t *testing.T) {
 	}
 }
 
-func TestRunPlugin_ExitCodePropagation(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+func TestRunPlugin_ExitCodePropagation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	binPath := writePluginBinary(t, dir, "entire-exit42", filepath.Join(dir, "args.txt"), 42)
 
-	code := runPlugin(context.Background(), binPath, []string{"a", "b"}, nil, os.Stderr, os.Stderr)
+	code := runPlugin(context.Background(), binPath, []string{"a", "b"})
 	if code != 42 {
 		t.Errorf("exit code: got %d, want 42", code)
 	}

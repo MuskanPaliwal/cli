@@ -84,7 +84,7 @@ func discoverAndRegister(ctx context.Context) {
 
 			// Strip Windows executable extensions (.exe, .bat) before deriving agent name.
 			// On Unix, binaries have no extension, so this is a no-op.
-			cleanName := stripExeExt(name)
+			cleanName := StripExeExt(name)
 			agentName := types.AgentName(strings.TrimPrefix(cleanName, binaryPrefix))
 			if registered[agentName] {
 				logging.Debug(ctx, "skipping external agent (name conflict with built-in)",
@@ -131,10 +131,10 @@ func discoverAndRegister(ctx context.Context) {
 	}
 }
 
-// stripExeExt removes Windows executable extensions (.exe, .bat, .cmd) from a
+// StripExeExt removes Windows executable extensions (.exe, .bat, .cmd) from a
 // file name so that the agent name derived from the binary matches on all platforms.
 // On Unix this is effectively a no-op because binaries have no extension.
-func stripExeExt(name string) string {
+func StripExeExt(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".exe", ".bat", ".cmd":
 		return strings.TrimSuffix(name, filepath.Ext(name))

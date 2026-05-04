@@ -109,9 +109,8 @@ func TrackCommandDetached(cmd *cobra.Command, agent string, isEntireEnabled bool
 	}
 }
 
-// BuildPluginEventPayload constructs the event payload for a plugin invocation.
-// The plugin name is embedded as a property; we never record plugin args or
-// flags. Returns nil if the payload cannot be built.
+// BuildPluginEventPayload deliberately omits plugin args/flags — only the
+// allowlisted plugin name is recorded. Returns nil on failure.
 func BuildPluginEventPayload(pluginName string, isEntireEnabled bool, version string) *EventPayload {
 	if pluginName == "" {
 		return nil
@@ -139,9 +138,8 @@ func BuildPluginEventPayload(pluginName string, isEntireEnabled bool, version st
 	}
 }
 
-// TrackPluginDetached records a plugin invocation event in a detached
-// subprocess. Call sites are responsible for restricting invocation to
-// allowlisted plugin names so third-party plugin identifiers don't leak.
+// TrackPluginDetached records a plugin invocation. Call sites must gate
+// on the plugin allowlist — this function does no name filtering itself.
 func TrackPluginDetached(pluginName string, isEntireEnabled bool, version string) {
 	if os.Getenv("ENTIRE_TELEMETRY_OPTOUT") != "" {
 		return
