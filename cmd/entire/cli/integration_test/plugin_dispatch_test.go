@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // Integration tests for the early-dispatch path in cmd/entire/main.go.
@@ -213,18 +215,32 @@ func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin shell-script harness only runs on Unix")
 	}
-	dir := t.TempDir()
-	envFile := filepath.Join(dir, "env.txt")
+	// Spawn the parent CLI from inside a real git repo so it can resolve
+	// the repo root and forward ENTIRE_REPO_ROOT. testutil.InitRepo
+	// configures user.name/email and disables GPG signing.
+	repoDir := t.TempDir()
+	resolvedRepo, err := filepath.EvalSymlinks(repoDir)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+	testutil.InitRepo(t, resolvedRepo)
+
+	pluginDir := t.TempDir()
+	envFile := filepath.Join(pluginDir, "env.txt")
 	body := fmt.Sprintf(
-		"#!/bin/sh\necho \"ENTIRE_CLI_VERSION=$ENTIRE_CLI_VERSION\" > %q\nexit 0\n",
+		"#!/bin/sh\n{\n"+
+			"  echo \"ENTIRE_CLI_VERSION=$ENTIRE_CLI_VERSION\"\n"+
+			"  echo \"ENTIRE_REPO_ROOT=$ENTIRE_REPO_ROOT\"\n"+
+			"} > %q\nexit 0\n",
 		envFile,
 	)
-	if err := os.WriteFile(filepath.Join(dir, "entire-envcheck"), []byte(body), 0o755); err != nil { //nolint:gosec // test fixture
+	if err := os.WriteFile(filepath.Join(pluginDir, "entire-envcheck"), []byte(body), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("write plugin: %v", err)
 	}
 
 	cmd := exec.Command(getTestBinary(), "envcheck")
-	cmd.Env = pathWith(dir)
+	cmd.Env = pathWith(pluginDir)
+	cmd.Dir = resolvedRepo
 	cmd.Stdout = &bytes.Buffer{}
 	cmd.Stderr = &bytes.Buffer{}
 	if err := cmd.Run(); err != nil {
@@ -235,14 +251,31 @@ func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read env file: %v", err)
 	}
-	out := strings.TrimSpace(string(got))
-	if !strings.HasPrefix(out, "ENTIRE_CLI_VERSION=") {
-		t.Fatalf("env line missing prefix: %q", out)
-	}
+	envVars := parseEnvLines(t, string(got))
+
 	// Value depends on build-time linker flags; just check it's non-empty.
-	if strings.TrimPrefix(out, "ENTIRE_CLI_VERSION=") == "" {
+	if v := envVars["ENTIRE_CLI_VERSION"]; v == "" {
 		t.Errorf("ENTIRE_CLI_VERSION was empty")
 	}
+	if got, want := envVars["ENTIRE_REPO_ROOT"], resolvedRepo; got != want {
+		t.Errorf("ENTIRE_REPO_ROOT = %q, want %q", got, want)
+	}
+}
+
+// parseEnvLines splits "KEY=value" lines into a map. Missing keys map
+// to empty strings.
+func parseEnvLines(t *testing.T, contents string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimRight(contents, "\n"), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Errorf("malformed env line: %q", line)
+			continue
+		}
+		m[k] = v
+	}
+	return m
 }
 
 func TestPluginDispatch_NonExecutableReportsLaunchError(t *testing.T) {
