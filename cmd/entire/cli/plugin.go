@@ -71,14 +71,41 @@ func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, plugi
 	if cmd, _, err := rootCmd.Find(args); err == nil && cmd != rootCmd {
 		return "", nil, false
 	}
-	binPath, err := exec.LookPath(pluginBinaryPrefix + name)
+	binName := pluginBinaryPrefix + name
+	binPath, err := exec.LookPath(binName)
 	if err != nil {
+		// LookPath conflates "not on PATH" with "found but not executable".
+		// Distinguish: if a file with this name exists on PATH but isn't
+		// executable, surface that as a launch error rather than falling
+		// through to Cobra's generic unknown-command path.
+		if p, found := findInaccessiblePlugin(binName); found {
+			return p, args[1:], true
+		}
 		return "", nil, false
 	}
 	if isAgentProtocolBinary(binPath) {
 		return "", nil, false
 	}
 	return binPath, args[1:], true
+}
+
+// findInaccessiblePlugin scans PATH for a non-directory file with the
+// given name. Only meaningful after exec.LookPath has already failed —
+// indicates the file exists but lacks the executable bit (or the
+// equivalent platform-specific accessibility).
+func findInaccessiblePlugin(filename string) (string, bool) {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, filename)
+		info, err := os.Stat(candidate) //nolint:gosec // PATH entries are user-trusted; scanning them is the point.
+		if err != nil || info.IsDir() {
+			continue
+		}
+		return candidate, true
+	}
+	return "", false
 }
 
 func isPluginCandidate(name string) bool {

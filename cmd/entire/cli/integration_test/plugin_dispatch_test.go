@@ -245,6 +245,34 @@ func TestPluginDispatch_EnvVarsForwarded(t *testing.T) {
 	}
 }
 
+func TestPluginDispatch_NonExecutableReportsLaunchError(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("executable bit semantics tested on Unix only")
+	}
+	dir := t.TempDir()
+	// Mode 0o644 — file exists on PATH but cannot be exec'd. The dispatcher
+	// must report a launch failure rather than silently falling through to
+	// Cobra's generic unknown-command path.
+	if err := os.WriteFile(filepath.Join(dir, "entire-noexec"), []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatalf("write plugin: %v", err)
+	}
+
+	cmd := exec.Command(getTestBinary(), "noexec")
+	cmd.Env = pathWith(dir)
+	var stderr bytes.Buffer
+	cmd.Stdout = &bytes.Buffer{}
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit for non-executable plugin")
+	}
+	if !strings.Contains(stderr.String(), "Failed to run plugin entire-noexec") {
+		t.Errorf("expected launch-failure message in stderr, got: %s", stderr.String())
+	}
+}
+
 func TestPluginDispatch_AgentProtocolBinarySkipped(t *testing.T) {
 	t.Parallel()
 	// `entire-agent-*` is reserved for the protocol — never dispatched as

@@ -16,7 +16,7 @@ import (
 // Skips the calling test on Windows.
 func writePluginBinary(t *testing.T, dir, name, argFile string, exitCode int) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == windowsGOOS {
 		t.Skip("plugin shell-script harness only runs on Unix")
 	}
 	path := filepath.Join(dir, name)
@@ -106,6 +106,28 @@ func TestResolvePlugin_FlagAsFirstArg(t *testing.T) {
 	t.Parallel()
 	if _, _, ok := resolvePlugin(newTestRoot(), []string{"--help"}); ok {
 		t.Fatal("flags must not trigger plugin dispatch")
+	}
+}
+
+func TestResolvePlugin_NonExecutableSurfacesAsLaunchError(t *testing.T) { //nolint:paralleltest // mutates PATH via t.Setenv
+	if runtime.GOOS == windowsGOOS {
+		t.Skip("executable bit semantics tested on Unix only")
+	}
+	dir := t.TempDir()
+	// Same script body as writePluginBinary but mode 0o644 (not executable).
+	path := filepath.Join(dir, "entire-bad")
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	withPathDir(t, dir)
+
+	got, _, ok := resolvePlugin(newTestRoot(), []string{"bad"})
+	if !ok {
+		t.Fatal("non-executable plugin must surface as a launch failure, not a fall-through")
+	}
+	if got != path {
+		t.Errorf("binPath: got %q, want %q", got, path)
 	}
 }
 
