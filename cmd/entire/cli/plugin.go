@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/telemetry"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +35,27 @@ func MaybeDispatchPlugin(ctx context.Context, rootCmd *cobra.Command, args []str
 	if !ok {
 		return false, 0
 	}
-	return true, runPlugin(ctx, binPath, pluginArgs, os.Stdin, os.Stdout, os.Stderr)
+	pluginName := args[0]
+	exitCode = runPlugin(ctx, binPath, pluginArgs, os.Stdin, os.Stdout, os.Stderr)
+	maybeTrackPluginInvocation(ctx, pluginName)
+	return true, exitCode
+}
+
+// maybeTrackPluginInvocation fires telemetry only for plugins on the
+// official allowlist and only when telemetry is opted in via settings.
+// Third-party plugin names are never sent.
+func maybeTrackPluginInvocation(ctx context.Context, pluginName string) {
+	if !IsOfficialPlugin(pluginName) {
+		return
+	}
+	s, err := LoadEntireSettings(ctx)
+	if err != nil {
+		return
+	}
+	if s.Telemetry == nil || !*s.Telemetry {
+		return
+	}
+	telemetry.TrackPluginDetached(pluginName, s.Enabled, versioninfo.Version)
 }
 
 // resolvePlugin decides whether args should be routed to an external plugin.
