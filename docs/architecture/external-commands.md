@@ -17,6 +17,17 @@ Rules, in order:
 3. **Path-traversal candidates are rejected.** Names containing `/` or `\` never resolve.
 4. **Found-but-not-executable surfaces as a launch error.** If `entire-<name>` exists on `$PATH` but lacks the executable bit, the resolver reports `Failed to run plugin entire-<name>` with exit code 1, rather than falling through to Cobra's "unknown command" path.
 
+### Managed install directory
+
+Users can drop binaries anywhere on `$PATH`, but a per-user managed directory is also automatically discovered:
+
+- **Default:** `$XDG_DATA_HOME/entire/plugins/bin` (Linux/macOS) or `%LOCALAPPDATA%\entire\plugins\bin` (Windows).
+- **Override:** `$ENTIRE_PLUGIN_DIR/bin`.
+
+The CLI prepends this directory to `$PATH` at startup via `cli.PrependPluginBinDirToPATH()` so the existing `exec.LookPath` resolution finds managed installs without any special-casing. This is purely additive — the kubectl-style `$PATH` model is unchanged.
+
+`entire plugin install/list/remove` manage the contents of this directory. Authors who prefer the raw "drop a binary on `$PATH`" model don't need to use it.
+
 ## Environment
 
 Each external-command invocation receives:
@@ -25,6 +36,7 @@ Each external-command invocation receives:
 |---|---|
 | `ENTIRE_CLI_VERSION` | The CLI's version string (e.g. `0.42.0`, `dev`) |
 | `ENTIRE_REPO_ROOT` | Absolute path to the git repository root, when the CLI is invoked inside one. Omitted otherwise. |
+| `ENTIRE_PLUGIN_DATA_DIR` | Per-plugin durable storage directory (`<plugin-root>/data/<name>`). Not pre-created — the plugin should `mkdir -p` on first write. Set regardless of whether the plugin is on raw `$PATH` or in the managed dir, so plugins get the same contract either way. |
 
 Plus the parent's full environment. The working directory is **not** changed — external commands run in the user's current directory, the same as any other shell command.
 
@@ -95,5 +107,7 @@ Key files:
 
 - `cmd/entire/cli/plugin.go` — entry point, `resolvePlugin`, `runPlugin`
 - `cmd/entire/cli/plugin_official.go` — `officialPlugins` allowlist, `IsOfficialPlugin`
+- `cmd/entire/cli/plugin_store.go` — managed install directory, `PluginBinDir`, `PluginDataDir`, `InstallPluginFromPath`, `ListInstalledPlugins`, `RemoveInstalledPlugin`, `PrependPluginBinDirToPATH`
+- `cmd/entire/cli/plugin_group.go` — `entire plugin install/list/remove` Cobra commands
 - `cmd/entire/cli/telemetry/detached.go` — `BuildPluginEventPayload`, `TrackPluginDetached`
 - `cmd/entire/cli/integration_test/external_command_test.go` — end-to-end coverage of the resolution path

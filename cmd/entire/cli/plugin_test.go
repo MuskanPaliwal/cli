@@ -145,7 +145,7 @@ func TestRunPlugin_ExitCodePropagation(t *testing.T) {
 	dir := t.TempDir()
 	binPath := writePluginBinary(t, dir, "entire-exit42", filepath.Join(dir, "args.txt"), 42)
 
-	code := runPlugin(context.Background(), binPath, []string{"a", "b"})
+	code := runPlugin(context.Background(), "exit42", binPath, []string{"a", "b"})
 	if code != 42 {
 		t.Errorf("exit code: got %d, want 42", code)
 	}

@@ -233,6 +233,7 @@ func TestExternalCommand_EnvVarsForwarded(t *testing.T) {
 		"#!/bin/sh\n{\n"+
 			"  echo \"ENTIRE_CLI_VERSION=$ENTIRE_CLI_VERSION\"\n"+
 			"  echo \"ENTIRE_REPO_ROOT=$ENTIRE_REPO_ROOT\"\n"+
+			"  echo \"ENTIRE_PLUGIN_DATA_DIR=$ENTIRE_PLUGIN_DATA_DIR\"\n"+
 			"} > %q\nexit 0\n",
 		envFile,
 	)
@@ -240,8 +241,10 @@ func TestExternalCommand_EnvVarsForwarded(t *testing.T) {
 		t.Fatalf("write plugin: %v", err)
 	}
 
+	// Pin the plugin parent dir so we can assert the per-plugin data path.
+	pluginRoot := t.TempDir()
 	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "envcheck")
-	cmd.Env = pathWith(pluginDir)
+	cmd.Env = append(pathWith(pluginDir), "ENTIRE_PLUGIN_DIR="+pluginRoot)
 	cmd.Dir = resolvedRepo
 	cmd.Stdout = &bytes.Buffer{}
 	cmd.Stderr = &bytes.Buffer{}
@@ -261,6 +264,10 @@ func TestExternalCommand_EnvVarsForwarded(t *testing.T) {
 	}
 	if got, want := envVars["ENTIRE_REPO_ROOT"], resolvedRepo; got != want {
 		t.Errorf("ENTIRE_REPO_ROOT = %q, want %q", got, want)
+	}
+	wantData := filepath.Join(pluginRoot, "data", "envcheck")
+	if got := envVars["ENTIRE_PLUGIN_DATA_DIR"]; got != wantData {
+		t.Errorf("ENTIRE_PLUGIN_DATA_DIR = %q, want %q", got, wantData)
 	}
 }
 

@@ -33,6 +33,12 @@ func main() {
 	// Create and execute root command
 	rootCmd := cli.NewRootCmd()
 
+	// Make managed-installed plugins discoverable by the kubectl-style
+	// dispatcher: prepend the managed bin dir to PATH before resolution.
+	// Idempotent and silent on failure (managed installs simply won't be
+	// found this run; PATH-installed plugins still work).
+	cli.PrependPluginBinDirToPATH()
+
 	if handled, code := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
 		cancel()
 		os.Exit(code)

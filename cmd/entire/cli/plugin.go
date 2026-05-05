@@ -42,7 +42,7 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 		return false, 0
 	}
 	pluginName := args[0]
-	exitCode = runPlugin(ctx, binPath, pluginArgs)
+	exitCode = runPlugin(ctx, pluginName, binPath, pluginArgs)
 	if exitCode == 0 {
 		maybeTrackPluginInvocation(ctx, pluginName)
 		versioncheck.CheckAndNotify(ctx, os.Stdout, versioninfo.Version)
@@ -145,7 +145,7 @@ func isAgentProtocolBinary(binPath string) bool {
 // On context cancellation the child gets SIGINT (with a 5s grace before the
 // runtime falls back to SIGKILL) so plugins can clean up. Terminal signals
 // reach the child directly via the shared process group.
-func runPlugin(ctx context.Context, binPath string, args []string) int {
+func runPlugin(ctx context.Context, pluginName, binPath string, args []string) int {
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
@@ -155,6 +155,13 @@ func runPlugin(ctx context.Context, binPath string, args []string) int {
 	cmd.Env = append(os.Environ(), "ENTIRE_CLI_VERSION="+versioninfo.Version)
 	if repoRoot, err := paths.WorktreeRoot(ctx); err == nil {
 		cmd.Env = append(cmd.Env, "ENTIRE_REPO_ROOT="+repoRoot)
+	}
+	// Per-plugin durable storage. Passed regardless of where the binary lives
+	// so plugins installed via raw PATH and via `entire plugin install` get
+	// the same contract. The dir is not pre-created — that's the plugin's
+	// responsibility on first use.
+	if dataDir, err := PluginDataDir(pluginName); err == nil && dataDir != "" {
+		cmd.Env = append(cmd.Env, pluginEnvPluginData+"="+dataDir)
 	}
 
 	if err := cmd.Run(); err != nil {
