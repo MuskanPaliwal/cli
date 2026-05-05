@@ -35,14 +35,18 @@ const (
 )
 
 // pluginParentDir returns the per-user directory that holds the managed
-// plugin storage. Honors ENTIRE_PLUGIN_DIR; otherwise XDG_DATA_HOME, then a
-// platform default.
+// plugin storage. Resolution, in order:
+//
+//  1. ENTIRE_PLUGIN_DIR (cross-platform override).
+//  2. On Unix: XDG_DATA_HOME if set, else ~/.local/share/entire/plugins.
+//  3. On Windows: LOCALAPPDATA if set, else ~\AppData\Local\entire\plugins.
+//
+// XDG_DATA_HOME is deliberately ignored on Windows even when set (e.g. in
+// MSYS/Cygwin) — Windows users expect Windows conventions, and routing
+// through XDG would produce a surprising location.
 func pluginParentDir() (string, error) {
 	if v := os.Getenv(pluginEnvPluginDir); v != "" {
 		return v, nil
-	}
-	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
-		return filepath.Join(v, pluginManagedDirEntireXD), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -53,6 +57,9 @@ func pluginParentDir() (string, error) {
 			return filepath.Join(appData, pluginManagedDirEntireXD), nil
 		}
 		return filepath.Join(home, "AppData", "Local", pluginManagedDirEntireXD), nil
+	}
+	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		return filepath.Join(v, pluginManagedDirEntireXD), nil
 	}
 	return filepath.Join(home, ".local", "share", pluginManagedDirEntireXD), nil
 }
@@ -295,18 +302,53 @@ func InstallPluginFromPath(opts InstallPluginOptions) (*InstalledPlugin, error) 
 
 	// Atomic replace via tmp + rename. Rename is atomic on POSIX and
 	// replaces an existing target on Windows (Go's os.Rename uses
-	// MoveFileEx with MOVEFILE_REPLACE_EXISTING). If symlink or rename
+	// MoveFileEx with MOVEFILE_REPLACE_EXISTING). If linking or rename
 	// fails, the previously installed plugin (if any) is unaffected.
 	tmpDest := dest + ".tmp"
 	_ = os.Remove(tmpDest) // best-effort: clean up any stale tmp from a prior failed run
-	if err := os.Symlink(src, tmpDest); err != nil {
-		return nil, fmt.Errorf("create symlink: %w", err)
+	if err := materializeManagedEntry(src, tmpDest, srcInfo); err != nil {
+		return nil, fmt.Errorf("install plugin: %w", err)
 	}
 	if err := os.Rename(tmpDest, dest); err != nil {
 		_ = os.Remove(tmpDest) // best-effort cleanup; previous install is intact
 		return nil, fmt.Errorf("install plugin: %w", err)
 	}
 	return FindInstalledPlugin(bare)
+}
+
+// materializeManagedEntry creates dest as a reference to src, falling back
+// through symlink → hardlink → copy in that order.
+//
+// Symlink-first preserves the dev-loop property that rebuilding the source
+// is immediately reflected in the managed entry. The fallbacks exist for
+// Windows: os.Symlink there requires Developer Mode or admin, and silently
+// breaks `entire plugin install` for typical users without either. Mirrors
+// the pattern in setup_test.go's copyExecutable.
+//
+// On a successful copy the file mode of the source is preserved so the
+// executable bit survives.
+func materializeManagedEntry(src, dest string, srcInfo os.FileInfo) error {
+	if err := os.Symlink(src, dest); err == nil {
+		return nil
+	}
+	if err := os.Link(src, dest); err == nil {
+		return nil
+	}
+	data, err := os.ReadFile(src) //nolint:gosec // src is the user-provided plugin executable; reading it is the point
+	if err != nil {
+		return fmt.Errorf("read source for copy fallback: %w", err)
+	}
+	mode := srcInfo.Mode().Perm()
+	if mode == 0 {
+		mode = 0o755
+	}
+	// G304: dest is always inside the managed bin dir. The basename comes
+	// from a validated plugin name (validatePluginName ran upstream), and
+	// the parent dir comes from EnsurePluginBinDir.
+	if err := os.WriteFile(dest, data, mode); err != nil { //nolint:gosec // dest is constrained to the managed bin dir
+		return fmt.Errorf("copy fallback: %w", err)
+	}
+	return nil
 }
 
 // RemoveInstalledPlugin removes the managed-dir entry for name. Symlinks are
@@ -329,10 +371,19 @@ func RemoveInstalledPlugin(name string) error {
 // name the dispatcher uses (e.g. "entire-pgr" → "pgr"). Returns "" if the
 // input doesn't match the expected shape.
 //
-// Extension stripping is platform-conditional. On Unix the dispatcher's
-// exec.LookPath matches the exact filename, so accepting "entire-pgr.exe"
-// would produce a managed entry that can never be invoked. On Windows the
-// runtime resolves PATHEXT, so .exe/.bat/.cmd entries are valid.
+// Extension stripping is platform-conditional:
+//
+//   - On Windows, .exe/.bat/.cmd are the natural extensions for executables
+//     and exec.LookPath resolves them via PATHEXT, so we strip them so the
+//     bare name a user types ("pgr") matches both the managed-list display
+//     and the dispatcher's lookup.
+//
+//   - On Unix, exec.LookPath matches the exact filename. If we stripped here,
+//     "entire-pgr.exe" would be listed as "pgr" and the user would type
+//     "entire pgr", but the dispatcher's exec.LookPath("entire-pgr") would
+//     not find "entire-pgr.exe". Leaving the dot in place keeps the listed
+//     name aligned with the only invocation that actually resolves
+//     ("entire pgr.exe"), avoiding silent shadowing surprises.
 func bareNameFromBinaryName(base string) string {
 	if !strings.HasPrefix(base, pluginBinaryPrefix) {
 		return ""

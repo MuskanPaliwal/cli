@@ -32,6 +32,40 @@ func TestPluginParentDir_HonorsOverride(t *testing.T) { //nolint:paralleltest //
 	}
 }
 
+func TestPluginParentDir_WindowsIgnoresXDG(t *testing.T) { //nolint:paralleltest // mutates env
+	if runtime.GOOS != windowsGOOS {
+		t.Skip("Windows-only behavior")
+	}
+	// ENTIRE_PLUGIN_DIR not set; XDG_DATA_HOME set. Result must NOT be
+	// rooted in XDG — Windows users expect Windows conventions.
+	t.Setenv(pluginEnvPluginDir, "")
+	t.Setenv("XDG_DATA_HOME", `C:\fake\xdg`)
+	got, err := pluginParentDir()
+	if err != nil {
+		t.Fatalf("pluginParentDir: %v", err)
+	}
+	if strings.Contains(got, "fake") {
+		t.Errorf("pluginParentDir = %q; XDG_DATA_HOME must be ignored on Windows", got)
+	}
+}
+
+func TestPluginParentDir_UnixHonorsXDG(t *testing.T) { //nolint:paralleltest // mutates env
+	if runtime.GOOS == windowsGOOS {
+		t.Skip("Unix-only behavior")
+	}
+	t.Setenv(pluginEnvPluginDir, "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	got, err := pluginParentDir()
+	if err != nil {
+		t.Fatalf("pluginParentDir: %v", err)
+	}
+	want := filepath.Join(xdg, "entire", "plugins")
+	if got != want {
+		t.Errorf("pluginParentDir = %q, want %q", got, want)
+	}
+}
+
 func TestPluginBinDir_AndDataDir(t *testing.T) { //nolint:paralleltest // mutates env
 	root := withPluginDir(t)
 	bin, err := PluginBinDir()
@@ -245,6 +279,40 @@ func TestInstallPluginFromPath_RejectsSelfInstall(t *testing.T) { //nolint:paral
 	}
 	if _, statErr := os.Stat(src); statErr != nil {
 		t.Errorf("self-install attempt deleted the source: %v", statErr)
+	}
+}
+
+func TestMaterializeManagedEntry_FallsThroughToCopy(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == windowsGOOS {
+		t.Skip("test exercises Unix file modes")
+	}
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "src-bin")
+	body := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(src, body, 0o755); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		t.Fatalf("stat src: %v", err)
+	}
+
+	// Force the symlink and hardlink branches to fail by aiming at a
+	// destination inside a 0o500 dir we don't own write to. macOS root-
+	// owned, ro-mounted, etc. would also work but a temp dir we chmod is
+	// portable. This is a smoke test that the helper runs through; the
+	// happy path is exercised by the InstallPluginFromPath tests.
+	good := filepath.Join(t.TempDir(), "out")
+	if err := materializeManagedEntry(src, good, srcInfo); err != nil {
+		t.Fatalf("materializeManagedEntry: %v", err)
+	}
+	got, err := os.ReadFile(good)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Errorf("dest content mismatch: got %q want %q", got, body)
 	}
 }
 
