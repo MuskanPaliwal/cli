@@ -28,6 +28,8 @@ The CLI prepends this directory to `$PATH` at startup via `cli.PrependPluginBinD
 
 `entire plugin install/list/remove` manage the contents of this directory. Authors who prefer the raw "drop a binary on `$PATH`" model don't need to use it.
 
+> **Compatibility note:** the `entire plugin` command group is itself a built-in. Per the "built-ins win" rule above, it shadows any external command named `entire-plugin` that may have existed on `$PATH` previously. The collision is intentional — managing plugins is a built-in concern — but worth flagging for anyone who shipped an `entire-plugin` external command before this layer landed.
+
 ## Environment
 
 Each external-command invocation receives:

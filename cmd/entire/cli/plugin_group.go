@@ -21,8 +21,14 @@ func newPluginGroupCmd() *cobra.Command {
 		Long: `Manage Entire plugins.
 
 Plugins are external executables named 'entire-<name>'. The CLI discovers
-plugins on $PATH and from a managed directory (` + "`~/.local/share/entire/plugins/bin`" + `,
-or the override at $ENTIRE_PLUGIN_DIR/bin) which is auto-prepended to PATH.
+plugins on $PATH and from a per-user managed directory which is
+auto-prepended to PATH at startup. The managed directory is, in order of
+precedence:
+
+  $ENTIRE_PLUGIN_DIR/bin (override)
+  $XDG_DATA_HOME/entire/plugins/bin (Linux/macOS, when set)
+  ~/.local/share/entire/plugins/bin (Linux/macOS default)
+  %LOCALAPPDATA%\entire\plugins\bin (Windows)
 
 Commands:
   install   Install a plugin by symlinking an existing executable

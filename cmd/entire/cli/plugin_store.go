@@ -71,12 +71,43 @@ func PluginBinDir() (string, error) {
 // PluginDataDir returns the per-plugin data directory for the given bare name
 // (e.g. "pgr" for `entire-pgr`). The returned path is not created — that's
 // the plugin's responsibility on first use.
+//
+// Returns an error for names the dispatcher would never invoke (empty,
+// flag-shaped, agent-protocol-reserved, "."/".." path-traversal, slashes).
+// This guarantees ENTIRE_PLUGIN_DATA_DIR always points inside the managed
+// data subtree.
 func PluginDataDir(name string) (string, error) {
+	if err := validatePluginName(name); err != nil {
+		return "", err
+	}
 	parent, err := pluginParentDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(parent, pluginManagedDataSubdir, name), nil
+}
+
+// validatePluginName mirrors the dispatcher's isPluginCandidate rules and
+// returns a descriptive error for invalid names. Used by every entry point
+// that takes a plugin name from outside the dispatcher (data dir resolution,
+// managed-dir install).
+func validatePluginName(name string) error {
+	if name == "" {
+		return errors.New("plugin name is empty")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("plugin name %q must not start with '-'", name)
+	}
+	if strings.HasPrefix(name, "agent-") {
+		return fmt.Errorf("plugin name %q is reserved for the external agent protocol", name)
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("plugin name %q must not contain path separators", name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("plugin name %q is not a valid identifier", name)
+	}
+	return nil
 }
 
 // EnsurePluginBinDir creates the managed install dir if it doesn't exist.
@@ -205,24 +236,33 @@ type InstallPluginOptions struct {
 // caller is responsible for built-in conflict checks (resolvePlugin already
 // gates dispatch on rootCmd.Find — installing a name that shadows a built-in
 // is allowed but the built-in still wins at runtime).
+//
+// Refuses names the dispatcher will never invoke (agent-protocol prefix,
+// flag-shaped, "."/"..", slashes), and refuses self-install when the source
+// is the same file as the would-be managed entry. The replace step is
+// atomic: a new symlink is created at <dest>.tmp and renamed onto <dest>,
+// so a failed --force never leaves the previous install missing.
 func InstallPluginFromPath(opts InstallPluginOptions) (*InstalledPlugin, error) {
 	src, err := filepath.Abs(opts.SourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve source path: %w", err)
 	}
-	info, err := os.Stat(src)
+	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return nil, fmt.Errorf("stat source: %w", err)
 	}
-	if info.IsDir() {
+	if srcInfo.IsDir() {
 		return nil, fmt.Errorf("source must be a file, got directory: %s", src)
 	}
 	base := filepath.Base(src)
 	bare := bareNameFromBinaryName(base)
 	if bare == "" {
-		return nil, fmt.Errorf("source basename %q must start with %q", base, pluginBinaryPrefix)
+		return nil, fmt.Errorf("source basename %q must start with %q and have a runnable name", base, pluginBinaryPrefix)
 	}
-	if runtime.GOOS != windowsGOOS && info.Mode()&0o111 == 0 {
+	if err := validatePluginName(bare); err != nil {
+		return nil, fmt.Errorf("derived plugin name from %q is not dispatchable: %w", base, err)
+	}
+	if runtime.GOOS != windowsGOOS && srcInfo.Mode()&0o111 == 0 {
 		return nil, fmt.Errorf("source %s is not executable (chmod +x)", src)
 	}
 
@@ -232,19 +272,39 @@ func InstallPluginFromPath(opts InstallPluginOptions) (*InstalledPlugin, error) 
 	}
 	dest := filepath.Join(binDir, base)
 
+	// Reject self-install: the source path already equals the managed
+	// destination path. Without this guard, `--force` would atomically
+	// rename a tmp symlink onto its own target file and the underlying
+	// binary would be unlinked.
+	//
+	// We deliberately do NOT use os.SameFile here. The legitimate
+	// repeat-install case has dest as a symlink we created on a prior
+	// install; SameFile would resolve dest through the symlink to src
+	// and falsely trip. Path equality is the precise risky case.
+	if filepath.Clean(src) == filepath.Clean(dest) {
+		return nil, fmt.Errorf("source %s is already the managed entry; nothing to install", src)
+	}
+
 	if _, err := os.Lstat(dest); err == nil {
 		if !opts.Force {
 			return nil, fmt.Errorf("plugin %q already installed; use --force to replace", bare)
-		}
-		if err := os.Remove(dest); err != nil {
-			return nil, fmt.Errorf("remove existing entry: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("stat install destination: %w", err)
 	}
 
-	if err := os.Symlink(src, dest); err != nil {
-		return nil, fmt.Errorf("symlink plugin: %w", err)
+	// Atomic replace via tmp + rename. Rename is atomic on POSIX and
+	// replaces an existing target on Windows (Go's os.Rename uses
+	// MoveFileEx with MOVEFILE_REPLACE_EXISTING). If symlink or rename
+	// fails, the previously installed plugin (if any) is unaffected.
+	tmpDest := dest + ".tmp"
+	_ = os.Remove(tmpDest) // best-effort: clean up any stale tmp from a prior failed run
+	if err := os.Symlink(src, tmpDest); err != nil {
+		return nil, fmt.Errorf("create symlink: %w", err)
+	}
+	if err := os.Rename(tmpDest, dest); err != nil {
+		_ = os.Remove(tmpDest) // best-effort cleanup; previous install is intact
+		return nil, fmt.Errorf("install plugin: %w", err)
 	}
 	return FindInstalledPlugin(bare)
 }
@@ -265,13 +325,22 @@ func RemoveInstalledPlugin(name string) error {
 	return nil
 }
 
-// bareNameFromBinaryName turns "entire-pgr" or "entire-pgr.exe" into "pgr".
-// Returns "" if the input doesn't match the expected shape.
+// bareNameFromBinaryName turns a plugin executable's basename into the bare
+// name the dispatcher uses (e.g. "entire-pgr" → "pgr"). Returns "" if the
+// input doesn't match the expected shape.
+//
+// Extension stripping is platform-conditional. On Unix the dispatcher's
+// exec.LookPath matches the exact filename, so accepting "entire-pgr.exe"
+// would produce a managed entry that can never be invoked. On Windows the
+// runtime resolves PATHEXT, so .exe/.bat/.cmd entries are valid.
 func bareNameFromBinaryName(base string) string {
 	if !strings.HasPrefix(base, pluginBinaryPrefix) {
 		return ""
 	}
-	cleaned := stripPluginExeExt(base)
+	cleaned := base
+	if runtime.GOOS == windowsGOOS {
+		cleaned = stripPluginExeExt(base)
+	}
 	bare := strings.TrimPrefix(cleaned, pluginBinaryPrefix)
 	if bare == "" {
 		return ""
@@ -280,9 +349,7 @@ func bareNameFromBinaryName(base string) string {
 }
 
 // stripPluginExeExt drops Windows executable extensions (.exe, .bat, .cmd).
-// On Unix this is a no-op for typical binaries with no extension. We don't
-// reuse external.StripExeExt to keep this layer independent of the agent
-// package and avoid an import cycle if the agent package ever grows one.
+// Caller is responsible for gating on runtime.GOOS == windowsGOOS.
 func stripPluginExeExt(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".exe", ".bat", ".cmd":
