@@ -1177,6 +1177,114 @@ func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 	assert.Equal(t, 2, result2.skipped)
 }
 
+func TestMigrateCheckpointsV2_FastPathSkipsFullyMigratedCheckpoint(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("ccdd11223344")
+
+	// Agent type is required for the first migration to produce a compact transcript.
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-fastpath",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"yo\"}]}}\n")),
+		Prompts:      []string{"hi"},
+		Agent:        agent.AgentTypeClaudeCode,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	var discard bytes.Buffer
+	first, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &discard, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.migrated)
+
+	summary, err := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.NotEmpty(t, summary.Sessions[0].Transcript)
+	hasFull, err := v2Store.HasFullSessionArtifacts(cpID, 0)
+	require.NoError(t, err)
+	require.True(t, hasFull)
+
+	// The fast-path predicate requires a non-zero v1 SessionCount.
+	list, err := v1Store.ListCommitted(context.Background())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, 1, list[0].SessionCount)
+
+	assert.True(t, v2CheckpointFullyMigrated(v2Store, list[0], summary))
+
+	second, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &discard, false)
+	require.NoError(t, err)
+	assert.Equal(t, 0, second.migrated)
+	assert.Equal(t, 1, second.skipped)
+	assert.Equal(t, 0, second.backfilledCompactTranscripts,
+		"fast-path must short-circuit before backfillCompactTranscripts runs")
+}
+
+func TestV2CheckpointFullyMigrated(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	_, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("ddee22334455")
+
+	// Predicate is false when there's no existing summary.
+	assert.False(t, v2CheckpointFullyMigrated(v2Store, checkpoint.CommittedInfo{CheckpointID: cpID, SessionCount: 1}, nil))
+
+	// Predicate is false when info reports no sessions (cannot validate count).
+	emptySummary := &checkpoint.CheckpointSummary{Sessions: []checkpoint.SessionFilePaths{{Transcript: "x"}}}
+	assert.False(t, v2CheckpointFullyMigrated(v2Store, checkpoint.CommittedInfo{CheckpointID: cpID, SessionCount: 0}, emptySummary))
+
+	// Predicate is false when v1 reports more sessions than v2 has stored.
+	mismatchSummary := &checkpoint.CheckpointSummary{Sessions: []checkpoint.SessionFilePaths{{Transcript: "x"}}}
+	assert.False(t, v2CheckpointFullyMigrated(v2Store, checkpoint.CommittedInfo{CheckpointID: cpID, SessionCount: 2}, mismatchSummary))
+
+	// Predicate is false when any session is missing the compact transcript.
+	noCompactSummary := &checkpoint.CheckpointSummary{Sessions: []checkpoint.SessionFilePaths{{Transcript: ""}}}
+	assert.False(t, v2CheckpointFullyMigrated(v2Store, checkpoint.CommittedInfo{CheckpointID: cpID, SessionCount: 1}, noCompactSummary))
+}
+
+func TestMigrateCheckpointsV2_BackfillSkipsV1ReadWhenV2HasNoAgent(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("eeff33445566")
+
+	// v2 has the checkpoint with no agent and no compact transcript — the
+	// permanently unrecoverable state we re-encounter on every rerun.
+	err := v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-noagent",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("{\"type\":\"assistant\",\"message\":\"x\"}\n")),
+		Prompts:      []string{"p"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+		// Agent intentionally empty; CompactTranscript intentionally nil.
+	})
+	require.NoError(t, err)
+
+	v2Summary, err := v2Store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, v2Summary)
+	require.Empty(t, v2Summary.Sessions[0].Transcript)
+
+	// v1 has nothing for this checkpoint; the skip path must return without consulting v1.
+	info := checkpoint.CommittedInfo{CheckpointID: cpID, SessionCount: 1}
+	backfilled, backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, v2Summary)
+	assert.Equal(t, 0, backfilled)
+	require.ErrorIs(t, backfillErr, errTranscriptNotGeneratable)
+	// "no agent type" message only appears when lastAgent stays empty — i.e. we never read v1.
+	assert.Contains(t, backfillErr.Error(), "no agent type in metadata")
+}
+
 func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)

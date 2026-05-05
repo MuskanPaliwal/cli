@@ -110,6 +110,125 @@ func TestAttach_Success(t *testing.T) {
 	}
 }
 
+// TestAttach_PopulatesBaseCommitFromHEAD is a regression for
+// https://github.com/entireio/cli/issues/411 / PR #1102.
+//
+// When `entire attach` ran on an existing session whose state had an empty
+// BaseCommit (e.g., after a hook initialization failure on session start, or
+// for sessions started before `entire enable` ran), saveAttachSessionState
+// left BaseCommit empty. The prepare-commit-msg hook then refused to
+// recognize the session as active and never wrote Entire-Checkpoint trailers
+// onto subsequent commits in that session.
+//
+// After attach, BaseCommit (and AttributionBaseCommit) must be populated
+// from HEAD so the session is recognized as active.
+func TestAttach_PopulatesBaseCommitFromHEAD(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	repoRoot := mustGetwd(t)
+	repo, err := git.PlainOpen(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headRef, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headHash := headRef.Hash().String()
+
+	sessionID := "test-attach-empty-base-commit"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":"hi"},"uuid":"a1"}
+`)
+
+	// Pre-create a session state with empty BaseCommit — simulates a session
+	// that started while hook init failed, or a session that pre-dates `entire
+	// enable`. State exists, but BaseCommit was never populated.
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), &session.State{
+		SessionID: sessionID,
+		AgentType: agent.AgentTypeClaudeCode,
+		StartedAt: time.Now(),
+		// BaseCommit and AttributionBaseCommit deliberately empty.
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
+		t.Fatalf("runAttach failed: %v", err)
+	}
+
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil {
+		t.Fatal("expected session state to exist after attach")
+	}
+	if state.BaseCommit != headHash {
+		t.Errorf("BaseCommit = %q, want %q (HEAD); attach did not populate empty BaseCommit",
+			state.BaseCommit, headHash)
+	}
+	if state.AttributionBaseCommit != headHash {
+		t.Errorf("AttributionBaseCommit = %q, want %q (HEAD); attach did not populate empty AttributionBaseCommit",
+			state.AttributionBaseCommit, headHash)
+	}
+}
+
+// TestAttach_PreservesActivePhase is a regression for PR #1102.
+//
+// `entire attach` could be called against a session that is currently active
+// (e.g., the user runs attach mid-session to repair a missed checkpoint).
+// Previously, saveAttachSessionState unconditionally set Phase to PhaseEnded,
+// which broke the running session: the prepare-commit-msg hook then treated
+// the session as ended and skipped Entire-Checkpoint trailers on every
+// subsequent commit until the agent restarted.
+//
+// Attach must preserve PhaseActive when the session is already active.
+func TestAttach_PreservesActivePhase(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	sessionID := "test-attach-active-session"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":"hi"},"uuid":"a1"}
+`)
+
+	// Pre-create an ACTIVE session — agent is mid-turn when the user runs attach.
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), &session.State{
+		SessionID: sessionID,
+		AgentType: agent.AgentTypeClaudeCode,
+		StartedAt: time.Now(),
+		Phase:     session.PhaseActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
+		t.Fatalf("runAttach failed: %v", err)
+	}
+
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil {
+		t.Fatal("expected session state to exist after attach")
+	}
+	if state.Phase != session.PhaseActive {
+		t.Errorf("Phase = %q, want %q; attach clobbered an active session into PhaseEnded",
+			state.Phase, session.PhaseActive)
+	}
+}
+
 func TestAttach_SessionAlreadyTracked_NoCheckpoint(t *testing.T) {
 	setupAttachTestRepo(t)
 

@@ -300,6 +300,12 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	if existing != nil && !force {
+		// Fast-path: when every session already has a compact transcript and
+		// /full/<n> artifacts, the repair branch below is a guaranteed no-op.
+		if v2CheckpointFullyMigrated(v2Store, info, existing) {
+			return nil, outcome, errAlreadyMigrated
+		}
+
 		fullCheckpoint, queuedFullRepair, repairErr := collectMissingFullCheckpointForPacking(ctx, repo, v1Store, v2Store, info, existing)
 		if repairErr != nil {
 			return nil, outcome, repairErr
@@ -1044,6 +1050,24 @@ func hasFullSessionArtifacts(v2Store *checkpoint.V2GitStore, cpID id.CheckpointI
 	return ok, nil
 }
 
+// v2CheckpointFullyMigrated reports whether every session already has a compact
+// transcript and /full/<n> artifacts. Returns false on any uncertainty.
+func v2CheckpointFullyMigrated(v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, existing *checkpoint.CheckpointSummary) bool {
+	if existing == nil || info.SessionCount == 0 || info.SessionCount != len(existing.Sessions) {
+		return false
+	}
+	for i, session := range existing.Sessions {
+		if session.Transcript == "" {
+			return false
+		}
+		ok, err := hasFullSessionArtifacts(v2Store, info.CheckpointID, i)
+		if err != nil || !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // backfillCompactTranscripts checks sessions in an already-migrated v2 checkpoint
 // for missing transcript.jsonl and attempts to generate + write them from v1 data.
 // Returns errAlreadyMigrated if all sessions already have compact transcripts.
@@ -1064,6 +1088,12 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 	var lastAgent string
 
 	for _, sessionIdx := range needsBackfill {
+		// Sessions with no agent type recorded in v2 are permanently
+		// unrecoverable; skip without reading v1 to keep reruns cheap.
+		if v2Meta, metaErr := v2Store.ReadSessionMetadataAndPrompts(ctx, info.CheckpointID, sessionIdx); metaErr == nil && v2Meta != nil && v2Meta.Metadata.Agent == "" {
+			continue
+		}
+
 		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
 		if readErr != nil {
 			logging.Warn(ctx, "transcript.jsonl backfill: could not read v1 session",
