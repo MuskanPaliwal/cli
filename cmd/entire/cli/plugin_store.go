@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 )
 
 // Managed plugin storage. The kubectl-style dispatcher in plugin.go resolves
@@ -438,21 +440,15 @@ func bareNameFromBinaryName(base string) string {
 	}
 	cleaned := base
 	if runtime.GOOS == windowsGOOS {
-		cleaned = stripPluginExeExt(base)
+		// Reuse the canonical Windows-executable-extension list from
+		// agent/external rather than maintaining a parallel copy. plugin.go
+		// already depends on this package for isAgentProtocolBinary, so
+		// there's no new layering cost.
+		cleaned = external.StripExeExt(base)
 	}
 	bare := strings.TrimPrefix(cleaned, pluginBinaryPrefix)
 	if bare == "" {
 		return ""
 	}
 	return bare
-}
-
-// stripPluginExeExt drops Windows executable extensions (.exe, .bat, .cmd).
-// Caller is responsible for gating on runtime.GOOS == windowsGOOS.
-func stripPluginExeExt(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".exe", ".bat", ".cmd":
-		return strings.TrimSuffix(name, filepath.Ext(name))
-	}
-	return name
 }
