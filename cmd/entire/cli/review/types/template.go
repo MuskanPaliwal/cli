@@ -120,10 +120,10 @@ func (p *templateProcess) Events() <-chan Event { return p.events }
 // with stderr; other types for I/O or pipe failures. ProcessError implements
 // Unwrap so callers can use errors.As and errors.Is to classify.
 func (p *templateProcess) Wait() error {
-	err := p.cmd.Wait()
 	if p.stderrDone != nil {
 		<-p.stderrDone
 	}
+	err := p.cmd.Wait()
 	if err != nil && p.ctx.Err() != nil {
 		return p.ctx.Err() //nolint:wrapcheck // preserve Process cancellation contract
 	}
