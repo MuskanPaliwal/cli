@@ -27,41 +27,53 @@ import (
 // XDG_DATA_HOME, then a platform default.
 
 const (
-	pluginEnvPluginDir       = "ENTIRE_PLUGIN_DIR"
-	pluginManagedBinSubdir   = "bin"
-	pluginManagedDataSubdir  = "data"
-	pluginEnvPluginData      = "ENTIRE_PLUGIN_DATA_DIR"
-	pluginManagedDirEntireXD = "entire/plugins"
+	pluginEnvPluginDir      = "ENTIRE_PLUGIN_DIR"
+	pluginManagedBinSubdir  = "bin"
+	pluginManagedDataSubdir = "data"
+	pluginEnvPluginData     = "ENTIRE_PLUGIN_DATA_DIR"
+	// Path segments for the managed plugin tree. Kept as separate
+	// segments (rather than "entire/plugins") so filepath.Join produces
+	// platform-native separators on Windows.
+	pluginManagedTopDir = "entire"
+	pluginManagedSubDir = "plugins"
 )
 
 // pluginParentDir returns the per-user directory that holds the managed
 // plugin storage. Resolution, in order:
 //
 //  1. ENTIRE_PLUGIN_DIR (cross-platform override).
-//  2. On Unix: XDG_DATA_HOME if set, else ~/.local/share/entire/plugins.
-//  3. On Windows: LOCALAPPDATA if set, else ~\AppData\Local\entire\plugins.
+//  2. On Windows: LOCALAPPDATA if set, else ~\AppData\Local\entire\plugins.
+//  3. On Unix: XDG_DATA_HOME if set, else ~/.local/share/entire/plugins.
 //
 // XDG_DATA_HOME is deliberately ignored on Windows even when set (e.g. in
 // MSYS/Cygwin) — Windows users expect Windows conventions, and routing
 // through XDG would produce a surprising location.
+//
+// os.UserHomeDir is called only when no env-var branch resolves, so a
+// degenerate environment with $LOCALAPPDATA or $XDG_DATA_HOME but no home
+// still returns a usable path.
 func pluginParentDir() (string, error) {
 	if v := os.Getenv(pluginEnvPluginDir); v != "" {
 		return v, nil
+	}
+	if runtime.GOOS == windowsGOOS {
+		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			return filepath.Join(appData, pluginManagedTopDir, pluginManagedSubDir), nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home dir: %w", err)
+		}
+		return filepath.Join(home, "AppData", "Local", pluginManagedTopDir, pluginManagedSubDir), nil
+	}
+	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		return filepath.Join(v, pluginManagedTopDir, pluginManagedSubDir), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
-	if runtime.GOOS == windowsGOOS {
-		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
-			return filepath.Join(appData, pluginManagedDirEntireXD), nil
-		}
-		return filepath.Join(home, "AppData", "Local", pluginManagedDirEntireXD), nil
-	}
-	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
-		return filepath.Join(v, pluginManagedDirEntireXD), nil
-	}
-	return filepath.Join(home, ".local", "share", pluginManagedDirEntireXD), nil
+	return filepath.Join(home, ".local", "share", pluginManagedTopDir, pluginManagedSubDir), nil
 }
 
 // PluginBinDir returns the managed install directory. Binaries (or symlinks)
@@ -148,13 +160,26 @@ func PrependPluginBinDirToPATH() {
 		return
 	}
 	// Idempotent: if the first entry already matches, leave it alone.
-	if i := strings.Index(cur, sep); i >= 0 && cur[:i] == dir {
-		return
+	// Windows PATH lookups are case-insensitive (`C:\Foo` and `c:\foo`
+	// resolve identically), so a case-different first entry is the same
+	// dir and we should not double-prepend.
+	first := cur
+	if i := strings.Index(cur, sep); i >= 0 {
+		first = cur[:i]
 	}
-	if cur == dir {
+	if pathEntriesEqual(first, dir) {
 		return
 	}
 	_ = os.Setenv("PATH", dir+sep+cur)
+}
+
+// pathEntriesEqual reports whether two PATH entries refer to the same dir.
+// Case-insensitive on Windows, exact match elsewhere.
+func pathEntriesEqual(a, b string) bool {
+	if runtime.GOOS == windowsGOOS {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // InstalledPlugin describes a single entry in the managed bin dir.

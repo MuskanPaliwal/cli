@@ -38,7 +38,7 @@ Each external-command invocation receives:
 |---|---|
 | `ENTIRE_CLI_VERSION` | The CLI's version string (e.g. `0.42.0`, `dev`) |
 | `ENTIRE_REPO_ROOT` | Absolute path to the git repository root, when the CLI is invoked inside one. Omitted otherwise. |
-| `ENTIRE_PLUGIN_DATA_DIR` | Per-plugin durable storage directory (`<plugin-root>/data/<name>`). Not pre-created — the plugin should `mkdir -p` on first write. Set regardless of whether the plugin is on raw `$PATH` or in the managed dir, so plugins get the same contract either way. |
+| `ENTIRE_PLUGIN_DATA_DIR` | Per-plugin durable storage directory (`<plugin-root>/data/<name>`). Not pre-created — the plugin should `mkdir -p` on first write. Set regardless of whether the plugin is on raw `$PATH` or in the managed dir, so plugins get the same contract either way. Omitted only in degenerate environments where the per-user data root cannot be resolved (e.g. no home dir, no `LOCALAPPDATA`/`XDG_DATA_HOME`/`ENTIRE_PLUGIN_DIR`); the parent CLI prints a warning to stderr in that case. |
 
 Plus the parent's full environment. The working directory is **not** changed — external commands run in the user's current directory, the same as any other shell command.
 

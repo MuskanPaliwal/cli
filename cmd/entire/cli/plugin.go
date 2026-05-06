@@ -165,8 +165,17 @@ func runPlugin(ctx context.Context, pluginName, binPath string, args []string) i
 	// so plugins installed via raw PATH and via `entire plugin install` get
 	// the same contract. The dir is not pre-created — that's the plugin's
 	// responsibility on first use.
-	if dataDir, err := PluginDataDir(pluginName); err == nil && dataDir != "" {
+	//
+	// PluginDataDir can only fail in degenerate environments (e.g. no
+	// resolvable home dir). The plugin name itself has already passed
+	// isPluginCandidate validation in resolvePlugin, so the validator
+	// branch can't fire here. We warn-and-proceed rather than refuse to
+	// launch: a HOME-less environment is the user's problem to surface,
+	// not a reason to break plugins that don't read the var.
+	if dataDir, err := PluginDataDir(pluginName); err == nil {
 		cmd.Env = append(cmd.Env, pluginEnvPluginData+"="+dataDir)
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: ENTIRE_PLUGIN_DATA_DIR not set for plugin %q: %v\n", pluginName, err)
 	}
 
 	if err := cmd.Run(); err != nil {

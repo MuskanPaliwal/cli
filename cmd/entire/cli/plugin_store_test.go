@@ -282,7 +282,14 @@ func TestInstallPluginFromPath_RejectsSelfInstall(t *testing.T) { //nolint:paral
 	}
 }
 
-func TestMaterializeManagedEntry_FallsThroughToCopy(t *testing.T) {
+// TestMaterializeManagedEntry_HappyPath is a smoke test that the helper
+// completes successfully on a normal write-capable destination. On Unix it
+// exits through the symlink branch; the hardlink and copy fallbacks exist
+// for Windows-without-Developer-Mode and aren't portably triggerable from an
+// in-process test (forcing os.Symlink to fail without mocks would require a
+// non-portable filesystem setup). The other tests in this file exercise
+// InstallPluginFromPath end-to-end, which calls into here.
+func TestMaterializeManagedEntry_HappyPath(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == windowsGOOS {
 		t.Skip("test exercises Unix file modes")
@@ -298,16 +305,11 @@ func TestMaterializeManagedEntry_FallsThroughToCopy(t *testing.T) {
 		t.Fatalf("stat src: %v", err)
 	}
 
-	// Force the symlink and hardlink branches to fail by aiming at a
-	// destination inside a 0o500 dir we don't own write to. macOS root-
-	// owned, ro-mounted, etc. would also work but a temp dir we chmod is
-	// portable. This is a smoke test that the helper runs through; the
-	// happy path is exercised by the InstallPluginFromPath tests.
-	good := filepath.Join(t.TempDir(), "out")
-	if err := materializeManagedEntry(src, good, srcInfo); err != nil {
+	dest := filepath.Join(t.TempDir(), "out")
+	if err := materializeManagedEntry(src, dest, srcInfo); err != nil {
 		t.Fatalf("materializeManagedEntry: %v", err)
 	}
-	got, err := os.ReadFile(good)
+	got, err := os.ReadFile(dest)
 	if err != nil {
 		t.Fatalf("read result: %v", err)
 	}
