@@ -37,15 +37,17 @@ func TestPluginParentDir_WindowsIgnoresXDG(t *testing.T) { //nolint:paralleltest
 		t.Skip("Windows-only behavior")
 	}
 	// ENTIRE_PLUGIN_DIR not set; XDG_DATA_HOME set. Result must NOT be
-	// rooted in XDG — Windows users expect Windows conventions.
+	// rooted at the XDG path — Windows users expect Windows conventions.
+	xdg := t.TempDir()
 	t.Setenv(pluginEnvPluginDir, "")
-	t.Setenv("XDG_DATA_HOME", `C:\fake\xdg`)
+	t.Setenv("XDG_DATA_HOME", xdg)
 	got, err := pluginParentDir()
 	if err != nil {
 		t.Fatalf("pluginParentDir: %v", err)
 	}
-	if strings.Contains(got, "fake") {
-		t.Errorf("pluginParentDir = %q; XDG_DATA_HOME must be ignored on Windows", got)
+	xdgRoot := filepath.Clean(filepath.Join(xdg, pluginManagedTopDir, pluginManagedSubDir))
+	if strings.HasPrefix(filepath.Clean(got), xdgRoot) {
+		t.Errorf("pluginParentDir = %q is rooted at XDG path %q; XDG_DATA_HOME must be ignored on Windows", got, xdgRoot)
 	}
 }
 

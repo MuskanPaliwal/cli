@@ -157,9 +157,12 @@ func runPlugin(ctx context.Context, pluginName, binPath string, args []string) i
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "ENTIRE_CLI_VERSION="+versioninfo.Version)
+	// Use upsertEnv (not append) so the CLI-computed values can't be
+	// shadowed by pre-existing ENTIRE_* entries inherited from the
+	// user's shell. getenv() typically returns the first match.
+	env := upsertEnv(os.Environ(), "ENTIRE_CLI_VERSION", versioninfo.Version)
 	if repoRoot, err := paths.WorktreeRoot(ctx); err == nil {
-		cmd.Env = append(cmd.Env, "ENTIRE_REPO_ROOT="+repoRoot)
+		env = upsertEnv(env, "ENTIRE_REPO_ROOT", repoRoot)
 	}
 	// Per-plugin durable storage. Passed regardless of where the binary lives
 	// so plugins installed via raw PATH and via `entire plugin install` get
@@ -173,10 +176,11 @@ func runPlugin(ctx context.Context, pluginName, binPath string, args []string) i
 	// launch: a HOME-less environment is the user's problem to surface,
 	// not a reason to break plugins that don't read the var.
 	if dataDir, err := PluginDataDir(pluginName); err == nil {
-		cmd.Env = append(cmd.Env, pluginEnvPluginData+"="+dataDir)
+		env = upsertEnv(env, pluginEnvPluginData, dataDir)
 	} else {
 		fmt.Fprintf(os.Stderr, "warning: ENTIRE_PLUGIN_DATA_DIR not set for plugin %q: %v\n", pluginName, err)
 	}
+	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError

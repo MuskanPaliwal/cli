@@ -31,7 +31,7 @@ precedence:
   %LOCALAPPDATA%\entire\plugins\bin (Windows)
 
 Commands:
-  install   Install a plugin by symlinking an existing executable
+  install   Install a plugin by linking or copying an existing executable
   list      List plugins installed in the managed directory
   remove    Remove a plugin from the managed directory
 
@@ -51,12 +51,16 @@ func newPluginInstallCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "install <path>",
-		Short: "Symlink a plugin executable into the managed directory",
-		Long: `Symlink a plugin executable into the managed directory.
+		Short: "Link or copy a plugin executable into the managed directory",
+		Long: `Link or copy a plugin executable into the managed directory.
 
 The source must be a file whose basename starts with 'entire-' (the
 dispatcher only resolves names of that shape). On Unix the file must be
 executable.
+
+The CLI prefers a symlink so rebuilds of the source are reflected
+immediately, and falls back to a hardlink, then a copy, if symlinks aren't
+available (notably Windows without Developer Mode).
 
 After install, 'entire <name>' invokes the plugin via the kubectl-style
 dispatcher — the managed directory is auto-prepended to $PATH.

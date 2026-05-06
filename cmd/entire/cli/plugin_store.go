@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -174,8 +175,11 @@ func PrependPluginBinDirToPATH() {
 }
 
 // pathEntriesEqual reports whether two PATH entries refer to the same dir.
-// Case-insensitive on Windows, exact match elsewhere.
+// filepath.Clean normalizes trailing separators and (on Windows) slash
+// orientation; case folding handles Windows' case-insensitive lookup.
 func pathEntriesEqual(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
 	if runtime.GOOS == windowsGOOS {
 		return strings.EqualFold(a, b)
 	}
@@ -359,19 +363,38 @@ func materializeManagedEntry(src, dest string, srcInfo os.FileInfo) error {
 	if err := os.Link(src, dest); err == nil {
 		return nil
 	}
-	data, err := os.ReadFile(src) //nolint:gosec // src is the user-provided plugin executable; reading it is the point
-	if err != nil {
-		return fmt.Errorf("read source for copy fallback: %w", err)
-	}
+	return copyFileStreaming(src, dest, srcInfo)
+}
+
+// copyFileStreaming copies src to dest in fixed-size buffers, preserving the
+// source's executable mode. Plugin binaries can be tens of megabytes; using
+// io.Copy avoids the heap spike of reading the whole file into memory.
+func copyFileStreaming(src, dest string, srcInfo os.FileInfo) error {
 	mode := srcInfo.Mode().Perm()
 	if mode == 0 {
 		mode = 0o755
 	}
+	in, err := os.Open(src) //nolint:gosec // src is the user-provided plugin executable; reading it is the point
+	if err != nil {
+		return fmt.Errorf("open source for copy fallback: %w", err)
+	}
+	defer in.Close()
+
 	// G304: dest is always inside the managed bin dir. The basename comes
 	// from a validated plugin name (validatePluginName ran upstream), and
 	// the parent dir comes from EnsurePluginBinDir.
-	if err := os.WriteFile(dest, data, mode); err != nil { //nolint:gosec // dest is constrained to the managed bin dir
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode) //nolint:gosec // dest is constrained to the managed bin dir
+	if err != nil {
+		return fmt.Errorf("open destination for copy fallback: %w", err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dest)
 		return fmt.Errorf("copy fallback: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dest)
+		return fmt.Errorf("close destination after copy fallback: %w", err)
 	}
 	return nil
 }
