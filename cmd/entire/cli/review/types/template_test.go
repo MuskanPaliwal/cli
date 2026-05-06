@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -110,6 +112,79 @@ func TestReviewerTemplate_ProcessWaitReturnsExitError(t *testing.T) {
 	waitErr := proc.Wait()
 	if waitErr == nil {
 		t.Error("Wait() should return non-nil error for exit code 1")
+	}
+}
+
+func TestReviewerTemplate_WaitReturnsContextErrorOnCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX shell")
+	}
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tmpl := &ReviewerTemplate{
+		AgentName: "cancel-agent",
+		BuildCmd: func(ctx context.Context, _ RunConfig) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "sleep 10")
+		},
+		Parser: func(_ io.Reader) <-chan Event {
+			ch := make(chan Event)
+			close(ch)
+			return ch
+		},
+	}
+
+	proc, err := tmpl.Start(ctx, RunConfig{})
+	if err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	for ev := range proc.Events() {
+		_ = ev
+	}
+	cancel()
+
+	waitErr := proc.Wait()
+	if !errors.Is(waitErr, context.Canceled) {
+		t.Fatalf("Wait() = %T %v, want context.Canceled", waitErr, waitErr)
+	}
+}
+
+func TestReviewerTemplate_WaitIncludesStderrOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX shell")
+	}
+	t.Parallel()
+
+	tmpl := &ReviewerTemplate{
+		AgentName: "stderr-agent",
+		BuildCmd: func(ctx context.Context, _ RunConfig) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "echo 'auth failed: login required' >&2; exit 7")
+		},
+		Parser: func(_ io.Reader) <-chan Event {
+			ch := make(chan Event)
+			close(ch)
+			return ch
+		},
+	}
+
+	proc, err := tmpl.Start(context.Background(), RunConfig{})
+	if err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	for ev := range proc.Events() {
+		_ = ev
+	}
+
+	waitErr := proc.Wait()
+	if waitErr == nil {
+		t.Fatal("Wait() returned nil, want failure")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("Wait() = %T %v, want error wrapping *exec.ExitError", waitErr, waitErr)
+	}
+	if !strings.Contains(waitErr.Error(), "auth failed: login required") {
+		t.Fatalf("Wait() error missing stderr diagnostics: %v", waitErr)
 	}
 }
 

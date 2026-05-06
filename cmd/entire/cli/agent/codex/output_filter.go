@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -99,20 +100,159 @@ func Strip(r io.Reader) io.Reader {
 	go func() {
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+		state := codexStripNormal
+		var currentAssistant []string
 		for scanner.Scan() {
-			if line, ok := FilterLine(scanner.Text()); ok {
-				_, err := pw.Write([]byte(line + "\n"))
-				if err != nil {
-					_ = pw.CloseWithError(err)
-					return
-				}
+			done, err := collectFinalCodexLine(scanner.Text(), &state, &currentAssistant, pw)
+			if err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+			if done {
+				state = codexStripAfterTokens
 			}
 		}
 		if err := scanner.Err(); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		}
+		if state != codexStripAfterTokens {
+			if err := writeCodexAssistantBlock(pw, currentAssistant); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
 		_ = pw.Close()
 	}()
 	return pr
+}
+
+type codexStripState int
+
+const (
+	codexStripNormal codexStripState = iota
+	codexStripUserBlock
+	codexStripAssistantBlock
+	codexStripExecBlock
+	codexStripAfterTokens
+)
+
+func collectFinalCodexLine(raw string, state *codexStripState, currentAssistant *[]string, w io.Writer) (bool, error) {
+	cleaned := csiRegex.ReplaceAllString(raw, "")
+	trimmed := strings.TrimSpace(cleaned)
+	trimmedRight := strings.TrimRight(cleaned, " \t")
+
+	if *state == codexStripAfterTokens {
+		return true, nil
+	}
+	if isTokensUsedMarker(trimmed) {
+		return true, writeCodexAssistantBlock(w, *currentAssistant)
+	}
+
+	switch *state {
+	case codexStripUserBlock:
+		if isCodexRoleMarker(trimmed) {
+			*state = codexStripAssistantBlock
+			*currentAssistant = nil
+		}
+		return false, nil
+	case codexStripAssistantBlock:
+		if isCodexRoleMarker(trimmed) {
+			*currentAssistant = nil
+			return false, nil
+		}
+		if isUserRoleMarker(trimmed) {
+			*state = codexStripUserBlock
+			return false, nil
+		}
+		if trimmedRight == "exec" || execBlockRegex.MatchString(trimmedRight) {
+			*state = codexStripExecBlock
+			return false, nil
+		}
+		if isCodexMetadataLine(trimmed) {
+			return false, nil
+		}
+		if line, ok := FilterLine(raw); ok {
+			*currentAssistant = append(*currentAssistant, line)
+		}
+		return false, nil
+	case codexStripExecBlock:
+		if trimmed == "" {
+			*state = codexStripNormal
+			return false, nil
+		}
+		if isCodexRoleMarker(trimmed) {
+			*state = codexStripAssistantBlock
+			*currentAssistant = nil
+			return false, nil
+		}
+		return false, nil
+	case codexStripNormal:
+		// Continue below.
+	case codexStripAfterTokens:
+		return true, nil
+	}
+
+	if isUserRoleMarker(trimmed) {
+		*state = codexStripUserBlock
+		return false, nil
+	}
+	if isCodexRoleMarker(trimmed) {
+		*state = codexStripAssistantBlock
+		*currentAssistant = nil
+		return false, nil
+	}
+	if isCodexMetadataLine(trimmed) {
+		return false, nil
+	}
+	if trimmedRight == "exec" {
+		*state = codexStripExecBlock
+		return false, nil
+	}
+	if execBlockRegex.MatchString(trimmedRight) {
+		return false, nil
+	}
+
+	return false, nil
+}
+
+func writeCodexAssistantBlock(w io.Writer, lines []string) error {
+	for _, line := range lines {
+		if _, err := w.Write([]byte(line + "\n")); err != nil {
+			return fmt.Errorf("write filtered codex output: %w", err)
+		}
+	}
+	return nil
+}
+
+func isTokensUsedMarker(trimmed string) bool {
+	return strings.EqualFold(trimmed, "tokens used")
+}
+
+func isUserRoleMarker(trimmed string) bool {
+	return trimmed == "user"
+}
+
+func isCodexRoleMarker(trimmed string) bool {
+	return trimmed == "codex"
+}
+
+func isCodexMetadataLine(trimmed string) bool {
+	if strings.HasPrefix(trimmed, "OpenAI Codex v") {
+		return true
+	}
+	for _, prefix := range []string{
+		"workdir:",
+		"model:",
+		"provider:",
+		"approval:",
+		"sandbox:",
+		"reasoning:",
+		"session id:",
+	} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -52,12 +52,13 @@ type Process interface {
 	// Wait blocks until the process exits and returns:
 	//   - nil on clean exit (exit code 0)
 	//   - ctx.Err() on cancellation
-	//   - *exec.ExitError on non-zero exit
+	//   - an error wrapping *exec.ExitError on non-zero exit
 	//   - other error types for I/O or pipe failures
 	//
 	// Wait must be called exactly once per Process. It is safe to call Wait
-	// after the Events channel has closed; Wait returns the same value
-	// regardless of whether Events was fully drained.
+	// after the Events channel has closed. Consumers must drain Events until
+	// close before calling Wait; otherwise an implementation that forwards
+	// parsed events from another goroutine may block while sending.
 	Wait() error
 }
 

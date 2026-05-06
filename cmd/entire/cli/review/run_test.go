@@ -215,8 +215,11 @@ func TestRun_TornStreamCleanExitClassifiedAsFailed(t *testing.T) {
 	rec := &stubSinkRecorder{}
 
 	summary, err := Run(context.Background(), reviewer, reviewtypes.RunConfig{}, []reviewtypes.Sink{rec})
-	if err != nil {
-		t.Fatalf("expected nil wait-err on clean exit, got %v", err)
+	if err == nil {
+		t.Fatal("expected parser failure to return an error even when process exits 0")
+	}
+	if !errors.Is(err, parserErr) {
+		t.Fatalf("expected returned error to wrap parserErr, got %v", err)
 	}
 	if len(summary.AgentRuns) != 1 {
 		t.Fatalf("expected 1 AgentRun, got %d", len(summary.AgentRuns))
@@ -242,8 +245,8 @@ func TestRun_FinishedFailureCleanExitClassifiedAsFailed(t *testing.T) {
 	rec := &stubSinkRecorder{}
 
 	summary, err := Run(context.Background(), reviewer, reviewtypes.RunConfig{}, []reviewtypes.Sink{rec})
-	if err != nil {
-		t.Fatalf("expected nil wait-err, got %v", err)
+	if err == nil {
+		t.Fatal("expected Finished{Success:false} to return an error even when process exits 0")
 	}
 	if got := summary.AgentRuns[0].Status; got != reviewtypes.AgentStatusFailed {
 		t.Errorf("expected AgentStatusFailed (Finished{Success:false} override), got %v", got)

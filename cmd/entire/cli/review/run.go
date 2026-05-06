@@ -7,6 +7,7 @@ package review
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
@@ -16,9 +17,10 @@ import (
 // to all sinks via AgentEvent as they arrive; on completion, RunFinished
 // is called on each sink with the populated RunSummary.
 //
-// Returns the summary plus the agent's wait error (nil on clean exit,
-// ctx.Err() on cancellation, *exec.ExitError on non-zero exit). Callers
-// can inspect both — the summary is always populated even on error.
+// Returns the summary plus the agent's terminal error (nil on clean exit,
+// ctx.Err() on cancellation, an error wrapping *exec.ExitError on non-zero
+// exit, or an agent-level error when the event stream reports failure).
+// Callers can inspect both: the summary is always populated even on error.
 func Run(
 	ctx context.Context,
 	reviewer reviewtypes.AgentReviewer,
@@ -57,6 +59,7 @@ func Run(
 		finishedSeen bool // saw Finished{...} event from the parser
 		finishedOk   bool // its Success field
 		sawRunError  bool // saw at least one RunError event
+		firstRunErr  error
 	)
 	for ev := range proc.Events() {
 		buffer = append(buffer, ev)
@@ -68,6 +71,9 @@ func Run(
 			finishedOk = e.Success
 		case reviewtypes.RunError:
 			sawRunError = true
+			if firstRunErr == nil {
+				firstRunErr = e.Err
+			}
 		}
 		for _, sink := range sinks {
 			sink.AgentEvent(reviewer.Name(), ev)
@@ -77,6 +83,10 @@ func Run(
 	waitErr := proc.Wait()
 	finished := time.Now()
 	status := classifyStatus(ctx, waitErr, eventOutcome{finishedSeen: finishedSeen, finishedOk: finishedOk, sawRunError: sawRunError})
+	runErr := waitErr
+	if runErr == nil && status == reviewtypes.AgentStatusFailed {
+		runErr = agentRunFailureError(reviewer.Name(), firstRunErr)
+	}
 
 	summary := reviewtypes.RunSummary{
 		StartedAt:  started,
@@ -89,13 +99,20 @@ func Run(
 			Buffer:    buffer,
 			StartedAt: started,
 			Duration:  finished.Sub(started),
-			Err:       waitErr,
+			Err:       runErr,
 		}},
 	}
 	for _, sink := range sinks {
 		sink.RunFinished(summary)
 	}
-	return summary, waitErr //nolint:wrapcheck // interface boundary passthrough; wrapping hides ctx.Err() and *exec.ExitError from callers
+	return summary, runErr
+}
+
+func agentRunFailureError(agent string, cause error) error {
+	if cause != nil {
+		return fmt.Errorf("review agent %s reported failure: %w", agent, cause)
+	}
+	return fmt.Errorf("review agent %s reported failure", agent)
 }
 
 // eventOutcome summarises agent-level signals observed in the event stream.
