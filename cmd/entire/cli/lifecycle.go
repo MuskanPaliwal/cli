@@ -278,7 +278,7 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 			slog.String("error", loadErr.Error()))
 	} else if state != nil {
 		updated := *state
-		adoptReviewEnv(logCtx, &updated)
+		adoptReviewEnv(logCtx, &updated, string(ag.Name()))
 		if updated.Kind != state.Kind || updated.ReviewPrompt != state.ReviewPrompt || !slices.Equal(updated.ReviewSkills, state.ReviewSkills) {
 			if saveErr := strategy.SaveSessionState(ctx, &updated); saveErr != nil {
 				logging.Warn(logCtx, "failed to save session state after review env adoption",
@@ -969,21 +969,38 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 // adoptReviewEnv tags the session as a review session when ENTIRE_REVIEW_*
 // env vars are present on the current process. `entire review` sets these
 // vars on the spawned agent process; the lifecycle hook (a child of the agent)
-// inherits them naturally. No file marker, no worktree race, no scoping guard.
+// inherits them naturally. Agent and starting-SHA checks protect against stale
+// ENTIRE_REVIEW_* values inherited from a parent shell or a nested invocation.
 //
 // Adoption is idempotent: if state.Kind is already set (subsequent turns of
 // a review session) the function returns without modifying state.
 //
 // Failure modes are silent at the user level but logged for diagnostics:
 //   - EnvSession unset or not "1": not a review session; return, no tagging.
+//   - EnvAgent does not match the hook agent: leave session untagged.
+//   - EnvStartingSHA does not match the session base commit: leave untagged.
 //   - EnvSkills malformed JSON: log warning, leave session untagged to avoid
 //     corrupting metadata with junk data.
-func adoptReviewEnv(ctx context.Context, state *session.State) {
+func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent string) {
 	// Already tagged — don't re-apply on subsequent turns.
 	if state.Kind != "" {
 		return
 	}
 	if os.Getenv(review.EnvSession) != "1" {
+		return
+	}
+	envAgent := os.Getenv(review.EnvAgent)
+	if envAgent != expectedAgent {
+		logging.Warn(ctx, "review env adoption skipped: agent mismatch",
+			slog.String("env_agent", envAgent),
+			slog.String("hook_agent", expectedAgent))
+		return
+	}
+	startingSHA := os.Getenv(review.EnvStartingSHA)
+	if startingSHA == "" || state.BaseCommit == "" || startingSHA != state.BaseCommit {
+		logging.Warn(ctx, "review env adoption skipped: starting SHA mismatch",
+			slog.String("env_starting_sha", startingSHA),
+			slog.String("state_base_commit", state.BaseCommit))
 		return
 	}
 	skills, err := review.DecodeSkills(os.Getenv(review.EnvSkills))
@@ -996,6 +1013,6 @@ func adoptReviewEnv(ctx context.Context, state *session.State) {
 	state.ReviewSkills = skills
 	state.ReviewPrompt = os.Getenv(review.EnvPrompt)
 	logging.Debug(ctx, "adopted review env",
-		slog.String("agent", os.Getenv(review.EnvAgent)),
+		slog.String("agent", envAgent),
 		slog.Int("skill_count", len(skills)))
 }

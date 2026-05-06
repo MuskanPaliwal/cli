@@ -290,10 +290,10 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 	}
 
 	runCfg := reviewtypes.RunConfig{
-		Skills:       cfg.Skills,
-		AlwaysPrompt: cfg.Prompt,
-		ScopeBaseRef: scopeBaseRef,
-		StartingSHA:  headSHA,
+		PromptOverride: cfg.Prompt,
+		Skills:         cfg.Skills,
+		ScopeBaseRef:   scopeBaseRef,
+		StartingSHA:    headSHA,
 	}
 
 	// 7. Branch on launchability.

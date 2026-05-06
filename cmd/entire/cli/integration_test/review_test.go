@@ -3,13 +3,16 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -100,6 +103,63 @@ func TestReview_EnvVarAdoptionCondensesReviewMetadataOnNextCommit(t *testing.T) 
 	}
 }
 
+func TestReviewCommand_PassesReviewEnvToSpawnedAgentHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake agent launcher uses a POSIX shell script")
+	}
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	enableReviewAgent(t, env, "claude-code")
+	env.WriteSettings(map[string]any{
+		"enabled": true,
+		"review": map[string]any{
+			"claude-code": map[string]any{
+				"skills": []string{"/review"},
+			},
+		},
+	})
+
+	const sessionID = "review-command-spawn-session"
+	fakeBinDir := t.TempDir()
+	fakeClaude := filepath.Join(fakeBinDir, "claude")
+	fakeAgent := `#!/bin/sh
+set -eu
+printf '%s\n' '{"session_id":"` + sessionID + `","transcript_path":"","prompt":"review command prompt"}' | "$ENTIRE_TEST_BINARY" hooks claude-code user-prompt-submit
+`
+	if err := os.WriteFile(fakeClaude, []byte(fakeAgent), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+
+	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "review")
+	cmd.Dir = env.RepoDir
+	cmd.Env = envWithOverrides(env.cliEnv(),
+		"PATH="+fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"ENTIRE_TEST_BINARY="+getTestBinary(),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("entire review failed: %v\nOutput:\n%s", err, output)
+	}
+
+	state, err := env.GetSessionState(sessionID)
+	if err != nil {
+		t.Fatalf("GetSessionState: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected fake agent hook to create session state")
+	}
+	if state.Kind != session.KindAgentReview {
+		t.Fatalf("state.Kind = %q, want %q", state.Kind, session.KindAgentReview)
+	}
+	if len(state.ReviewSkills) != 1 || state.ReviewSkills[0] != "/review" {
+		t.Fatalf("state.ReviewSkills = %v, want [/review]", state.ReviewSkills)
+	}
+	if !strings.Contains(state.ReviewPrompt, "/review") {
+		t.Fatalf("state.ReviewPrompt missing /review: %q", state.ReviewPrompt)
+	}
+}
+
 func TestReviewAttach_TagsAttachedSessionAsReview(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +245,28 @@ func TestReview_MissingSkillAtSpawn_ErrorsCleanly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(env.RepoDir, ".git", "entire-sessions", "review-pending.json")); !os.IsNotExist(err) {
 		t.Errorf("pending marker should not exist; stat err=%v", err)
 	}
+}
+
+func envWithOverrides(base []string, overrides ...string) []string {
+	remove := make(map[string]struct{}, len(overrides))
+	for _, override := range overrides {
+		if key, _, ok := strings.Cut(override, "="); ok {
+			remove[key] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		if _, drop := remove[key]; drop {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, overrides...)
 }
 
 func enableReviewAgent(t *testing.T, env *TestEnv, name string) {

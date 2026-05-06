@@ -203,20 +203,32 @@ func TestCodexReviewer_EventStream(t *testing.T) {
 	text := combined.String()
 
 	// Narrative should appear.
-	if !strings.Contains(text, "AgentReviewer") {
-		t.Error("expected fixture content mentioning 'AgentReviewer' in AssistantText events")
+	if !strings.Contains(text, "No findings.") {
+		t.Error("expected fixture final response in AssistantText events")
+	}
+	if !strings.Contains(text, "Important finding: all error paths are covered.") {
+		t.Error("expected ANSI-cleaned fixture content in AssistantText events")
 	}
 
 	// Chrome must be absent.
 	chromePatterns := []string{
-		"─────── codex",
+		"OpenAI Codex",
+		"workdir:",
 		"[hooks]",
 		"firing user-prompt-submit",
+		"I will inspect the reviewer contracts.",
+		"git status",
+		"go test ./cmd/entire/cli/review",
+		"TestExample",
+		"tokens used",
 	}
 	for _, pattern := range chromePatterns {
 		if strings.Contains(text, pattern) {
 			t.Errorf("chrome pattern %q must not appear in AssistantText events", pattern)
 		}
+	}
+	if strings.Count(text, "No findings.") != 1 {
+		t.Errorf("final response should appear once after duplicate summary filtering; got:\n%s", text)
 	}
 
 	// CSI escape sequences must not leak into AssistantText events.

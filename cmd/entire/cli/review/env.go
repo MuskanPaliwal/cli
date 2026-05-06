@@ -27,10 +27,9 @@ const (
 	EnvSession = "ENTIRE_REVIEW_SESSION"
 
 	// EnvAgent is the name of the agent spawned for the review (e.g.
-	// "claude-code"). The lifecycle hook logs this for diagnostics; the
-	// agent's identity is otherwise persisted via session state's existing
-	// agent_type field set during normal turn-start handling, so adoption
-	// itself does not need to copy this value into review-specific state.
+	// "claude-code"). The lifecycle hook requires this to match the hook's
+	// agent before tagging the session, preventing stale exported review env
+	// from tagging sessions for a different agent.
 	EnvAgent = "ENTIRE_REVIEW_AGENT"
 
 	// EnvSkills is a JSON-encoded []string of skill invocations passed to the
@@ -44,14 +43,9 @@ const (
 	EnvPrompt = "ENTIRE_REVIEW_PROMPT"
 
 	// EnvStartingSHA is the git commit SHA that was HEAD when `entire review`
-	// was invoked. Set on the spawned process so future consumers (e.g. the
-	// re-run guard or `entire status`) can detect whether commits occurred
-	// during the review without walking history. CU1's adoption path does
-	// not currently consume it — session state's existing base_commit field
-	// captures the same SHA via normal turn-start handling, so this env var
-	// is reserved for future code that needs a separate review-spawn anchor
-	// (e.g. comparing review-time HEAD to base_commit when sessions span
-	// commits made outside the agent).
+	// was invoked. The lifecycle hook requires this to match the session's
+	// initial base_commit before tagging the session, so stale env from an old
+	// HEAD does not mark a later normal session as a review.
 	EnvStartingSHA = "ENTIRE_REVIEW_STARTING_SHA"
 )
 

@@ -27,6 +27,24 @@ func TestEnvSkillsRoundtrip(t *testing.T) {
 	}
 }
 
+func TestEnvSkillsEmptyRoundtrip(t *testing.T) {
+	t.Parallel()
+	encoded, err := EncodeSkills(nil)
+	if err != nil {
+		t.Fatalf("encode nil: %v", err)
+	}
+	if encoded != "[]" {
+		t.Fatalf("EncodeSkills(nil) = %q, want []", encoded)
+	}
+	decoded, err := DecodeSkills(encoded)
+	if err != nil {
+		t.Fatalf("decode empty: %v", err)
+	}
+	if len(decoded) != 0 {
+		t.Fatalf("decoded empty skills = %v, want empty slice", decoded)
+	}
+}
+
 func TestEnvNamesAreStable(t *testing.T) {
 	t.Parallel()
 	// Direct comparisons (not map iteration) so each constant is pinned

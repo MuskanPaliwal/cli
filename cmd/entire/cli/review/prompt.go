@@ -22,6 +22,10 @@ import (
 // Empty sections are skipped (no triple-newline gaps). The scope clause
 // is only added when cfg.ScopeBaseRef is non-empty.
 func ComposeReviewPrompt(cfg reviewtypes.RunConfig) string {
+	if cfg.PromptOverride != "" {
+		return cfg.PromptOverride
+	}
+
 	var sections []string
 
 	// Skills: one per line, joined as a single section.

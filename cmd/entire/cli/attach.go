@@ -48,10 +48,14 @@ type attachOptions struct {
 	// --agent flag's default points at claude-code, which would otherwise
 	// make a Gemini session incorrectly look up review.claude-code config.
 	Review bool
-	// ReviewSkillsOverride, when non-empty, overrides the agent's
-	// configured review skills. Empty means "read review.<agent> from
-	// settings after resolving the real agent". Ignored when Review=false.
+	// ReviewSkillsOverride, when non-empty, declares which review skills were
+	// run. Empty is valid: the session is still tagged as a review, with no
+	// structured skills list. Ignored when Review=false.
 	ReviewSkillsOverride []string
+	// ReviewPromptOverride, when non-empty, is recorded instead of the
+	// transcript's first user prompt. Used by `entire review attach` when a
+	// pending-review marker has the exact prompt the user was asked to run.
+	ReviewPromptOverride string
 }
 
 func newAttachCmd() *cobra.Command {
@@ -282,7 +286,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	if opts.Review {
 		writeOpts.Kind = string(session.KindAgentReview)
 		writeOpts.ReviewSkills = reviewSkills
-		writeOpts.ReviewPrompt = meta.FirstPrompt
+		writeOpts.ReviewPrompt = reviewPromptForAttach(meta, opts)
 		writeOpts.HasReview = true
 	}
 
@@ -537,13 +541,20 @@ func saveAttachSessionState(ctx context.Context, existingState *session.State, s
 	if opts.Review {
 		state.Kind = session.KindAgentReview
 		state.ReviewSkills = reviewSkills
-		state.ReviewPrompt = meta.FirstPrompt
+		state.ReviewPrompt = reviewPromptForAttach(meta, opts)
 	}
 
 	if err := stateStore.Save(ctx, state); err != nil {
 		return fmt.Errorf("failed to save session state: %w", err)
 	}
 	return nil
+}
+
+func reviewPromptForAttach(meta transcriptMetadata, opts attachOptions) string {
+	if opts.ReviewPromptOverride != "" {
+		return opts.ReviewPromptOverride
+	}
+	return meta.FirstPrompt
 }
 
 // validateAttachPreconditions checks session ID format and git repo state.

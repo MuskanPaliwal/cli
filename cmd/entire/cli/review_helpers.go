@@ -28,6 +28,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	cliReview "github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
@@ -116,15 +117,59 @@ discoverability alongside the other review subcommands.`,
 			// Discover external agents so --agent <external-name> is
 			// recognized and auto-detection covers them.
 			external.DiscoverAndRegister(cmd.Context())
-			return runAttachSurfaceReviewErrors(cmd, args[0], types.AgentName(agentFlag), attachOptions{
+
+			marker, useMarker, markerErr := matchingPendingReviewMarker(cmd.Context(), agentFlag, cmd.Flags().Changed("agent"))
+			if markerErr != nil {
+				return markerErr
+			}
+			if useMarker && !cmd.Flags().Changed("agent") && marker.AgentName != "" {
+				agentFlag = marker.AgentName
+			}
+			opts := attachOptions{
 				Force:                force,
 				Review:               true,
 				ReviewSkillsOverride: skillsFlag,
-			})
+			}
+			if useMarker {
+				if !cmd.Flags().Changed("skills") {
+					opts.ReviewSkillsOverride = marker.Skills
+				}
+				opts.ReviewPromptOverride = marker.Prompt
+			}
+			err := runAttachSurfaceReviewErrors(cmd, args[0], types.AgentName(agentFlag), opts)
+			if err == nil && useMarker {
+				if clearErr := cliReview.ClearPendingReviewMarker(cmd.Context()); clearErr != nil {
+					logging.Debug(cmd.Context(), "clear pending review marker after attach", slog.String("error", clearErr.Error()))
+				}
+			}
+			return err
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session")
 	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional: declare which review skills were run in this session")
 	return cmd
+}
+
+func matchingPendingReviewMarker(ctx context.Context, selectedAgent string, agentChanged bool) (cliReview.PendingReviewMarker, bool, error) {
+	marker, ok, err := cliReview.ReadPendingReviewMarker(ctx)
+	if err != nil {
+		return cliReview.PendingReviewMarker{}, false, fmt.Errorf("read pending review marker: %w", err)
+	}
+	if !ok {
+		return cliReview.PendingReviewMarker{}, false, nil
+	}
+	if marker.WorktreePath != "" {
+		worktreeRoot, rootErr := paths.WorktreeRoot(ctx)
+		if rootErr != nil {
+			return cliReview.PendingReviewMarker{}, false, fmt.Errorf("resolve worktree root for pending review marker: %w", rootErr)
+		}
+		if marker.WorktreePath != worktreeRoot {
+			return cliReview.PendingReviewMarker{}, false, nil
+		}
+	}
+	if agentChanged && marker.AgentName != "" && marker.AgentName != selectedAgent {
+		return cliReview.PendingReviewMarker{}, false, nil
+	}
+	return marker, true, nil
 }

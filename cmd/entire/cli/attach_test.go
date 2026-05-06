@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -1007,6 +1008,66 @@ func TestAttach_WithReviewFlag(t *testing.T) {
 	}
 	if state.ReviewPrompt != firstPrompt {
 		t.Errorf("ReviewPrompt = %q, want %q", state.ReviewPrompt, firstPrompt)
+	}
+}
+
+func TestReviewAttach_UsesPendingReviewMarkerDefaults(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	sessionID := "test-review-attach-marker"
+	firstPrompt := "manual session prompt"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"`+firstPrompt+`"},"uuid":"uuid-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reviewing now."}]},"uuid":"uuid-2"}
+`)
+	markerPrompt := "marker prompt\nwith scope"
+	markerSkills := []string{"/review", "/test-auditor"}
+	repoRoot, err := paths.WorktreeRoot(context.Background())
+	if err != nil {
+		t.Fatalf("WorktreeRoot: %v", err)
+	}
+	if err := cliReview.WritePendingReviewMarker(context.Background(), cliReview.PendingReviewMarker{
+		AgentName:    string(agent.AgentNameClaudeCode),
+		Skills:       markerSkills,
+		Prompt:       markerPrompt,
+		StartingSHA:  "deadbeef",
+		StartedAt:    time.Now().UTC(),
+		WorktreePath: repoRoot,
+	}); err != nil {
+		t.Fatalf("WritePendingReviewMarker: %v", err)
+	}
+
+	rootCmd := NewRootCmd()
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetOut(outBuf)
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review", "attach", sessionID, "--force"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("review attach failed: %v\nstderr: %s", err, errBuf.String())
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil {
+		t.Fatal("expected session state to be created")
+	}
+	if state.Kind != session.KindAgentReview {
+		t.Errorf("Kind = %q, want %q", state.Kind, session.KindAgentReview)
+	}
+	if !reflect.DeepEqual(state.ReviewSkills, markerSkills) {
+		t.Errorf("ReviewSkills = %v, want %v", state.ReviewSkills, markerSkills)
+	}
+	if state.ReviewPrompt != markerPrompt {
+		t.Errorf("ReviewPrompt = %q, want marker prompt %q", state.ReviewPrompt, markerPrompt)
+	}
+	if _, ok, err := cliReview.ReadPendingReviewMarker(context.Background()); err != nil || ok {
+		t.Fatalf("pending marker should be cleared after attach: ok=%v err=%v", ok, err)
 	}
 }
 

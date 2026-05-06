@@ -69,7 +69,7 @@ func TestRunConfigZeroValueIsValid(t *testing.T) {
 	if len(c.Skills) != 0 {
 		t.Errorf("zero RunConfig.Skills should be nil, got %v", c.Skills)
 	}
-	if c.AlwaysPrompt != "" || c.PerRunPrompt != "" || c.ScopeBaseRef != "" || c.StartingSHA != "" {
+	if c.PromptOverride != "" || c.AlwaysPrompt != "" || c.PerRunPrompt != "" || c.ScopeBaseRef != "" || c.StartingSHA != "" {
 		t.Errorf("zero RunConfig fields should be empty strings, got %+v", c)
 	}
 }

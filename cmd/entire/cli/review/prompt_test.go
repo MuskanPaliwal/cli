@@ -60,6 +60,22 @@ func TestComposeReviewPrompt_AllSectionsWithScope(t *testing.T) {
 	}
 }
 
+func TestComposeReviewPrompt_PromptOverrideIsVerbatim(t *testing.T) {
+	t.Parallel()
+	cfg := reviewtypes.RunConfig{
+		Skills:         []string{"/review"},
+		AlwaysPrompt:   "always-on instructions",
+		PerRunPrompt:   "per-run focus",
+		ScopeBaseRef:   "main",
+		PromptOverride: "custom prompt\nleave untouched",
+	}
+	got := ComposeReviewPrompt(cfg)
+	want := "custom prompt\nleave untouched"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestComposeReviewPrompt_EmptyAlwaysPromptNoExtraBlankLine(t *testing.T) {
 	t.Parallel()
 	// Skills + PerRunPrompt only — empty AlwaysPrompt must not produce triple-newline.

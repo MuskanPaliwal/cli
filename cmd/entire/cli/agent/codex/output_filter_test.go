@@ -193,11 +193,13 @@ func TestStrip_FullFixture(t *testing.T) {
 		"exec node /usr/local/lib/codex/hooks.js in /repo",
 		"",
 		"\x1b[?25l",
+		"codex",
 		"This is the narrative output from the agent.",
 		"It spans multiple lines.",
 		"\x1b[?25h",
 		"exec git diff HEAD in /repo",
 		"2026-04-30T10:00:00.000Z ERROR: something logged",
+		"codex",
 		"Final conclusion: no issues found.",
 	}, "\n")
 
@@ -227,13 +229,84 @@ func TestStrip_FullFixture(t *testing.T) {
 
 	// Narrative must survive.
 	narrativeMustSurvive := []string{
-		"This is the narrative output from the agent.",
-		"It spans multiple lines.",
 		"Final conclusion: no issues found.",
 	}
 	for _, want := range narrativeMustSurvive {
 		if !strings.Contains(output, want) {
 			t.Errorf("narrative %q missing from filtered output; got:\n%s", want, output)
 		}
+	}
+	for _, unwanted := range []string{
+		"This is the narrative output from the agent.",
+		"It spans multiple lines.",
+	} {
+		if strings.Contains(output, unwanted) {
+			t.Errorf("pre-final narrative %q should not appear in filtered output; got:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestStrip_DropsExecBlocksAndDuplicateSummary(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Join([]string{
+		"OpenAI Codex v0.124.0 (research preview)",
+		"--------",
+		"workdir: /private/tmp/review-output-test",
+		"model: gpt-5.4",
+		"--------",
+		"user",
+		"Please run these review skills in order.",
+		"",
+		"codex",
+		"I will inspect the code.",
+		"exec",
+		`/bin/zsh -lc "git status --short" in /private/tmp/review-output-test`,
+		" succeeded in 0ms:",
+		" M cmd/entire/cli/review.go",
+		"",
+		"exec",
+		`/bin/zsh -lc "go test ./..." in /private/tmp/review-output-test`,
+		" failed in 1s:",
+		"--- FAIL: TestExample",
+		"",
+		"codex",
+		"No findings.",
+		"",
+		"Residual risk: tests were not run in this sandbox.",
+		"tokens used",
+		"12,826",
+		"No findings.",
+		"",
+		"Residual risk: tests were not run in this sandbox.",
+	}, "\n")
+
+	data, err := io.ReadAll(Strip(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("Strip read: %v", err)
+	}
+	output := string(data)
+
+	for _, forbidden := range []string{
+		"OpenAI Codex",
+		"workdir:",
+		"Please run these review skills",
+		"I will inspect the code.",
+		"git status",
+		"cmd/entire/cli/review.go",
+		"go test ./...",
+		"TestExample",
+		"tokens used",
+		"12,826",
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("filtered output leaked %q:\n%s", forbidden, output)
+		}
+	}
+	if strings.Count(output, "No findings.") != 1 {
+		t.Fatalf("filtered output should contain final response once, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Residual risk: tests were not run in this sandbox.") {
+		t.Fatalf("filtered output missing final residual-risk line:\n%s", output)
 	}
 }
