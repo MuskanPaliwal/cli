@@ -1,0 +1,51 @@
+How about we create a skill for this purpose where every time I try to fix a bug or bump on a feature using cloud or codecs or anything, they do the changes in this manner? So I don’t think this is caused by Claude hook stdin parsing or the `session-start` handler itself.
+
+  The key clue is that `entire --version` also hangs in the reported environment, and the sample shows the process stuck in
+  `_dyld_start`. That means the binary hasn’t reached Go `main()` yet, so Cobra, hook parsing, logging, and any internal Go
+  timeout haven’t started. This points to a macOS launch / Gatekeeper / `syspolicyd` state issue surfacing through the Claude
+  hook path. The reported recovery, killing the wedged `syspolicyd` process, fits that.
+
+  I think the right mitigation on our side is to make the production Claude `SessionStart` hook fail open using Claude Code’s
+  native per-hook timeout. We can keep the existing hook command, but install it with a short timeout, likely 5 seconds. That
+  keeps the timeout outside the child `entire` process, so if macOS stalls before Go `main()` starts, Claude Code can cancel
+  the hook and continue startup instead of waiting indefinitely.
+
+---
+
+Wait a minute. I want this skill to be in my hub repository. Remove whatever you did till now. Put it in the hub repository and before executing any changes tell me what you did and show me what you did.
+
+---
+
+First remove the chanbges hgere and then do the changes in hub repo
+
+---
+
+The skill should be for everyone: Claude, Codex, Opencode, everyone so it should be sim limked
+
+---
+
+Yep continue.
+
+---
+
+```
+
+Instead of one turn rewrite of the whole code base I would love if we
+do like one small small segment and you explain that segment to me and then
+only move forward when I am clear on the code part of that small segment.
+
+While implementing this the code doesn't have to run. Like the code doesn't
+have to pass test and code doesn't have to be perfect at given time. It can
+be perfect, it can be partially implemented but the goal is for me to
+understand what we are writing.
+
+Once the very tiny part of code is written, i will understand it, then i will commit it and then will move forward. This is how we are gonna implement this whole feature.
+```Use this in the skill. This is the problem I want the skill for.
+
+---
+
+I'm fine with the name.
+
+---
+
+Continue.

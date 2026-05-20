@@ -3,7 +3,7 @@
   "checkpoint_id": "01d84dee8fed",
   "strategy": "manual-commit",
   "branch": "fix-claude-hook-launch-timeout",
-  "checkpoints_count": 43,
+  "checkpoints_count": 45,
   "files_touched": [
     "cmd/entire/cli/agent/claudecode/hooks.go",
     "cmd/entire/cli/agent/claudecode/hooks_test.go",
@@ -15,13 +15,19 @@
       "transcript": "/01/d84dee8fed/0/full.jsonl",
       "content_hash": "/01/d84dee8fed/0/content_hash.txt",
       "prompt": "/01/d84dee8fed/0/prompt.txt"
+    },
+    {
+      "metadata": "/01/d84dee8fed/1/metadata.json",
+      "transcript": "/01/d84dee8fed/1/full.jsonl",
+      "content_hash": "/01/d84dee8fed/1/content_hash.txt",
+      "prompt": "/01/d84dee8fed/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1425158,
+    "input_tokens": 1711811,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 29955200,
-    "output_tokens": 74791,
-    "api_call_count": 297
+    "cache_read_tokens": 31022208,
+    "output_tokens": 88871,
+    "api_call_count": 332
   }
 }
