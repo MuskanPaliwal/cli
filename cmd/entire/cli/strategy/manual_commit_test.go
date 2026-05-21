@@ -48,6 +48,34 @@ func TestShadowStrategy_ValidateRepository(t *testing.T) {
 	}
 }
 
+func TestManualCommitStrategy_ListCheckpointsUsesLocalV2WhenSettingsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	cpID := id.MustCheckpointID("dd11ee22ff33")
+	v2Store := checkpoint.NewV2GitStore(repo)
+	require.NoError(t, v2Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-v2-local",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
+		Prompts:      []string{"Use local v2 data"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	s := NewManualCommitStrategy()
+	checkpoints, err := s.listCheckpoints(context.Background())
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+	require.Equal(t, cpID, checkpoints[0].CheckpointID)
+	require.Equal(t, "session-v2-local", checkpoints[0].SessionID)
+}
+
 func TestShadowStrategy_ValidateRepository_NotGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

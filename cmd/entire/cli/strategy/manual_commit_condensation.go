@@ -22,7 +22,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -45,10 +44,9 @@ var (
 	isSummaryProviderCLIAvailable    = agent.IsSummaryCLIAvailable
 )
 
-// listCheckpoints returns all checkpoints from the metadata branch.
-// Uses checkpoint.GitStore.ListCommitted() for reading from entire/checkpoints/v1.
+// listCheckpoints returns all checkpoints from committed checkpoint storage.
 func (s *ManualCommitStrategy) listCheckpoints(ctx context.Context) ([]CheckpointInfo, error) {
-	store, err := s.getCheckpointStore()
+	store, err := s.committedCheckpointStore(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checkpoint store: %w", err)
 	}
@@ -58,35 +56,21 @@ func (s *ManualCommitStrategy) listCheckpoints(ctx context.Context) ([]Checkpoin
 		return nil, fmt.Errorf("failed to list committed checkpoints: %w", err)
 	}
 
-	// Convert from checkpoint.CommittedInfo to strategy.CheckpointInfo
-	result := make([]CheckpointInfo, 0, len(committed))
-	for _, c := range committed {
-		result = append(result, CheckpointInfo{
-			CheckpointID:     c.CheckpointID,
-			SessionID:        c.SessionID,
-			CreatedAt:        c.CreatedAt,
-			CheckpointsCount: c.CheckpointsCount,
-			FilesTouched:     c.FilesTouched,
-			Agent:            c.Agent,
-			IsTask:           c.IsTask,
-			ToolUseID:        c.ToolUseID,
-			SessionCount:     c.SessionCount,
-			SessionIDs:       c.SessionIDs,
-		})
-	}
-
-	return result, nil
+	return checkpointInfosFromCommitted(committed), nil
 }
 
 // getCheckpointLog returns the transcript for a specific checkpoint ID.
-// Uses checkpoint.GitStore.ReadCommitted() for reading from entire/checkpoints/v1.
 func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointID id.CheckpointID) ([]byte, error) {
-	store, err := s.getCheckpointStore()
+	store, err := s.committedCheckpointStore(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checkpoint store: %w", err)
 	}
 
-	content, err := store.ReadLatestSessionContent(ctx, checkpointID)
+	summary, err := cpkg.ReadCommittedCheckpoint(ctx, store, checkpointID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read checkpoint: %w", err)
+	}
+	content, err := cpkg.ReadLatestSessionContent(ctx, store, checkpointID, summary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read checkpoint: %w", err)
 	}
@@ -1606,14 +1590,7 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 // writeCommittedV2 writes checkpoint data to v2 refs unconditionally.
 // Callers decide whether to propagate or swallow the error (v2-only vs dual-write).
 func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
-	v2URL, err := remote.FetchURL(ctx)
-	if err != nil {
-		logging.Debug(ctx, "manual-commit condensation: using origin for v2 write fetch remote",
-			slog.String("error", err.Error()),
-		)
-		v2URL = originRemote
-	}
-	v2Store := cpkg.NewV2GitStore(repo, v2URL)
+	v2Store := cpkg.NewV2GitStore(repo)
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
 		return fmt.Errorf("v2 write committed: %w", err)
 	}
@@ -1678,14 +1655,7 @@ func writeTaskMetadataV2IfEnabled(
 		return
 	}
 
-	v2URL, err := remote.FetchURL(ctx)
-	if err != nil {
-		logging.Debug(ctx, "manual-commit condensation: using origin for v2 task metadata fetch remote",
-			slog.String("error", err.Error()),
-		)
-		v2URL = originRemote
-	}
-	v2Store := cpkg.NewV2GitStore(repo, v2URL)
+	v2Store := cpkg.NewV2GitStore(repo)
 	sessionIndex, err := resolveV2SessionIndexForCheckpoint(repo, checkpointID, sessionID)
 	if err != nil {
 		logging.Warn(ctx, "v2 dual-write task metadata copy skipped: failed to resolve session index",

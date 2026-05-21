@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,6 +36,22 @@ const (
 )
 
 var checkpointsVersionWarningOnce sync.Once
+
+type worktreeRootContextKey struct{}
+
+// WithWorktreeRoot returns a context that makes settings.Load resolve project
+// and clone-local settings relative to worktreeRoot instead of the process cwd.
+func WithWorktreeRoot(ctx context.Context, worktreeRoot string) context.Context {
+	if worktreeRoot == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, worktreeRootContextKey{}, filepath.Clean(worktreeRoot))
+}
+
+func worktreeRootFromContext(ctx context.Context) (string, bool) {
+	root, ok := ctx.Value(worktreeRootContextKey{}).(string)
+	return root, ok && root != ""
+}
 
 // Commit linking mode constants.
 const (
@@ -267,6 +284,10 @@ func (s *EntireSettings) ReviewConfigFor(agentName string) ReviewConfig {
 // Returns default settings if no settings or preferences file exists.
 // Works correctly from any subdirectory within the repository.
 func Load(ctx context.Context) (*EntireSettings, error) {
+	if worktreeRoot, ok := worktreeRootFromContext(ctx); ok {
+		return loadForWorktreeRoot(ctx, worktreeRoot)
+	}
+
 	// Get absolute paths for settings files
 	settingsFileAbs, err := paths.AbsPath(ctx, EntireSettingsFile)
 	if err != nil {
@@ -290,6 +311,33 @@ func Load(ctx context.Context) (*EntireSettings, error) {
 	}
 
 	return loadMergedSettings(settingsFileAbs, preferencesFileAbs, localSettingsFileAbs)
+}
+
+func loadForWorktreeRoot(ctx context.Context, worktreeRoot string) (*EntireSettings, error) {
+	settingsFileAbs := filepath.Join(worktreeRoot, EntireSettingsFile)
+	preferencesFileAbs := ""
+	if path, prefErr := clonePreferencesPathForWorktreeRoot(ctx, worktreeRoot); prefErr == nil {
+		preferencesFileAbs = path
+	} else {
+		logging.Debug(ctx, "clone preferences path unresolved; skipping preferences layer",
+			slog.String("error", prefErr.Error()))
+	}
+	localSettingsFileAbs := filepath.Join(worktreeRoot, EntireSettingsLocalFile)
+	return loadMergedSettings(settingsFileAbs, preferencesFileAbs, localSettingsFileAbs)
+}
+
+func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", worktreeRoot, "rev-parse", "--git-common-dir")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve git common dir: %w", err)
+	}
+
+	commonDir := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(worktreeRoot, commonDir)
+	}
+	return filepath.Join(filepath.Clean(commonDir), ClonePreferencesFile), nil
 }
 
 func loadMergedSettings(settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {

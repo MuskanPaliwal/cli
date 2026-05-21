@@ -87,7 +87,7 @@ func TestFetchV2MainRefIfMissing_SkipsWhenExists(t *testing.T) {
 // writeV2Checkpoint writes a checkpoint to both /main and /full/current via V2GitStore.
 func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID, sessionID string) {
 	t.Helper()
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 	err := store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    sessionID,
@@ -102,7 +102,7 @@ func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID,
 func v2CheckpointCountInRef(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) int {
 	t.Helper()
 
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 	_, treeHash, err := store.GetRefState(refName)
 	require.NoError(t, err)
 	count, err := store.CountCheckpointsInTree(t.Context(), treeHash)
@@ -156,7 +156,7 @@ func rotateV2CurrentForTest(t *testing.T, repo *git.Repository, archiveRefName p
 
 	ctx := context.Background()
 	fullCurrentRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 
 	currentRef, err := repo.Reference(fullCurrentRef, true)
 	require.NoError(t, err)
@@ -334,7 +334,7 @@ func TestPushV2Refs_PushesPendingArchivePublications(t *testing.T) {
 	tmpDir := setupRepoWithV2Ref(t)
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 
 	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
 
@@ -389,7 +389,7 @@ func TestPushV2Refs_PendingPublicationFailureLabelsSkippedActiveRefs(t *testing.
 	tmpDir := setupRepoWithV2Ref(t)
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
 
 	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000099")
@@ -448,7 +448,7 @@ func TestPushV2Refs_PushesPendingArchivePublicationsWithoutActiveRefs(t *testing
 	require.NoError(t, err)
 	headRef, err := repo.Head()
 	require.NoError(t, err)
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 
 	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
 	archiveCommitHash := writeV2ArchiveRef(t, repo, archiveRef, "pending archive")
@@ -530,7 +530,7 @@ func TestPushV2Refs_DropsPendingResetPublicationWhenCurrentWasNotReset(t *testin
 	tmpDir := setupRepoWithV2Ref(t)
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)
-	store := checkpoint.NewV2GitStore(repo, "origin")
+	store := checkpoint.NewV2GitStore(repo)
 
 	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
 	currentRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
@@ -609,7 +609,7 @@ func TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent(t *testing.T) {
 	localDir := setupRepoWithV2Ref(t)
 	localRepo, err := git.PlainOpen(localDir)
 	require.NoError(t, err)
-	localStore := checkpoint.NewV2GitStore(localRepo, "origin")
+	localStore := checkpoint.NewV2GitStore(localRepo)
 
 	for i, cpID := range []id.CheckpointID{
 		id.MustCheckpointID("000000000001"),
@@ -673,7 +673,7 @@ func TestPushV2Refs_LocalRotationPublishesCurrentWorkAddedBeforePush(t *testing.
 	localDir := setupRepoWithV2Ref(t)
 	localRepo, err := git.PlainOpen(localDir)
 	require.NoError(t, err)
-	localStore := checkpoint.NewV2GitStore(localRepo, "origin")
+	localStore := checkpoint.NewV2GitStore(localRepo)
 
 	for i, cpID := range oldCPs {
 		writeV2Checkpoint(t, localRepo, cpID, "session-before-rotation-"+string(rune('a'+i)))
@@ -744,7 +744,7 @@ func TestPushV2Refs_RepeatedLocalRotationsBeforePushPublishesAllArchives(t *test
 	localDir := setupRepoWithV2Ref(t)
 	localRepo, err := git.PlainOpen(localDir)
 	require.NoError(t, err)
-	localStore := checkpoint.NewV2GitStore(localRepo, "origin")
+	localStore := checkpoint.NewV2GitStore(localRepo)
 
 	for i, cpID := range gen1CPs {
 		writeV2Checkpoint(t, localRepo, cpID, "session-gen-1-"+string(rune('a'+i)))
@@ -989,7 +989,7 @@ func TestFetchAndMergeRef_RotationConflict(t *testing.T) {
 	writeV2Checkpoint(t, remoteRepo, id.MustCheckpointID("112233445566"), "remote-session")
 
 	// Manually rotate: archive /full/current, create fresh orphan
-	remoteStore := checkpoint.NewV2GitStore(remoteRepo, "origin")
+	remoteStore := checkpoint.NewV2GitStore(remoteRepo)
 	currentRef, err := remoteRepo.Reference(fullCurrentRef, true)
 	require.NoError(t, err)
 
@@ -1039,7 +1039,7 @@ func TestFetchAndMergeRef_RotationConflict(t *testing.T) {
 	// Verify: local /full/current should now be the fresh orphan from remote
 	localRepo, err = git.PlainOpen(localDir)
 	require.NoError(t, err)
-	localStore := checkpoint.NewV2GitStore(localRepo, "origin")
+	localStore := checkpoint.NewV2GitStore(localRepo)
 	_, freshTreeHash, err := localStore.GetRefState(fullCurrentRef)
 	require.NoError(t, err)
 	freshCount, err := localStore.CountCheckpointsInTree(t.Context(), freshTreeHash)

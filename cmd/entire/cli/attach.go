@@ -339,13 +339,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 // writeAttachCheckpointV2 writes attach-created checkpoints into the v2 refs.
 func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
-	v2URL, err := remote.FetchURL(ctx)
-	if err != nil {
-		logging.Debug(ctx, "attach: using origin for v2 store fetch remote",
-			slog.String("error", err.Error()),
-		)
-	}
-	v2Store := cpkg.NewV2GitStore(repo, v2URL)
+	v2Store := cpkg.NewV2GitStore(repo)
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
 		return fmt.Errorf("v2 write committed: %w", err)
 	}
@@ -443,13 +437,7 @@ func refreshCheckpointRefs(ctx context.Context, v2Only bool) (*git.Repository, e
 // construction.
 func checkpointPresentLocally(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID, v2Only bool) (bool, error) {
 	if v2Only {
-		v2URL, urlErr := remote.FetchURL(ctx)
-		if urlErr != nil {
-			logging.Debug(ctx, "attach: using origin for v2 store fetch remote",
-				slog.String("error", urlErr.Error()),
-			)
-		}
-		summary, err := cpkg.NewV2GitStore(repo, v2URL).ReadCommitted(ctx, checkpointID)
+		summary, err := cpkg.NewV2GitStore(repo).ReadCommitted(ctx, checkpointID)
 		if err != nil {
 			return false, err //nolint:wrapcheck // Caller wraps with checkpoint ID context
 		}

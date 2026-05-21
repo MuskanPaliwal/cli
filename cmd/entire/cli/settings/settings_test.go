@@ -45,6 +45,39 @@ func setupSettingsDir(t *testing.T, base, local string) {
 	t.Chdir(tmpDir)
 }
 
+func TestLoad_WithWorktreeRootReadsSettingsFromExplicitRepo(t *testing.T) {
+	cwdDir := t.TempDir()
+	targetDir := t.TempDir()
+	testutil.InitRepo(t, cwdDir)
+	testutil.InitRepo(t, targetDir)
+
+	for dir, content := range map[string]string{
+		cwdDir:    `{"enabled": true, "strategy_options": {"checkpoints_version": 2}}`,
+		targetDir: `{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`,
+	} {
+		entireDir := filepath.Join(dir, ".entire")
+		if err := os.MkdirAll(entireDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Chdir(cwdDir)
+
+	got, err := Load(WithWorktreeRoot(context.Background(), targetDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CheckpointsVersion() != 1 {
+		t.Fatalf("CheckpointsVersion() = %d, want target repo default v1", got.CheckpointsVersion())
+	}
+	if !got.IsCheckpointsV2Enabled() {
+		t.Fatal("IsCheckpointsV2Enabled() = false, want target repo checkpoints_v2 setting")
+	}
+}
+
 func TestLoad_RejectsUnknownKeys(t *testing.T) {
 	// Create a temporary directory
 	tmpDir := t.TempDir()

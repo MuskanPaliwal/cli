@@ -820,7 +820,7 @@ func pushV2Refs(ctx context.Context, target string) {
 		printV2PushFailures(ctx, target, nil, []error{fmt.Errorf("open repository: %w", err)}, false)
 		return
 	}
-	store := checkpoint.NewV2GitStore(repo, target)
+	store := checkpoint.NewV2GitStore(repo)
 
 	refs := v2RefsToPush(repo)
 	pendingPublications, pendingReadErr := readPendingV2FullGenerationPublications(ctx, store)
