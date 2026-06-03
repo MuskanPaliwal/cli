@@ -1,0 +1,56 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "803ea1872413",
+  "session_id": "ses_17807a5ceffeFbwASFmRM2CfZr",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-03T16:12:15.774296Z",
+  "branch": "fix-submodule-gitdir-worktree-id",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/paths/worktree_test.go"
+  ],
+  "agent": "OpenCode",
+  "model": "glm-5.1",
+  "turn_id": "6bf58463a270",
+  "token_usage": {
+    "input_tokens": 123043,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 426176,
+    "output_tokens": 3850,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-03T16:12:15.768175Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 24,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 24,
+    "total_lines_changed": 35,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 591,
+      "user_lines_removed": 68,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 57,
+        ".opencode/plugins/entire.ts": 54,
+        "cmd/entire/cli/paths/worktree_test.go": 44,
+        "issue-640-submodule-gitdir.html": 436
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 53,
+        ".opencode/plugins/entire.ts": 15
+      }
+    }
+  ]
+}

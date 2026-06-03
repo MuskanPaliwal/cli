@@ -1,0 +1,1 @@
+find bugs in this repo. this repo has so many bugs. for better understanding, go thorugh all the readme and docs, understand what product does and the use case and then figure out exitsing bugs
