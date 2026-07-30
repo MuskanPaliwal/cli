@@ -89,6 +89,18 @@ func AsSidecarImageProvider(ag Agent) (SidecarImageProvider, bool) {
 	return p, ok
 }
 
+// AsTranscriptFetcher returns the agent as TranscriptFetcher if it implements
+// the interface. This is an optional capability (materializing a transcript on
+// demand for sessions with no hook-cached file), so it resolves by type
+// assertion alone with no DeclaredCaps gate.
+func AsTranscriptFetcher(ag Agent) (TranscriptFetcher, bool) {
+	if ag == nil {
+		return nil, false
+	}
+	f, ok := ag.(TranscriptFetcher)
+	return f, ok
+}
+
 // AsTokenCalculator returns the agent as TokenCalculator if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
 func AsTokenCalculator(ag Agent) (TokenCalculator, bool) {

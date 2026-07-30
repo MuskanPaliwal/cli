@@ -168,6 +168,14 @@ func (a *OpenCodeAgent) PrepareTranscript(ctx context.Context, sessionRef string
 	return err
 }
 
+// FetchTranscript materializes the session's transcript via `opencode export`
+// and returns the cached path. Unlike PrepareTranscript (which only refreshes
+// an existing file), this works for sessions Entire never tracked — e.g.
+// sessions spawned by an external host, where no hook ever cached an export.
+func (a *OpenCodeAgent) FetchTranscript(ctx context.Context, sessionID string) (string, error) {
+	return a.fetchAndCacheExport(ctx, sessionID)
+}
+
 // sessionTranscriptPath validates the session ID and returns the expected transcript path.
 func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {

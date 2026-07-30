@@ -1903,3 +1903,78 @@ func runGitInDir(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
 	}
 }
+
+// TestAttach_OpenCodeFetchesTranscriptForUntrackedSession is a regression test
+// for sessions spawned outside a hooked terminal (e.g. by an external session
+// host): no hook ever cached an export under .entire/tmp, and
+// resolveAndValidateTranscript used to give up because PrepareTranscript was
+// only called when the file already existed. OpenCode can materialize the
+// transcript via `opencode export`, so attach now consults the
+// TranscriptFetcher capability before failing.
+func TestAttach_OpenCodeFetchesTranscriptForUntrackedSession(t *testing.T) {
+	setupAttachTestRepo(t)
+	// Mock-export mode: fetchAndCacheExport returns the pre-written file
+	// instead of invoking the opencode CLI.
+	t.Setenv("ENTIRE_TEST_OPENCODE_MOCK_EXPORT", "1")
+
+	sessionID := "test-attach-opencode-untracked"
+	repoRoot := mustGetwd(t)
+	tmpDir := filepath.Join(repoRoot, ".entire", "tmp")
+	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	export := `{
+  "info": {"id": "test-attach-opencode-untracked", "title": "docs: example"},
+  "messages": [
+    {
+      "info": {"id": "msg_u1", "role": "user", "time": {"created": 1767225600000}},
+      "parts": [{"type": "text", "text": "Update the example doc"}]
+    },
+    {
+      "info": {
+        "id": "msg_a1", "role": "assistant",
+        "providerID": "fireworks-ai", "modelID": "accounts/fireworks/routers/kimi-k3-fast",
+        "time": {"created": 1767225660000, "completed": 1767225700000},
+        "tokens": {"total": 100, "input": 90, "output": 10, "reasoning": 0, "cache": {"write": 0, "read": 0}}
+      },
+      "parts": [
+        {"type": "tool", "tool": "bash", "callID": "bash_0",
+         "state": {"status": "completed", "input": {"command": "git commit -m \"docs: example\""}, "output": "ok"}}
+      ]
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, sessionID+".json"), []byte(export), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := runAttach(context.Background(), &out, &out, sessionID, agent.AgentNameOpenCode, attachOptions{Force: true})
+	if err != nil {
+		t.Fatalf("runAttach failed: %v", err)
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil {
+		t.Fatal("expected session state to be created")
+		return
+	}
+	if state.LastCheckpointID.IsEmpty() {
+		t.Error("expected LastCheckpointID to be set after attach")
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Attached session") {
+		t.Errorf("expected 'Attached session' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "Created checkpoint") {
+		t.Errorf("expected 'Created checkpoint' in output, got: %s", output)
+	}
+}

@@ -810,6 +810,16 @@ func resolveAndValidateTranscript(ctx context.Context, sessionID string, ag agen
 		}
 		return transcriptPath, nil
 	}
+	// Agents that can materialize a transcript on demand (e.g. OpenCode via
+	// `opencode export`) can conjure one even when no hook-cached file exists,
+	// e.g. sessions spawned by an external host rather than a hooked terminal.
+	if fetcher, ok := agent.AsTranscriptFetcher(ag); ok {
+		fetched, fetchErr := fetcher.FetchTranscript(ctx, sessionID)
+		if fetchErr == nil {
+			return fetched, nil
+		}
+		logging.Debug(ctx, "FetchTranscript failed, falling back to project-dir search", "error", fetchErr)
+	}
 	found, searchErr := searchTranscriptInProjectDirs(sessionID, ag)
 	if searchErr == nil {
 		logging.Info(ctx, "found transcript in alternative project directory", "path", found)

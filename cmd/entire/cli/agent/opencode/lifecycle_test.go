@@ -389,3 +389,29 @@ func TestFetchAndCacheExport_WritesAndValidatesExportFile(t *testing.T) {
 	require.True(t, json.Valid(content), "expected cached transcript to be valid JSON")
 	require.Contains(t, string(content), "\"ses_abc123\"")
 }
+
+func TestFetchTranscript_ValidatesSessionID(t *testing.T) {
+	t.Parallel()
+
+	ag := &OpenCodeAgent{}
+	if _, err := ag.FetchTranscript(context.Background(), "bad/session-id"); err == nil {
+		t.Fatal("expected error for session ID with path separator, got nil")
+	}
+}
+
+func TestFetchTranscript_AttemptsExport(t *testing.T) {
+	t.Parallel()
+
+	// Without mock-export mode, FetchTranscript must attempt `opencode export`
+	// — proving it tries to materialize the transcript for sessions with no
+	// hook-cached file rather than stat-checking an existing one. Without a
+	// usable session the export fails, wrapped as "opencode export failed".
+	ag := &OpenCodeAgent{}
+	_, err := ag.FetchTranscript(context.Background(), "test-fetch-transcript-no-such-session")
+	if err == nil {
+		t.Fatal("expected error for nonexistent session, got nil")
+	}
+	if !strings.Contains(err.Error(), "opencode export failed") {
+		t.Errorf("expected 'opencode export failed' error, got: %v", err)
+	}
+}
