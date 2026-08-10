@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1195,6 +1196,41 @@ func TestWriteCommitted_MultipleSessionsSameCheckpoint(t *testing.T) {
 	}
 	if content1.Metadata.SessionID != "session-two" {
 		t.Errorf("session 1 SessionID = %q, want %q", content1.Metadata.SessionID, "session-two")
+	}
+}
+
+// TestWriteCommitted_DeduplicatesFilesTouched verifies the write boundary
+// enforces uniqueness on files_touched instead of trusting the caller. Every
+// known producer dedupes before writing, yet duplicated paths have reached the
+// permanent record in the wild until a session's metadata.json exceeded
+// GitHub's 100 MB blob limit and the checkpoints branch became unpushable —
+// so the invariant is enforced where the record is written.
+func TestWriteCommitted_DeduplicatesFilesTouched(t *testing.T) {
+	repo, _ := setupBranchTestRepo(t)
+	store := NewGitStore(repo, DefaultV1Refs())
+	checkpointID := id.MustCheckpointID("c1c2c3c4c5c6")
+
+	err := store.Write(context.Background(), Session{
+		CheckpointID:     checkpointID,
+		SessionID:        "session-dup",
+		Strategy:         "manual-commit",
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "dup session"}`)),
+		FilesTouched:     []string{"b.go", "a.go", "b.go", "a.go", "a.go"},
+		CheckpointsCount: 1,
+		AuthorName:       "Test Author",
+		AuthorEmail:      "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	metadata, err := store.ReadSessionMetadata(context.Background(), checkpointID, 0)
+	if err != nil {
+		t.Fatalf("ReadSessionMetadata() error = %v", err)
+	}
+	want := []string{"a.go", "b.go"}
+	if !slices.Equal(metadata.FilesTouched, want) {
+		t.Errorf("FilesTouched = %v, want %v", metadata.FilesTouched, want)
 	}
 }
 
