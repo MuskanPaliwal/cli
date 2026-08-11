@@ -751,7 +751,7 @@ func (s *treeWriter) writeSessionToSubdirectory(ctx context.Context, opts WriteO
 		CommitSHA:                   opts.CommitSHA,
 		CheckpointsCount:            opts.CheckpointsCount,
 		SaveStepCount:               opts.SaveStepCount,
-		FilesTouched:                mergeFilesTouched(opts.FilesTouched, nil),
+		FilesTouched:                NormalizeFilesTouched(opts.FilesTouched),
 		Agent:                       opts.Agent,
 		Model:                       opts.Model,
 		TurnID:                      opts.TurnID,
@@ -1228,6 +1228,21 @@ func (s *treeWriter) writeCompactTranscript(ctx context.Context, agentType types
 		Hash: blobHash,
 	}
 	return &boundary
+}
+
+// NormalizeFilesTouched returns files deduplicated, sorted, and normalized to
+// forward slashes, for writing into persistent checkpoint records. It
+// preserves the nil-versus-empty distinction of its input: files_touched is
+// marshaled without omitempty, so nil-in stays nil (JSON null, as before) and
+// a non-nil empty input stays non-nil (JSON []), keeping the wire format
+// unchanged for callers that send an empty list. Exported so alternate
+// persistent backends enforce the same write-boundary invariant.
+func NormalizeFilesTouched(files []string) []string {
+	merged := mergeFilesTouched(files, nil)
+	if merged == nil && files != nil {
+		return []string{}
+	}
+	return merged
 }
 
 // mergeFilesTouched combines two file lists, removing duplicates.

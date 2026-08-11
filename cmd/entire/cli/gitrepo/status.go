@@ -93,6 +93,12 @@ func Status(ctx context.Context, repo *git.Repository) (git.Status, error) {
 // (agent worktrees, vendored clones) would otherwise be reported as if they
 // were this repository's files. Tracked entries are kept regardless of
 // location, matching git, which always reports index entries.
+//
+// Deliberately quieter than git in one respect: git reports the boundary
+// itself as a single untracked entry ("?? vendor/"), while this filter drops
+// it entirely. Consumers treat every status entry as a file to record, so a
+// synthetic directory entry would be junk of the same kind this filter
+// removes. Do not "fix" the missing boundary entry.
 func filterNestedCheckouts(root string, status git.Status) {
 	containsGit := make(map[string]bool)
 	for relPath, fileStatus := range status {
