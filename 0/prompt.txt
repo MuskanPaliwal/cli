@@ -1,0 +1,45 @@
+we have gotten this comment from a maintainer on our pr: can we discuss this? https://github.com/entireio/cli/pull/1937#issuecomment-5267402995
+
+---
+
+yupp just amke sure we are asking the real question and we make sure that the draft reply should not be a aiish, make it no ai slop
+
+---
+
+First tell me clearly what commits are you dropping and what are you keeping?
+
+---
+
+yes go ahead
+
+---
+
+make it no-ai-slope the previous version was more better
+
+---
+
+can you be like hi,
+
+---
+
+and do use i have done this etc
+
+---
+
+Now you think we should create another PR or we should wait for his reply? I think I can at least create a PR.
+
+---
+
+Okay, then we should create a PR for that. Like I think we should first create a separate factory. Create the PR. I mean, yeah.
+
+---
+
+where did you do the commit?
+
+---
+
+okay are we sure?
+
+---
+
+yupp
