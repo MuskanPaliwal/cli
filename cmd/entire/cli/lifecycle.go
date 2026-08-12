@@ -22,7 +22,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/provenance"
@@ -96,13 +95,6 @@ func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Ev
 		}
 	}
 
-	// Memoize worktree status for the handlers whose window is provably stable.
-	// Centralized here rather than inside a handler so that no handler can opt
-	// itself in without the precondition being reviewed (see statusCacheSafe).
-	if statusCacheSafe(event.Type) {
-		ctx = gitrepo.WithStatusCache(ctx)
-	}
-
 	switch event.Type {
 	case agent.SessionStart:
 		return handleLifecycleSessionStart(ctx, ag, event)
@@ -124,33 +116,6 @@ func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Ev
 		return handleLifecycleToolUse(ctx, ag, event)
 	default:
 		return fmt.Errorf("unknown lifecycle event type: %d", event.Type)
-	}
-}
-
-// statusCacheSafe reports whether t's handler is guaranteed to neither write
-// tracked files nor stage anything for the duration of the handler, which is the
-// precondition for reusing one worktree status across it (see
-// gitrepo.WithStatusCache).
-//
-// This is a closed allowlist and must stay one. Post-agent handlers — TurnEnd,
-// SubagentEnd — run after the agent has edited files, and DetectFileChanges
-// there must observe those edits. Before adding an event, check that its handler
-// performs no tracked-file write between its first and last status read;
-// TurnStart only qualifies because EnsureSetup (which can rewrite the tracked
-// .entire/.gitignore) was hoisted above its first read.
-//
-// Every event is listed explicitly rather than folded into the default so the
-// exhaustive linter fails the build when a new EventType is added, forcing that
-// review to happen. The default stays as a belt-and-braces deny.
-func statusCacheSafe(t agent.EventType) bool {
-	switch t {
-	case agent.TurnStart:
-		return true
-	case agent.SessionStart, agent.TurnEnd, agent.Compaction, agent.SessionEnd,
-		agent.SubagentStart, agent.SubagentEnd, agent.ModelUpdate, agent.ToolUse:
-		return false
-	default:
-		return false
 	}
 }
 
@@ -593,13 +558,9 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		}
 	}
 
-	// Strategy setup runs before the first worktree-status read below.
-	// EnsureEntireGitignore can append entries to .entire/.gitignore, which is
-	// tracked, and the dispatcher has already installed a status cache for this
-	// event (see statusCacheSafe). The cache fills on first read rather than at
-	// install, so doing this write first keeps every cached read consistent with
-	// the worktree. Moving this back below CapturePrePromptState would reintroduce
-	// a tracked-file write between two cached reads.
+	// EnsureEntireGitignore can append to the tracked .entire/.gitignore, so run
+	// it before CapturePrePromptState: the snapshot should describe the tree the
+	// agent starts from, not one setup is about to change.
 	_, setupSpan := perf.Start(ctx, "ensure_setup")
 	if err := strategy.EnsureSetup(ctx); err != nil {
 		logging.Warn(logCtx, "failed to ensure strategy setup",

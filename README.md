@@ -5,7 +5,7 @@ Entire hooks into your Git workflow to capture AI agent sessions as you work. Se
 With Entire, you can:
 
 - **Understand why code changed** — see the full prompt/response transcript and files touched
-- **Recover instantly** — rewind to a known-good checkpoint when an agent goes sideways and resume seamlessly
+- **Recover instantly** — resume from a known-good checkpoint when an agent goes sideways
 - **Keep Git history clean** — preserve agent context on a separate branch
 - **Onboard faster** — show the path from prompt → change → commit
 - **Maintain traceability** — support audit and compliance requirements when needed
@@ -13,7 +13,7 @@ With Entire, you can:
 ## Why Entire
 
 - **Understand why code changed, not just what** — Transcripts, prompts, files touched, token usage, tool calls, and more are captured alongside every commit.
-- **Rewind and resume from any checkpoint** — Go back to any previous agent session and pick up exactly where you or a coworker left off.
+- **Resume from any checkpoint** — Go back to any previous agent session and pick up exactly where you or a coworker left off.
 - **Full context preserved and searchable** — A versioned record of every AI interaction tied to your git history, with nothing lost.
 - **Zero context switching** — Git-native, two-step setup, works with Claude Code, Codex, Gemini, Pi, and more.
 
@@ -133,19 +133,7 @@ Just use one of your AI agents as before. Entire runs in the background, trackin
 entire status  # Check current session status anytime
 ```
 
-### 3. Rewind to a Previous Checkpoint (deprecated)
-
-> **Deprecated:** `entire checkpoint rewind` will be removed in a future release.
-
-If you want to undo some changes and go back to an earlier checkpoint:
-
-```
-entire checkpoint rewind
-```
-
-This shows all available checkpoints in the current session. Select one to restore your code to that exact state.
-
-### 4. Resume a Previous Session
+### 3. Resume a Previous Session
 
 To restore the latest checkpointed session metadata for a branch:
 
@@ -155,7 +143,7 @@ entire session resume <branch>
 
 Entire checks out the branch, restores the latest checkpointed session metadata (one or more sessions), and prints command(s) to continue.
 
-### 5. Disable Entire (Optional)
+### 4. Disable Entire (Optional)
 
 ```
 entire disable
@@ -175,7 +163,7 @@ Sessions are stored separately from your code commits on the `entire/checkpoints
 
 ### Checkpoints
 
-A **checkpoint** is a snapshot within a session that you can rewind to—a "save point" in your work.
+A **checkpoint** is a snapshot within a session—a "save point" in your work.
 
 Checkpoints are created when you or the agent make a git commit. **Checkpoint IDs** are 12-character hex strings (e.g., `a3b2c4d5e6f7`).
 
@@ -208,7 +196,6 @@ Entire uses a manual-commit strategy that keeps your git history clean:
 
 - **No commits on your branch** — Entire never creates commits on the active branch
 - **Safe on any branch** — works on main, master, and feature branches alike
-- **Non-destructive rewind** — restore files from any checkpoint without altering commit history
 - **Metadata stored separately** — all session data lives on the `entire/checkpoints/v1` branch
 
 ### Git Worktrees
@@ -299,7 +286,6 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | `entire enable`  | Enable Entire in your repository                                                                  |
 | `entire checkpoint`        | List, explain, and search checkpoints                                                   |
 | `entire checkpoint explain` | Explain a session, commit, or checkpoint                                               |
-| `entire checkpoint rewind` | Rewind to a previous checkpoint (deprecated, will be removed in a future release)       |
 | `entire login`   | Authenticate the CLI with Entire device auth                                                      |
 | `entire org`     | Manage Entire organizations (create, list, get, delete)                                           |
 | `entire plugin`  | Discover, install, upgrade, and remove plugins (see [Plugins](#plugins))                          |
@@ -527,7 +513,7 @@ Local settings override project settings field-by-field. When you run `entire st
 ### Agent-Specific Steps & Limitations
 
 - Codex hooks are enabled by default (codex-cli 0.124.0+), so enabling Entire for Codex only installs `.codex/hooks.json` — no `config.toml` is needed and Entire never creates one. If an older Entire version left a `.codex/config.toml` behind and your repo lives inside `~/.codex/agents`, delete that file to stop Codex's "malformed agent role definition" startup warning.
-- Entire supports Cursor IDE and Cursor Agent CLI tool, but `entire rewind` is not available at this time. Other commands (`doctor`, `status` etc.) work the same as all other agents.
+- Entire supports Cursor IDE and Cursor Agent CLI tool. Commands (`doctor`, `status` etc.) work the same as all other agents.
 - Entire supports Copilot CLI, but not Copilot in VS Code, in other IDEs, or on github.com.
 - Entire supports Pi coding agent (Preview). Pi uses a TypeScript extension instead of a JSON hook config. Subagent capture is not currently available.
 
@@ -545,7 +531,6 @@ Entire automatically redacts detected secrets (API keys, tokens, credentials) wh
 | ------------------------ | ------------------------------------------------------- |
 | "Not a git repository"   | Navigate to a Git repository first                      |
 | "Entire is disabled"     | Run `entire enable`                                     |
-| "No rewind points found" | Work with your configured agent and commit your changes |
 | "shadow branch conflict" | Run `entire clean --force`                              |
 
 ### SSH Authentication Errors

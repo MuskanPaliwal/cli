@@ -542,3 +542,70 @@ func TestNewSemanticSearcher_RejectsMultipleRepoFilters(t *testing.T) {
 		t.Fatal("expected a validation error before any network access")
 	}
 }
+
+// TestMergeSemanticV4Responses_AllCellsRepoUnmatched verifies the error when
+// every queried cell answered but none matched the repo filter (not indexed,
+// or the owner org isn't flag-enabled — a typo can't reach this point, the
+// slug already resolved). The old behavior lumped this in with undeployed
+// cells and told the user their REGION lacked semantic search — a
+// misdiagnosis that sent a flag-enrollment gap to the wrong team.
+func TestMergeSemanticV4Responses_AllCellsRepoUnmatched(t *testing.T) {
+	t.Parallel()
+
+	_, err := mergeSemanticV4Responses(context.Background(), 0, 0, []cellCallResult[*search.Response]{
+		v4CellErr(fmt.Errorf("cell a: %w", search.ErrRepoFilterUnmatched)),
+		v4CellErr(search.ErrRepoFilterUnmatched),
+	})
+	if err == nil {
+		t.Fatal("expected an error when no cell matched the repo filter")
+	}
+	if strings.Contains(err.Error(), "region") {
+		t.Errorf("error = %q, must not blame the region for a repo-filter miss", err.Error())
+	}
+	if !strings.Contains(err.Error(), "repo") || !strings.Contains(err.Error(), "enabled") {
+		t.Errorf("error = %q, want it to point at the repo name, access, or semantic-search enablement", err.Error())
+	}
+}
+
+// TestMergeSemanticV4Responses_RepoUnmatchedBeatsRegionMessage: when some
+// cells lack query-serve AND one answered "repo unmatched", the repo message
+// wins — a cell answering proves the region serves semantic search.
+func TestMergeSemanticV4Responses_RepoUnmatchedBeatsRegionMessage(t *testing.T) {
+	t.Parallel()
+
+	_, err := mergeSemanticV4Responses(context.Background(), 0, 0, []cellCallResult[*search.Response]{
+		v4CellErr(search.ErrCellUnavailable),
+		v4CellErr(search.ErrRepoFilterUnmatched),
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), "region") {
+		t.Errorf("error = %q, must not blame the region when a cell answered", err.Error())
+	}
+}
+
+// TestMergeSemanticV4Responses_RepoUnmatchedQuietWithResults: a repo-unmatched
+// cell alongside a successful page is skipped quietly, like an undeployed
+// cell — no partial-failure warning, results still returned.
+func TestMergeSemanticV4Responses_RepoUnmatchedQuietWithResults(t *testing.T) {
+	t.Parallel()
+
+	ok := &search.Response{Results: []search.Result{
+		v4Ckpt("ok", 1, search.Meta{Score: 0.5}),
+	}, Total: 1}
+
+	resp, err := mergeSemanticV4Responses(context.Background(), 0, 0, []cellCallResult[*search.Response]{
+		v4CellErr(search.ErrRepoFilterUnmatched),
+		v4CellOK(ok),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none for a repo-unmatched cell beside results", resp.Warnings)
+	}
+	if len(resp.Results) != 1 {
+		t.Errorf("results = %d, want 1", len(resp.Results))
+	}
+}

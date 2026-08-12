@@ -341,11 +341,18 @@ type semanticCellPage struct {
 // cluster catalog doesn't expose the placement's jurisdiction at all (a cell
 // mid-onboarding). Neither is worth warning the user about on every search.
 func classifySemanticCells(ctx context.Context, results []cellCallResult[*search.Response]) (pages []semanticCellPage, failed []string, lastErr error) {
-	var skipped []string
+	var skipped, unmatched []string
+	var unmatchedErr error
 	for _, r := range results {
 		switch {
 		case errors.Is(r.err, search.ErrCellUnavailable), errors.Is(r.err, auth.ErrNoCellForJurisdiction):
 			skipped = append(skipped, r.group.label())
+		case errors.Is(r.err, search.ErrRepoFilterUnmatched):
+			// The cell answered; the repo filter just matched nothing there.
+			// Quiet like a skip when another cell has results, but if NO cell
+			// matches it must surface as a repo problem, never a region one.
+			unmatched = append(unmatched, r.group.label())
+			unmatchedErr = r.err
 		case r.err != nil:
 			lastErr = r.err
 			failed = append(failed, r.group.label())
@@ -365,11 +372,30 @@ func classifySemanticCells(ctx context.Context, results []cellCallResult[*search
 	if len(skipped) > 0 {
 		logging.Debug(ctx, "semantic search: cells without query-serve skipped", "skipped_cells", skipped)
 	}
-	if len(pages) == 0 && lastErr == nil && len(skipped) > 0 {
-		lastErr = errNoRegionAvailable
+	if len(unmatched) > 0 {
+		// unmatchedErr carries the server's own message (CellV4 wraps it into
+		// the sentinel) — keep it visible here for diagnosis.
+		logging.Debug(ctx, "semantic search: cells where the repo filter matched nothing", "unmatched_cells", unmatched, "error", unmatchedErr.Error())
+	}
+	if len(pages) == 0 && lastErr == nil {
+		switch {
+		case len(unmatched) > 0:
+			// Takes priority over the region message: a cell answering proves
+			// its region serves semantic search.
+			lastErr = errNoRepoAvailable
+		case len(skipped) > 0:
+			lastErr = errNoRegionAvailable
+		}
 	}
 	return pages, failed, lastErr
 }
+
+// errNoRepoAvailable is returned when at least one cell answered but none
+// matched the repo filter. A typo'd name or missing access cannot reach this
+// point — resolveScope already validated the slug against the control-plane
+// repo index — so the message names only the causes that survive: query-serve
+// hasn't indexed the repo, or its owner org isn't enabled for semantic search.
+var errNoRepoAvailable = errors.New("semantic search cannot search this repo yet — it may not be indexed, or semantic search may not be enabled for its owner")
 
 // errNoRegionAvailable is returned when every queried cell lacks query-serve.
 var errNoRegionAvailable = errors.New("semantic search is not yet available in the region(s) hosting this search")
