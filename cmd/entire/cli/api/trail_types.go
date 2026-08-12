@@ -138,13 +138,20 @@ type TrailDeleteResponse struct {
 }
 
 // TrailApproval is a single approval decision on a trail.
+//
+// Author is a GitHub login string, not a *trail.Author object — the approvals
+// endpoint sends `"author":"nodo"` where the trail resource sends
+// `"author":{"id":…,"login":…}`. Matching TrailThread/TrailMessage, which use the
+// same string shape. Declaring an object here made every populated response fail
+// to decode, so `entire trail approvals` worked only while there was nothing to
+// show (see TestTrailApprovalDecodesStringAuthor).
 type TrailApproval struct {
-	ID        string        `json:"id"`
-	Author    *trail.Author `json:"author"`
-	Event     string        `json:"event"` // "approved" | "changes_requested"
-	Body      string        `json:"body,omitempty"`
-	CommitSHA string        `json:"commit_sha,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID        string    `json:"id"`
+	Author    string    `json:"author"` // GitHub login
+	Event     string    `json:"event"`  // "approved" | "changes_requested"
+	Body      string    `json:"body,omitempty"`
+	CommitSHA string    `json:"commit_sha,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // TrailApprovalRequest is the body for POST .../:number/approvals.

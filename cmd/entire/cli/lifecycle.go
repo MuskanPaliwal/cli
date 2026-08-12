@@ -844,8 +844,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	}
 
 	// Compute subagents directory for agents that support subagent extraction.
-	// Subagent transcripts live in <transcriptDir>/<modelSessionID>/subagents/
-	subagentsDir := filepath.Join(filepath.Dir(transcriptRef), event.SessionID, "subagents")
+	subagentsDir := paths.SubagentsDir(filepath.Dir(transcriptRef), event.SessionID)
 
 	// Extract metadata via agent interface (modified files)
 	var modifiedFiles []string
@@ -1145,15 +1144,8 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 		event.SubagentType, event.TaskDescription = ParseSubagentTypeAndDescription(event.ToolInput)
 	}
 
-	// Determine subagent transcript path
-	transcriptDir := filepath.Dir(event.SessionRef)
-	var subagentTranscriptPath string
-	if event.SubagentID != "" {
-		subagentTranscriptPath = AgentTranscriptPath(transcriptDir, event.SubagentID)
-		if !fileExists(subagentTranscriptPath) {
-			subagentTranscriptPath = ""
-		}
-	}
+	// Determine subagent transcript path (empty when the agent stores none).
+	subagentTranscriptPath := ResolveAgentTranscriptPath(filepath.Dir(event.SessionRef), event.SessionID, event.SubagentID)
 
 	// Log context
 	subagentEndAttrs := []any{
@@ -1211,9 +1203,22 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 		return fmt.Errorf("failed to get worktree root: %w", err)
 	}
 
-	relModifiedFiles := FilterAndNormalizePaths(modifiedFiles, repoRoot)
+	// The transcript records what the subagent wrote at some point in its run, not
+	// what is still uncommitted. When the subagent committed its own work mid-turn
+	// (the scenario TestSingleSessionSubagentCommitInTurn covers), that commit has
+	// already condensed the session and deleted the shadow branch, so there is
+	// nothing left to snapshot. Keeping those paths defeats the "no changes, skip"
+	// gate below and mints a *new* shadow branch after condensation — which nothing
+	// then condenses away, because turn-end skips when no files changed, so it
+	// outlives the session.
+	//
+	// filterToUncommittedFiles is the same guard the turn-end path already applies
+	// for this exact reason; it fails open, so a git error keeps the list as-is
+	// rather than silently dropping a real checkpoint.
+	relModifiedFiles := filterToUncommittedFiles(ctx, FilterAndNormalizePaths(modifiedFiles, repoRoot), repoRoot)
 	var relNewFiles, relDeletedFiles []string
 	if changes != nil {
+		// changes come from git status, so they are uncommitted by construction.
 		relNewFiles = FilterAndNormalizePaths(changes.New, repoRoot)
 		relDeletedFiles = FilterAndNormalizePaths(changes.Deleted, repoRoot)
 		relModifiedFiles = mergeUnique(relModifiedFiles, FilterAndNormalizePaths(changes.Modified, repoRoot))
