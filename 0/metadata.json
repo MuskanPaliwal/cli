@@ -1,0 +1,242 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "01KZV9ADQR13SWXAK6YK0QG5F6",
+  "session_id": "a0f337a0-9d0d-4157-bc03-811122a9cd7a",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-12T15:26:45.797516Z",
+  "branch": "fix-checkpoint-metadata-bloat",
+  "checkpoints_count": 9,
+  "save_step_count": 7,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/status.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "325d51925b29",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1003,
+    "cache_creation_tokens": 91528,
+    "cache_read_tokens": 3106069,
+    "output_tokens": 36400,
+    "api_call_count": 34
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01XQFsXvz11nxc9mZyXq6fgA",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "draft-github-reply"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "325d51925b29",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 37,
+        "end": 38,
+        "entry_ids": [
+          "f53f3f8e-8055-4f4e-991b-cc407a681f0f"
+        ],
+        "tool_use_id": "toolu_01XQFsXvz11nxc9mZyXq6fgA"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XQFsXvz11nxc9mZyXq6fgA"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: draft-github-reply",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WZb78LPKjqJfLcVHXUq9Me",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "no-ai-slop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "325d51925b29",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 53,
+        "end": 54,
+        "entry_ids": [
+          "2ddc8915-aa20-4daa-98c8-7b7d28736517"
+        ],
+        "tool_use_id": "toolu_01WZb78LPKjqJfLcVHXUq9Me"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WZb78LPKjqJfLcVHXUq9Me"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: no-ai-slop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_013qVL3RHw5JW438dJsyE4Jp",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "commit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "325d51925b29",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 215,
+        "end": 216,
+        "entry_ids": [
+          "7a56d4e6-59f4-4a11-8807-60dd72df52a5"
+        ],
+        "tool_use_id": "toolu_013qVL3RHw5JW438dJsyE4Jp"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013qVL3RHw5JW438dJsyE4Jp"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: commit",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-12T15:26:45.776783Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 6,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "total_lines_changed": 6,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 101,
+      "user_lines_removed": 72,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95,
+        "cmd/entire/cli/gitrepo/status.go": 6
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 6,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 95,
+      "user_lines_removed": 72,
+      "agent_lines_added": 6,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".opencode/package-lock.json": 95
+      },
+      "user_removed_per_file": {
+        ".opencode/package-lock.json": 72
+      }
+    }
+  ]
+}
