@@ -224,7 +224,7 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 	}
 
 	if err := runOpenCodeExportToFileFn(ctx, sessionID, tmpFile); err != nil {
-		return "", fmt.Errorf("opencode export failed: %w", err)
+		return "", err
 	}
 
 	//nolint:gosec // tmpFile is constructed from validated session ID under repo .entire/tmp
@@ -239,7 +239,9 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 			slog.Int("bytes", len(data)),
 			slog.String("path", tmpFile),
 		)
-		return "", fmt.Errorf("opencode export returned invalid JSON (%d bytes)", len(data))
+		return "", &openCodeExportError{
+			message: fmt.Sprintf("OpenCode returned invalid transcript data for session %q. Try updating OpenCode and running the command again.", sessionID),
+		}
 	}
 
 	return tmpFile, nil

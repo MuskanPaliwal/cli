@@ -761,8 +761,13 @@ func resolveAgentAndTranscript(ctx context.Context, w io.Writer, sessionID strin
 	transcriptPath, err := resolveAndValidateTranscript(ctx, sessionID, ag)
 	if err != nil {
 		// Auto-detect: try all other agents.
-		detectedAg, detectedPath, detectErr := detectAgentByTranscript(ctx, sessionID, agentName)
+		detectedAg, detectedPath, detectErr := detectAgentByTranscript(ctx, sessionID, ag.Name())
 		if detectErr != nil {
+			var fetchFailure *transcriptFetchError
+			if errors.As(err, &fetchFailure) {
+				logging.Debug(ctx, "auto-detection also failed after transcript fetch", "error", detectErr)
+				return nil, "", err
+			}
 			return nil, "", fmt.Errorf("%w (also tried auto-detecting other agents: %w)", err, detectErr)
 		}
 		ag = detectedAg
@@ -773,6 +778,15 @@ func resolveAgentAndTranscript(ctx context.Context, w io.Writer, sessionID strin
 
 	return ag, transcriptPath, nil
 }
+
+// transcriptFetchError keeps secondary auto-detection failures from obscuring
+// the fetch failure that the selected agent can explain.
+type transcriptFetchError struct {
+	cause error
+}
+
+func (e *transcriptFetchError) Error() string { return e.cause.Error() }
+func (e *transcriptFetchError) Unwrap() error { return e.cause }
 
 // resolveAgent resolves the agent to use. For existing sessions with an AgentType,
 // uses agent.GetByAgentType. Otherwise falls back to the --agent flag.
@@ -813,10 +827,15 @@ func resolveAndValidateTranscript(ctx context.Context, sessionID string, ag agen
 	// Agents that can materialize a transcript on demand (e.g. OpenCode via
 	// `opencode export`) can conjure one even when no hook-cached file exists,
 	// e.g. sessions spawned by an external host rather than a hooked terminal.
+	var fetchErr error
 	if fetcher, ok := agent.AsTranscriptFetcher(ag); ok {
-		fetched, fetchErr := fetcher.FetchTranscript(ctx, sessionID)
+		var fetched string
+		fetched, fetchErr = fetcher.FetchTranscript(ctx, sessionID)
 		if fetchErr == nil {
 			return fetched, nil
+		}
+		if errors.Is(fetchErr, context.Canceled) {
+			return "", fmt.Errorf("fetch transcript: %w", fetchErr)
 		}
 		logging.Debug(ctx, "FetchTranscript failed, falling back to project-dir search", "error", fetchErr)
 	}
@@ -826,6 +845,9 @@ func resolveAndValidateTranscript(ctx context.Context, sessionID string, ag agen
 		return found, nil
 	}
 	logging.Debug(ctx, "fallback transcript search failed", "error", searchErr)
+	if fetchErr != nil {
+		return "", &transcriptFetchError{cause: fetchErr}
+	}
 	return "", fmt.Errorf("transcript not found for agent %q with session %s; is the session ID correct?", ag.Name(), sessionID)
 }
 

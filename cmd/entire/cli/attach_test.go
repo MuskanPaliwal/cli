@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,101 @@ func TestAttach_TranscriptNotFound(t *testing.T) {
 	err := runAttach(context.Background(), &out, &out, "nonexistent-session-id", agent.AgentNameClaudeCode, attachOptions{Force: true})
 	if err == nil {
 		t.Fatal("expected error for missing transcript")
+	}
+	if !strings.Contains(err.Error(), `transcript not found for agent "claude-code"`) {
+		t.Fatalf("runAttach error = %v, want existing transcript-not-found error", err)
+	}
+}
+
+type failingTranscriptFetcher struct {
+	agent.Agent
+
+	baseDir    string
+	baseDirErr error
+	err        error
+}
+
+func (a *failingTranscriptFetcher) FetchTranscript(context.Context, string) (string, error) {
+	return "", a.err
+}
+
+func (a *failingTranscriptFetcher) GetSessionBaseDir() (string, error) {
+	return a.baseDir, a.baseDirErr
+}
+
+func TestResolveAndValidateTranscript_PreservesFetchFailureAfterFallback(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	baseAgent, err := agent.Get(agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("opencode export timed out")
+	ag := &failingTranscriptFetcher{
+		Agent:      baseAgent,
+		baseDirErr: errors.New("fallback unavailable"),
+		err:        wantErr,
+	}
+
+	_, err = resolveAndValidateTranscript(context.Background(), "test-fetch-failure", ag)
+	if err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("resolveAndValidateTranscript error = %v, want %q", err, wantErr)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatal("final error does not retain the fetch failure")
+	}
+}
+
+func TestResolveAndValidateTranscript_FallbackWinsAfterFetchFailure(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	const sessionID = "test-fetch-fallback"
+	baseAgent, err := agent.Get(agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseDir := t.TempDir()
+	fallbackDir := filepath.Join(baseDir, "project")
+	if err := os.MkdirAll(fallbackDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	fallbackPath := baseAgent.ResolveSessionFile(fallbackDir, sessionID)
+	if err := os.WriteFile(fallbackPath, []byte("transcript"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ag := &failingTranscriptFetcher{
+		Agent:   baseAgent,
+		baseDir: baseDir,
+		err:     errors.New("fetch failed"),
+	}
+
+	got, err := resolveAndValidateTranscript(context.Background(), sessionID, ag)
+	if err != nil {
+		t.Fatalf("expected fallback transcript to win, got: %v", err)
+	}
+	if got != fallbackPath {
+		t.Fatalf("resolved path = %q, want %q", got, fallbackPath)
+	}
+}
+
+func TestResolveAgentAndTranscript_HidesFailedAutoDetectionAfterFetchFailure(t *testing.T) {
+	setupAttachTestRepo(t)
+	t.Setenv("ENTIRE_TEST_OPENCODE_MOCK_EXPORT", "1")
+	t.Setenv("HOME", t.TempDir())
+
+	var out bytes.Buffer
+	_, _, err := resolveAgentAndTranscript(
+		context.Background(),
+		&out,
+		"test-fetch-failure-autodetect",
+		agent.AgentNameOpenCode,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "mock export file not found") {
+		t.Fatalf("resolveAgentAndTranscript error = %v, want fetch failure", err)
+	}
+	if strings.Contains(err.Error(), "also tried auto-detecting") {
+		t.Fatalf("error contains noisy auto-detection failure: %v", err)
 	}
 }
 

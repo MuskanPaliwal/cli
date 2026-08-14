@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -254,11 +255,6 @@ func TestHookNames(t *testing.T) {
 }
 
 func TestPrepareTranscript_AlwaysRefreshesTranscript(t *testing.T) {
-	t.Parallel()
-
-	// PrepareTranscript should always attempt to refresh via fetchAndCacheExport,
-	// even when the file already exists. Without opencode CLI or mock mode,
-	// this means it must return an error (proving it tried to refresh).
 	tmpDir := t.TempDir()
 	transcriptPath := filepath.Join(tmpDir, "sess-123.json")
 
@@ -267,16 +263,14 @@ func TestPrepareTranscript_AlwaysRefreshesTranscript(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	ag := &OpenCodeAgent{}
-	err := ag.PrepareTranscript(context.Background(), transcriptPath)
+	wantErr := errors.New("refresh attempted")
+	original := runOpenCodeExportToFileFn
+	runOpenCodeExportToFileFn = func(context.Context, string, string) error { return wantErr }
+	t.Cleanup(func() { runOpenCodeExportToFileFn = original })
 
-	// Without opencode CLI, fetchAndCacheExport must fail — proving it attempted a refresh
-	// rather than short-circuiting because the file exists.
-	if err == nil {
-		t.Fatal("expected error (refresh attempt should fail without opencode CLI), got nil")
-	}
-	if !strings.Contains(err.Error(), "opencode export failed") {
-		t.Errorf("expected 'opencode export failed' error, got: %v", err)
+	err := (&OpenCodeAgent{}).PrepareTranscript(context.Background(), transcriptPath)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("PrepareTranscript error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -400,18 +394,37 @@ func TestFetchTranscript_ValidatesSessionID(t *testing.T) {
 }
 
 func TestFetchTranscript_AttemptsExport(t *testing.T) {
-	t.Parallel()
+	t.Chdir(t.TempDir())
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
 
-	// Without mock-export mode, FetchTranscript must attempt `opencode export`
-	// — proving it tries to materialize the transcript for sessions with no
-	// hook-cached file rather than stat-checking an existing one. Without a
-	// usable session the export fails, wrapped as "opencode export failed".
+	wantErr := errors.New("export attempted")
+	original := runOpenCodeExportToFileFn
+	runOpenCodeExportToFileFn = func(context.Context, string, string) error { return wantErr }
+	t.Cleanup(func() { runOpenCodeExportToFileFn = original })
+
 	ag := &OpenCodeAgent{}
 	_, err := ag.FetchTranscript(context.Background(), "test-fetch-transcript-no-such-session")
-	if err == nil {
-		t.Fatal("expected error for nonexistent session, got nil")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("FetchTranscript error = %v, want %v", err, wantErr)
 	}
-	if !strings.Contains(err.Error(), "opencode export failed") {
-		t.Errorf("expected 'opencode export failed' error, got: %v", err)
+}
+
+func TestFetchTranscript_ReportsInvalidJSON(t *testing.T) {
+	t.Chdir(t.TempDir())
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	original := runOpenCodeExportToFileFn
+	runOpenCodeExportToFileFn = func(_ context.Context, _, outputPath string) error {
+		return os.WriteFile(outputPath, []byte("not json"), 0o600)
+	}
+	t.Cleanup(func() { runOpenCodeExportToFileFn = original })
+
+	const sessionID = "test-invalid-json"
+	_, err := (&OpenCodeAgent{}).FetchTranscript(context.Background(), sessionID)
+	want := `OpenCode returned invalid transcript data for session "test-invalid-json". Try updating OpenCode and running the command again.`
+	if err == nil || err.Error() != want {
+		t.Fatalf("FetchTranscript error = %v, want %q", err, want)
 	}
 }

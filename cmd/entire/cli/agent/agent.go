@@ -197,7 +197,8 @@ type TranscriptFetcher interface {
 	Agent
 
 	// FetchTranscript writes the session's transcript to the agent's cache
-	// location and returns its path.
+	// location and returns its path. Errors may be shown to users after other
+	// transcript sources fail, so they must be concise and safe to display.
 	FetchTranscript(ctx context.Context, sessionID string) (string, error)
 }
 
