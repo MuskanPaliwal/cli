@@ -17,9 +17,10 @@ type CapabilityDeclarer interface {
 // can deserialize directly into this type.
 //
 // Not every optional interface appears here: built-in-only capabilities that
-// have no external-protocol equivalent (SessionBaseDirProvider, ModelExtractor,
-// SkillEventExtractor, TranscriptSanitizer) are intentionally excluded — their
-// As* helpers resolve by type assertion alone (see builtinCapability), with no
+// have no external-protocol equivalent (HookFreshness, SidecarImageProvider,
+// TranscriptSanitizer, SubagentSessionResolver, SessionBaseDirProvider,
+// ModelExtractor, SkillEventExtractor) are intentionally excluded — their As*
+// helpers resolve by type assertion alone (see builtinCapability), with no
 // DeclaredCaps gate.
 type DeclaredCaps struct {
 	Hooks                  bool `json:"hooks"`
