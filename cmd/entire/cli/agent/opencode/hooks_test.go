@@ -1,9 +1,14 @@
 package opencode
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -238,6 +243,105 @@ func TestInstallHooks_MessageUpdatedFallsBackToTurnStart(t *testing.T) {
 	}
 	if !strings.Contains(content, `prompt: "",`) {
 		t.Fatal("plugin file should send an empty prompt for fallback turn-start")
+	}
+	if !strings.Contains(content, `promptlessTurnStarts.has(msg.id) && part.text`) {
+		t.Fatal("plugin file should re-fire turn-start with the real prompt once the text part arrives")
+	}
+	if got := strings.Count(content, `promptlessTurnStarts.clear()`); got != 3 {
+		t.Fatalf("plugin file should clear promptless turn tracking at all three session reset sites, got %d", got)
+	}
+}
+
+func TestGeneratedPlugin_PreservesPromptAfterMessageUpdatedFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the generated plugin invokes hooks through sh")
+	}
+	bunPath, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("bun is required to execute the generated OpenCode plugin")
+	}
+
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "entire.ts")
+	if err := os.WriteFile(pluginPath, []byte(renderPlugin()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookLog := filepath.Join(dir, "turn-start.jsonl")
+	fakeEntire := `#!/bin/sh
+if [ "$3" = "turn-start" ]; then
+  cat >> "$HOOK_LOG"
+fi
+`
+	if err := os.WriteFile(filepath.Join(binDir, "entire"), []byte(fakeEntire), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	harness := `
+import { EntirePlugin } from "./entire.ts"
+
+const plugin = await EntirePlugin({ directory: process.cwd() } as any)
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "message-1", role: "user", sessionID: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "message-1", type: "text", text: "preserve this prompt" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "message-1", type: "text", text: "duplicate update" } },
+  },
+} as any)
+`
+	harnessPath := filepath.Join(dir, "harness.ts")
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOOK_LOG", hookLog)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.CommandContext(context.Background(), bunPath, "run", harnessPath)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("execute generated plugin: %v\n%s", err, output)
+	}
+
+	logFile, err := os.Open(hookLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logFile.Close() })
+
+	var prompts []string
+	scanner := bufio.NewScanner(logFile)
+	for scanner.Scan() {
+		var payload struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &payload); err != nil {
+			t.Fatalf("decode turn-start payload %q: %v", scanner.Text(), err)
+		}
+		prompts = append(prompts, payload.Prompt)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"", "preserve this prompt"}
+	t.Logf("captured turn-start prompts: %q", prompts)
+	if !slices.Equal(prompts, want) {
+		t.Fatalf("turn-start prompts = %q, want %q", prompts, want)
 	}
 }
 

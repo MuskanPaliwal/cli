@@ -5,8 +5,9 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
 export const EntirePlugin: Plugin = async ({ directory }) => {
-  // Track seen user messages to fire turn-start only once per message
   const seenUserMessages = new Set<string>()
+  // Metadata-only fallbacks require one repair turn-start when their text arrives.
+  const promptlessTurnStarts = new Set<string>()
   // Track current session ID for message events (which don't include sessionID)
   let currentSessionID: string | null = null
   // Track the model used by the most recent assistant message
@@ -111,6 +112,7 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
       return false
     }
     seenUserMessages.clear()
+    promptlessTurnStarts.clear()
     messageStore.clear()
     currentModel = null
     currentSessionID = sessionID
@@ -175,6 +177,7 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
               seenUserMessages.add(msg.id)
               const sessionID = msg.sessionID ?? currentSessionID
               if (sessionID) {
+                promptlessTurnStarts.add(msg.id)
                 fireTurnStart({
                   session_id: sessionID,
                   prompt: "",
@@ -191,13 +194,22 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
 
             // Fire turn-start on the first text part of a new user message
             const msg = messageStore.get(part.messageID)
-            if (msg?.role === "user" && part.type === "text" && !seenUserMessages.has(msg.id)) {
-              seenUserMessages.add(msg.id)
+            if (msg?.role === "user" && part.type === "text") {
               const sessionID = msg.sessionID ?? currentSessionID
-              if (sessionID) {
+              if (!seenUserMessages.has(msg.id)) {
+                seenUserMessages.add(msg.id)
+                if (sessionID) {
+                  fireTurnStart({
+                    session_id: sessionID,
+                    prompt: part.text ?? "",
+                    model: currentModel ?? "",
+                  })
+                }
+              } else if (promptlessTurnStarts.has(msg.id) && part.text && sessionID) {
+                promptlessTurnStarts.delete(msg.id)
                 fireTurnStart({
                   session_id: sessionID,
-                  prompt: part.text ?? "",
+                  prompt: part.text,
                   model: currentModel ?? "",
                 })
               }
@@ -234,6 +246,7 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
             const session = (event as any).properties?.info
             if (!session?.id) break
             seenUserMessages.clear()
+            promptlessTurnStarts.clear()
             messageStore.clear()
             currentSessionID = null
             pendingInjection = null
@@ -251,6 +264,7 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
             if (!currentSessionID) break
             const sessionID = currentSessionID
             seenUserMessages.clear()
+            promptlessTurnStarts.clear()
             messageStore.clear()
             currentSessionID = null
             pendingInjection = null
