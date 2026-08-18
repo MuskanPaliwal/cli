@@ -17,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/investigate"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/review"
@@ -678,6 +679,49 @@ func TestHandleLifecycleTurnStart_EmptySessionID(t *testing.T) {
 	if !strings.Contains(err.Error(), "no session_id") {
 		t.Errorf("expected error message about missing session_id, got: %v", err)
 	}
+}
+
+func TestDispatchLifecyclePromptUpdate_AppendsWithoutChangingTurnState(t *testing.T) {
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	t.Chdir(repoDir)
+
+	const sessionID = "prompt-update-append"
+	stateBefore := &strategy.SessionState{
+		SessionID:             sessionID,
+		StartedAt:             time.Now().Round(0),
+		Phase:                 session.PhaseActive,
+		TurnID:                "turn-before-repair",
+		LastPrompt:            "earlier prompt",
+		LastCheckpointID:      "abc123abc123",
+		TurnCheckpointIDs:     []string{"abc123abc123"},
+		AttributionBaseCommit: "base-before-repair",
+		PendingPromptAttribution: &strategy.PromptAttribution{
+			UserLinesAdded: 3,
+		},
+	}
+	require.NoError(t, strategy.SaveSessionState(context.Background(), stateBefore))
+
+	promptPath := filepath.Join(paths.SessionMetadataDirFromSessionID(sessionID), paths.PromptFileName)
+	testutil.WriteFile(t, repoDir, promptPath, "earlier prompt")
+
+	err := DispatchLifecycleEvent(context.Background(), newMockAgent(), &agent.Event{
+		Type:      agent.PromptUpdate,
+		SessionID: sessionID,
+		Prompt:    "late prompt",
+	})
+	require.NoError(t, err)
+
+	prompt, err := os.ReadFile(filepath.Join(repoDir, promptPath))
+	require.NoError(t, err)
+	require.Equal(t, "earlier prompt"+checkpoint.PromptSeparator+"late prompt", string(prompt))
+
+	stateAfter, err := strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stateAfter)
+	expectedState := *stateBefore
+	expectedState.LastPrompt = "late prompt"
+	require.Equal(t, &expectedState, stateAfter)
 }
 
 // --- handleLifecycleTurnEnd tests ---

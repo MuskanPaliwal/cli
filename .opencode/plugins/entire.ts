@@ -188,6 +188,15 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
             break
           }
 
+          case "message.removed": {
+            const messageID = (event as any).properties?.messageID
+            if (!messageID) break
+            seenUserMessages.delete(messageID)
+            promptlessTurnStarts.delete(messageID)
+            messageStore.delete(messageID)
+            break
+          }
+
           case "message.part.updated": {
             const part = (event as any).properties?.part
             if (!part?.messageID) break
@@ -244,11 +253,13 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
           case "session.deleted": {
             const session = (event as any).properties?.info
             if (!session?.id) break
-            seenUserMessages.clear()
-            promptlessTurnStarts.clear()
-            messageStore.clear()
-            currentSessionID = null
-            pendingInjection = null
+            if (currentSessionID === session.id) {
+              seenUserMessages.clear()
+              promptlessTurnStarts.clear()
+              messageStore.clear()
+              currentSessionID = null
+              pendingInjection = null
+            }
             // Use sync variant: session-end may fire during shutdown.
             callHookSync("session-end", {
               session_id: session.id,

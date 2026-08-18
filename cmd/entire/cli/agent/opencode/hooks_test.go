@@ -313,6 +313,42 @@ await plugin.event!({
     properties: { part: { messageID: "message-1", type: "text", text: "duplicate update" } },
   },
 } as any)
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "unrelated-delete-message", role: "user", sessionID: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "session.deleted",
+    properties: { info: { id: "unrelated-session" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "unrelated-delete-message", type: "text", text: "survives unrelated deletion" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "removed-message", role: "user", sessionID: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.removed",
+    properties: { sessionID: "session-1", messageID: "removed-message" },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "removed-message", type: "text", text: "stale removed prompt" } },
+  },
+} as any)
 for (const id of ["message-2", "message-3"]) {
   await plugin.event!({
     event: {
@@ -432,6 +468,9 @@ await plugin.event!({
 	want := []hookCall{
 		{Name: "turn-start", Prompt: ""},
 		{Name: "prompt-update", Prompt: "preserve this prompt"},
+		{Name: "turn-start", Prompt: ""},
+		{Name: "prompt-update", Prompt: "survives unrelated deletion"},
+		{Name: "turn-start", Prompt: ""},
 		{Name: "turn-start", Prompt: ""},
 		{Name: "turn-start", Prompt: ""},
 		{Name: "prompt-update", Prompt: "third prompt"},

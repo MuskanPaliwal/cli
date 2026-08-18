@@ -341,6 +341,51 @@ func TestOpenCodeLatePromptRepairAfterMidTurnCommitPreservesTurnState(t *testing
 	assert.Equal(t, "preserve this prompt", checkpointPrompt)
 }
 
+func TestOpenCodeLatePromptRepairBeforeMidTurnCommitIsCheckpointed(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	env.InitEntireWithAgent(agent.AgentNameOpenCode)
+	sess := env.NewOpenCodeSession()
+
+	require.NoError(t, env.SimulateOpenCodeSessionStart(sess.ID, sess.TranscriptPath))
+	require.NoError(t, env.SimulateOpenCodeTurnStart(sess.ID, sess.TranscriptPath, ""))
+
+	stateBefore, err := env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stateBefore)
+	require.NotEmpty(t, stateBefore.TurnID)
+
+	require.NoError(t, env.SimulateOpenCodePromptUpdate(sess.ID, "repair before commit"))
+
+	stateAfterRepair, err := env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stateAfterRepair)
+	expectedState := *stateBefore
+	expectedState.LastPrompt = "repair before commit"
+	assert.Equal(t, &expectedState, stateAfterRepair, "prompt repair should only update LastPrompt before the commit")
+
+	env.WriteFile("repair-before.go", "package repairbefore\n")
+	sess.CreateOpenCodeTranscript("repair before commit", []FileChange{
+		{Path: "repair-before.go", Content: "package repairbefore\n"},
+	})
+	env.CopyTranscriptToEntireTmp(sess.ID, sess.TranscriptPath)
+	env.GitCommitWithShadowHooksAsAgent("Add pre-repaired prompt", "repair-before.go")
+
+	stateAfterCommit, err := env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stateAfterCommit)
+	require.NotEmpty(t, stateAfterCommit.LastCheckpointID)
+	require.Contains(t, stateAfterCommit.TurnCheckpointIDs, stateAfterCommit.LastCheckpointID.String())
+
+	checkpointPrompt, found := env.ReadFileFromBranch(
+		paths.MetadataBranchName,
+		SessionFilePath(string(stateAfterCommit.LastCheckpointID), paths.PromptFileName),
+	)
+	require.True(t, found)
+	assert.Equal(t, "repair before commit", checkpointPrompt)
+}
+
 // TestOpenCodeResumedSessionAfterCommit verifies that resuming an OpenCode session
 // after a commit correctly creates a checkpoint for the second turn.
 //
