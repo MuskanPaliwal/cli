@@ -222,7 +222,7 @@ func TestInstallHooks_MessageUpdatedFallsBackToSessionStart(t *testing.T) {
 	}
 }
 
-func TestInstallHooks_MessageUpdatedFallsBackToTurnStart(t *testing.T) {
+func TestInstallHooks_MessageUpdatedFallsBackToPromptUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	ag := &OpenCodeAgent{}
@@ -245,7 +245,10 @@ func TestInstallHooks_MessageUpdatedFallsBackToTurnStart(t *testing.T) {
 		t.Fatal("plugin file should send an empty prompt for fallback turn-start")
 	}
 	if !strings.Contains(content, `promptlessTurnStarts.has(msg.id) && part.text`) {
-		t.Fatal("plugin file should re-fire turn-start with the real prompt once the text part arrives")
+		t.Fatal("plugin file should repair the prompt once the text part arrives")
+	}
+	if !strings.Contains(content, `callHookSync("prompt-update", {`) {
+		t.Fatal("plugin file should use the prompt-only update hook for late text")
 	}
 	if got := strings.Count(content, `promptlessTurnStarts.clear()`); got != 3 {
 		t.Fatalf("plugin file should clear promptless turn tracking at all three session reset sites, got %d", got)
@@ -271,9 +274,10 @@ func TestGeneratedPlugin_PreservesPromptAfterMessageUpdatedFallback(t *testing.T
 	if err := os.Mkdir(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hookLog := filepath.Join(dir, "turn-start.jsonl")
+	hookLog := filepath.Join(dir, "prompt-hooks.log")
 	fakeEntire := `#!/bin/sh
-if [ "$3" = "turn-start" ]; then
+if [ "$3" = "turn-start" ] || [ "$3" = "prompt-update" ]; then
+  printf '%s\t' "$3" >> "$HOOK_LOG"
   cat >> "$HOOK_LOG"
 fi
 `
@@ -294,6 +298,12 @@ await plugin.event!({
 await plugin.event!({
   event: {
     type: "message.part.updated",
+	properties: { part: { messageID: "message-1", type: "text", text: "" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
     properties: { part: { messageID: "message-1", type: "text", text: "preserve this prompt" } },
   },
 } as any)
@@ -301,6 +311,79 @@ await plugin.event!({
   event: {
     type: "message.part.updated",
     properties: { part: { messageID: "message-1", type: "text", text: "duplicate update" } },
+  },
+} as any)
+for (const id of ["message-2", "message-3"]) {
+  await plugin.event!({
+    event: {
+      type: "message.updated",
+      properties: { info: { id, role: "user", sessionID: "session-1" } },
+    },
+  } as any)
+}
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "message-2", type: "text", text: "" } },
+  },
+} as any)
+for (const [messageID, text] of [["message-3", "third prompt"], ["message-2", "second prompt"], ["message-3", "duplicate third prompt"]]) {
+  await plugin.event!({
+    event: {
+      type: "message.part.updated",
+      properties: { part: { messageID, type: "text", text } },
+    },
+  } as any)
+}
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "deleted-message", role: "user", sessionID: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "session.deleted",
+    properties: { info: { id: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "deleted-message", type: "text", text: "stale deleted prompt" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "switched-message", role: "user", sessionID: "session-1" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "session.created",
+    properties: { info: { id: "session-2" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "switched-message", type: "text", text: "stale switched prompt" } },
+  },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "disposed-message", role: "user", sessionID: "session-2" } },
+  },
+} as any)
+await plugin.event!({
+  event: { type: "server.instance.disposed", properties: {} },
+} as any)
+await plugin.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "disposed-message", type: "text", text: "stale disposed prompt" } },
   },
 } as any)
 `
@@ -323,25 +406,43 @@ await plugin.event!({
 	}
 	t.Cleanup(func() { _ = logFile.Close() })
 
-	var prompts []string
+	type hookCall struct {
+		Name   string
+		Prompt string
+	}
+	var calls []hookCall
 	scanner := bufio.NewScanner(logFile)
 	for scanner.Scan() {
+		hookName, payloadJSON, found := strings.Cut(scanner.Text(), "\t")
+		if !found {
+			t.Fatalf("decode hook log line %q", scanner.Text())
+		}
 		var payload struct {
 			Prompt string `json:"prompt"`
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &payload); err != nil {
-			t.Fatalf("decode turn-start payload %q: %v", scanner.Text(), err)
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			t.Fatalf("decode %s payload %q: %v", hookName, payloadJSON, err)
 		}
-		prompts = append(prompts, payload.Prompt)
+		calls = append(calls, hookCall{Name: hookName, Prompt: payload.Prompt})
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
 
-	want := []string{"", "preserve this prompt"}
-	t.Logf("captured turn-start prompts: %q", prompts)
-	if !slices.Equal(prompts, want) {
-		t.Fatalf("turn-start prompts = %q, want %q", prompts, want)
+	want := []hookCall{
+		{Name: "turn-start", Prompt: ""},
+		{Name: "prompt-update", Prompt: "preserve this prompt"},
+		{Name: "turn-start", Prompt: ""},
+		{Name: "turn-start", Prompt: ""},
+		{Name: "prompt-update", Prompt: "third prompt"},
+		{Name: "prompt-update", Prompt: "second prompt"},
+		{Name: "turn-start", Prompt: ""},
+		{Name: "turn-start", Prompt: ""},
+		{Name: "turn-start", Prompt: ""},
+	}
+	t.Logf("captured prompt hooks: %+v", calls)
+	if !slices.Equal(calls, want) {
+		t.Fatalf("prompt hooks = %+v, want %+v", calls, want)
 	}
 }
 

@@ -100,6 +100,8 @@ func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Ev
 		return handleLifecycleSessionStart(ctx, ag, event)
 	case agent.TurnStart:
 		return handleLifecycleTurnStart(ctx, ag, event)
+	case agent.PromptUpdate:
+		return handleLifecyclePromptUpdate(ctx, ag, event)
 	case agent.TurnEnd:
 		return handleLifecycleTurnEnd(ctx, ag, event)
 	case agent.Compaction:
@@ -585,27 +587,11 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 	}
 	captureSpan.End()
 
-	// Append prompt to prompt.txt on filesystem so it's available for
-	// mid-turn commits (before SaveStep writes it to the shadow branch).
-	// Prompts are separated by "\n\n---\n\n" to support multiple turns.
-	if event.Prompt != "" {
-		sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
-		if sessionDirAbs, absErr := paths.AbsPath(ctx, sessionDir); absErr == nil {
-			if mkErr := os.MkdirAll(sessionDirAbs, 0o750); mkErr == nil {
-				promptPath := filepath.Join(sessionDirAbs, paths.PromptFileName)
-				existing, readErr := os.ReadFile(promptPath) //nolint:gosec // session metadata path
-				var content string
-				if readErr == nil && len(existing) > 0 {
-					content = string(existing) + "\n\n---\n\n" + event.Prompt
-				} else {
-					content = event.Prompt
-				}
-				if writeErr := os.WriteFile(promptPath, []byte(content), 0o600); writeErr != nil { //nolint:gosec // path from internal metadata, not user input
-					logging.Warn(logCtx, "failed to write prompt.txt",
-						slog.String("error", writeErr.Error()))
-				}
-			}
-		}
+	// Store the prompt before InitializeSession so a fast mid-turn commit can
+	// include it in the checkpoint's filesystem metadata.
+	if err := appendPromptToFile(ctx, sessionID, event.Prompt); err != nil {
+		logging.Warn(logCtx, "failed to write prompt.txt",
+			slog.String("error", err.Error()))
 	}
 
 	// Initialize session (setup already ran above, before the first status read)

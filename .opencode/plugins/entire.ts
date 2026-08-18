@@ -6,7 +6,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 export const EntirePlugin: Plugin = async ({ directory }) => {
   const seenUserMessages = new Set<string>()
-  // Metadata-only fallbacks require one repair turn-start when their text arrives.
+  // Metadata-only fallbacks require one prompt update when their text arrives.
   const promptlessTurnStarts = new Set<string>()
   // Track current session ID for message events (which don't include sessionID)
   let currentSessionID: string | null = null
@@ -207,10 +207,9 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
                 }
               } else if (promptlessTurnStarts.has(msg.id) && part.text && sessionID) {
                 promptlessTurnStarts.delete(msg.id)
-                fireTurnStart({
+                callHookSync("prompt-update", {
                   session_id: sessionID,
                   prompt: part.text,
-                  model: currentModel ?? "",
                 })
               }
             }
