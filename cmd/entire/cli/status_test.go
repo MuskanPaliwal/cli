@@ -2088,6 +2088,29 @@ func TestRunStatus_CheckpointSyncDestination_ConfigAnnotated(t *testing.T) {
 	}
 }
 
+func TestRunStatus_CheckpointSyncDestination_CapturedAnnotated(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	testutil.AddRemote(t, ".", "origin", "https://example.com/origin.git")
+	testutil.AddRemote(t, ".", "fork", "https://example.com/fork.git")
+	// A captured election (evidence-elected by a past tracked push) must be
+	// distinguishable from both the silent default and the explicit setting.
+	if err := os.WriteFile(filepath.Join(".git", "entire-checkpoint-sync-remotes.json"), []byte(`{"remotes":["fork"]}`), 0o600); err != nil {
+		t.Fatalf("write capture state: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, false, false); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Checkpoints sync to: fork (follows your branch's push destination)") {
+		t.Errorf("expected annotated destination line for captured remote, got:\n%s", out)
+	}
+}
+
 func TestRunStatus_CheckpointSyncFailClosed(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)

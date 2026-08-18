@@ -5,6 +5,9 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -89,10 +92,54 @@ func assertSingleRemoteRouting(t *testing.T, env *TestEnv, checkpointID string, 
 	}
 }
 
+// setBranchTrackingRemote points the current branch's tracking remote at
+// remoteName. SetupNamedBareRemote pushes with `-u`, so the last remote set up
+// becomes the branch's declared push destination — and a pre-push to a
+// declared destination legitimately captures the election. Tests whose
+// scenario needs an UNDECLARED gated remote must undo that side effect.
+func setBranchTrackingRemote(t *testing.T, env *TestEnv, remoteName string) {
+	t.Helper()
+	branch := env.GetCurrentBranch()
+	if branch == "" {
+		t.Fatal("cannot set tracking remote: no current branch")
+	}
+	cmd := exec.CommandContext(t.Context(), "git", "config", "branch."+branch+".remote", remoteName)
+	cmd.Dir = env.RepoDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to set branch tracking remote: %v\n%s", err, output)
+	}
+	// The edit is deliberate test setup, not drift — refresh the baseline the
+	// harness compares .git/config against at teardown.
+	env.setGitConfigBaseline()
+}
+
+// capturedSyncRemotesOnDisk reads the captured-election state file for the
+// test repo; nil when no capture has happened.
+func capturedSyncRemotesOnDisk(t *testing.T, env *TestEnv) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(env.RepoDir, ".git", "entire-checkpoint-sync-remotes.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read captured sync remotes: %v", err)
+	}
+	var f struct {
+		Remotes []string `json:"remotes"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatalf("parse captured sync remotes: %v", err)
+	}
+	return f.Remotes
+}
+
 // TestCheckpointSyncRemote_DefaultElection_OnlyOriginReceivesCheckpoints
 // verifies that with two configured remotes and no override, checkpoint data
 // syncs only to origin (the default election): a pre-push for "publish"
-// carries nothing, a pre-push for "origin" delivers the checkpoint.
+// carries nothing, a pre-push for "origin" delivers the checkpoint. The
+// branch's tracking is reset to origin so publish stays an undeclared one-off
+// destination — the shape that must never sync or capture.
 func TestCheckpointSyncRemote_DefaultElection_OnlyOriginReceivesCheckpoints(t *testing.T) {
 	t.Parallel()
 	ForEachBackend(t, func(t *testing.T, backend string) {
@@ -101,11 +148,16 @@ func TestCheckpointSyncRemote_DefaultElection_OnlyOriginReceivesCheckpoints(t *t
 
 		bareOrigin := env.SetupBareRemote()
 		barePublish := env.SetupNamedBareRemote("publish")
+		setBranchTrackingRemote(t, env, "origin")
 		checkpointID := createCheckpointedCommit(t, env, "Add gate module", "gate.go", "package gate", "Add gate module")
 
 		assertSingleRemoteRouting(t, env, checkpointID,
 			remoteTarget{name: "publish", bareDir: barePublish},
 			remoteTarget{name: "origin", bareDir: bareOrigin})
+
+		if got := capturedSyncRemotesOnDisk(t, env); got != nil {
+			t.Errorf("an undeclared one-off push must not capture the election, got %v", got)
+		}
 	})
 }
 
@@ -142,39 +194,85 @@ func TestCheckpointSyncRemote_ConfigOverride_RoutesToNamedRemote(t *testing.T) {
 	})
 }
 
-// TestCheckpointSyncRemote_BranchTrackingDoesNotReroute pins the regression
-// that removed the tracking tier before merge: a branch tracking a non-origin
-// remote must NOT move checkpoint sync there.
-//
-// Election is compared against the remote of the push being made, so electing
-// the tracking remote made every push to a different remote a silent no-op —
-// caught by TestAlternates_RelativeObjectAlternate_CheckpointSync, which
-// clones with `-o base` and pushes checkpoints to a separately added origin.
-// It also elected a remote the read paths cannot see: resume and explain
-// resolve checkpoints through origin's remote-tracking refs.
-//
-// The fork topology this tier was meant to serve — origin is the unpushable
-// base repo, you push to your own fork — is served explicitly by
-// checkpoint_push_remote (TestCheckpointSyncRemote_ConfigOverride_RoutesToNamedRemote).
-func TestCheckpointSyncRemote_BranchTrackingDoesNotReroute(t *testing.T) {
+// TestCheckpointSyncRemote_TrackingAloneDoesNotReroute pins the regression
+// that removed the static tracking tier from the election (74e239a9): a
+// branch tracking a non-origin remote must NOT move checkpoint sync there
+// while that remote never receives a push. Electing from config at rest made
+// every push to a different remote a silent no-op — caught by
+// TestAlternates_RelativeObjectAlternate_CheckpointSync, which clones with
+// `-o base` and pushes checkpoints to a separately added origin. Capture must
+// not resurrect that bug: declaration without a confirming push elects
+// nothing.
+func TestCheckpointSyncRemote_TrackingAloneDoesNotReroute(t *testing.T) {
 	t.Parallel()
 	ForEachBackend(t, func(t *testing.T, backend string) {
 		env := NewFeatureBranchEnv(t)
 		env.CheckpointStore = backend
 
 		// SetupNamedBareRemote pushes with `-u`, so the branch ends up
-		// tracking "upstream" — the exact config that used to win the
-		// election. Origin must still be elected.
+		// tracking "base" — but base never sees a pre-push. Origin stays
+		// elected and keeps receiving checkpoints.
 		bareOrigin := env.SetupBareRemote()
-		bareUpstream := env.SetupNamedBareRemote("upstream")
+		bareBase := env.SetupNamedBareRemote("base")
 
 		checkpointID := createCheckpointedCommit(t, env, "Add fork module", "fork.go", "package fork", "Add fork module")
 
-		assertSingleRemoteRouting(t, env, checkpointID,
-			remoteTarget{name: "upstream", bareDir: bareUpstream},
-			remoteTarget{name: "origin", bareDir: bareOrigin})
+		env.RunPrePush("origin")
+		if !env.CheckpointExistsOnRemote(bareOrigin, checkpointID) {
+			t.Errorf("checkpoint %s should reach origin while the tracked remote is never pushed", checkpointID)
+		}
+		if env.CheckpointsPresentOnRemote(bareBase) {
+			t.Error("the tracked-but-never-pushed remote must not receive checkpoint data")
+		}
+		if got := capturedSyncRemotesOnDisk(t, env); got != nil {
+			t.Errorf("tracking config alone must not capture the election, got %v", got)
+		}
 
 		const wantRemote, wantSource = "origin", "default"
+		st := statusSyncJSONOutput(t, env)
+		if st.CheckpointSyncRemote != wantRemote || st.CheckpointSyncRemoteSource != wantSource {
+			t.Errorf("status should report remote %q from source %q, got %q from %q",
+				wantRemote, wantSource, st.CheckpointSyncRemote, st.CheckpointSyncRemoteSource)
+		}
+	})
+}
+
+// TestCheckpointSyncRemote_TrackedPushCapturesElection verifies the capture
+// path end to end — the fork topology that produced the first user report
+// after v0.10.0 ("the remote I push to isn't called origin → checkpoints no
+// longer push"): origin exists but the branch pushes its fork. The pre-push
+// to the declared destination captures the election and the SAME push carries
+// the checkpoint; origin never receives data and a later origin push is
+// gated. Status reports the captured source.
+func TestCheckpointSyncRemote_TrackedPushCapturesElection(t *testing.T) {
+	t.Parallel()
+	ForEachBackend(t, func(t *testing.T, backend string) {
+		env := NewFeatureBranchEnv(t)
+		env.CheckpointStore = backend
+
+		bareOrigin := env.SetupBareRemote()
+		bareFork := env.SetupNamedBareRemote("fork") // `-u`: branch declares fork
+
+		checkpointID := createCheckpointedCommit(t, env, "Add capture module", "capture.go", "package capture", "Add capture module")
+
+		env.RunPrePush("fork")
+		if got := capturedSyncRemotesOnDisk(t, env); len(got) != 1 || got[0] != "fork" {
+			t.Errorf("declared-destination push should capture the election, got %v", got)
+		}
+		if !env.CheckpointExistsOnRemote(bareFork, checkpointID) {
+			t.Errorf("checkpoint %s should land on the captured remote in the capturing push", checkpointID)
+		}
+		if env.usingGitRefs() && queuedCheckpointRefCount(t, env) != 0 {
+			t.Error("push queue should drain into the captured remote")
+		}
+
+		// The election moved: origin is now the gated remote.
+		env.RunPrePush("origin")
+		if env.CheckpointsPresentOnRemote(bareOrigin) {
+			t.Error("origin must not receive checkpoint data after the election was captured")
+		}
+
+		const wantRemote, wantSource = "fork", "observed"
 		st := statusSyncJSONOutput(t, env)
 		if st.CheckpointSyncRemote != wantRemote || st.CheckpointSyncRemoteSource != wantSource {
 			t.Errorf("status should report remote %q from source %q, got %q from %q",
@@ -284,9 +382,11 @@ func TestCheckpointSyncRemote_StatusReportsDestinationAndUnpushed(t *testing.T) 
 
 		_ = env.SetupBareRemote()
 		_ = env.SetupNamedBareRemote("publish")
+		setBranchTrackingRemote(t, env, "origin")
 		_ = createCheckpointedCommit(t, env, "Add status module", "status.go", "package status", "Add status module")
 
-		// Gated push: publish is not the elected remote, so nothing syncs.
+		// Gated push: publish is neither elected nor the branch's declared
+		// destination, so nothing syncs and nothing captures.
 		env.RunPrePush("publish")
 
 		text := env.RunCLI("status")

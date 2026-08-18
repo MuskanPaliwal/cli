@@ -58,16 +58,37 @@ func IsMetadataDisconnected(ctx context.Context, repo *git.Repository, remoteRef
 	return isDisconnected(ctx, repoPath, localRef.Hash().String(), remoteRef.Hash().String())
 }
 
+// FirstReadCandidateTrackingRef returns the remote name and remote-tracking
+// ref of the first checkpoint read candidate (elected sync remote first, then
+// the legacy origin tier) whose tracking ref for primary exists locally.
+// Pure read; ok is false when no candidate has a tracking ref (or the chain
+// is empty).
+func FirstReadCandidateTrackingRef(ctx context.Context, repo *git.Repository, primary plumbing.ReferenceName) (string, plumbing.ReferenceName, bool) {
+	for _, remoteName := range CheckpointReadRemotes(ctx) {
+		refName := plumbing.NewRemoteReferenceName(remoteName, primary.Short())
+		if _, err := repo.Reference(refName, true); err == nil {
+			return remoteName, refName, true
+		}
+	}
+	return "", "", false
+}
+
 // WarnIfMetadataDisconnected checks (once per process) whether the metadata
-// branch is disconnected and prints a warning to stderr if so.
+// branch is disconnected and prints a warning to stderr if so. The check runs
+// against the first checkpoint read candidate whose remote-tracking ref
+// exists (pure read across both tiers).
 // It does NOT fix the problem — users are directed to 'entire doctor'.
+//
+// Takes the caller's context rather than context.Background(): the probe below
+// reads git, so a detached context ignored both interrupt cancellation and the
+// invocation-scoped remote-read cache, re-shelling out for answers the caller
+// already had.
 //
 // Uses sync.Once, so a transient failure on the first call permanently suppresses
 // the warning. This is acceptable because the check is advisory only and
 // 'entire doctor' is the authoritative repair path.
-func WarnIfMetadataDisconnected() {
+func WarnIfMetadataDisconnected(ctx context.Context) {
 	disconnectedOnce.Do(func() {
-		ctx := context.Background()
 		repo, err := OpenRepository(ctx)
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check: could not open repository",
@@ -76,10 +97,14 @@ func WarnIfMetadataDisconnected() {
 		}
 		defer repo.Close()
 		refs := checkpoint.ResolveRefs(ctx)
-		if !refs.PrimaryFetchableFromOrigin() {
-			return // origin doesn't track Primary; nothing to disconnect from
+		if !refs.PrimaryFetchableFromRemote() {
+			return // no remote tracks Primary; nothing to disconnect from
 		}
-		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", refs.Primary.Short()))
+		_, remoteRefName, ok := FirstReadCandidateTrackingRef(ctx, repo, refs.Primary)
+		if !ok {
+			return // no candidate has a tracking ref; nothing to disconnect from
+		}
+		disconnected, err := IsMetadataDisconnected(ctx, repo, remoteRefName)
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check failed",
 				slog.String("error", err.Error()))
