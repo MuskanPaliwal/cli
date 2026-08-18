@@ -265,7 +265,8 @@ type checkpointSyncInfo struct {
 	// dedicated checkpoint_remote mode. Empty when nothing resolved (no
 	// remotes configured, or the fail-closed case).
 	Remote string
-	// Source is config|default|sole|first (resolver values) or "dedicated".
+	// Source is config|observed|default|sole|first (resolver values) or
+	// "dedicated".
 	Source string
 	// Err is the fail-closed misconfiguration message from the resolver.
 	Err string
@@ -351,8 +352,11 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 	default:
 		b.WriteString("\n  Checkpoints sync to: ")
 		b.WriteString(sty.render(sty.cyan, info.Remote))
-		if info.Source == string(strategy.SyncRemoteSourceConfig) {
+		switch info.Source {
+		case string(strategy.SyncRemoteSourceConfig):
 			b.WriteString(sty.render(sty.dim, " (set by checkpoint_push_remote)"))
+		case string(strategy.SyncRemoteSourceObserved):
+			b.WriteString(sty.render(sty.dim, " (follows your branch's push destination)"))
 		}
 	}
 	if info.Unpushed > 0 {
@@ -742,7 +746,7 @@ type statusJSON struct {
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named
 	// checkpoint_remote, which is the existing GitHub-coupled setting.
 	CheckpointSyncRemote       string `json:"checkpoint_sync_remote,omitempty"`
-	CheckpointSyncRemoteSource string `json:"checkpoint_sync_remote_source,omitempty"` // config|tracking|default|sole|first|dedicated
+	CheckpointSyncRemoteSource string `json:"checkpoint_sync_remote_source,omitempty"` // config|observed|default|sole|first|dedicated
 	CheckpointSyncError        string `json:"checkpoint_sync_error,omitempty"`         // fail-closed message
 	UnpushedCheckpoints        int    `json:"unpushed_checkpoints,omitempty"`
 	Error                      string `json:"error,omitempty"`

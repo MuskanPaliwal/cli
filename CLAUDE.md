@@ -586,6 +586,35 @@ relPath := paths.ToRelativePath("/repo/api/file.ts", repoRoot)  // returns "api/
 
 Test case in `state_test.go`: `TestFilterAndNormalizePaths_SiblingDirectories` documents this bug pattern.
 
+#### Invoking Commands on Windows - Never Put a Dynamic Value on a cmd.exe Line
+
+**When Entire performs the exec itself, do not go through `cmd.exe`.** Pass the
+program and its arguments as separate argv elements (`exec.Command(prog, arg)`),
+or call the Win32 API directly.
+
+cmd.exe treats `&`, `|`, `<`, `>` as command separators/redirections and expands
+`%VAR%`, and **Go's argv escaping will not protect you**: `syscall.EscapeArg`
+only quotes an argument containing a space, tab, quote, or backslash. A URL,
+a percent-encoded path, or any `&`-bearing string therefore reaches cmd.exe bare
+and is silently cut at the first metacharacter. That is exactly how
+`entire login` shipped a Windows build that opened
+`…/authorize?client_id=entire-cli` and got rejected for a missing
+`redirect_uri` — the `cmd /c start "" <url>` launcher lost everything from the
+first `&` on, and because the truncation happened inside the released child, the
+CLI saw a successful launch and printed no fallback URL.
+
+Escaping is the right tool in exactly one situation: **a third party owns the
+exec.** When Entire writes a command into an agent's config file (Cursor/Codex
+`hooks.json`) and that agent runs it through cmd.exe, there is no shell to
+avoid — use `agent.escapeWindowsCMD`. Reviewers should flag any new
+`exec.Command("cmd", …)` / `"cmd.exe"` call site that interpolates a
+non-constant value.
+
+Key files: `cmd/entire/cli/browser_open_windows.go` (ShellExecute, the
+avoid-the-shell side) and `cmd/entire/cli/agent/hook_command.go`
+(`escapeWindowsCMD`, the third-party-exec side). Each doc comment points at the
+other.
+
 ### Control-Plane Core Resolution (which core am I talking to?)
 
 Control-plane commands dial one of three cores: the active context's
@@ -683,7 +712,8 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Shadow branch migration** - if user does stash/pull/rebase (HEAD changes without commit), shadow branch is automatically moved to new base commit
 - **Orphaned branch cleanup** - if a shadow branch exists without a corresponding session state file, it is automatically reset when a new session starts
 - PrePush hook can push `entire/checkpoints/v1` branch alongside user pushes
-- **Single checkpoint sync remote** - checkpoint data syncs only to the elected checkpoint sync remote (`strategy_options.checkpoint_push_remote` setting → `origin` → sole remote → first remote in `.git/config` order; fail-closed only when the setting names a missing remote), on both the git-branch and git-refs backends. The branch's tracking config (`branch.<name>.pushRemote`, `remote.pushDefault`, `branch.<name>.remote`) is deliberately **not** a tier: election is compared against the remote of the push being made, so electing the tracking remote silently drops checkpoint sync on every push to a different remote (`git push <other> HEAD`, a `git clone -o base` pushing checkpoints to a separately added `origin`, any repo with `remote.pushDefault`). Checkpoint reads consult the elected remote first and `origin` as a read-only legacy tier. For a fork setup where `origin` is an unpushable base repo, name the fork with `checkpoint_push_remote`. Pushes to any other remote or to a raw URL never carry checkpoint data; the dedicated `checkpoint_remote` URL mode is exempt. `entire status` shows the sync destination and an unpushed-checkpoint count.
+- **Single checkpoint sync remote** - checkpoint data syncs only to the elected checkpoint sync remote (`strategy_options.checkpoint_push_remote` setting → captured election → `origin` → sole remote → first remote in `.git/config` order; fail-closed only when the setting names a missing remote — the captured tier is fail-soft), on both the git-branch and git-refs backends. **Capture**: during pre-push, a push whose target agrees with the branch's declared push destination (`branch.<name>.pushRemote` → `remote.pushDefault` → `branch.<name>.remote`) and differs from the current election persists that remote as the captured election (git common dir, `entire-checkpoint-sync-remotes.json`), announces it on stderr, and the same push carries the checkpoints — see `strategy/checkpoint_sync_capture.go`. Declaration alone is deliberately **not** a tier: electing from tracking config at rest silently drops checkpoint sync on every push to a different remote (`git push <other> HEAD`, a `git clone -o base` pushing checkpoints to a separately added `origin`, any repo with `remote.pushDefault` — the `74e239a9` regression), and a bare push to an undeclared remote never elects (the pre-single-remote transcript leak). Phase-1 capture rules: at most one captured remote, first still-configured capture sticks (no per-push ping-pong in mixed-habit repos; a captured remote that was renamed or removed no longer vetoes the next capture), explicit `checkpoint_push_remote` outranks and disables capture. Pushes to any other remote or to a raw URL never carry checkpoint data; the dedicated `checkpoint_remote` URL mode is exempt. `entire status` shows the sync destination, its source (`observed` renders as "follows your branch's push destination"), and an unpushed-checkpoint count.
+- **Checkpoint reads follow the election** - reads consult an ordered candidate chain: the elected sync remote first, then `origin` as a **read-only legacy tier** (pre-single-remote checkpoints live there; `strategy.CheckpointReadRemotes` / `CheckpointReadRemotesWithElection` resolve the chain, failing OPEN to `[origin]` on an election error). Metadata-branch fetches refresh every candidate tracking ref because branch existence does not prove a requested checkpoint exists there; other fetch targets, tracking-ref readers, blob hydration, and checkpoint-policy reads try candidates in order. Git-refs remote discovery ls-remotes every candidate **without** needing a dedicated `checkpoint_remote` and merges the listings. Local-ref writers stay **elected-remote-only**: `EnsurePrimaryRef`, the metadata-fetch advance, `promoteRemoteTrackingPrimary`, and the local checkpoint-policy ref update never act on the legacy tier (a stale origin feeding `SafelyAdvanceLocalRef` is the #1374-class hazard), keyed on the explicit election result, never on the chain's first entry. A remoteless repo keeps its "checkpoint absent" classification, which requires positive evidence (successful empty `git remote` listing, live ctx, readable settings without a `checkpoint_remote` key).
 - **OPF (OpenAI Privacy Filter) runs at pre-push, not post-commit**: when `redaction.openai_privacy_filter.enabled` is true, the PrePush hook re-redacts unpushed `entire/checkpoints/v1` commits with the OPF 9th layer, builds new commits carrying an `Entire-OPF-Applied: true` trailer, and atomically updates the local v1 ref before pushing. Per-commit condensation stays on the fast 8-layer pipeline. See `strategy/manual_commit_opf_rewrite.go` and `docs/security-and-privacy.md` for the full flow, including divergence detection, bootstrap caps, and CAS-on-conflict semantics.
 - Safe to use on main/master since it never modifies commit history
 

@@ -379,11 +379,18 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	ctx := cmd.Context()
 	refs := checkpoint.ResolveRefs(ctx)
 	w := cmd.OutOrStdout()
-	if !refs.PrimaryFetchableFromOrigin() {
-		fmt.Fprintf(w, "✓ Metadata branches: OK (primary ref %s is not pushed to origin)\n", refs.Primary)
+	if !refs.PrimaryFetchableFromRemote() {
+		fmt.Fprintf(w, "✓ Metadata branches: OK (primary ref %s is not pushed to a remote)\n", refs.Primary)
 		return nil
 	}
-	remoteRefName := plumbing.NewRemoteReferenceName("origin", refs.Primary.Short())
+	// Check against the first checkpoint read candidate whose remote-tracking
+	// ref exists — a pure read across both tiers (elected sync remote, then
+	// the legacy origin tier).
+	remoteName, remoteRefName, ok := strategy.FirstReadCandidateTrackingRef(ctx, repo, refs.Primary)
+	if !ok {
+		fmt.Fprintln(w, "✓ Metadata branches: OK (no remote-tracking metadata ref found)")
+		return nil
+	}
 	disconnected, err := strategy.IsMetadataDisconnected(ctx, repo, remoteRefName)
 	if err != nil {
 		return fmt.Errorf("could not check metadata branch state: %w", err)
@@ -397,6 +404,17 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	fmt.Fprintln(w, "Metadata branches: DISCONNECTED")
 	fmt.Fprintf(w, "  Local and remote %s branches share no common ancestor.\n", refs.Primary.Short())
 	fmt.Fprintln(w, "  Some remote checkpoints may not be visible locally.")
+
+	// The repair advances the local ref from the remote tip, so it is
+	// confined to the elected checkpoint sync remote: a stale legacy-tier
+	// origin must never drive a local-ref rewrite. Report-only otherwise.
+	elected, electErr := strategy.ResolveCheckpointSyncRemote(ctx)
+	if electErr != nil || elected.Name != remoteName {
+		fmt.Fprintf(w, "  The disconnected tracking ref belongs to remote %q, which is not the elected checkpoint sync remote.\n", remoteName)
+		fmt.Fprintln(w, "  Automatic repair only reconciles against the elected sync remote; fetch its metadata branch and re-run 'entire doctor'.")
+		return nil
+	}
+
 	fmt.Fprintln(w, "  Fix: cherry-pick local checkpoints onto remote tip (preserves all data).")
 
 	if !force {
