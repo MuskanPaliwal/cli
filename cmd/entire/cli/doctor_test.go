@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -459,6 +461,51 @@ func TestRunSessionsFix_ForceDiscardOutput_Indented(t *testing.T) {
 	}
 }
 
+// Doctor's logging setup must cover the whole command, not just the
+// exited-session sweep. With no exited session to finalize — the common case,
+// and the one this fixture builds — the sweep returns before it touches logging,
+// so the condense and discard handlers that run afterwards would emit structured
+// slog lines to slog.Default(), i.e. onto the user's terminal interleaved with
+// doctor's own report.
+//
+// Cannot use t.Parallel(): t.Chdir and the process-global slog default.
+func TestRunSessionsFix_HandlerLogsStayOffTheTerminal(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	createShadowBranchRef(t, repo, testBaseCommit, "")
+
+	// Already ended, so never a candidate for the exited-owner sweep, but stuck
+	// with uncondensed data — which sends --force down the condensing path, and
+	// CondenseSessionByID logs.
+	require.NoError(t, strategy.SaveSessionState(context.Background(), &strategy.SessionState{
+		SessionID:  "2026-02-02-doctor-logging",
+		BaseCommit: testBaseCommit,
+		Phase:      session.PhaseEnded,
+		StepCount:  3,
+		StartedAt:  time.Now().Add(-2 * time.Hour),
+	}))
+
+	// Start from no logger so this asserts doctor's own setup, not one left
+	// installed by an earlier test in this package.
+	logging.Close()
+	var fallback bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&fallback, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cmd, _ := newTestCmd(t)
+	require.NoError(t, runSessionsFix(cmd, true))
+
+	assert.Empty(t, fallback.String(),
+		"handler logs went to slog.Default() (the user's terminal) instead of .entire/logs/")
+
+	logged, err := os.ReadFile(filepath.Join(dir, ".entire", "logs", "entire.log"))
+	require.NoError(t, err, "doctor did not initialize file logging")
+	assert.NotEmpty(t, logged, "nothing was logged, so this test proves nothing about where logs go")
+}
+
 // TestCheckCodexHookTrust_SilentWhenCodexNotInstalled — `entire doctor`
 // shouldn't print anything Codex-related when this repo doesn't have
 // .codex/hooks.json. Other agents (Claude, Cursor) keep their existing
@@ -490,6 +537,7 @@ func resolvedHooksPath(t *testing.T, dir string) string {
 func canonicalCodexHooksJSON() string {
 	return `{"hooks":{
 		"SessionStart":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex session-start","timeout":30}]}],
+		"SessionEnd":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex session-end","timeout":3}]}],
 		"UserPromptSubmit":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex user-prompt-submit","timeout":30}]}],
 		"Stop":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex stop","timeout":30}]}],
 		"PostToolUse":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex post-tool-use","timeout":30}]}]
@@ -511,6 +559,9 @@ func TestCheckCodexHookTrust_OKWhenAllTrusted(t *testing.T) {
 	require.NoError(t, os.MkdirAll(codexHome, 0o750))
 	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
 trusted_hash = "sha256:aaa"
+
+[hooks.state."` + hooksPath + `:session_end:0:0"]
+trusted_hash = "sha256:eee"
 
 [hooks.state."` + hooksPath + `:user_prompt_submit:0:0"]
 trusted_hash = "sha256:bbb"
@@ -543,9 +594,12 @@ func TestCheckCodexHookTrust_ListsMissingEvents(t *testing.T) {
 	hooksPath := resolvedHooksPath(t, dir)
 	codexHome := filepath.Join(t.TempDir(), "codex-home")
 	require.NoError(t, os.MkdirAll(codexHome, 0o750))
-	// Trust three of four — PostToolUse is the gap.
+	// Trust all but one — PostToolUse is the gap.
 	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
 trusted_hash = "sha256:aaa"
+
+[hooks.state."` + hooksPath + `:session_end:0:0"]
+trusted_hash = "sha256:eee"
 
 [hooks.state."` + hooksPath + `:user_prompt_submit:0:0"]
 trusted_hash = "sha256:bbb"
@@ -632,6 +686,8 @@ func TestCheckCodexHookTrust_FlagsStaleHooksFile(t *testing.T) {
 
 	codexDir := filepath.Join(dir, ".codex")
 	require.NoError(t, os.MkdirAll(codexDir, 0o750))
+	// The install set of an older release: no PostToolUse, and no SessionEnd
+	// either — both post-date it.
 	staleHooksJSON := `{"hooks":{
 		"SessionStart":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex session-start","timeout":30}]}],
 		"UserPromptSubmit":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex user-prompt-submit","timeout":30}]}],
@@ -661,8 +717,11 @@ trusted_hash = "sha256:ccc"
 
 	out := stdout.String()
 	require.Contains(t, out, "Codex hooks: OUT OF DATE")
+	require.Contains(t, out, "- session_end")
 	require.Contains(t, out, "- post_tool_use")
 	require.Contains(t, out, "entire enable")
+	// Trust stays quiet: every event the stale file actually declares is trusted,
+	// so only the out-of-date finding should fire.
 	require.NotContains(t, out, "Codex hook trust: REVIEW NEEDED")
 }
 

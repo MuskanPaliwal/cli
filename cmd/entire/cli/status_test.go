@@ -614,6 +614,41 @@ func TestWriteActiveSessions_EndedSessionsExcluded(t *testing.T) {
 	}
 }
 
+// A session ended by `entire session attach` carries PhaseEnded with no EndedAt
+// stamp. Status must drop it like any other ended session — filtering on EndedAt
+// alone left it listed as active while `entire session stop`, which filters on
+// IsEnded, refused to offer it.
+func TestWriteActiveSessions_PhaseEndedWithoutEndedAtExcluded(t *testing.T) {
+	setupTestRepo(t)
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatalf("NewStateStore() error = %v", err)
+	}
+
+	state := &session.State{
+		SessionID:    "attach-ended-session",
+		WorktreePath: "/Users/test/repo",
+		StartedAt:    time.Now().Add(-10 * time.Minute),
+		Phase:        session.PhaseEnded,
+	}
+
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	var buf bytes.Buffer
+	sty := newStatusStyles(&buf)
+	writeActiveSessions(context.Background(), &buf, sty)
+
+	if buf.Len() != 0 {
+		t.Errorf("Expected empty output for a PhaseEnded session with no EndedAt, got: %s", buf.String())
+	}
+	if got := filterActiveSessions([]*session.State{state}); len(got) != 0 {
+		t.Errorf("filterActiveSessions kept %d ended session(s); status and stop must agree", len(got))
+	}
+}
+
 func TestWriteActiveSessions_ShowsDivergenceWarningWhenBaseCommitStale(t *testing.T) {
 	setupTestRepo(t)
 

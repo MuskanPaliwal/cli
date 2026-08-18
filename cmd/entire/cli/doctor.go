@@ -144,6 +144,15 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 	}
 	defer repo.Close()
 
+	// Route logging to .entire/logs/ for the rest of the command. Doctor emits
+	// none itself, but the sweep below and the condense/discard handlers further
+	// down all do, and with no logger installed those land on the user's terminal
+	// via slog.Default(), interleaved with doctor's own report. It belongs here
+	// rather than inside the sweep: the sweep returns early — without touching
+	// logging — whenever no session needs finalizing, which is the common case
+	// for a run that still has time-based stuck sessions to condense.
+	defer ensureCommandLogging(ctx)()
+
 	// Finalize any ACTIVE session whose agent process has exited (no SessionStop
 	// hook fired). A gone process is unambiguous, so these are condensed on the
 	// spot rather than left for the interactive prompt below; the sweep marks
@@ -240,27 +249,7 @@ func classifySession(state *strategy.SessionState, repo *git.Repository, now tim
 	_, refErr := repo.Reference(refName, true)
 	hasShadowBranch := refErr == nil
 
-	switch {
-	case state.Phase.IsActive():
-		var reason string
-		switch {
-		case state.OwnerExited():
-			// Detected immediately (no timeout wait): the owning agent process
-			// is gone. Normally finalized up front in runSessionsFix; this
-			// branch covers a session that couldn't be finalized there.
-			pid := 0
-			if state.Owner != nil {
-				pid = state.Owner.PID
-			}
-			reason = fmt.Sprintf("agent process %d exited (no longer running)", pid)
-		case !state.IsStuckActive():
-			return nil
-		case state.LastInteractionTime != nil:
-			reason = fmt.Sprintf("active, last interaction %s ago", now.Sub(*state.LastInteractionTime).Truncate(time.Minute))
-		default:
-			reason = fmt.Sprintf("active, started %s ago with no recorded interaction", now.Sub(state.StartedAt).Truncate(time.Minute))
-		}
-
+	stuck := func(reason string) *stuckSession {
 		return &stuckSession{
 			State:             state,
 			Reason:            reason,
@@ -269,21 +258,38 @@ func classifySession(state *strategy.SessionState, repo *git.Repository, now tim
 			CheckpointCount:   state.StepCount,
 			FilesTouchedCount: len(state.FilesTouched),
 		}
+	}
+
+	// A dead owner is unambiguous and phase-independent, so it is checked ahead
+	// of the phase switch: an agent that quit without firing a session-end hook
+	// leaves the session IDLE just as often as ACTIVE (see State.OwnerExited).
+	// Detected immediately, with no timeout wait. These are normally finalized
+	// up front in runSessionsFix; this covers sessions that couldn't be.
+	if state.OwnerExited() {
+		pid := 0
+		if state.Owner != nil {
+			pid = state.Owner.PID
+		}
+		return stuck(fmt.Sprintf("agent process %d exited (no longer running)", pid))
+	}
+
+	switch {
+	case state.Phase.IsActive():
+		switch {
+		case !state.IsStuckActive():
+			return nil
+		case state.LastInteractionTime != nil:
+			return stuck(fmt.Sprintf("active, last interaction %s ago", now.Sub(*state.LastInteractionTime).Truncate(time.Minute)))
+		default:
+			return stuck(fmt.Sprintf("active, started %s ago with no recorded interaction", now.Sub(state.StartedAt).Truncate(time.Minute)))
+		}
 
 	case state.Phase == session.PhaseEnded:
 		// Ended sessions are stuck if they have uncondensed data
 		if state.StepCount <= 0 || !hasShadowBranch {
 			return nil
 		}
-
-		return &stuckSession{
-			State:             state,
-			Reason:            "ended with uncondensed checkpoint data",
-			ShadowBranch:      shadowBranch,
-			HasShadowBranch:   hasShadowBranch,
-			CheckpointCount:   state.StepCount,
-			FilesTouchedCount: len(state.FilesTouched),
-		}
+		return stuck("ended with uncondensed checkpoint data")
 
 	default:
 		return nil
