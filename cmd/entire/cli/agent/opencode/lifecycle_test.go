@@ -457,9 +457,7 @@ func TestFetchAndCacheExport_PartialFailurePreservesCachedTranscript(t *testing.
 	})
 
 	_, err := (&OpenCodeAgent{}).fetchAndCacheExport(context.Background(), sessionID)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("fetchAndCacheExport error = %v, want unchanged producer error", err)
-	}
+	require.Same(t, wantErr, err, "producer error should be returned unchanged")
 
 	got, readErr := os.ReadFile(cachedPath)
 	require.NoError(t, readErr, "cached transcript was destroyed by a failed export")
@@ -569,9 +567,7 @@ func TestFetchTranscript_AttemptsExport(t *testing.T) {
 
 	ag := &OpenCodeAgent{}
 	_, err := ag.FetchTranscript(context.Background(), "test-fetch-transcript-no-such-session")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("FetchTranscript error = %v, want unchanged producer error", err)
-	}
+	require.Same(t, wantErr, err, "producer error should be returned unchanged")
 }
 
 func TestFetchTranscript_ReportsInvalidJSON(t *testing.T) {

@@ -38,13 +38,23 @@ func TestRenameWithRetry_WindowsContentionThenSuccess(t *testing.T) {
 		}
 		return nil
 	}
-	ops.wait = func(context.Context, time.Duration) error { return nil }
+	waits := 0
+	ops.wait = func(_ context.Context, delay time.Duration) error {
+		waits++
+		if delay != renameBackoff {
+			t.Errorf("retry delay = %s, want %s", delay, renameBackoff)
+		}
+		return nil
+	}
 
 	if err := renameWithRetry(context.Background(), "staged", "session.json", ops); err != nil {
 		t.Fatal(err)
 	}
 	if attempts != 3 {
 		t.Fatalf("rename attempts = %d, want 3", attempts)
+	}
+	if waits != 2 {
+		t.Fatalf("rename waits = %d, want 2", waits)
 	}
 }
 
@@ -56,7 +66,14 @@ func TestRenameWithRetry_WindowsContentionExhausted(t *testing.T) {
 		attempts++
 		return errorAccessDenied
 	}
-	ops.wait = func(context.Context, time.Duration) error { return nil }
+	waits := 0
+	ops.wait = func(_ context.Context, delay time.Duration) error {
+		waits++
+		if delay != renameBackoff {
+			t.Errorf("retry delay = %s, want %s", delay, renameBackoff)
+		}
+		return nil
+	}
 
 	err := renameWithRetry(context.Background(), "staged", "session.json", ops)
 	if !errors.Is(err, errorAccessDenied) {
@@ -68,6 +85,9 @@ func TestRenameWithRetry_WindowsContentionExhausted(t *testing.T) {
 	if attempts != renameAttempts {
 		t.Fatalf("rename attempts = %d, want %d", attempts, renameAttempts)
 	}
+	if waits != renameAttempts-1 {
+		t.Fatalf("rename waits = %d, want %d", waits, renameAttempts-1)
+	}
 }
 
 func TestRenameWithRetry_WindowsContentionHonorsCancellation(t *testing.T) {
@@ -75,10 +95,17 @@ func TestRenameWithRetry_WindowsContentionHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ops := defaultAtomicWriteOps()
-	ops.rename = func(string, string) error { return errorSharingViolation }
+	attempts := 0
+	ops.rename = func(string, string) error {
+		attempts++
+		return errorSharingViolation
+	}
 
 	err := renameWithRetry(ctx, "staged", "session.json", ops)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("rename attempts = %d, want 0", attempts)
 	}
 }

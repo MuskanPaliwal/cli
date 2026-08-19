@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriteFileAtomicStream_ReplacesValidatedFile(t *testing.T) {
@@ -86,9 +89,7 @@ func TestWriteFileAtomicStream_ProducerFailureCleansStaging(t *testing.T) {
 			return nil
 		},
 	)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("error = %v, want unchanged producer error", err)
-	}
+	require.Same(t, wantErr, err, "producer error should be returned unchanged")
 	if validated {
 		t.Fatal("validator ran after producer failure")
 	}
@@ -110,8 +111,35 @@ func TestWriteFileAtomicStream_ValidatorFailureCleansStaging(t *testing.T) {
 		},
 		func(io.Reader) error { return wantErr },
 	)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("error = %v, want unchanged validator error", err)
+	require.Same(t, wantErr, err, "validator error should be returned unchanged")
+	assertAtomicDestinationUnchanged(t, target)
+	assertNoAtomicTemps(t, dir)
+}
+
+func TestWriteFileAtomicStream_ValidatorReadFailureCleansStaging(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := seedAtomicDestination(t, dir)
+	wantErr := errors.New("validation read failed")
+	reader := &faultReadCloser{readErr: wantErr}
+	ops := defaultAtomicWriteOps()
+	ops.open = func(string) (io.ReadCloser, error) { return reader, nil }
+
+	err := writeFileAtomic(
+		context.Background(), target, 0o600,
+		func(w io.Writer) error {
+			_, err := io.WriteString(w, "fresh")
+			return err
+		},
+		func(r io.Reader) error {
+			_, err := io.ReadAll(r)
+			return err
+		},
+		atomicWriteConfig{ops: ops, tempPattern: ".out.*.tmp"},
+	)
+	require.Same(t, wantErr, err, "validator read error should be returned unchanged")
+	if !reader.closed {
+		t.Fatal("validation reader was not closed after read failure")
 	}
 	assertAtomicDestinationUnchanged(t, target)
 	assertNoAtomicTemps(t, dir)
@@ -144,6 +172,60 @@ func TestWriteFileAtomicStream_CancellationBeforePublicationCleansStaging(t *tes
 	}
 	assertAtomicDestinationUnchanged(t, target)
 	assertNoAtomicTemps(t, dir)
+}
+
+func TestWriteFileAtomicStream_CancellationDuringRenameRetryRetainsStaging(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := seedAtomicDestination(t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	wantContention := errors.New("destination is busy")
+	attempts := 0
+	ops := defaultAtomicWriteOps()
+	ops.rename = func(staged, destination string) error {
+		attempts++
+		if attempts == 1 {
+			return wantContention
+		}
+		return os.Rename(staged, destination)
+	}
+	ops.isRenameContention = func(err error) bool { return errors.Is(err, wantContention) }
+	ops.wait = func(context.Context, time.Duration) error {
+		cancel()
+		return nil
+	}
+
+	err := writeFileAtomic(
+		ctx, target, 0o600,
+		func(w io.Writer) error {
+			_, err := io.WriteString(w, "fresh")
+			return err
+		},
+		func(io.Reader) error { return nil },
+		atomicWriteConfig{
+			ops:                          ops,
+			tempPattern:                  ".out.*.tmp",
+			retainStagedOnPublishFailure: true,
+		},
+	)
+	var publishErr *PublishError
+	if !errors.As(err, &publishErr) {
+		t.Fatalf("error = %v, want *PublishError", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("rename attempts = %d, want 1", attempts)
+	}
+	assertAtomicDestinationUnchanged(t, target)
+	staged, readErr := os.ReadFile(publishErr.StagedPath)
+	if readErr != nil {
+		t.Fatalf("read retained staging: %v", readErr)
+	}
+	if string(staged) != "fresh" {
+		t.Fatalf("retained staging = %q, want fresh", staged)
+	}
 }
 
 func TestWriteFileAtomicStream_RejectsIncompleteJSONBeforePublication(t *testing.T) {
@@ -240,6 +322,127 @@ func TestWriteFileAtomicStream_SyncAndCloseFailuresCleanStaging(t *testing.T) {
 			assertNoAtomicTemps(t, dir)
 		})
 	}
+}
+
+func TestWriteFileAtomicStream_CreateFailureLeavesDestinationUntouched(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := seedAtomicDestination(t, dir)
+	wantErr := errors.New("create failed")
+	producerCalled := false
+	ops := defaultAtomicWriteOps()
+	ops.createTemp = func(string, string) (syncWriteCloser, error) { return nil, wantErr }
+
+	err := writeFileAtomic(
+		context.Background(), target, 0o600,
+		func(io.Writer) error {
+			producerCalled = true
+			return nil
+		},
+		func(io.Reader) error { return nil },
+		atomicWriteConfig{ops: ops, tempPattern: ".out.*.tmp"},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if producerCalled {
+		t.Fatal("producer ran after staging creation failed")
+	}
+	assertAtomicDestinationUnchanged(t, target)
+	assertNoAtomicTemps(t, dir)
+}
+
+func TestWriteFileAtomicStream_ValidationAndChmodFailuresCleanStaging(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		configure func(*atomicWriteOps, error)
+	}{
+		{
+			name: "validation open",
+			configure: func(ops *atomicWriteOps, wantErr error) {
+				ops.open = func(string) (io.ReadCloser, error) { return nil, wantErr }
+			},
+		},
+		{
+			name: "validation close",
+			configure: func(ops *atomicWriteOps, wantErr error) {
+				ops.open = func(path string) (io.ReadCloser, error) {
+					file, err := os.Open(path)
+					if err != nil {
+						return nil, err
+					}
+					return &faultReadFile{File: file, closeErr: wantErr}, nil
+				}
+			},
+		},
+		{
+			name: "chmod",
+			configure: func(ops *atomicWriteOps, wantErr error) {
+				ops.chmod = func(string, os.FileMode) error { return wantErr }
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			target := seedAtomicDestination(t, dir)
+			wantErr := errors.New(tt.name + " failed")
+			ops := defaultAtomicWriteOps()
+			tt.configure(&ops, wantErr)
+
+			err := writeFileAtomic(
+				context.Background(), target, 0o600,
+				func(w io.Writer) error {
+					_, err := io.WriteString(w, "fresh")
+					return err
+				},
+				func(io.Reader) error { return nil },
+				atomicWriteConfig{ops: ops, tempPattern: ".out.*.tmp"},
+			)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("error = %v, want %v", err, wantErr)
+			}
+			assertAtomicDestinationUnchanged(t, target)
+			assertNoAtomicTemps(t, dir)
+		})
+	}
+}
+
+func TestWriteFileAtomicStream_CancellationAfterValidationCleansStaging(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	target := seedAtomicDestination(t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	chmodCalled := false
+	ops := defaultAtomicWriteOps()
+	ops.chmod = func(string, os.FileMode) error {
+		chmodCalled = true
+		return nil
+	}
+
+	err := writeFileAtomic(
+		ctx, target, 0o600,
+		func(w io.Writer) error {
+			_, err := io.WriteString(w, "fresh")
+			return err
+		},
+		func(io.Reader) error {
+			cancel()
+			return nil
+		},
+		atomicWriteConfig{ops: ops, tempPattern: ".out.*.tmp"},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if chmodCalled {
+		t.Fatal("chmod ran after validation canceled the operation")
+	}
+	assertAtomicDestinationUnchanged(t, target)
+	assertNoAtomicTemps(t, dir)
 }
 
 func TestWriteFileAtomicStream_RenameFailureRetainsValidatedStaging(t *testing.T) {
@@ -350,6 +553,17 @@ type faultWriteFile struct {
 	closeErr error
 }
 
+type faultReadFile struct {
+	*os.File
+
+	closeErr error
+}
+
+type faultReadCloser struct {
+	readErr error
+	closed  bool
+}
+
 type faultSyncCloser struct {
 	syncErr     error
 	closeErr    error
@@ -380,6 +594,21 @@ func (f *faultWriteFile) Close() error {
 		return f.closeErr
 	}
 	return err
+}
+
+func (f *faultReadFile) Close() error {
+	err := f.File.Close()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return err
+}
+
+func (f *faultReadCloser) Read([]byte) (int, error) { return 0, f.readErr }
+
+func (f *faultReadCloser) Close() error {
+	f.closed = true
+	return nil
 }
 
 func seedAtomicDestination(t *testing.T, dir string) string {

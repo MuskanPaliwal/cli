@@ -16,7 +16,8 @@ const (
 )
 
 // PublishError reports that a complete, validated staging file could not be
-// installed at its destination. StagedPath is retained for caller recovery.
+// installed at its destination. Ownership of StagedPath transfers to the
+// caller, which must recover or remove it.
 type PublishError struct {
 	StagedPath  string
 	destination string
@@ -38,9 +39,9 @@ func (e *PublishError) Unwrap() error { return e.err }
 // duration of their callbacks. Each callback is invoked at most once.
 //
 // Producer and validator errors are returned unchanged. Failures before the
-// rename remove the staging file and leave the destination untouched. A rename
-// failure instead returns *PublishError and retains its already-validated
-// StagedPath so the caller can recover the completed output.
+// rename leave the destination untouched and make a best-effort attempt to
+// remove the staging file. A rename failure instead returns *PublishError and
+// transfers ownership of its already-validated StagedPath to the caller.
 func WriteFileAtomicStream(
 	ctx context.Context,
 	filePath string,
@@ -243,6 +244,9 @@ func writeFileAtomic(
 func renameWithRetry(ctx context.Context, staged, destination string, ops atomicWriteOps) error {
 	var err error
 	for attempt := range renameAttempts {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("rename staging file canceled: %w", ctxErr)
+		}
 		if err = ops.rename(staged, destination); err == nil {
 			return nil
 		}
