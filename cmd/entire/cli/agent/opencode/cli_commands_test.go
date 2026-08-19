@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -88,34 +89,27 @@ func TestClassifyOpenCodeExportError_Timeout(t *testing.T) {
 	}
 }
 
-// TestRunOpenCodeExportToFile_MissingBinary pins the classification of the most
-// common failure. The runner writes to a staging path the caller owns, so the
-// preservation of the live transcript is covered by the fetchAndCacheExport tests
-// in lifecycle_test.go, not here.
-func TestRunOpenCodeExportToFile_MissingBinary(t *testing.T) {
+// TestRunOpenCodeExport_MissingBinary pins the classification of the most common
+// failure. Publication is covered by the fetchAndCacheExport tests.
+func TestRunOpenCodeExport_MissingBinary(t *testing.T) {
 	// No t.Parallel: t.Setenv.
-	dir := t.TempDir()
-	staged := filepath.Join(dir, ".export-ses_cached.json-1")
-
 	// Empty PATH makes the export fail deterministically without an opencode binary.
 	t.Setenv("PATH", "")
 
-	err := runOpenCodeExportToFile(context.Background(), "ses_cached", staged)
+	err := runOpenCodeExport(context.Background(), "ses_cached", &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected export to fail with no opencode on PATH")
 	}
 	if !errors.Is(err, exec.ErrNotFound) {
-		t.Fatalf("runOpenCodeExportToFile error = %v, want exec.ErrNotFound", err)
+		t.Fatalf("runOpenCodeExport error = %v, want exec.ErrNotFound", err)
 	}
 }
 
-func TestRunOpenCodeExportToFile_WritesStdoutToPath(t *testing.T) {
+func TestRunOpenCodeExport_WritesStdout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub opencode is a shell script")
 	}
 	// No t.Parallel: t.Setenv.
-	staged := filepath.Join(t.TempDir(), ".export-ses_ok.json-1")
-
 	const export = `{"info":{"id":"ses_ok"},"messages":[]}`
 	stubDir := t.TempDir()
 	script := "#!/bin/sh\nprintf '%s' '" + export + "'\n"
@@ -124,54 +118,12 @@ func TestRunOpenCodeExportToFile_WritesStdoutToPath(t *testing.T) {
 	}
 	t.Setenv("PATH", stubDir)
 
-	if err := runOpenCodeExportToFile(context.Background(), "ses_ok", staged); err != nil {
-		t.Fatalf("runOpenCodeExportToFile failed: %v", err)
+	var output bytes.Buffer
+	if err := runOpenCodeExport(context.Background(), "ses_ok", &output); err != nil {
+		t.Fatalf("runOpenCodeExport failed: %v", err)
 	}
-
-	got, err := os.ReadFile(staged)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != export {
-		t.Fatalf("exported transcript = %q, want %q", string(got), export)
-	}
-}
-
-func TestRenameOverExisting_ReplacesDestination(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	staged := filepath.Join(dir, ".export-ses_x.json-1")
-	dest := filepath.Join(dir, "ses_x.json")
-	if err := os.WriteFile(staged, []byte("fresh"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dest, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := renameOverExisting(staged, dest); err != nil {
-		t.Fatalf("renameOverExisting failed: %v", err)
-	}
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "fresh" {
-		t.Fatalf("destination = %q, want %q", string(got), "fresh")
-	}
-	if _, err := os.Stat(staged); !os.IsNotExist(err) {
-		t.Errorf("staged file still present after rename: %v", err)
-	}
-}
-
-func TestIsRenameContention_NonSharingErrorsAreNotRetried(t *testing.T) {
-	t.Parallel()
-
-	// On POSIX this is always false; on Windows only sharing/access violations
-	// qualify. A plain ENOENT must never be retried on either.
-	if isRenameContention(os.ErrNotExist) {
-		t.Error("isRenameContention(ErrNotExist) = true, want false")
+	if output.String() != export {
+		t.Fatalf("exported transcript = %q, want %q", output.String(), export)
 	}
 }
 

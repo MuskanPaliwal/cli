@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -29,45 +30,19 @@ type openCodeExportError struct {
 func (e *openCodeExportError) Error() string { return e.message }
 func (e *openCodeExportError) Unwrap() error { return e.cause }
 
-// runOpenCodeExportToFile runs `opencode export <sessionID>` and redirects stdout
-// to outputPath. This avoids pipe/stdout capture truncation bugs in some opencode versions.
-//
-// outputPath must be a staging path, never a live transcript: `opencode export`
-// can fail after writing a partial payload, and can exit 0 having written nothing
-// at all. Callers own the validate-then-install step — see fetchAndCacheExport,
-// which is the only caller and stages under .entire/tmp.
-//
-// The fsync before close is what makes the caller's rename durable: without it
-// some filesystems can surface the rename as complete while the file is still
-// empty after a hard crash, which would destroy the transcript the staging exists
-// to protect. Same reasoning as jsonutil.WriteFileAtomic.
-func runOpenCodeExportToFile(ctx context.Context, sessionID, outputPath string) (retErr error) {
+// runOpenCodeExport runs `opencode export <sessionID>` and streams stdout to
+// output. The caller owns durable, validated publication of those bytes.
+func runOpenCodeExport(ctx context.Context, sessionID string, output io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, openCodeCommandTimeout)
 	defer cancel()
 
-	//nolint:gosec // outputPath is a staging path the caller derives from .entire/tmp plus a validated session ID
-	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("failed to create export file: %w", err)
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && retErr == nil {
-			retErr = fmt.Errorf("failed to close export file: %w", closeErr)
-		}
-	}()
-
 	cmd := exec.CommandContext(ctx, "opencode", "export", sessionID)
-	cmd.Stdout = file
+	cmd.Stdout = output
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if runErr := cmd.Run(); runErr != nil {
 		return classifyOpenCodeExportError(ctx, runErr, stderr.String(), sessionID)
 	}
-
-	if syncErr := file.Sync(); syncErr != nil {
-		return fmt.Errorf("failed to flush export file: %w", syncErr)
-	}
-
 	return nil
 }
 

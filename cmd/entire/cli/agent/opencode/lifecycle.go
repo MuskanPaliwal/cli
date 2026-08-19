@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,12 +13,13 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
-var runOpenCodeExportToFileFn = runOpenCodeExportToFile
+var runOpenCodeExportFn = runOpenCodeExport
 
 // Compile-time assertion that OpenCode can inject context into the model.
 var _ agent.ContextInjector = (*OpenCodeAgent)(nil)
@@ -223,57 +225,45 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
-	// Export to a staging file and move it into place only once the bytes are
-	// known good. tmpFile is frequently the ONLY local copy of the session — the
-	// turn-end hook writes it and nothing condenses it into a checkpoint until
-	// the user commits — and every caller re-exports over a possibly-populated
-	// path (PrepareTranscript on every turn end, FetchTranscript on attach).
-	// Writing in place means a missing binary, a rejected session, a timeout, or
-	// an `opencode export` that exits 0 with truncated output replaces a good
-	// transcript with nothing or with garbage. Garbage is the worse of the two:
-	// attach's os.Stat branch accepts whatever is at this path and treats
-	// PrepareTranscript's failure as best-effort, so a corrupt file is used
-	// silently while a missing one at least falls through to a re-fetch.
-	staged, err := stageExportPath(tmpDir, sessionID)
+	// The cache may be the session's only local transcript until checkpointing;
+	// publish only a complete export that has passed JSON validation.
+	err = jsonutil.WriteFileAtomicStream(
+		ctx,
+		tmpFile,
+		0o600,
+		func(writer io.Writer) error {
+			return runOpenCodeExportFn(ctx, sessionID, writer)
+		},
+		func(reader io.Reader) error {
+			return validateOpenCodeExport(ctx, sessionID, reader)
+		},
+	)
 	if err != nil {
-		return "", err
-	}
-	keepStaged := false
-	defer func() {
-		if !keepStaged {
-			_ = os.Remove(staged)
+		var publishErr *jsonutil.PublishError
+		if errors.As(err, &publishErr) {
+			return "", fmt.Errorf("failed to install export file (export saved at %s): %w", publishErr.StagedPath, err)
 		}
-	}()
-
-	if err := runOpenCodeExportToFileFn(ctx, sessionID, staged); err != nil {
-		return "", err
+		return "", err //nolint:wrapcheck // preserve producer and validator error classification
 	}
-
-	//nolint:gosec // staged is derived from tmpDir plus a validated session ID
-	data, err := os.ReadFile(staged)
-	if err != nil {
-		return "", fmt.Errorf("failed to read export file: %w", err)
-	}
-
-	if !json.Valid(data) {
-		logging.Debug(logging.WithComponent(ctx, "lifecycle"),
-			"opencode export file contained invalid JSON",
-			slog.Int("bytes", len(data)),
-			slog.String("path", staged),
-		)
-		return "", &openCodeExportError{
-			message: fmt.Sprintf("OpenCode returned invalid transcript data for session %q. Try updating OpenCode and running the command again.", sessionID),
-		}
-	}
-
-	if err := renameOverExisting(staged, tmpFile); err != nil {
-		// The staged export is intact and validated; keep it rather than delete a
-		// transcript we may be the last holder of, and name it so the user can
-		// recover it by hand.
-		keepStaged = true
-		return "", fmt.Errorf("failed to install export file (export saved at %s): %w", staged, err)
-	}
-	keepStaged = true
 
 	return tmpFile, nil
+}
+
+func validateOpenCodeExport(ctx context.Context, sessionID string, reader io.Reader) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read export file: %w", err)
+	}
+	if json.Valid(data) {
+		return nil
+	}
+
+	logging.Debug(logging.WithComponent(ctx, "lifecycle"),
+		"opencode export file contained invalid JSON",
+		slog.Int("bytes", len(data)),
+		slog.String("session_id", sessionID),
+	)
+	return &openCodeExportError{
+		message: fmt.Sprintf("OpenCode returned invalid transcript data for session %q. Try updating OpenCode and running the command again.", sessionID),
+	}
 }
