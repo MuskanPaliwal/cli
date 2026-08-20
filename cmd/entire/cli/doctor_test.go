@@ -310,7 +310,11 @@ func TestClassifySession_WorktreeIDInShadowBranch(t *testing.T) {
 }
 
 // Distinct parentless commits have no common ancestor.
-func writeRootlessMetadataCommit(t *testing.T, repo *git.Repository, message string) plumbing.Hash {
+// writeRootlessMetadataCommit builds a metadata commit with an empty tree.
+// parents is variadic so a test can build connected history (shared base, two
+// children) without a second copy of the go-git plumbing dance; passing none
+// yields the rootless commit the disconnection tests want.
+func writeRootlessMetadataCommit(t *testing.T, repo *git.Repository, message string, parents ...plumbing.Hash) plumbing.Hash {
 	t.Helper()
 	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
 	treeObj := repo.Storer.NewEncodedObject()
@@ -323,6 +327,8 @@ func writeRootlessMetadataCommit(t *testing.T, repo *git.Repository, message str
 		Committer: object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
 		Message:   message,
 		TreeHash:  treeHash,
+
+		ParentHashes: parents,
 	}
 	enc := repo.Storer.NewEncodedObject()
 	require.NoError(t, commitObj.Encode(enc))
@@ -487,16 +493,22 @@ func TestRunSessionsFix_HandlerLogsStayOffTheTerminal(t *testing.T) {
 		StartedAt:  time.Now().Add(-2 * time.Hour),
 	}))
 
-	// Start from no logger so this asserts doctor's own setup, not one left
-	// installed by an earlier test in this package.
-	logging.Close()
+	// Anything reaching slog.Default() is on the user's terminal in production.
 	var fallback bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&fallback, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
+	// The root pre-run installs the logger for every command; this stands in for
+	// it, since runSessionsFix is called directly rather than through the tree.
+	l, logErr := newLogger(context.Background())
+	require.NoError(t, logErr)
+	t.Cleanup(func() { _ = l.Close() })
+
 	cmd, _ := newTestCmd(t)
+	cmd.SetContext(logging.WithLogger(cmd.Context(), l))
 	require.NoError(t, runSessionsFix(cmd, true))
+	require.NoError(t, l.Close()) // flush before reading the file
 
 	assert.Empty(t, fallback.String(),
 		"handler logs went to slog.Default() (the user's terminal) instead of .entire/logs/")
@@ -540,7 +552,9 @@ func canonicalCodexHooksJSON() string {
 		"SessionEnd":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex session-end","timeout":3}]}],
 		"UserPromptSubmit":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex user-prompt-submit","timeout":30}]}],
 		"Stop":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex stop","timeout":30}]}],
-		"PostToolUse":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex post-tool-use","timeout":30}]}]
+		"PostToolUse":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex post-tool-use","timeout":30}]}],
+		"SubagentStart":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex subagent-start","timeout":30}]}],
+		"SubagentStop":[{"matcher":null,"hooks":[{"type":"command","command":"entire hooks codex subagent-stop","timeout":30}]}]
 	}}`
 }
 
@@ -571,6 +585,12 @@ trusted_hash = "sha256:ccc"
 
 [hooks.state."` + hooksPath + `:post_tool_use:0:0"]
 trusted_hash = "sha256:ddd"
+
+[hooks.state."` + hooksPath + `:subagent_start:0:0"]
+trusted_hash = "sha256:eee"
+
+[hooks.state."` + hooksPath + `:subagent_stop:0:0"]
+trusted_hash = "sha256:fff"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
 	t.Setenv("CODEX_HOME", codexHome)
@@ -615,8 +635,13 @@ trusted_hash = "sha256:ccc"
 
 	out := stdout.String()
 	require.Contains(t, out, "Codex hook trust: REVIEW NEEDED")
-	require.Contains(t, out, "1 hook(s) declared")
+	// The fixture trusts session_start/user_prompt_submit/stop, so the remaining
+	// three declared events are untrusted. Codex refuses to run untrusted hooks, so
+	// each one named here is a hook that silently would not fire.
+	require.Contains(t, out, "3 hook(s) declared")
 	require.Contains(t, out, "- post_tool_use")
+	require.Contains(t, out, "- subagent_start")
+	require.Contains(t, out, "- subagent_stop")
 	require.Contains(t, out, "Open /hooks inside Codex")
 }
 
@@ -737,4 +762,105 @@ func TestConfirmDoctorFix_CancelledContext(t *testing.T) {
 	proceed, err := confirmDoctorFix(ctx, &out, "Apply fix?")
 	require.NoError(t, err)
 	assert.False(t, proceed)
+}
+
+// setupDivergedMetadata points local v1 and origin's tracking ref at two
+// different children of one base commit, and returns both tips.
+func setupDivergedMetadata(t *testing.T, repo *git.Repository) (local, remote plumbing.Hash) {
+	t.Helper()
+	base := writeRootlessMetadataCommit(t, repo, "shared base")
+	local = writeRootlessMetadataCommit(t, repo, "local checkpoint", base)
+	remote = writeRootlessMetadataCommit(t, repo, "remote checkpoint", base)
+
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName(paths.MetadataBranchName), local)))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName), remote)))
+	return local, remote
+}
+
+func runCheckDisconnectedMetadata(t *testing.T) string {
+	t.Helper()
+	cmd, stdout := newTestCmd(t)
+	require.NoError(t, checkDisconnectedMetadata(cmd, true))
+	return stdout.String()
+}
+
+// TestCheckDisconnectedMetadata_Diverged_ReportedAsSelfHealing covers the state
+// that previously printed a bare "OK": local and remote both advanced, so the
+// next fetch rewrites the local ref by replaying local commits. Nothing else
+// surfaces that, since the replay itself only logs.
+func TestCheckDisconnectedMetadata_Diverged_ReportedAsSelfHealing(t *testing.T) {
+	// Cannot use t.Parallel(): t.Chdir and IsolateGitConfigEnv modify globals.
+	testutil.IsolateGitConfigEnv(t)
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	local, remote := setupDivergedMetadata(t, repo)
+
+	// origin is the elected remote here, so the replay really will happen.
+	testutil.AddRemote(t, dir, "origin", "https://example.com/origin.git")
+
+	output := runCheckDisconnectedMetadata(t)
+
+	assert.Contains(t, output, "Metadata branches: DIVERGED")
+	assert.NotContains(t, output, "DISCONNECTED", "shared ancestry is not a disconnection")
+	assert.Contains(t, output, local.String()[:12], "the local tip must be shown")
+	assert.Contains(t, output, remote.String()[:12], "the remote tip must be shown")
+	assert.Contains(t, output, "No action needed", "divergence against the elected remote self-heals")
+	assert.Contains(t, output, "new hashes", "the user must learn the replayed commits are re-hashed")
+
+	localRef, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	assert.Equal(t, local, localRef.Hash(), "reporting must not move any ref")
+}
+
+// TestCheckDisconnectedMetadata_Diverged_LegacyTierWontReconcile is the other
+// half: the confinement rule means a diverged legacy-tier ref never advances the
+// local ref, so promising self-healing there would be a lie.
+func TestCheckDisconnectedMetadata_Diverged_LegacyTierWontReconcile(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	setupDivergedMetadata(t, repo)
+
+	// Election picks upstream; origin carries the diverged tracking ref.
+	testutil.AddRemote(t, dir, "origin", "https://example.com/origin.git")
+	testutil.AddRemote(t, dir, "upstream", "https://example.com/upstream.git")
+	testutil.WriteCheckpointPushRemoteSetting(t, dir, "upstream")
+
+	output := runCheckDisconnectedMetadata(t)
+
+	assert.Contains(t, output, "Metadata branches: DIVERGED")
+	assert.Contains(t, output, "legacy read tier")
+	assert.Contains(t, output, "Nothing will reconcile this on its own.")
+	assert.NotContains(t, output, "No action needed",
+		"a legacy-tier divergence does not self-heal; saying so would be wrong")
+}
+
+// TestCheckDisconnectedMetadata_Aligned_StaysQuiet pins that the common case is
+// unchanged — the divergence check must not add noise to a healthy repo.
+func TestCheckDisconnectedMetadata_Aligned_StaysQuiet(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	tip := writeRootlessMetadataCommit(t, repo, "agreed metadata")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName(paths.MetadataBranchName), tip)))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName), tip)))
+	testutil.AddRemote(t, dir, "origin", "https://example.com/origin.git")
+
+	output := runCheckDisconnectedMetadata(t)
+
+	assert.Contains(t, output, "✓ Metadata branches: OK")
+	assert.NotContains(t, output, "DIVERGED")
 }

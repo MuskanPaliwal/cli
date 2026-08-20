@@ -2503,8 +2503,10 @@ func (s *ManualCommitStrategy) calculatePromptAttributionAtStart(
 
 	// Get worktree status to find ALL changed files. This is a second full
 	// worktree walk in the turn-start hook — the pre-prompt capture in
-	// cli/state.go does its own. They are not shared.
-	status, err := gitrepo.Status(ctx, repo)
+	// cli/state.go does its own. They are not shared, but they share the
+	// budget wrapper's process-local breach latch: if the pre-prompt walk
+	// breached, this call fails fast instead of re-entering the walk.
+	status, err := gitrepo.StatusWithBudget(ctx, repo)
 	if err != nil {
 		logging.Debug(logCtx, "prompt attribution skipped: failed to get worktree status",
 			slog.String("error", err.Error()))

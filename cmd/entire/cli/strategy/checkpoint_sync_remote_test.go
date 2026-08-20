@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -309,8 +310,8 @@ func TestCheckpointSyncAllowedForRemote(t *testing.T) {
 
 		t.Chdir(tmpDir)
 
-		assert.True(t, checkpointSyncAllowedForRemote(ctx, "origin"))
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish"))
+		assert.True(t, checkpointSyncAllowedForRemote(ctx, "origin", ""))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish", ""))
 	})
 
 	t.Run("misconfigured setting fails closed for every remote", func(t *testing.T) {
@@ -326,8 +327,8 @@ func TestCheckpointSyncAllowedForRemote(t *testing.T) {
 
 		t.Chdir(tmpDir)
 
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin"))
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish"))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin", ""))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish", ""))
 	})
 
 	t.Run("unreadable settings fails closed for every remote", func(t *testing.T) {
@@ -349,8 +350,8 @@ func TestCheckpointSyncAllowedForRemote(t *testing.T) {
 
 		t.Chdir(tmpDir)
 
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin"))
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish"))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin", ""))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "publish", ""))
 	})
 
 	t.Run("raw URL push argument is never allowed", func(t *testing.T) {
@@ -364,7 +365,7 @@ func TestCheckpointSyncAllowedForRemote(t *testing.T) {
 
 		t.Chdir(tmpDir)
 
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "https://github.com/o/r.git"))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "https://github.com/o/r.git", ""))
 	})
 
 	t.Run("no remotes configured: never allowed", func(t *testing.T) {
@@ -376,7 +377,7 @@ func TestCheckpointSyncAllowedForRemote(t *testing.T) {
 
 		t.Chdir(tmpDir)
 
-		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin"))
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "origin", ""))
 	})
 }
 
@@ -416,6 +417,127 @@ func captureStderrWriter(t *testing.T) *bytes.Buffer {
 	stderrWriter = &buf
 	t.Cleanup(func() { stderrWriter = oldWriter })
 	return &buf
+}
+
+// Regression: after the single-remote gate (ENT-1451) shipped, a push to a
+// non-elected remote stopped carrying checkpoints with no signal in the push
+// output — users whose habitual push remote lost the default election to a
+// dormant origin saw checkpoints strand locally and had to discover
+// checkpoint_push_remote through support. The gated pre-push must name the
+// elected destination and the setting.
+//
+// Not parallel: uses t.Chdir()
+func TestHintGatedCheckpointSync(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	ctx := context.Background()
+
+	// initHintRepo builds a repo with unpushed v1 checkpoint commits and an
+	// origin+publish remote pair, so a push to "publish" is gated under the
+	// default election.
+	// declared: whether the branch declares "publish" as its push destination.
+	// The hint only speaks for a remote the branch actually pushes to, so the
+	// declaration is part of the fixture rather than incidental.
+	initHintRepo := func(t *testing.T, declared bool) string {
+		dir, _, second := initCountTestRepo(t)
+		testutil.AddRemote(t, dir, "origin", "https://example.com/origin.git")
+		testutil.AddRemote(t, dir, "publish", "https://example.com/publish.git")
+		testutil.GitUpdateRef(t, dir, v1LocalRef, second)
+		if declared {
+			setGitConfig(t, dir, "remote.pushDefault", "publish")
+		}
+		return dir
+	}
+
+	t.Run("automatic election with waiting checkpoints prints the hint", func(t *testing.T) {
+		dir := initHintRepo(t, true)
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		out := buf.String()
+		assert.Contains(t, out, `"origin"`, "hint must name the elected destination")
+		assert.Contains(t, out, "checkpoint_push_remote", "hint must name the setting that re-routes sync")
+		assert.Contains(t, out, `"publish"`, "hint must name the remote the user actually pushed")
+		// A remote name is a per-clone fact: pointing at the tracked
+		// settings.json would invite committing it, fail-closing sync for
+		// every teammate whose clone lacks that remote name.
+		assert.Contains(t, out, ".entire/settings.local.json", "hint must point at the clone-local settings file")
+	})
+
+	t.Run("a push to a remote this branch does not push to stays silent", func(t *testing.T) {
+		// The advice is "point checkpoint_push_remote at the remote you just
+		// pushed". For a deploy target or a one-off `git push upstream` that would
+		// tell the user to publish session transcripts there — the leak the
+		// single-remote gate exists to prevent. Silence is the only correct output.
+		dir := initHintRepo(t, false)
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		assert.Empty(t, buf.String(),
+			"an undeclared push target must not be recommended as the checkpoint sync remote")
+	})
+
+	t.Run("checkpoints already on the elected remote stay silent", func(t *testing.T) {
+		// Pins that the count runs against the ELECTED remote, not the pushed
+		// one: origin's tracking ref is up to date, publish has none, so
+		// counting against "publish" would report every v1 commit and nag on
+		// every gated push forever after checkpoints already synced.
+		dir := initHintRepo(t, true)
+		testutil.GitUpdateRef(t, dir, "refs/remotes/origin/"+paths.MetadataBranchName, testutil.GetHeadHash(t, dir))
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		assert.Empty(t, buf.String(), "nothing is waiting for the elected remote; the gated push has nothing to warn about")
+	})
+
+	t.Run("explicit checkpoint_push_remote stays silent", func(t *testing.T) {
+		dir := initHintRepo(t, true)
+		testutil.WriteCheckpointPushRemoteSetting(t, dir, "origin")
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		assert.Empty(t, buf.String(), "a configured election is a decision already made; gated pushes must not nag")
+	})
+
+	t.Run("nothing waiting stays silent", func(t *testing.T) {
+		dir, _, _ := initCountTestRepo(t)
+		testutil.AddRemote(t, dir, "origin", "https://example.com/origin.git")
+		testutil.AddRemote(t, dir, "publish", "https://example.com/publish.git")
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		assert.Empty(t, buf.String(), "no stranded checkpoints, nothing to warn about")
+	})
+
+	t.Run("raw URL push stays silent", func(t *testing.T) {
+		dir := initHintRepo(t, true)
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "https://example.com/elsewhere.git")
+
+		assert.Empty(t, buf.String(), "checkpoint_push_remote takes a remote name; a URL push has no actionable hint")
+	})
+
+	t.Run("failed election stays silent", func(t *testing.T) {
+		dir := initHintRepo(t, true)
+		testutil.WriteCheckpointPushRemoteSetting(t, dir, "gone")
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "publish")
+
+		assert.Empty(t, buf.String(), "the fail-closed election already logs its own warning")
+	})
 }
 
 // Regression: the default election guesses from config at rest (origin bias),
@@ -476,8 +598,18 @@ func TestResolveCheckpointSyncRemote_CapturedTier(t *testing.T) {
 	})
 }
 
+// captureOnSuccessfulPush runs both capture phases in the order a pre-push that
+// delivers checkpoints runs them: propose before the push, persist after it. The
+// subtests below assert that end state, which is unchanged by the split;
+// TestCaptureCheckpointSyncRemote_OnlyOnDelivery covers the split itself.
+func captureOnSuccessfulPush(ctx context.Context, pushRemote string) {
+	if pendingCaptureCheckpointSyncRemote(ctx, pushRemote) {
+		commitCapturedSyncRemote(ctx, pushRemote)
+	}
+}
+
 // Not parallel: uses t.Chdir()
-func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
+func TestCaptureCheckpointSyncRemote(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
@@ -487,7 +619,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		t.Chdir(dir)
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "fork")
+		captureOnSuccessfulPush(ctx, "fork")
 
 		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx), "capture must persist the remote")
 		assert.Contains(t, buf.String(), `"fork"`, "capture must announce itself")
@@ -503,7 +635,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		t.Chdir(dir)
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "origin")
+		captureOnSuccessfulPush(ctx, "origin")
 
 		assert.Empty(t, loadCapturedSyncRemotes(ctx), "the seed election needs no capture; persisting it would block a later real capture")
 		assert.Empty(t, buf.String())
@@ -516,7 +648,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		t.Chdir(dir)
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "fork")
+		captureOnSuccessfulPush(ctx, "fork")
 
 		assert.Empty(t, loadCapturedSyncRemotes(ctx))
 		assert.Empty(t, buf.String())
@@ -532,7 +664,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		require.NoError(t, saveCapturedSyncRemote(ctx, "fork"))
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "work")
+		captureOnSuccessfulPush(ctx, "work")
 
 		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx), "first capture sticks until config or phase 2")
 		assert.Empty(t, buf.String())
@@ -554,7 +686,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "myfork")
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "myfork")
+		captureOnSuccessfulPush(ctx, "myfork")
 
 		assert.Equal(t, []string{"myfork"}, loadCapturedSyncRemotes(ctx),
 			"a captured remote that no longer exists must not veto the next capture")
@@ -568,7 +700,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		t.Chdir(dir)
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "fork")
+		captureOnSuccessfulPush(ctx, "fork")
 
 		assert.Empty(t, loadCapturedSyncRemotes(ctx), "an explicit setting is a decision already made")
 		assert.Empty(t, buf.String())
@@ -581,7 +713,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		setGitConfig(t, dir, "branch."+branch+".pushRemote", "fork")
 		t.Chdir(dir)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "fork")
+		captureOnSuccessfulPush(ctx, "fork")
 
 		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx), "pushRemote is git's own push-resolution winner")
 	})
@@ -591,7 +723,7 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		setGitConfig(t, dir, "remote.pushDefault", "fork")
 		t.Chdir(dir)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "fork")
+		captureOnSuccessfulPush(ctx, "fork")
 
 		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx))
 	})
@@ -602,9 +734,92 @@ func TestMaybeCaptureCheckpointSyncRemote(t *testing.T) {
 		t.Chdir(dir)
 		buf := captureStderrWriter(t)
 
-		maybeCaptureCheckpointSyncRemote(ctx, "https://example.com/elsewhere.git")
+		captureOnSuccessfulPush(ctx, "https://example.com/elsewhere.git")
 
 		assert.Empty(t, loadCapturedSyncRemotes(ctx))
 		assert.Empty(t, buf.String())
+	})
+}
+
+// The election is permanent and one-shot ("first capture sticks"), so it must
+// follow evidence that checkpoints ARRIVED, not evidence that a push was about
+// to be attempted. Everything between the gate and the network can still stop
+// delivery — a diverged checkpoint policy, an OPF rewrite failure, the
+// empty-remote defer, a rejected transfer — and capturing on intent both
+// announced a move that carried nothing and left the queued checkpoints able to
+// drain only to the remote that had just failed to take them.
+//
+// Not parallel: uses t.Chdir()
+func TestCaptureCheckpointSyncRemote_OnlyOnDelivery(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	ctx := context.Background()
+
+	t.Run("a push that never delivers leaves the election alone", func(t *testing.T) {
+		dir := newCaptureTestRepo(t)
+		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "fork")
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		// The pre-push proposes, then something downstream returns early and
+		// commitCapturedSyncRemote is never reached.
+		require.True(t, pendingCaptureCheckpointSyncRemote(ctx, "fork"),
+			"fork is the declared destination, so this push would elect it")
+
+		assert.Empty(t, loadCapturedSyncRemotes(ctx), "proposing must not write the election")
+		assert.Empty(t, buf.String(), "nothing was delivered, so nothing may be announced")
+		got, err := ResolveCheckpointSyncRemote(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, CheckpointSyncRemote{Name: "origin", Source: SyncRemoteSourceDefault}, got,
+			"the election must still be recoverable by a later push that does deliver")
+	})
+
+	t.Run("the same push retried later still captures", func(t *testing.T) {
+		// The corollary: declining to persist on a failed push must not poison
+		// the next one, or a single transient failure would cost the user the
+		// automatic election entirely.
+		dir := newCaptureTestRepo(t)
+		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "fork")
+		t.Chdir(dir)
+
+		require.True(t, pendingCaptureCheckpointSyncRemote(ctx, "fork"))
+		captureOnSuccessfulPush(ctx, "fork")
+
+		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx))
+	})
+
+	t.Run("commit re-checks eligibility after the push", func(t *testing.T) {
+		// The lock is dropped across the network push, so another worktree's
+		// hook can capture in between. The winner is whoever's state lands
+		// first; the loser must not append itself on top.
+		dir := newCaptureTestRepo(t)
+		testutil.AddRemote(t, dir, "work", "https://example.com/work.git")
+		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "fork")
+		t.Chdir(dir)
+
+		require.True(t, pendingCaptureCheckpointSyncRemote(ctx, "fork"))
+		// Another worktree delivers to work and commits first.
+		require.NoError(t, saveCapturedSyncRemote(ctx, "work"))
+		buf := captureStderrWriter(t)
+
+		commitCapturedSyncRemote(ctx, "fork")
+
+		assert.Equal(t, []string{"work"}, loadCapturedSyncRemotes(ctx),
+			"a capture already in force wins; the stale proposal must not overwrite or append")
+		assert.Empty(t, buf.String(), "a declined commit must not announce")
+	})
+
+	t.Run("the gate admits the push that will elect the remote", func(t *testing.T) {
+		// Capture and the confinement gate have to agree, or the electing push
+		// would be gated and there would be nothing delivered to capture on.
+		dir := newCaptureTestRepo(t)
+		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "fork")
+		t.Chdir(dir)
+
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "fork", ""),
+			"without a pending capture fork is just a non-elected remote")
+		assert.True(t, checkpointSyncAllowedForRemote(ctx, "fork", "fork"),
+			"the push that elects fork must be allowed to carry checkpoints there")
+		assert.False(t, checkpointSyncAllowedForRemote(ctx, "other", "fork"),
+			"a pending capture only admits the remote it names")
 	})
 }

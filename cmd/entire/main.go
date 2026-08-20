@@ -13,6 +13,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli"
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/procsignal"
@@ -95,6 +96,10 @@ func main() {
 	}
 
 	executed, err := rootCmd.ExecuteContextC(ctx)
+	if l := logging.LoggerFromContext(executed.Context()); l != nil {
+		_ = l.Close()
+	}
+
 	if err != nil {
 		var silent *cli.SilentError
 

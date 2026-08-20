@@ -206,16 +206,12 @@ func attachPrompts(meta transcriptMetadata) []string {
 }
 
 func runAttach(ctx context.Context, w, errW io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
-	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
-	if err := logging.Init(ctx, sessionID); err != nil {
-		// Init failed — logging will use stderr fallback, non-fatal.
-		_ = err
-	}
-	// Flush the 8KB buffered log writer on exit. Without this, any
-	// Warn/Info calls during attach (including the overwrite tripwire)
-	// get silently dropped when the process exits, matching the pattern
-	// already used by resume/clean/reset/rewind/explain.
-	defer logging.Close()
+	// The logger arrives in ctx from the root PersistentPreRun, and the root
+	// PersistentPostRun flushes it (main.go does for the error path cobra skips
+	// that hook on) — so attach neither builds nor closes one, the way
+	// resume/clean/reset/explain do not either. Only the session is attach's to
+	// add, so its lines are filterable.
+	ctx = logging.WithSessionID(ctx, sessionID)
 
 	logCtx := logging.WithComponent(ctx, "attach")
 

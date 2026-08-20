@@ -201,6 +201,13 @@ type State struct {
 	// Used for stale session detection in "entire doctor".
 	LastInteractionTime *time.Time `json:"last_interaction_time,omitempty"`
 
+	// CaptureDegradedAt records when the session's most recent turn degraded
+	// capture because a worktree status scan breached its budget (new-file
+	// detection skipped, or the checkpoint itself skipped). Set at turn end,
+	// cleared by the next turn whose scans stay within budget. Surfaced as a
+	// warning by `entire status`.
+	CaptureDegradedAt *time.Time `json:"capture_degraded_at,omitempty"`
+
 	// StepCount is the number of checkpoints/steps created in this session.
 	// JSON tag kept as "checkpoint_count" for backward compatibility with existing state files.
 	StepCount int `json:"checkpoint_count"`

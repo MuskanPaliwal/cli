@@ -283,6 +283,23 @@ URL mode is exempt — it addresses a separate metadata store directly. `entire
 status` shows the sync destination and how many checkpoints have not reached
 it yet.
 
+A gated push is not fully silent: when checkpoints are waiting for the
+elected remote, the hook prints a two-line stderr hint naming the elected
+destination, the waiting count, and the `checkpoint_push_remote` setting
+(pointed at `.entire/settings.local.json` — a remote name is a per-clone
+fact) that re-routes sync to the remote being pushed. The hint stays quiet
+when the election was explicit (`checkpoint_push_remote` is already set),
+when the push target is a raw URL rather than a configured remote, when
+nothing is waiting, when the election failed (the fail-closed case logs a
+warning instead), and when the push target is not the branch's declared push
+destination — a deploy target or a one-off `git push upstream` must never be
+recommended as the checkpoint sync remote, which would publish transcripts
+there. With capture taking a declared destination on the first agreeing push,
+what remains for the hint is a declared remote capture will not elect because
+one is already in force (phase-1 first-capture-sticks), where naming the
+setting is genuinely the only way to re-route. See `hintGatedCheckpointSync` in
+`strategy/checkpoint_sync_remote.go`.
+
 **Reads follow the election.** Where writes confine to one remote, reads
 consult an ordered candidate chain: the elected sync remote first, then
 `origin` as a **read-only legacy tier** — every pre-election repo has its

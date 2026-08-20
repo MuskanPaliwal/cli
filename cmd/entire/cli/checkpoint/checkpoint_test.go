@@ -18,6 +18,7 @@ import (
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode" // register claude-code so its .claude protected dir is discoverable
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -197,6 +198,34 @@ func TestCollectChangedFiles_ExcludesProtectedDirs(t *testing.T) {
 		"infrastructure dir must not be captured into the checkpoint")
 	require.Contains(t, result.Changed, "src/keep.txt",
 		"ordinary untracked files must still be captured")
+}
+
+// TestCollectChangedFiles_BudgetExceededReturnsSentinel pins the second half
+// of the zombie-hook regression: the first-checkpoint `git status` subprocess
+// had no deadline, so on a pathological worktree the hook process could
+// outlive the agent's ~60s hook timeout stuck in a child git rather than a
+// goroutine. When the budget expires, the child is killed and the error must
+// wrap gitrepo.ErrStatusBudgetExceeded so the lifecycle handlers' warn-and-skip
+// degrade path recognizes it (rather than failing the hook on a generic error).
+func TestCollectChangedFiles_BudgetExceededReturnsSentinel(t *testing.T) {
+	// Not parallel: overrides the package-level budget seam.
+	origBudget := gitStatusBudget
+	// An already-expired deadline deterministically forces the breach path
+	// without needing a slow git or a multi-million-file fixture.
+	gitStatusBudget = time.Nanosecond
+	t.Cleanup(func() { gitStatusBudget = origBudget })
+
+	tempDir := t.TempDir()
+	testutil.InitRepo(t, tempDir)
+	testutil.WriteFile(t, tempDir, "base.txt", "base")
+	testutil.GitAdd(t, tempDir, "base.txt")
+	testutil.GitCommit(t, tempDir, "init")
+
+	repo, err := git.PlainOpen(tempDir)
+	require.NoError(t, err)
+
+	_, err = collectChangedFiles(context.Background(), repo)
+	require.ErrorIs(t, err, gitrepo.ErrStatusBudgetExceeded)
 }
 
 // TestWriteCommitted_AgentField verifies that the Agent field is written
