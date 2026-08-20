@@ -84,6 +84,27 @@ func Init(ctx context.Context, sessionID string) error {
 		}
 	}
 
+	// Resolve the level BEFORE taking the write lock. logLevelGetter is
+	// supplied by the cli package and loads settings, and anything it touches
+	// may log — settings.Load already does. mu is a plain (non-reentrant)
+	// RWMutex, so a log call underneath the getter would block on RLock while
+	// Init holds the write lock and hang the process. That was a real hang:
+	// every hook froze in any repo whose committed settings.json set
+	// redaction.openai_privacy_filter.command, because the trust gate warned
+	// from inside the loader.
+	//
+	// Never call out to code you do not control while holding mu.
+	levelStr := os.Getenv(LogLevelEnvVar)
+	if levelStr == "" {
+		mu.RLock()
+		getter := logLevelGetter
+		mu.RUnlock()
+		if getter != nil {
+			levelStr = getter()
+		}
+	}
+	level := parseLogLevel(levelStr)
+
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -96,13 +117,6 @@ func Init(ctx context.Context, sessionID string) error {
 		_ = logFile.Close()
 		logFile = nil
 	}
-
-	// Get log level from environment first, then settings
-	levelStr := os.Getenv(LogLevelEnvVar)
-	if levelStr == "" && logLevelGetter != nil {
-		levelStr = logLevelGetter()
-	}
-	level := parseLogLevel(levelStr)
 
 	// Warn if invalid level was provided
 	if levelStr != "" && !isValidLogLevel(levelStr) {
@@ -139,9 +153,48 @@ func Init(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// EnsureInitialized routes logging to .entire/logs/ unless it is already
+// initialized, and returns a function that tears down only what it set up.
+//
+// It exists for code that emits logging.* calls from a plain command rather
+// than a hook. Without an initialized logger, log() falls back to
+// slog.Default(), which prints internal structured lines straight onto the
+// user's terminal in the middle of command output — see the same hazard called
+// out at the Init call sites in setup.go and investigate/cmd.go.
+//
+// Unlike Init it is a no-op when a logger already exists, so a caller reachable
+// from a hook cannot close the hook's log file out from under it. Like Init, it
+// CREATES .entire/logs/, so call it only once the command is committed to doing
+// work in an Entire-enabled repository.
+//
+// Scope the returned cleanup to everything the command still has to log, not
+// just the call that needed logging in the first place: it closes the file, so
+// anything logged after it runs goes back to the terminal via slog.Default().
+func EnsureInitialized(ctx context.Context) func() {
+	mu.RLock()
+	already := logger != nil
+	mu.RUnlock()
+	if already {
+		return func() {}
+	}
+	// Init only errors on an invalid non-empty session ID; with "" it always
+	// succeeds, falling back to stderr internally if the log file can't be
+	// opened. Close is correct on that path too — it tolerates a nil logFile.
+	_ = Init(ctx, "") //nolint:errcheck // cannot fail for an empty session ID
+	return Close
+}
+
 // Close closes the log file if one is open.
 // Flushes any buffered data before closing.
 // Safe to call multiple times.
+//
+// It also drops the logger itself, so a caller that keeps logging afterwards
+// falls back to slog.Default() rather than writing into a handler bound to the
+// buffer we just closed. That handler holds the *bufio.Writer by value (see
+// createLogger), so leaving it in place would silently swallow every later line:
+// short writes sit in an orphaned buffer nobody flushes, and once it fills the
+// underlying file is already closed. Commands that Close mid-run and keep
+// working should call EnsureInitialized again rather than rely on the fallback.
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -154,6 +207,7 @@ func Close() {
 		_ = logFile.Close()
 		logFile = nil
 	}
+	logger = nil
 	currentSessionID = ""
 }
 

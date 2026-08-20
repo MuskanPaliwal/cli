@@ -992,17 +992,18 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 }
 
 // reportRepoEnabled records the `entire enable` against the backend so the web
-// onboarding can reflect it. It is strictly best-effort and fully silent:
-// enabling works offline, and every outcome (no origin remote, not logged in,
-// network error, App-can't-reach-repo) is swallowed — the web onboarding
-// surfaces the "install the GitHub App" nudge, so the CLI stays quiet.
+// onboarding can reflect it, and — as a second, independent, best-effort step
+// — probes and caches whether trails are enabled for the repo. Both steps are
+// strictly best-effort and fully silent: enabling works offline, and every
+// outcome (no origin remote, not logged in, network error, App-can't-reach-
+// repo, trails probe failure) is swallowed — the web onboarding surfaces the
+// "install the GitHub App" nudge, so the CLI stays quiet.
 func reportRepoEnabled(ctx context.Context, insecureHTTPAuth bool) {
-	// This runs synchronously on the enable success path, so bound it: a backend
-	// that accepts the connection but never responds must not hang the command
-	// after it has already printed success.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
+	// This runs synchronously on the enable success path, so every network step
+	// below is bounded: a backend that accepts the connection but never responds
+	// must not hang the command after it has already printed success. The bounds
+	// live on the individual steps rather than on one shared parent here — see
+	// the call site at the bottom for why that distinction matters.
 	rawURL, err := gitremote.GetRemoteURL(ctx, "origin")
 	if err != nil || strings.TrimSpace(rawURL) == "" {
 		// Local-only repo with no origin yet — nothing to report.
@@ -1025,11 +1026,36 @@ func reportRepoEnabled(ctx context.Context, insecureHTTPAuth bool) {
 		return
 	}
 
-	cleanURL, err := cleanRemoteURLForReport(rawURL)
-	if err != nil {
-		logging.Debug(ctx, "skipping enable report: unparseable origin remote", "error", err)
-		return
-	}
+	// Sequential, but each under its OWN deadline rather than sharing one: the
+	// trails probe now costs ~4 sequential round trips (repos index, cluster
+	// catalog, identity-token exchange, TrailsEnabled) since it moved onto the
+	// repo's cell, so a slow enable report sharing a single budget could starve
+	// it to nothing. Separate budgets give the probe a floor it cannot lose,
+	// and their sum is the same 5s ceiling this function used to impose.
+	//
+	// The probe gets the larger share because it is the step that grew, and
+	// because its failure self-heals — SessionStart's detached refresh retries
+	// it — whereas the enable report has no retry.
+	reportEnableToBackend(ctx, insecureHTTPAuth, info)
+	probeAndCacheTrailsEnablement(ctx, insecureHTTPAuth, info)
+}
+
+const (
+	// enableReportBudget bounds the best-effort backend enable report, and
+	// enableTrailsProbeBudget the trails-enablement probe that follows it. See
+	// reportRepoEnabled's call site for why they are separate deadlines rather
+	// than one shared budget; their sum is the total this path may spend.
+	enableReportBudget      = 2 * time.Second
+	enableTrailsProbeBudget = 3 * time.Second
+)
+
+// reportEnableToBackend tells the backend which repo was just enabled, purely
+// for the web onboarding UI and the GitHub-App-reachability nudge. Best-effort
+// and independent of the trails probe: a failure here (not logged in, network
+// error, backend rejects the URL) must not block that probe.
+func reportEnableToBackend(ctx context.Context, insecureHTTPAuth bool, info *gitremote.Info) {
+	ctx, cancel := context.WithTimeout(ctx, enableReportBudget)
+	defer cancel()
 
 	client, err := NewAuthenticatedAPIClient(ctx, insecureHTTPAuth)
 	if err != nil {
@@ -1037,15 +1063,34 @@ func reportRepoEnabled(ctx context.Context, insecureHTTPAuth bool) {
 		logging.Debug(ctx, "skipping enable report", "error", err)
 		return
 	}
-
-	if _, err := client.ReportEnable(ctx, cleanURL); err != nil {
-		// The enable report is best-effort and independent from the trails cache:
-		// still try the trails probe so a reporting failure doesn't leave the
-		// prompt-path cache stale or unknown.
+	if _, err := client.ReportEnable(ctx, cleanRemoteURLForReport(info)); err != nil {
 		logging.Debug(ctx, "enable report failed", "error", err)
 	}
+}
 
-	enabled, err := client.TrailsEnabled(ctx, info.Forge, info.Owner, info.Repo)
+// probeAndCacheTrailsEnablement checks whether trails are enabled for the repo
+// that was just enabled, and caches the decision. Routes through
+// trailRefreshAPIClient (see its doc for why) rather than the generic
+// data-API/BFF client.
+func probeAndCacheTrailsEnablement(ctx context.Context, insecureHTTPAuth bool, info *gitremote.Info) {
+	// The deadline bounds the NETWORK work only. The cache writes keep the
+	// caller's ctx: saveTrailsEnabledForScope, the single writer they funnel
+	// through, already guarantees a spent deadline cannot lose the answer.
+	probeCtx, cancel := context.WithTimeout(ctx, enableTrailsProbeBudget)
+	defer cancel()
+
+	client, notOnboarded, err := trailsCellClient(probeCtx, insecureHTTPAuth, info.Owner+"/"+info.Repo)
+	if notOnboarded {
+		if saveErr := saveTrailsEnabledForRemote(ctx, info.Forge, info.Owner, info.Repo, false); saveErr != nil {
+			logging.Debug(ctx, "failed to cache trails enablement", "error", saveErr)
+		}
+		return
+	}
+	if err != nil {
+		logging.Debug(ctx, "trails enablement probe client unavailable", "error", err)
+		return
+	}
+	enabled, err := client.TrailsEnabled(probeCtx, info.Forge, info.Owner, info.Repo)
 	if err != nil {
 		logging.Debug(ctx, "trails enablement probe failed", "error", err)
 		return
@@ -1055,20 +1100,15 @@ func reportRepoEnabled(ctx context.Context, insecureHTTPAuth bool) {
 	}
 }
 
-// cleanRemoteURLForReport turns a raw git remote URL into a clean,
+// cleanRemoteURLForReport turns a parsed git remote into a clean,
 // credential-free HTTPS URL safe to send to the backend. The raw remote can
 // carry embedded credentials (https://token@host/...) or query params, so we
-// never forward it verbatim: parse it and rebuild from host/owner/repo alone.
-// Returns an error if the URL can't be parsed (the caller skips reporting).
-func cleanRemoteURLForReport(rawURL string) (string, error) {
-	info, err := gitremote.ParseURL(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("parse remote URL: %w", err)
-	}
+// never forward it verbatim: rebuild from host/owner/repo alone.
+func cleanRemoteURLForReport(info *gitremote.Info) string {
 	// Use CanonicalHost, not Host: an entire://cluster/gh/owner/repo origin (an
 	// already-mirrored repo) carries the Entire cluster as Host, so reporting
 	// Host verbatim would point the backend at the cluster instead of github.com.
-	return fmt.Sprintf("https://%s/%s/%s.git", info.CanonicalHost(), info.Owner, info.Repo), nil
+	return fmt.Sprintf("https://%s/%s/%s.git", info.CanonicalHost(), info.Owner, info.Repo)
 }
 
 func newDisableCmd() *cobra.Command {

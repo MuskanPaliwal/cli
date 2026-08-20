@@ -1071,12 +1071,34 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	// the transcript to extract file changes. Cleanup is handled by
 	// `entire clean` or when the session state is fully removed.
 
-	if _, err := endSessionNow(ctx, event, event.SessionID, nil); err != nil {
+	if _, err := endSessionNow(ctx, event, event.SessionID, nil, sessionEndCondenseDeadline(ag), endedNow); err != nil {
 		logging.Warn(logCtx, "failed to mark session ended",
 			slog.String("error", err.Error()))
 	}
 
 	return nil
+}
+
+// processStart approximates when this hook process began. Package
+// initialization runs before main, so it is within milliseconds of exec —
+// precise enough to bound work against a deadline the agent measures from the
+// moment it spawned us.
+var processStart = time.Now()
+
+// sessionEndCondenseDeadline returns the wall-clock instant by which the eager
+// condense must be done, for agents that run session-end inside their own
+// shutdown under a hard cap (see agent.SessionEndBudgeter). The zero time means
+// no deadline.
+func sessionEndCondenseDeadline(ag agent.Agent) time.Time {
+	budgeter, ok := agent.AsSessionEndBudgeter(ag)
+	if !ok {
+		return time.Time{}
+	}
+	budget := budgeter.SessionEndBudget()
+	if budget <= 0 {
+		return time.Time{}
+	}
+	return processStart.Add(budget)
 }
 
 // endSessionNow runs the canonical "this session is over" sequence: it marks the
@@ -1093,13 +1115,48 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 // event drives the end (the sweep), which skips event-metadata persistence.
 // guard is forwarded to markSessionEnded (see there); when it skips the end,
 // the condense is skipped too and ended is false.
-func endSessionNow(ctx context.Context, event *agent.Event, sessionID string, guard func(*strategy.SessionState) bool) (ended bool, err error) {
-	ended, err = markSessionEnded(ctx, event, sessionID, guard)
+//
+// condenseDeadline, when non-zero, bounds only the condense — never the
+// mark-ended write, so the cheap step that un-sticks the session from `entire
+// status` is never the one given up on. The bound is best-effort: it cancels git
+// subprocesses and any context-aware step, but condensation does not poll ctx
+// between stages, so it curtails rather than guarantees. Its purpose is to stop
+// short of a host that kills the hook's whole process tree (Codex) rather than
+// to make condensation interruptible.
+//
+// Leaving mark-ended unbounded is not the same as guaranteeing it. It runs under
+// MutateSessionState, whose flock acquire blocks (WithSessionLockWait is opt-in,
+// and only TurnStart opts in), so a concurrent turn-end condense holding the
+// same per-session lock can push it past the host's cap and get the whole tree
+// killed. The exited-owner sweep is the backstop for that: the session is
+// reclaimed on the next `entire status` / `entire doctor`.
+//
+// Losing the race costs duplication, not data. One window is worth knowing:
+// CondenseSession commits the checkpoint to entire/checkpoints/v1 inside the
+// MutateSessionState callback, and the state is saved only after that callback
+// returns. A kill in between leaves the checkpoint committed with
+// CheckpointTranscriptStart / LastCheckpointID / StepCount / FullyCondensed
+// un-advanced, so PostCommit mints a fresh checkpoint ID over the same
+// transcript range. Everywhere else, an incomplete condense simply leaves
+// FullyCondensed false and PostCommit retries.
+func endSessionNow(ctx context.Context, event *agent.Event, sessionID string, guard func(*strategy.SessionState) bool, condenseDeadline time.Time, when endedAtPolicy) (ended bool, err error) {
+	ended, err = markSessionEnded(ctx, event, sessionID, guard, when)
 	if err != nil || !ended {
 		return ended, err
 	}
+	logCtx := logging.WithComponent(ctx, "lifecycle")
+	if !condenseDeadline.IsZero() {
+		if remaining := time.Until(condenseDeadline); remaining <= 0 {
+			logging.Info(logCtx, "skipping eager condense: session-end budget already spent",
+				slog.String("session_id", sessionID))
+			return true, nil
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, condenseDeadline)
+		defer cancel()
+	}
 	if condErr := GetStrategy(ctx).CondenseAndMarkFullyCondensed(ctx, sessionID); condErr != nil {
-		logging.Warn(logging.WithComponent(ctx, "lifecycle"), "eager condense on session end failed",
+		logging.Warn(logCtx, "eager condense on session end failed",
 			slog.String("session_id", sessionID),
 			slog.String("error", condErr.Error()))
 	}
@@ -1124,6 +1181,25 @@ func handleLifecycleSubagentStart(ctx context.Context, ag agent.Agent, event *ag
 	return nil
 }
 
+// declaredSubagentTranscript returns the agent-declared subagent transcript path
+// when it names a file that exists, else "".
+//
+// A declared-but-missing path warns rather than falling through silently: it means
+// the agent's contract and its behaviour disagree.
+func declaredSubagentTranscript(ctx context.Context, event *agent.Event) string {
+	declared := strings.TrimSpace(event.SubagentTranscriptPath)
+	if declared == "" {
+		return ""
+	}
+	if !fileExists(declared) {
+		logging.Warn(ctx, "agent declared a subagent transcript that does not exist",
+			slog.String("path", declared),
+			slog.String("agent_id", event.SubagentID))
+		return ""
+	}
+	return declared
+}
+
 // handleLifecycleSubagentEnd handles subagent end: detects changes, saves task checkpoint.
 func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agent.Event) error {
 	logCtx := logging.WithAgent(logging.WithComponent(ctx, "lifecycle"), ag.Name())
@@ -1132,8 +1208,11 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 		event.SubagentType, event.TaskDescription = ParseSubagentTypeAndDescription(event.ToolInput)
 	}
 
-	// Determine subagent transcript path (empty when the agent stores none).
-	subagentTranscriptPath := ResolveAgentTranscriptPath(filepath.Dir(event.SessionRef), event.SessionID, event.SubagentID)
+	// Prefer what the agent declared; see Event.SubagentTranscriptPath.
+	subagentTranscriptPath := declaredSubagentTranscript(logCtx, event)
+	if subagentTranscriptPath == "" {
+		subagentTranscriptPath = ResolveAgentTranscriptPath(filepath.Dir(event.SessionRef), event.SessionID, event.SubagentID)
+	}
 
 	// Log context
 	subagentEndAttrs := []any{
@@ -1434,6 +1513,44 @@ func transitionSessionTurnEnd(ctx context.Context, sessionID string, event *agen
 	}
 }
 
+// sessionEndedAt resolves the EndedAt stamp for a session being finalized under
+// the given policy. endedWhenLastSeen falls back through the state's own record
+// of activity and never yields a zero time: an unknown last-seen is stamped now,
+// which is what the old unconditional behavior did anyway.
+func sessionEndedAt(state *strategy.SessionState, when endedAtPolicy) time.Time {
+	if when == endedWhenLastSeen {
+		if state.LastInteractionTime != nil && !state.LastInteractionTime.IsZero() {
+			return *state.LastInteractionTime
+		}
+		if !state.StartedAt.IsZero() {
+			return state.StartedAt
+		}
+	}
+	return time.Now()
+}
+
+// endedAtPolicy selects the timestamp written to SessionState.EndedAt.
+type endedAtPolicy int
+
+const (
+	// endedNow stamps the current time: the session is ending as we watch it,
+	// driven by its own session-end hook or by `entire session stop`.
+	endedNow endedAtPolicy = iota
+
+	// endedWhenLastSeen stamps the session's last known activity instead, for
+	// finalizations that discover an end that already happened. The exited-owner
+	// sweep is the case: the agent quit at some unknown earlier point, and since
+	// the sweep covers IDLE and state files live for StaleSessionThreshold, the
+	// first run after an upgrade can finalize sessions abandoned days ago.
+	//
+	// Stamping "now" on those dates a week-old session to today, which floats it
+	// above genuinely recent work in the `entire session resume` picker
+	// (sessionLastActiveTime prefers EndedAt) and makes `entire session info`
+	// report it as just-ended. Only display and ordering read the value — nothing
+	// keys retention off it — so the older, truer timestamp is strictly better.
+	endedWhenLastSeen
+)
+
 // markSessionEnded transitions the session to ENDED phase via the state machine.
 // If event is non-nil, hook-provided metrics are persisted to state before saving.
 // markSessionEnded fires the SessionStop transition (PhaseEnded + EndedAt) under
@@ -1443,7 +1560,7 @@ func transitionSessionTurnEnd(ctx context.Context, sessionID string, event *agen
 // exited-session sweep re-checks OwnerExited under the lock so it never ends a
 // session a concurrent turn just revived). It reports whether the session was
 // actually ended.
-func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string, guard func(*strategy.SessionState) bool) (ended bool, err error) {
+func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string, guard func(*strategy.SessionState) bool, when endedAtPolicy) (ended bool, err error) {
 	mutErr := strategy.MutateSessionState(ctx, sessionID, func(state *strategy.SessionState) error {
 		if guard != nil && !guard(state) {
 			return strategy.ErrMutationSkip
@@ -1451,12 +1568,16 @@ func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string,
 		if event != nil {
 			persistEventMetadataToState(event, state)
 		}
+		// Resolved before the transition, which is not a read-only step: the
+		// SessionStop edge carries ActionUpdateLastInteraction and stamps
+		// LastInteractionTime with now — exactly the value endedWhenLastSeen
+		// needs, so reading it afterwards always yields "now".
+		endedAt := sessionEndedAt(state, when)
 		if transErr := strategy.TransitionAndLog(ctx, state, session.EventSessionStop, session.TransitionContext{}, session.NoOpActionHandler{}); transErr != nil {
 			logging.Warn(logging.WithComponent(ctx, "lifecycle"), "session stop transition failed",
 				slog.String("error", transErr.Error()))
 		}
-		now := time.Now()
-		state.EndedAt = &now
+		state.EndedAt = &endedAt
 		ended = true
 		return nil
 	})
