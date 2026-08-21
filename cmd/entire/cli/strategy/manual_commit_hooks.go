@@ -2731,7 +2731,7 @@ var errPartialState = errors.New("partial session state")
 // (from prompt to stop event), ensuring every checkpoint has the full context.
 //
 
-func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *SessionState) error { //nolint:unparam // error return is part of the hook contract; callers check it
+func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *SessionState, capturedTranscript *agent.TranscriptSnapshot) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	hadMidTurnCommits := len(state.TurnCheckpointIDs) > 0
 
 	// Finalize all checkpoints from this turn with the full transcript.
@@ -2740,7 +2740,7 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	// Failing here would prevent session cleanup and could leave state inconsistent.
 	// The provisional transcript from PostCommit is already persisted, so the
 	// checkpoint isn't lost - it just won't have the complete transcript.
-	errCount := s.finalizeAllTurnCheckpoints(ctx, state)
+	errCount := s.finalizeAllTurnCheckpoints(ctx, state, capturedTranscript)
 	if errCount > 0 {
 		logCtx := logging.WithComponent(ctx, "checkpoint")
 		logging.Warn(logCtx, "HandleTurnEnd completed with errors (best-effort)",
@@ -2759,22 +2759,28 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	// Skip this when carry-forward is active. carryForwardToNewShadowBranch
 	// intentionally resets CheckpointTranscriptStart to 0 so the next checkpoint
 	// remains self-contained with the full transcript.
-	if hadMidTurnCommits && state.TranscriptPath != "" && len(state.FilesTouched) == 0 {
-		transcriptPath, resolveErr := resolveTranscriptPath(state)
-		if resolveErr == nil {
+	hasTranscript := capturedTranscript != nil || state.TranscriptPath != ""
+	if hadMidTurnCommits && hasTranscript && len(state.FilesTouched) == 0 {
+		position := 0
+		if capturedTranscript != nil {
+			position = capturedTranscript.Position
+		} else if transcriptPath, resolveErr := resolveTranscriptPath(state); resolveErr == nil {
 			if ag, agErr := agent.GetByAgentType(state.AgentType); agErr == nil {
 				if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
-					if pos, posErr := analyzer.GetTranscriptPosition(transcriptPath); posErr == nil && pos > state.CheckpointTranscriptStart {
-						logging.Debug(logging.WithComponent(ctx, "hooks"),
-							"advancing CheckpointTranscriptStart to turn end after mid-turn commit",
-							slog.String("session_id", state.SessionID),
-							slog.Int("old_offset", state.CheckpointTranscriptStart),
-							slog.Int("new_offset", pos),
-						)
-						state.CheckpointTranscriptStart = pos
+					if measuredPosition, positionErr := analyzer.GetTranscriptPosition(transcriptPath); positionErr == nil {
+						position = measuredPosition
 					}
 				}
 			}
+		}
+		if position > state.CheckpointTranscriptStart {
+			logging.Debug(logging.WithComponent(ctx, "hooks"),
+				"advancing CheckpointTranscriptStart to turn end after mid-turn commit",
+				slog.String("session_id", state.SessionID),
+				slog.Int("old_offset", state.CheckpointTranscriptStart),
+				slog.Int("new_offset", position),
+			)
+			state.CheckpointTranscriptStart = position
 		}
 	}
 
@@ -2804,6 +2810,29 @@ func precomputeTranscriptBlobsForFinalize(ctx context.Context, repo *git.Reposit
 	return precomputed
 }
 
+func readTranscriptForFinalize(state *SessionState, capturedTranscript *agent.TranscriptSnapshot) ([]byte, error) {
+	if capturedTranscript != nil {
+		// The Stop capture is authoritative. Reopening the source here would
+		// reintroduce the readiness/read race that capture is meant to close.
+		return bytes.Clone(capturedTranscript.Data), nil
+	}
+
+	// Non-capturing agents retain path re-resolution because some relocate
+	// transcripts mid-session (for example Cursor's flat-to-nested move).
+	if state.TranscriptPath == "" {
+		return nil, errors.New("no transcript path")
+	}
+	transcriptPath, err := resolveTranscriptPath(state)
+	if err != nil {
+		return nil, fmt.Errorf("resolve transcript path: %w", err)
+	}
+	data, err := os.ReadFile(transcriptPath) //nolint:gosec // path validated by resolveTranscriptPath
+	if err != nil {
+		return nil, fmt.Errorf("read transcript: %w", err)
+	}
+	return data, nil
+}
+
 // finalizeAllTurnCheckpoints replaces the provisional transcript in each checkpoint
 // created during this turn with the full session transcript.
 //
@@ -2812,7 +2841,7 @@ func precomputeTranscriptBlobsForFinalize(ctx context.Context, repo *git.Reposit
 // replace it so every checkpoint has the full prompt-to-stop context.
 //
 // Returns the number of errors encountered (best-effort: continues processing on error).
-func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, state *SessionState) int {
+func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, state *SessionState, capturedTranscript *agent.TranscriptSnapshot) int {
 	if len(state.TurnCheckpointIDs) == 0 {
 		return 0 // No mid-turn commits to finalize
 	}
@@ -2826,27 +2855,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 	errCount := 0
 
-	// Read full transcript from live transcript file, re-resolving the path if the
-	// agent relocated it mid-session (e.g., Cursor CLI flat → nested layout change).
-	if state.TranscriptPath == "" {
-		logging.Warn(logCtx, "finalize: no transcript path, skipping",
-			slog.String("session_id", state.SessionID),
-		)
-		state.TurnCheckpointIDs = nil
-		return 1 // Count as error - all checkpoints will be skipped
-	}
-
-	transcriptPath, resolveErr := resolveTranscriptPath(state)
-	if resolveErr != nil {
-		logging.Warn(logCtx, "finalize: transcript path resolution failed, skipping",
-			slog.String("session_id", state.SessionID),
-			slog.Any("error", resolveErr),
-		)
-		state.TurnCheckpointIDs = nil
-		return 1 // Count as error - all checkpoints will be skipped
-	}
-
-	fullTranscript, err := os.ReadFile(transcriptPath) //nolint:gosec // path validated by resolveTranscriptPath
+	fullTranscript, err := readTranscriptForFinalize(state, capturedTranscript)
 	if err != nil || len(fullTranscript) == 0 {
 		msg := "finalize: empty transcript, skipping"
 		if err != nil {

@@ -102,6 +102,12 @@ type Event struct {
 	// and TurnStart/TurnEnd events when the agent provides model info.
 	Model string
 
+	// FinalResponse is producer-supplied evidence for the completed turn.
+	FinalResponse *string
+
+	// FinalResponsePresent distinguishes an omitted field from an explicit null.
+	FinalResponsePresent bool
+
 	// Timestamp is when the event occurred.
 	Timestamp time.Time
 
