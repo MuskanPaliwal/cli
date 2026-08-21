@@ -604,7 +604,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		return recovery.result, recovery.err
 	}
 
-	writeOpts, attributionDuration := buildCondensationWriteOptions(
+	writeOpts, attributionDuration, newSkillEvents := buildCondensationWriteOptions(
 		ctx, repo, ref, state, sessionData, redactedTranscript, extractedAssets,
 		taskPayloads, checkpointID, shadowBranchName, o,
 	)
@@ -646,6 +646,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Prompts:                sessionData.Prompts,
 		TotalTranscriptLines:   sessionData.FullTranscriptLines,
 		TranscriptSizeBaseline: transcriptSizeBaseline,
+		NewSkillEvents:         newSkillEvents,
 	}, nil
 }
 
@@ -691,7 +692,7 @@ func buildCondensationWriteOptions(
 	checkpointID id.CheckpointID,
 	shadowBranchName string,
 	o condenseOpts,
-) (cpkg.WriteOptions, time.Duration) {
+) (cpkg.WriteOptions, time.Duration, []agent.SkillEvent) {
 	authorName, authorEmail := GetGitAuthorFromRepo(repo)
 	attrBase := state.AttributionBaseCommit
 	if attrBase == "" {
@@ -719,7 +720,7 @@ func buildCondensationWriteOptions(
 
 	// Post-commit emits regex-only blobs. OPF runs later in the
 	// pre-push rewrite path, never here.
-	skillEvents := mergeSkillEvents(state.SkillEvents, withSkillEventTurnID(sessionData.SkillEvents, state.TurnID))
+	newSkillEvents, skillEvents := persistNewSkillEvents(state, sessionData.SkillEvents)
 	return cpkg.WriteOptions{
 		CheckpointID:                checkpointID,
 		SessionID:                   state.SessionID,
@@ -753,7 +754,7 @@ func buildCondensationWriteOptions(
 		HasInvestigation:            state.Kind.IsInvestigate(),
 		InvestigateRunID:            state.InvestigateRunID,
 		InvestigateTopic:            state.InvestigateTopic,
-	}, attributionDuration
+	}, attributionDuration, newSkillEvents
 }
 
 // redactOrDrop runs redactSessionTranscript and, on failure, logs a warning
@@ -1638,7 +1639,8 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 
 	var shadowBranchName string
 	var clearAfter bool
-	mutErr := MutateSessionState(ctx, sessionID, func(state *SessionState) error {
+	var newSkillEvents []agent.SkillEvent
+	stateSaved, mutErr := MutateSessionStateSaved(ctx, sessionID, func(state *SessionState) error {
 		if state.PendingCondensationID() != checkpointID {
 			return ErrMutationSkip
 		}
@@ -1662,6 +1664,7 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		if err != nil {
 			return fmt.Errorf("failed to condense session: %w", err)
 		}
+		newSkillEvents = result.NewSkillEvents
 
 		if result.Skipped {
 			logging.Info(logCtx, "session condensation skipped (no transcript or files), marking fully condensed",
@@ -1694,6 +1697,9 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	}
 	if mutErr != nil {
 		return mutErr
+	}
+	if stateSaved {
+		EmitSkillInvocationTelemetry(ctx, newSkillEvents)
 	}
 
 	if clearAfter {
@@ -1812,7 +1818,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	}
 
 	var didCondense bool
-	mutErr := MutateSessionState(ctx, sessionID, func(state *SessionState) error {
+	var newSkillEvents []agent.SkillEvent
+	stateSaved, mutErr := MutateSessionStateSaved(ctx, sessionID, func(state *SessionState) error {
 		var preflightErr error
 		shadowBranchName, shouldCondense, preflightErr = prepareEagerCondensation(logCtx, repo, state)
 		if preflightErr != nil || !shouldCondense {
@@ -1832,6 +1839,7 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 			)
 			return ErrMutationSkip // fail-open
 		}
+		newSkillEvents = result.NewSkillEvents
 
 		if result.Skipped {
 			logging.Info(logCtx, "eager condense skipped (no transcript or files), marking fully condensed",
@@ -1864,6 +1872,9 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	}
 	if mutErr != nil {
 		return fmt.Errorf("failed to save session state: %w", mutErr)
+	}
+	if stateSaved {
+		EmitSkillInvocationTelemetry(ctx, newSkillEvents)
 	}
 
 	if didCondense && shadowBranchName != "" {

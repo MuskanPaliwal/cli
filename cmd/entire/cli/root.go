@@ -231,7 +231,7 @@ func newSendAnalyticsCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			telemetry.SendEvent(args[0])
+			telemetry.SendEvents(args[0])
 		},
 	}
 }
