@@ -1608,6 +1608,15 @@ type contentCheckOpts struct {
 func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *git.Repository, state *SessionState, opts contentCheckOpts) (bool, error) {
 	logCtx := logging.WithComponent(ctx, "manual-commit")
 
+	// Task records are pending checkpoint content that registers on neither the shadow branch nor transcript growth.
+	if state.HasTaskContent() {
+		logging.Debug(logCtx, "sessionHasNewContent: session has task records",
+			slog.String("session_id", state.SessionID),
+			slog.Int("task_records", len(state.TaskRecords)),
+		)
+		return true, nil
+	}
+
 	// Use cached shadow tree if provided
 	var tree *object.Tree
 	if opts.shadowTree != nil {
@@ -2084,12 +2093,13 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 		}
 		activeSessions++
 		// Skip sessions that have no condensable content: no transcript path,
-		// no tracked files, and no shadow branch data (StepCount == 0). These
+		// no tracked files, no SaveStep checkpoints, and no task records. These
 		// would produce a Skipped result in CondenseSession, leaving the
 		// Entire-Checkpoint trailer pointing to nothing on the metadata branch.
 		// NOTE: conservative approximation of the skip gate in CondenseSession
 		// (which checks extracted data, not raw state). Keep aligned.
-		if state.TranscriptPath == "" && len(state.FilesTouched) == 0 && state.StepCount == 0 {
+		if state.TranscriptPath == "" && len(state.FilesTouched) == 0 &&
+			state.StepCount == 0 && !state.HasTaskContent() {
 			emptyActiveSessions++
 			logging.Debug(logCtx, "prepare-commit-msg: fast path skipping empty session",
 				slog.String("session_id", state.SessionID),
@@ -2911,6 +2921,15 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
 	redactSpan.End()
 	if redactErr != nil {
+		if errors.Is(redactErr, redact.ErrScannerDegraded) {
+			// Keep TurnCheckpointIDs: the flag is per-process, so the next
+			// hook process retries.
+			logging.Warn(logCtx, "finalize: transcript redaction degraded, skipping",
+				slog.String("session_id", state.SessionID),
+				slog.String("error", redactErr.Error()),
+			)
+			return 1
+		}
 		logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
 			slog.String("session_id", state.SessionID),
 			slog.String("error", redactErr.Error()),

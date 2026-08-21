@@ -62,8 +62,8 @@ For each stuck session, you can choose to:
 
 Use --force to condense all fixable sessions without prompting.  Sessions that can't
 be condensed will be discarded.`,
-		PreRun: func(cmd *cobra.Command, _ []string) {
-			// Cobra runs the persistent pre-runs before a command's own PreRun,
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			// Cobra runs the persistent pre-runs before a command's own PreRunE,
 			// so the root hook has already put an initialized logger in this
 			// context: redaction diagnostics and the load-time summary land in
 			// .entire/logs/, which is where `entire doctor bundle` collects them
@@ -71,7 +71,7 @@ be condensed will be discarded.`,
 			// component=redaction. Answering "did my rules load?" is doctor's
 			// job, so it must not be the one command whose diagnostics go to
 			// bare stderr.
-			strategy.EnsureRedactionConfigured(cmd.Context())
+			return strategy.EnsureRedactionConfigured(cmd.Context())
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSessionsFix(cmd, forceFlag)
@@ -188,7 +188,7 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 		displayStuckSession(cmd, ss)
 
 		if force {
-			if ss.HasShadowBranch && ss.CheckpointCount > 0 {
+			if canCondenseStuckSession(ss) {
 				if err := strat.CondenseSessionByID(ctx, ss.State.SessionID); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to condense session %s: %v\n", ss.State.SessionID, err)
 				} else {
@@ -254,7 +254,7 @@ func classifySession(state *strategy.SessionState, repo *git.Repository, now tim
 			Reason:            reason,
 			ShadowBranch:      shadowBranch,
 			HasShadowBranch:   hasShadowBranch,
-			CheckpointCount:   state.StepCount,
+			CheckpointCount:   state.StepCount + len(state.TaskRecords),
 			FilesTouchedCount: len(state.FilesTouched),
 		}
 	}
@@ -284,7 +284,15 @@ func classifySession(state *strategy.SessionState, repo *git.Repository, now tim
 		}
 
 	case state.Phase == session.PhaseEnded:
-		// Ended sessions are stuck if they have uncondensed data
+		// FullyCondensed = everything worth keeping is materialized; a leftover
+		// live record can never complete (owner gone) and must not re-flag forever.
+		if state.FullyCondensed {
+			return nil
+		}
+		// Task records never live on the shadow branch, so branch absence must not hide them.
+		if state.HasTaskContent() {
+			return stuck("ended with uncondensed checkpoint data")
+		}
 		if state.StepCount <= 0 || !hasShadowBranch {
 			return nil
 		}
@@ -319,12 +327,20 @@ func displayStuckSession(cmd *cobra.Command, ss stuckSession) {
 	fmt.Fprintf(w, "  Checkpoints: %d, Files touched: %d\n", ss.CheckpointCount, ss.FilesTouchedCount)
 }
 
+// canCondenseStuckSession reports whether a stuck session has content the
+// condense path can save: shadow-branch checkpoints, or task records — which
+// never live on the shadow branch, so a record-bearing dead-owner session
+// must be condensed (materialized), never discarded.
+func canCondenseStuckSession(ss stuckSession) bool {
+	return (ss.HasShadowBranch && ss.CheckpointCount > 0) || ss.State.HasTaskContent()
+}
+
 // promptSessionAction asks the user what to do with a stuck session.
 func promptSessionAction(ss stuckSession) (string, error) {
 	var action string
 
 	options := make([]huh.Option[string], 0, 3)
-	if ss.HasShadowBranch && ss.CheckpointCount > 0 {
+	if canCondenseStuckSession(ss) {
 		options = append(options, huh.NewOption("Condense (save to permanent storage)", "condense"))
 	}
 	options = append(options,
@@ -685,6 +701,8 @@ func canDeleteShadowBranch(ctx context.Context, shadowBranch, excludeSessionID s
 		if state.SessionID == excludeSessionID {
 			continue
 		}
+		// Task records never live on the shadow branch, so only SaveStep
+		// checkpoints pin it alive.
 		otherShadow := checkpoint.ShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		if otherShadow == shadowBranch && state.StepCount > 0 {
 			return false, nil

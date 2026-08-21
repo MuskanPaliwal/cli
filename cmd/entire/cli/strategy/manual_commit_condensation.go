@@ -27,6 +27,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/imageextract"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
 
@@ -171,7 +172,8 @@ func externalizeSessionImages(ctx, logCtx context.Context, state *SessionState, 
 // prepareTranscriptForStorage runs the first two steps of the stored-copy pipeline
 // in order — sanitize (drop non-portable agent state), then externalize inline
 // images. Redaction is the caller's next step, so the whole pipeline reads
-// sanitize -> externalize -> redact.
+// sanitize -> externalize -> redact. See prepareTaskTranscriptForStorage for
+// the twin that runs the same pipeline over a subagent's own transcript.
 //
 // Each step has to precede the next:
 //
@@ -197,6 +199,238 @@ func prepareTranscriptForStorage(
 	sanitized := agent.SanitizeTranscriptForStorage(ag, raw)
 	externalized, assets = externalizeSessionImages(ctx, logCtx, state, sanitized)
 	return externalized, assets, int64(len(sanitized))
+}
+
+// prepareTaskTranscriptForStorage runs the sanitize -> externalize -> redact
+// chain for a single subagent transcript, mirroring prepareTranscriptForStorage's
+// first two steps and then completing with the same redaction the session
+// transcript gets (see redactSessionTranscript). It is a SEPARATE entry point
+// rather than a wrapper around prepareTranscriptForStorage for one reason:
+// that function returns the session transcript's sanitized SIZE, which seeds
+// CondenseResult.TranscriptSizeBaseline — the session's own growth-dedup
+// baseline (SessionState.CheckpointTranscriptSize). A task transcript must
+// NEVER contribute to that coordinate (it is not the session transcript), so
+// this helper only returns the pipeline's terminal artifacts: redacted bytes
+// and any externalized image assets. Callers append the assets to the
+// checkpoint's own Assets list (TaskPayload has no Assets field of its own).
+//
+// It also carries checkpoint.prepareSubagentTranscript's size guard, for the
+// same reason: agent-<agent-id>.jsonl is neither chunked nor capped, and
+// redaction runs at roughly 220ms/MB. The cap is measured against the SANITIZED
+// bytes, not the raw ones — sanitizing strips the bulk (Codex encrypted_content
+// runs to ~20% of a rollout's bytes), so measuring raw would drop a transcript
+// oversized only by payloads about to be discarded.
+func prepareTaskTranscriptForStorage(
+	ctx, logCtx context.Context,
+	ag agent.Agent,
+	state *SessionState,
+	path string,
+	raw []byte,
+) (redacted redact.RedactedBytes, assets []cpkg.TranscriptAsset, tooLarge bool, err error) {
+	sanitized := agent.SanitizeTranscriptForStorage(ag, raw)
+	if len(sanitized) > agent.MaxChunkSize {
+		logging.Warn(logCtx, "subagent transcript exceeds the blob size cap; storing task without it",
+			slog.String("session_id", state.SessionID),
+			slog.String("path", path),
+			slog.Int("raw_bytes", len(raw)),
+			slog.Int("sanitized_bytes", len(sanitized)),
+			slog.Int("cap", agent.MaxChunkSize))
+		return redact.RedactedBytes{}, nil, true, nil
+	}
+	externalized, assets := externalizeSessionImages(ctx, logCtx, state, sanitized)
+	redacted, _, err = redactSessionTranscript(logCtx, externalized)
+	if err != nil {
+		return redact.RedactedBytes{}, nil, false, err
+	}
+	return redacted, assets, false, nil
+}
+
+// resolveTaskTranscriptPath falls back to the agent-layout convention when a
+// task record has no declared transcript path (e.g. an agent that reports the
+// path only on some events, or a legacy record captured before an agent
+// started reporting one at all). Mirrors cli.ResolveAgentTranscriptPath,
+// which this package cannot call directly — the cli package imports strategy,
+// so the reverse import would cycle — and the logic itself is small enough
+// that duplicating it here beats introducing a new shared package for this
+// one call site (moving the transcript resolver into paths is deliberately
+// out of scope for the durable-records plan this implements).
+func resolveTaskTranscriptPath(state *SessionState, agentID string) string {
+	if agentID == "" || state.TranscriptPath == "" {
+		return ""
+	}
+	transcriptDir := filepath.Dir(state.TranscriptPath)
+	name := paths.AgentTranscriptFileName(agentID)
+	if nested := filepath.Join(paths.SubagentsDir(transcriptDir, state.SessionID), name); fileExists(nested) {
+		return nested
+	}
+	if legacy := filepath.Join(transcriptDir, name); fileExists(legacy) {
+		return legacy
+	}
+	return ""
+}
+
+// taskTranscriptReasonUnresolvable, taskTranscriptReasonUnreadable,
+// taskTranscriptReasonEmpty, taskTranscriptReasonRedactionFailed, and
+// taskTranscriptReasonTooLarge are the stable
+// TaskPayload.TranscriptUnavailableReason categories. They deliberately
+// carry no path or underlying-error detail: task.json is pushed to
+// entire/checkpoints/v1, so a local filesystem path (which os.ReadFile's error
+// text embeds) must never end up in it. The detailed error goes only to
+// logging.Warn at the call site.
+const (
+	taskTranscriptReasonUnresolvable    = "transcript path unresolvable"
+	taskTranscriptReasonUnreadable      = "transcript unreadable"
+	taskTranscriptReasonEmpty           = "transcript empty"
+	taskTranscriptReasonRedactionFailed = "transcript redaction failed"
+	taskTranscriptReasonTooLarge        = "transcript too large"
+)
+
+// materializeTaskRecords resolves and redacts each of state.TaskRecords'
+// subagent transcripts for storage under this checkpoint's
+// tasks/<tool-use-id>/ subtree — the durable-records materializer for #2058:
+// subagent transcripts used to die at condensation because no producer ever
+// set the (now deleted) WriteOptions.IsTask route.
+//
+// Every record is materialized on every condensation, whether completed or
+// still in flight: a completed record's transcript is stored once here and
+// then removed from session state by the caller (see resetCheckpointWindow);
+// an in-flight record's transcript-so-far is stored and the record stays so
+// the next condensation re-materializes it. A record whose transcript cannot
+// be resolved or read still produces a payload — with TranscriptUnavailableReason
+// set instead of a Transcript — so the pointer is never silently dropped.
+//
+// A record with an unsafe or empty ToolUseID, or one whose AgentID is unsafe
+// or empty at the point a transcript would be written, is skipped entirely —
+// no payload at all, not even a reason-only one: an unsafe ToolUseID has no
+// safe tasks/<id>/ directory to put a task.json under in the first place, and
+// an empty/unsafe AgentID would corrupt the agent-<id>.jsonl filename (see
+// writeTaskRecordEntries, which re-validates as a last resort). This must
+// never wedge condensation — a poisoned record produces zero payloads, not an
+// error, and the caller's normal completed-record removal
+// (resetCheckpointWindow) still drops it once completed, since a record that
+// can never materialize would otherwise retry forever.
+//
+// Task assets are appended to the incoming assets slice and returned (rather
+// than living on TaskPayload, which has no Assets field of its own) so they
+// join the checkpoint's own Assets list — see WriteOptions.Assets.
+func (s *ManualCommitStrategy) materializeTaskRecords(
+	ctx, logCtx context.Context,
+	ag agent.Agent,
+	state *SessionState,
+	assets []cpkg.TranscriptAsset,
+) ([]cpkg.TaskPayload, []cpkg.TranscriptAsset) {
+	if len(state.TaskRecords) == 0 {
+		return nil, assets
+	}
+
+	payloads := make([]cpkg.TaskPayload, 0, len(state.TaskRecords))
+	for _, record := range state.TaskRecords {
+		if record.ToolUseID == "" || validation.ValidateToolUseID(record.ToolUseID) != nil {
+			logging.Warn(logCtx, "skipping task record: unsafe or empty tool_use_id",
+				slog.String("session_id", state.SessionID),
+				slog.String("tool_use_id", record.ToolUseID),
+			)
+			continue
+		}
+
+		payload := cpkg.TaskPayload{
+			ToolUseID:       record.ToolUseID,
+			AgentID:         record.AgentID,
+			SubagentType:    record.SubagentType,
+			TaskDescription: record.TaskDescription,
+			Files:           record.Files,
+			TokenUsage:      record.TokenUsage,
+			StartedAt:       record.StartedAt,
+			CompletedAt:     record.CompletedAt,
+		}
+
+		// Candidate transcript paths, tried in order: the agent-declared path
+		// first, then the agent-layout fallback — declared paths are
+		// unreliable (agents relocate/clean up transcripts), which is why the
+		// fallback resolver exists at all, so a declared-but-unreadable path
+		// must not short-circuit past it.
+		var candidates []string
+		if record.DeclaredTranscriptPath != "" {
+			candidates = append(candidates, record.DeclaredTranscriptPath)
+		}
+		if fallback := resolveTaskTranscriptPath(state, record.AgentID); fallback != "" && fallback != record.DeclaredTranscriptPath {
+			candidates = append(candidates, fallback)
+		}
+		if len(candidates) == 0 {
+			payload.TranscriptUnavailableReason = taskTranscriptReasonUnresolvable
+			payloads = append(payloads, payload)
+			continue
+		}
+
+		// A transcript is about to be read and, if valid, stored as
+		// agent-<agent-id>.jsonl — the agent ID becomes part of that path, so
+		// it must be present and path-safe before going any further. Skip the
+		// WHOLE record rather than merely omitting the transcript: this is
+		// the same "poisoned identifier" shape as the ToolUseID check above.
+		if record.AgentID == "" || validation.ValidateAgentID(record.AgentID) != nil {
+			logging.Warn(logCtx, "skipping task record: unsafe or missing agent_id",
+				slog.String("session_id", state.SessionID),
+				slog.String("tool_use_id", record.ToolUseID),
+			)
+			continue
+		}
+
+		raw, transcriptPath, readErr := readFirstTranscript(candidates)
+		if readErr != nil {
+			logging.Warn(logCtx, "failed to read subagent transcript; storing task without it",
+				slog.String("session_id", state.SessionID),
+				slog.String("tool_use_id", record.ToolUseID),
+				slog.String("error", readErr.Error()),
+			)
+			payload.TranscriptUnavailableReason = taskTranscriptReasonUnreadable
+			payloads = append(payloads, payload)
+			continue
+		}
+		if len(raw) == 0 {
+			payload.TranscriptUnavailableReason = taskTranscriptReasonEmpty
+			payloads = append(payloads, payload)
+			continue
+		}
+
+		redacted, taskAssets, tooLarge, prepErr := prepareTaskTranscriptForStorage(ctx, logCtx, ag, state, transcriptPath, raw)
+		if tooLarge {
+			payload.TranscriptUnavailableReason = taskTranscriptReasonTooLarge
+			payloads = append(payloads, payload)
+			continue
+		}
+		if prepErr != nil {
+			logging.Warn(logCtx, "failed to redact subagent transcript; storing task without it",
+				slog.String("session_id", state.SessionID),
+				slog.String("tool_use_id", record.ToolUseID),
+				slog.String("error", prepErr.Error()),
+			)
+			payload.TranscriptUnavailableReason = taskTranscriptReasonRedactionFailed
+			payloads = append(payloads, payload)
+			continue
+		}
+
+		payload.Transcript = redacted
+		assets = append(assets, taskAssets...)
+		payloads = append(payloads, payload)
+	}
+
+	return payloads, assets
+}
+
+// readFirstTranscript tries each candidate path in order and returns the bytes
+// of the first one that reads successfully, along with the path it came from
+// (for logging — never for storage). Returns the last error when every
+// candidate fails (callers only reach here with at least one candidate).
+func readFirstTranscript(candidates []string) ([]byte, string, error) {
+	var lastErr error
+	for _, path := range candidates {
+		data, err := os.ReadFile(path) //nolint:gosec // path is agent-declared or resolved from session state, not user input
+		if err == nil {
+			return data, path, nil
+		}
+		lastErr = err
+	}
+	return nil, "", lastErr
 }
 
 // sidecarSessionImages captures images an agent stores OUTSIDE the transcript
@@ -321,23 +555,8 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 	}
 
-	// Skip gate: if there is no transcript AND no files touched, there is nothing
-	// meaningful to condense. Return early to avoid writing metadata-only stubs.
-	//
-	// This check MUST run before filterFilesTouched. That function's fallback
-	// assigns all committed files to sessions with empty FilesTouched (designed
-	// for mid-turn commits where SaveStep hasn't run yet). Without this ordering,
-	// genuinely empty sessions (no transcript, no shadow branch, no tracked files)
-	// would acquire committed files from the fallback and bypass this gate.
-	if len(sessionData.Transcript) == 0 && len(sessionData.FilesTouched) == 0 {
-		logging.Info(logCtx, "session skipped: no transcript or files to condense",
-			slog.String("session_id", state.SessionID),
-			slog.String("agent_type", string(state.AgentType)),
-			slog.String("checkpoint_id", checkpointID.String()),
-			slog.Bool("has_shadow_branch", hasShadowBranch),
-			slog.String("transcript_path", state.TranscriptPath),
-		)
-		return newSkippedResult(checkpointID, state.SessionID), nil
+	if skipped := skipIfNothingToCondense(logCtx, sessionData, state, checkpointID, hasShadowBranch); skipped != nil {
+		return skipped, nil
 	}
 
 	filterFilesTouched(sessionData, committedFiles, state)
@@ -354,6 +573,11 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// Capture agent sidecar images (e.g. Cursor's SQLite store) after the skip
 	// check, so the sqlite3 shell-out is avoided when the checkpoint is discarded.
 	extractedAssets = append(extractedAssets, sidecarSessionImages(ctx, logCtx, ag, state)...)
+
+	// Materialize this session's subagent task records (#2058): every
+	// completed-or-in-flight record's transcript is resolved, redacted, and
+	// stored under this checkpoint's tasks/<tool-use-id>/ subtree.
+	taskPayloads, extractedAssets := s.materializeTaskRecords(ctx, logCtx, ag, state, extractedAssets)
 
 	store, err := s.getPersistentStore(ctx, repo)
 	if err != nil {
@@ -402,6 +626,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Branch:                      branchName,
 		Transcript:                  redactedTranscript,
 		Assets:                      extractedAssets,
+		Tasks:                       taskPayloads,
 		Prompts:                     sessionData.Prompts,
 		FilesTouched:                sessionData.FilesTouched,
 		CheckpointsCount:            checkpointStepCount(state),
@@ -484,12 +709,39 @@ func redactOrDrop(logCtx context.Context, transcript []byte, sessionID string, c
 	return redactedTranscript, redactDuration
 }
 
+// skipIfNothingToCondense returns a Skipped result when there is no
+// transcript, no files touched, AND no task records — nothing meaningful to
+// condense, so return early instead of writing a metadata-only stub. A
+// records-only session (read-only background subagent, empty parent
+// transcript) must still write: its task payloads are the checkpoint's content.
+//
+// This check MUST run before filterFilesTouched. That function's fallback
+// assigns all committed files to sessions with empty FilesTouched (designed
+// for mid-turn commits where SaveStep hasn't run yet). Without this ordering,
+// genuinely empty sessions (no transcript, no shadow branch, no tracked files)
+// would acquire committed files from the fallback and bypass this gate.
+func skipIfNothingToCondense(logCtx context.Context, sessionData *ExtractedSessionData, state *SessionState, checkpointID id.CheckpointID, hasShadowBranch bool) *CondenseResult {
+	if len(sessionData.Transcript) > 0 || len(sessionData.FilesTouched) > 0 || state.HasTaskContent() {
+		return nil
+	}
+	logging.Info(logCtx, "session skipped: no transcript or files to condense",
+		slog.String("session_id", state.SessionID),
+		slog.String("agent_type", string(state.AgentType)),
+		slog.String("checkpoint_id", checkpointID.String()),
+		slog.Bool("has_shadow_branch", hasShadowBranch),
+		slog.String("transcript_path", state.TranscriptPath),
+	)
+	return newSkippedResult(checkpointID, state.SessionID)
+}
+
 // skipIfPostRedactionEmpty returns a Skipped result when redaction emptied the
 // transcript AND the filtered FilesTouched is also empty. Without this, a
 // session that passed the pre-redaction gate but got its transcript dropped by
-// a malformed-JSONL redaction error would write a metadata-only stub.
+// a malformed-JSONL redaction error would write a metadata-only stub. A
+// session with task payloads to materialize must still write even when its
+// parent transcript redacts to empty.
 func skipIfPostRedactionEmpty(logCtx context.Context, redactedTranscript redact.RedactedBytes, sessionData *ExtractedSessionData, state *SessionState, checkpointID id.CheckpointID) *CondenseResult {
-	if redactedTranscript.Len() > 0 || len(sessionData.FilesTouched) > 0 {
+	if redactedTranscript.Len() > 0 || len(sessionData.FilesTouched) > 0 || state.HasTaskContent() {
 		return nil
 	}
 	logging.Info(logCtx, "session skipped: nothing to persist after redaction",
@@ -510,7 +762,8 @@ func newSkippedResult(checkpointID id.CheckpointID, sessionID string) *CondenseR
 
 // redactSessionTranscript redacts the transcript once for use by both the compact
 // package and the checkpoint stores. Returns the redacted bytes and the duration
-// of the redaction operation for perf logging.
+// of the redaction operation for perf logging. Also the redaction step
+// prepareTaskTranscriptForStorage reuses for a subagent's own transcript.
 func redactSessionTranscript(ctx context.Context, transcript []byte) (redact.RedactedBytes, time.Duration, error) {
 	start := time.Now()
 	_, span := perf.Start(ctx, "redact_transcript")
@@ -574,6 +827,10 @@ func filterFilesTouched(sessionData *ExtractedSessionData, committedFiles map[st
 // recorded a checkpoint (StepCount > 0). False means the session was likely
 // registered but never did anything; treating such a session as the author of
 // the committed files would attribute another session's work to it.
+// Task records deliberately do NOT count here: a record-bearing session may
+// have touched no files at all (read-only subagent), so letting records
+// qualify the session for the committed-files fallback would be the exact
+// mis-attribution this guard prevents.
 func sessionHasEvidenceOfWork(sessionData *ExtractedSessionData, state *SessionState) bool {
 	if len(sessionData.Transcript) > 0 {
 		return true
@@ -1108,9 +1365,8 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 		// re-parse the whole main transcript plus every subagent file from line 0 —
 		// measured at ~29x the cost of this call, enough to triple post-commit
 		// condensation for a subagent-heavy session — and would still yield a
-		// cumulative snapshot needing the same rescoping SaveStep already did. It
-		// also finds nothing on this path once the agent has cleaned the transcripts
-		// up. CondenseSession fills the already-rescoped window total in instead;
+		// cumulative snapshot needing the same rescoping SaveStep already did.
+		// CondenseSession fills the already-rescoped window total in instead;
 		// see withSubagentTokensFrom.
 		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, checkpointTranscriptStart, "")
 		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, 0)
@@ -1274,7 +1530,8 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		_, refErr := repo.Reference(refName, true)
 		hasShadowBranch := refErr == nil
 
-		if !hasShadowBranch {
+		// Record-bearing sessions must materialize their records, not be cleared.
+		if !hasShadowBranch && !state.HasTaskContent() {
 			logging.Info(logCtx, "no shadow branch for session, clearing state only",
 				slog.String("session_id", sessionID),
 				slog.String("shadow_branch", shadowBranchName),
@@ -1371,7 +1628,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 			return ErrMutationSkip
 		}
 
-		if state.StepCount <= 0 {
+		// HasTaskContent counts live records too — even those must materialize, never be shortcut away.
+		if state.StepCount <= 0 && !state.HasTaskContent() {
 			state.FullyCondensed = true
 			return nil
 		}
@@ -1381,7 +1639,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 		_, refErr := repo.Reference(refName, true)
 		hasShadowBranch := refErr == nil
 
-		if !hasShadowBranch {
+		// Task records never write a shadow branch; their sessions condense via the no-shadow-branch path.
+		if !hasShadowBranch && !state.HasTaskContent() {
 			logging.Info(logCtx, "eager condense: no shadow branch",
 				slog.String("session_id", sessionID),
 				slog.String("shadow_branch", shadowBranchName),
@@ -1468,8 +1727,9 @@ func (s *ManualCommitStrategy) cleanupShadowBranchIfUnused(ctx context.Context, 
 			continue
 		}
 		otherShadow := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
+		// Only SaveStep checkpoints live on the shadow branch; task records do
+		// not, so they no longer pin the branch alive.
 		if otherShadow == shadowBranchName && state.StepCount > 0 {
-			// Another session still needs this shadow branch
 			return nil
 		}
 	}

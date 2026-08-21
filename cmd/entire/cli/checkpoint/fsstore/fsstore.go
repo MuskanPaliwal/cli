@@ -322,8 +322,6 @@ func metadataFromWriteOptions(opts cp.WriteOptions) cp.Metadata {
 		Agent:                       opts.Agent,
 		Model:                       opts.Model,
 		TurnID:                      opts.TurnID,
-		IsTask:                      opts.IsTask,
-		ToolUseID:                   opts.ToolUseID,
 		TranscriptIdentifierAtStart: opts.TranscriptIdentifierAtStart,
 		CheckpointTranscriptStart:   opts.CheckpointTranscriptStart,
 		TranscriptLinesAtStart:      opts.CheckpointTranscriptStart, // git writes both for back-compat
