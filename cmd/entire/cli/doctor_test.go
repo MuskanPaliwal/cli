@@ -175,6 +175,38 @@ func TestClassifySession_EndedNoShadowBranch_Healthy(t *testing.T) {
 	assert.Nil(t, result, "ended session without shadow branch should be healthy")
 }
 
+// An ENDED record-bearing session has condensable task content that never
+// lives on the shadow branch, so branch absence must not classify it healthy.
+func TestClassifySession_EndedRecordsOnlyNoShadowBranch_Stuck(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	state := &strategy.SessionState{
+		SessionID: "test-ended-records-only", BaseCommit: testBaseCommit, Phase: session.PhaseEnded,
+		TaskRecords: []session.TaskRecord{{ToolUseID: "toolu_1", StartedAt: time.Now(), CompletedAt: time.Now()}},
+	}
+
+	result := classifySession(state, repo, time.Now())
+	require.NotNil(t, result, "ended record-bearing session must be reported even without a shadow branch")
+	assert.Equal(t, "ended with uncondensed checkpoint data", result.Reason)
+	assert.Equal(t, 1, result.CheckpointCount)
+}
+
+// FullyCondensed + leftover live record (pre-fix state or failed sweep capture) is healthy: everything worth keeping is materialized.
+func TestClassifySession_EndedFullyCondensedLeftoverRecord_Healthy(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	state := &strategy.SessionState{
+		SessionID: "test-ended-condensed-leftover", BaseCommit: testBaseCommit, Phase: session.PhaseEnded,
+		FullyCondensed: true, TaskRecords: []session.TaskRecord{{ToolUseID: "toolu_left", StartedAt: time.Now()}},
+	}
+	assert.Nil(t, classifySession(state, repo, time.Now()),
+		"a FullyCondensed ended session must not be re-flagged for a leftover live record")
+}
+
 func TestClassifySession_EndedZeroStepCount_Healthy(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	repo, err := git.PlainOpen(dir)
@@ -516,6 +548,63 @@ func TestRunSessionsFix_HandlerLogsStayOffTheTerminal(t *testing.T) {
 	logged, err := os.ReadFile(filepath.Join(dir, ".entire", "logs", "entire.log"))
 	require.NoError(t, err, "doctor did not initialize file logging")
 	assert.NotEmpty(t, logged, "nothing was logged, so this test proves nothing about where logs go")
+}
+
+// An unwritable .entire/logs is the one Entire failure with no channel of its
+// own: the write that would report it is the write being dropped, so it exits 0
+// with an empty log and looks exactly like a repo where nothing ran. doctor is
+// the command users reach for when a redaction rule seems not to fire, so it has
+// to be the one that says so.
+func TestCheckLogSink_ReportsUnwritableLogDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	// A regular file where the directory must go. Chosen over chmod because it
+	// fails MkdirAll on Windows too, where the test suite also runs.
+	entireDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "logs"), []byte("not a directory"), 0o600))
+
+	l, err := newLogger(context.Background())
+	require.NoError(t, err, "an unusable log dir must not fail logger construction")
+	t.Cleanup(func() { _ = l.Close() })
+
+	cmd, stdout := newTestCmd(t)
+	cmd.SetContext(logging.WithLogger(cmd.Context(), l))
+	checkLogSink(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Operational logs: NOT WRITABLE")
+	assert.Contains(t, output, logging.LogsDir,
+		"the report must name the directory to fix")
+}
+
+// The check has to be silent on the happy path, or it trains users to skip
+// doctor's output — and silent for a repo that never set Entire up, where the
+// entry point installs no logger and there is nothing to nag about.
+func TestCheckLogSink_SilentWhenWritableOrAbsent(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	t.Run("writable", func(t *testing.T) {
+		l, err := newLogger(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = l.Close() })
+
+		cmd, stdout := newTestCmd(t)
+		cmd.SetContext(logging.WithLogger(cmd.Context(), l))
+		checkLogSink(cmd)
+
+		assert.Empty(t, stdout.String(), "a writable log directory must produce no output")
+	})
+
+	t.Run("no logger installed", func(t *testing.T) {
+		cmd, stdout := newTestCmd(t)
+		checkLogSink(cmd)
+
+		assert.Empty(t, stdout.String(),
+			"a repo where Entire was never set up has no logger and nothing to report")
+	})
 }
 
 // TestCheckCodexHookTrust_SilentWhenCodexNotInstalled — `entire doctor`
