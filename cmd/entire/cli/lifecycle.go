@@ -621,19 +621,7 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		adoptReviewEnv(logCtx, state, string(ag.Name()))
 		adoptInvestigateEnv(logCtx, state, string(ag.Name()))
 
-		skillEventSource := *event
-		// Record a skill event for a leading "/<command>" in the raw prompt. Only
-		// once ownership is known — TurnStart bypasses the owner filter so
-		// InitializeSession can repair it — and never overriding native adapter events.
-		if state.AgentType == "" || state.AgentType == ag.Type() {
-			skillEventSource.SkillEvents = agent.AppendPromptSlashCommandSkillEvent(
-				skillEventSource.SkillEvents,
-				string(ag.Name()),
-				event.Prompt,
-				event.Timestamp,
-			)
-		}
-		skillEventsChanged := appendEventSkillEventsToState(&skillEventSource, state)
+		skillEventsChanged := appendPromptSkillEventToState(ag, event, state)
 		if state.Kind == before.Kind &&
 			state.ReviewPrompt == before.ReviewPrompt &&
 			slices.Equal(state.ReviewSkills, before.ReviewSkills) &&
@@ -2054,6 +2042,19 @@ func appendEventSkillEventsToState(event *agent.Event, state *strategy.SessionSt
 		changed = true
 	}
 	return changed
+}
+
+func appendPromptSkillEventToState(ag agent.Agent, event *agent.Event, state *strategy.SessionState) bool {
+	skillEventSource := *event
+	if state.AgentType == "" || state.AgentType == ag.Type() {
+		skillEventSource.SkillEvents = agent.AppendPromptSlashCommandSkillEvent(
+			skillEventSource.SkillEvents,
+			string(ag.Name()),
+			event.Prompt,
+			event.Timestamp,
+		)
+	}
+	return appendEventSkillEventsToState(&skillEventSource, state)
 }
 
 func skillEventExists(events []agent.SkillEvent, candidate agent.SkillEvent) bool {

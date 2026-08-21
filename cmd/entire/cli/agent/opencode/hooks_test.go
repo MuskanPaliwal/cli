@@ -259,8 +259,11 @@ func TestInstallHooks_MessageUpdatedFallsBackToPromptUpdate(t *testing.T) {
 	if !strings.Contains(content, `callHookSync("prompt-update", {`) {
 		t.Fatal("plugin file should use the prompt-only update hook for late text")
 	}
-	if got := strings.Count(content, `promptlessTurnStarts.clear()`); got != 3 {
-		t.Fatalf("plugin file should clear promptless turn tracking at all three session reset sites, got %d", got)
+	if !strings.Contains(content, `clearSessionMessages(session.id)`) {
+		t.Fatal("plugin file should clear only the deleted session's message tracking")
+	}
+	if got := strings.Count(content, `promptlessTurnStarts.clear()`); got != 1 {
+		t.Fatalf("plugin file should clear all promptless tracking only at server shutdown, got %d", got)
 	}
 }
 
@@ -401,7 +404,7 @@ await plugin.event!({
 await plugin.event!({
   event: {
     type: "message.updated",
-    properties: { info: { id: "switched-message", role: "user", sessionID: "session-1" } },
+    properties: { info: { id: "interleaved-message", role: "user", sessionID: "session-1" } },
   },
 } as any)
 await plugin.event!({
@@ -413,7 +416,7 @@ await plugin.event!({
 await plugin.event!({
   event: {
     type: "message.part.updated",
-    properties: { part: { messageID: "switched-message", type: "text", text: "stale switched prompt" } },
+    properties: { part: { messageID: "interleaved-message", type: "text", text: "survives session interleaving" } },
   },
 } as any)
 await plugin.event!({
@@ -486,6 +489,7 @@ await plugin.event!({
 		{Name: "prompt-update", Prompt: "second prompt"},
 		{Name: "turn-start", Prompt: ""},
 		{Name: "turn-start", Prompt: ""},
+		{Name: "prompt-update", Prompt: "survives session interleaving"},
 		{Name: "turn-start", Prompt: ""},
 	}
 	t.Logf("captured prompt hooks: %+v", calls)

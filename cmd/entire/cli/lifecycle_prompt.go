@@ -60,12 +60,20 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 	}
 
 	if err := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
+		// OpenCode may deliver prompt text after turn-end has already backfilled it.
+		if state.Phase == session.PhaseIdle && state.LastPrompt == event.Prompt {
+			if appendPromptSkillEventToState(ag, event, state) {
+				return nil
+			}
+			return strategy.ErrMutationSkip
+		}
 		// Condensation clears prompt.txt while holding the same lock. Keep the
 		// repair file and state writes ordered with that operation.
 		if err := appendPromptToFile(ctx, event.SessionID, event.Prompt); err != nil {
 			return err
 		}
 		state.LastPrompt = session.TruncatePromptForStorage(event.Prompt)
+		appendPromptSkillEventToState(ag, event, state)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("update prompt storage: %w", err)

@@ -114,13 +114,19 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
     }
   }
 
+  function clearSessionMessages(sessionID: string) {
+    for (const [messageID, message] of messageStore) {
+      if (message?.sessionID !== sessionID) continue
+      seenUserMessages.delete(messageID)
+      promptlessTurnStarts.delete(messageID)
+      messageStore.delete(messageID)
+    }
+  }
+
   function resetSessionTracking(sessionID: string) {
     if (currentSessionID === sessionID) {
       return false
     }
-    seenUserMessages.clear()
-    promptlessTurnStarts.clear()
-    messageStore.clear()
     currentModel = null
     currentSessionID = sessionID
     // Drop any turn-start injection captured for the prior session so it
@@ -253,11 +259,10 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
           case "session.deleted": {
             const session = (event as any).properties?.info
             if (!session?.id) break
+            clearSessionMessages(session.id)
             if (currentSessionID === session.id) {
-              seenUserMessages.clear()
-              promptlessTurnStarts.clear()
-              messageStore.clear()
               currentSessionID = null
+              currentModel = null
               pendingInjection = null
             }
             // Use sync variant: session-end may fire during shutdown.
