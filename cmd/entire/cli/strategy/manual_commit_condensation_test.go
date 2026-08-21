@@ -14,9 +14,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
@@ -64,7 +68,6 @@ esac
 		t.Fatalf("write external summary agent binary: %v", err)
 	}
 }
-
 func TestCalculateTokenUsage_CursorAlwaysNil(t *testing.T) {
 	t.Parallel()
 
@@ -542,6 +545,215 @@ func TestCondenseSession_TagsCheckpointSummaryWithHasInvestigation(t *testing.T)
 	require.Equal(t, "Why is checkout flaky?", meta.InvestigateTopic, "per-session InvestigateTopic")
 }
 
+func setupEndedSessionWithoutFiles(t *testing.T, s *ManualCommitStrategy, repo *git.Repository, dir, sessionID string) *SessionState {
+	t.Helper()
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	endedAt := time.Now().UTC()
+	state.Phase = session.PhaseEnded
+	state.EndedAt = &endedAt
+	state.FilesTouched = nil
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+	return state
+}
+
+func TestCondenseSessionByID_ReusesCheckpointFromInterruptedEagerCondense(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	s := &ManualCommitStrategy{}
+	sessionID := "interrupted-eager-condense"
+	setupEndedSessionWithoutFiles(t, s, repo, dir, sessionID)
+
+	staleState, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	orphanID := id.MustCheckpointID("111111111111")
+	result, err := s.CondenseSession(context.Background(), repo, orphanID, staleState, nil)
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	checkpoints, err := store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+
+	require.NoError(t, s.CondenseSessionByID(context.Background(), sessionID))
+
+	checkpoints, err = store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+	assert.Equal(t, orphanID, checkpoints[0].CheckpointID)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, orphanID, state.LastCheckpointID)
+	assert.Equal(t, result.TotalTranscriptLines, state.CheckpointTranscriptStart)
+}
+
+func TestCondenseAndMarkFullyCondensed_ReusesReservedAttemptAfterInterruptedWrite(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	s := &ManualCommitStrategy{}
+	sessionID := "reserved-eager-condense"
+	setupEndedSessionWithoutFiles(t, s, repo, dir, sessionID)
+
+	var reservedID id.CheckpointID
+	reserveErr := MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
+		var err error
+		reservedID, _, err = ensureCondensationAttemptID(context.Background(), state)
+		return err
+	})
+	require.NoError(t, reserveErr)
+
+	staleState, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	result, err := s.CondenseSession(context.Background(), repo, reservedID, staleState, nil)
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+
+	require.NoError(t, s.CondenseAndMarkFullyCondensed(context.Background(), sessionID))
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	checkpoints, err := store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+	assert.Equal(t, reservedID, checkpoints[0].CheckpointID)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, reservedID, state.LastCheckpointID)
+	assert.True(t, state.PendingCondensationID().IsEmpty())
+	assert.True(t, state.FullyCondensed)
+}
+
+func TestPrepareCommitMsg_ReusesReservedAttemptAfterSessionResume(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	s := &ManualCommitStrategy{}
+	sessionID := "resumed-interrupted-condense"
+	setupEndedSessionWithoutFiles(t, s, repo, dir, sessionID)
+
+	reservedID := id.MustCheckpointID("111111111111")
+	require.NoError(t, MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
+		state.BeginCondensationAttempt(reservedID)
+		return nil
+	}))
+
+	require.NoError(t, s.InitializeSession(context.Background(), sessionID, agent.AgentTypeClaudeCode, "", "continue", ""))
+	resumed, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, session.PhaseActive, resumed.Phase)
+	require.Equal(t, reservedID, resumed.PendingCondensationID())
+
+	commitMsgFile := filepath.Join(dir, "COMMIT_EDITMSG")
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte("commit after resume\n"), 0o600))
+	require.NoError(t, s.PrepareCommitMsg(context.Background(), commitMsgFile, "message"))
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+	checkpointID, found := trailers.ParseCheckpoint(string(content))
+	require.True(t, found)
+	assert.Equal(t, reservedID, checkpointID)
+}
+
+func TestCondensationSessionWrites_KeepSharedReservedCheckpointInOneBackend(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	repo, err := gitrepo.OpenPath(dir)
+	require.NoError(t, err)
+	defer repo.Close()
+
+	ctx := settings.WithWorktreeRoot(t.Context(), dir)
+	stores, err := checkpoint.Open(ctx, repo, checkpoint.OpenOptions{})
+	require.NoError(t, err)
+
+	// The ULID was selected while git-refs was primary; the current default
+	// primary is git-branch. Both sessions share the preselected checkpoint ID.
+	checkpointID := id.MustCheckpointID("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+
+	write := func(sessionID string) {
+		t.Helper()
+		opts := checkpoint.WriteOptions{
+			CheckpointID: checkpointID,
+			SessionID:    sessionID,
+			Strategy:     StrategyNameManualCommit,
+			AuthorName:   "Test",
+			AuthorEmail:  "test@example.com",
+		}
+		require.NoError(t, stores.Persistent.Write(ctx, condensationSessionWriteRequest(opts)))
+	}
+
+	write("reserved-session")
+	write("ordinary-session")
+
+	summary, err := stores.Persistent.Read(ctx, checkpointID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 2, "all sessions sharing a checkpoint ID must remain visible together")
+}
+
+func TestCondenseSessionByID_DoesNotReuseCheckpointAfterSessionAdvances(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	s := &ManualCommitStrategy{}
+	sessionID := "advanced-after-interrupted-condense"
+	setupEndedSessionWithoutFiles(t, s, repo, dir, sessionID)
+
+	staleState, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	orphanID := id.MustCheckpointID("111111111111")
+	result, err := s.CondenseSession(context.Background(), repo, orphanID, staleState, nil)
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+
+	metadataDir := paths.EntireMetadataDir + "/" + sessionID
+	metadataDirAbs := filepath.Join(dir, metadataDir)
+	advancedTranscript := testTranscriptPromptResponse + `{"type":"human","message":{"content":"another prompt"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(advancedTranscript), 0o644))
+	require.NoError(t, s.SaveStep(context.Background(), StepContext{
+		SessionID:      sessionID,
+		MetadataDir:    metadataDir,
+		MetadataDirAbs: metadataDirAbs,
+		CommitMessage:  "Checkpoint 2",
+		AuthorName:     "Test",
+		AuthorEmail:    "test@test.com",
+	}))
+
+	require.NoError(t, s.CondenseSessionByID(context.Background(), sessionID))
+
+	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
+	checkpoints, err := store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 2)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.NotEqual(t, orphanID, state.LastCheckpointID)
+}
+
 // taskTranscriptSecret is a string with Shannon entropy > 4.5 that will
 // trigger redaction — mirrors checkpoint_test.go's highEntropySecret so task
 // transcript redaction is verified the same way session transcript redaction
@@ -557,7 +769,7 @@ func setupCondensableSessionWithTranscript(t *testing.T, sessionID string) (*git
 	dir := setupGitRepo(t)
 	t.Chdir(dir)
 
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
 
 	s := &ManualCommitStrategy{}
@@ -882,13 +1094,13 @@ func TestCondenseSession_PoisonedTaskRecord_SkippedNotWedged(t *testing.T) {
 // TestCondenseAndMarkFullyCondensed_RecordsOnlySessionMaterializes is the
 // trigger half of invariant 7: a records-only session (read-only background
 // subagent; no SaveStep, no shadow branch, no files, no parent transcript)
-// must condense into a real checkpoint carrying tasks/<id>/, not be
-// short-circuited to FullyCondensed by the empty-session/no-shadow-branch
-// shortcuts or CondenseSession's own skip gates.
+// must condense into a real checkpoint carrying tasks/<id>/. FullyCondensed is
+// already true here because the task may complete after SessionEnd condensed
+// the earlier state; the new task content must make the session eligible again.
 func TestCondenseAndMarkFullyCondensed_RecordsOnlySessionMaterializes(t *testing.T) {
 	dir := setupGitRepo(t)
 	t.Chdir(dir)
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
 
 	agentTranscriptPath := filepath.Join(t.TempDir(), "agent-transcript.jsonl")
@@ -898,7 +1110,7 @@ func TestCondenseAndMarkFullyCondensed_RecordsOnlySessionMaterializes(t *testing
 	now := time.Now()
 	s := &ManualCommitStrategy{}
 	require.NoError(t, s.saveSessionState(context.Background(), &SessionState{
-		SessionID: sessionID, StartedAt: now, Phase: session.PhaseEnded,
+		SessionID: sessionID, StartedAt: now, Phase: session.PhaseEnded, FullyCondensed: true,
 		TaskRecords: []session.TaskRecord{{
 			ToolUseID: "toolu_recordsonly", AgentID: "agent-ro", SubagentType: "reviewer",
 			DeclaredTranscriptPath: agentTranscriptPath, StartedAt: now, CompletedAt: now,

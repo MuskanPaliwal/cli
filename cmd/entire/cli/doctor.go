@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -37,19 +38,24 @@ Checks performed:
      entire/checkpoints/v1 branches share no common ancestor (caused by a
      previous bug). Fixes by cherry-picking local checkpoints onto remote tip.
 
+  2. Operational logs: warn when .entire/logs cannot be written. Every other
+     diagnostic is delivered by writing there, and that write is silent about
+     its own failure, so an unwritable log directory looks exactly like a repo
+     where nothing ran.
+
   When Codex hooks are installed:
-  2. Codex hook trust: warn when hooks declared in .codex/hooks.json
+  3. Codex hook trust: warn when hooks declared in .codex/hooks.json
      lack a trusted_hash entry in the user's Codex config (i.e. /hooks
      review hasn't run yet on this machine, or a newer entire release
      added a hook the user hasn't approved yet).
 
   For each installed agent that reports hook-config drift:
-  3. Hook config: warn when the installed hooks no longer match what this
+  4. Hook config: warn when the installed hooks no longer match what this
      CLI writes (e.g. an older release wrote Claude Code tool matchers that
      no longer fire, or a committed Pi/OpenCode extension has gone stale).
      Fix by re-running 'entire enable --force'.
 
-  4. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
+  5. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
 
 A session is considered stuck if:
   - It is in ACTIVE phase with no interaction for over 1 hour
@@ -120,6 +126,11 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Error: git hook check failed: %v\n", hooksErr)
 		finalErr = NewSilentError(fmt.Errorf("git hook check failed: %w", hooksErr))
 	}
+
+	// Before the remaining checks, because it is the channel they and every
+	// other command write their diagnostics to: if this is broken, an empty
+	// entire.log is not evidence of a healthy repo.
+	checkLogSink(cmd)
 
 	// Agent-specific: Codex hook trust state.
 	checkCodexHookTrust(cmd)
@@ -604,6 +615,38 @@ func checkGitHooks(cmd *cobra.Command, force bool) error {
 	}
 	fmt.Fprintln(w, "  ✓ Fixed: git hooks reinstalled")
 	return nil
+}
+
+// checkLogSink reports a .entire/logs Entire cannot write to.
+//
+// Every other diagnostic in the CLI is delivered by writing there, and that
+// write is deliberately silent about its own failure — a dropped log line must
+// never surface as an error in the caller. So an unwritable log directory
+// presents exactly like a repo where nothing ever ran: no message, exit 0, and
+// an absent or empty entire.log. That is the shape of the support report this
+// logging work exists to fix, so doctor is the wrong command to reproduce it.
+//
+// Read-only. The fixes are ownership and permissions, which doctor cannot take
+// on the user's behalf.
+//
+// A nil logger means the entry point declined to build one, i.e. Entire was
+// never set up here — nothing to nag about, and reading it back from the
+// context is what keeps this check on the same directory the logger actually
+// uses instead of re-deriving the path.
+func checkLogSink(cmd *cobra.Command) {
+	err := logging.LoggerFromContext(cmd.Context()).EnsureOpen()
+	if err == nil {
+		return
+	}
+
+	w := cmd.OutOrStdout()
+	fmt.Fprintln(w, "Operational logs: NOT WRITABLE")
+	fmt.Fprintf(w, "  %v\n", err)
+	fmt.Fprintf(w, "  Entire's diagnostics are being dropped, including the redaction warnings\n")
+	fmt.Fprintf(w, "  that explain why a custom rule isn't matching. `entire doctor logs` and\n")
+	fmt.Fprintf(w, "  `entire doctor bundle` have nothing to report until this is fixed.\n")
+	fmt.Fprintf(w, "  Fix: resolve the error above so %s is a writable directory — commonly\n", logging.LogsDir)
+	fmt.Fprintln(w, "  ownership or permissions, a regular file occupying the path, or a full disk.")
 }
 
 // checkHookDrift warns when an installed agent's Entire hook config is out of

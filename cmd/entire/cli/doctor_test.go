@@ -550,6 +550,63 @@ func TestRunSessionsFix_HandlerLogsStayOffTheTerminal(t *testing.T) {
 	assert.NotEmpty(t, logged, "nothing was logged, so this test proves nothing about where logs go")
 }
 
+// An unwritable .entire/logs is the one Entire failure with no channel of its
+// own: the write that would report it is the write being dropped, so it exits 0
+// with an empty log and looks exactly like a repo where nothing ran. doctor is
+// the command users reach for when a redaction rule seems not to fire, so it has
+// to be the one that says so.
+func TestCheckLogSink_ReportsUnwritableLogDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	// A regular file where the directory must go. Chosen over chmod because it
+	// fails MkdirAll on Windows too, where the test suite also runs.
+	entireDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "logs"), []byte("not a directory"), 0o600))
+
+	l, err := newLogger(context.Background())
+	require.NoError(t, err, "an unusable log dir must not fail logger construction")
+	t.Cleanup(func() { _ = l.Close() })
+
+	cmd, stdout := newTestCmd(t)
+	cmd.SetContext(logging.WithLogger(cmd.Context(), l))
+	checkLogSink(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Operational logs: NOT WRITABLE")
+	assert.Contains(t, output, logging.LogsDir,
+		"the report must name the directory to fix")
+}
+
+// The check has to be silent on the happy path, or it trains users to skip
+// doctor's output — and silent for a repo that never set Entire up, where the
+// entry point installs no logger and there is nothing to nag about.
+func TestCheckLogSink_SilentWhenWritableOrAbsent(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	t.Run("writable", func(t *testing.T) {
+		l, err := newLogger(context.Background())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = l.Close() })
+
+		cmd, stdout := newTestCmd(t)
+		cmd.SetContext(logging.WithLogger(cmd.Context(), l))
+		checkLogSink(cmd)
+
+		assert.Empty(t, stdout.String(), "a writable log directory must produce no output")
+	})
+
+	t.Run("no logger installed", func(t *testing.T) {
+		cmd, stdout := newTestCmd(t)
+		checkLogSink(cmd)
+
+		assert.Empty(t, stdout.String(),
+			"a repo where Entire was never set up has no logger and nothing to report")
+	})
+}
+
 // TestCheckCodexHookTrust_SilentWhenCodexNotInstalled — `entire doctor`
 // shouldn't print anything Codex-related when this repo doesn't have
 // .codex/hooks.json. Other agents (Claude, Cursor) keep their existing

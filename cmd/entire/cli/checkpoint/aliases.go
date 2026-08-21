@@ -44,9 +44,10 @@ type (
 	PersistentStore  = apicheckpoint.PersistentStore
 	Writer           = apicheckpoint.Writer
 	WriteRequest     = apicheckpoint.WriteRequest
-	// Write request union: session-level (Session, SessionTranscript,
+	// Write request union: session-level (Session, ReservedSession, SessionTranscript,
 	// SessionSummary) and checkpoint-level (CheckpointAttribution).
 	Session           = apicheckpoint.Session
+	ReservedSession   = apicheckpoint.ReservedSession
 	SessionTranscript = apicheckpoint.SessionTranscript
 	SessionSummary    = apicheckpoint.SessionSummary
 	//nolint:revive // CheckpointAttribution stutter is accepted — makes the checkpoint (vs session) tier explicit.

@@ -465,9 +465,9 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 	readCommitMessageSpan.End()
 
-	// Generate a fresh checkpoint ID and resolve session metadata
+	// Resolve the checkpoint ID and session metadata.
 	_, resolveMetadataSpan := perf.Start(ctx, "resolve_session_metadata")
-	checkpointID, err := checkpoint.GenerateCheckpointID(ctx)
+	checkpointID, err := checkpointIDForSessions(ctx, sessionsWithContent)
 	if err != nil {
 		resolveMetadataSpan.RecordError(err)
 		resolveMetadataSpan.End()
@@ -1201,6 +1201,15 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 ) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
+	reservedCheckpointID := state.PendingCondensationID()
+	if reservedCheckpointID != id.EmptyCheckpointID && reservedCheckpointID != checkpointID {
+		logging.Warn(logCtx, "post-commit: preserving interrupted condensation with a different checkpoint ID",
+			slog.String("session_id", state.SessionID),
+			slog.String("reserved_checkpoint_id", reservedCheckpointID.String()),
+			slog.String("commit_checkpoint_id", checkpointID.String()))
+		uncondensedActiveOnBranch[shadowBranchName] = true
+		return
+	}
 
 	// Pre-resolve shadow branch ref and tree for this session.
 	// These are read 4+ times across sessionHasNewContent, filesOverlapWithContent,
@@ -1431,7 +1440,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	// Save checkpoint ID so subsequent commits can reuse it (e.g., amend restores trailer).
 	// LastCheckpointCommitHash records the exact commit SHA so the reconcile path can
 	// distinguish a true reset (same SHA) from cherry-pick/rebase (same trailer, new SHA).
-	state.LastCheckpointID = checkpointID
+	state.LastCheckpointID = result.CheckpointID
 	state.LastCheckpointCommitHash = newHead
 
 	logging.Info(logCtx, "session condensed",
@@ -2130,10 +2139,19 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 }
 
 // addTrailerForAgentCommit handles the fast path when an agent is committing
-// (ACTIVE session + no TTY). Generates a checkpoint ID and adds the trailer
+// (ACTIVE session + no TTY). It resolves a checkpoint ID and adds the trailer
 // directly, bypassing content detection and interactive prompts.
+//
+// The ID is resolved from this one ACTIVE session, deliberately NOT from every
+// session in the worktree the way PrepareCommitMsg's slow path does. Widening it
+// would let a stale reservation held by some other, already-ended session become
+// this commit's checkpoint ID, merging a live session's work into a checkpoint
+// reserved for an unrelated transcript range. The reserved session loses nothing
+// by being left out: ENDED + GitCommit carries ActionCondenseIfFilesTouched, so
+// PostCommit does not condense a no-files ENDED session under any ID, and
+// `entire doctor` is its retry path.
 func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, commitMsgFile string, state *SessionState, source string) error { //nolint:unparam // kept for signature stability
-	cpID, err := checkpoint.GenerateCheckpointID(logCtx)
+	cpID, err := checkpointIDForSessions(logCtx, []*SessionState{state})
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
@@ -2163,6 +2181,19 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
 	return nil
+}
+
+func checkpointIDForSessions(ctx context.Context, states []*SessionState) (id.CheckpointID, error) {
+	for _, state := range states {
+		if checkpointID := state.PendingCondensationID(); checkpointID != id.EmptyCheckpointID {
+			return checkpointID, nil
+		}
+	}
+	checkpointID, err := checkpoint.GenerateCheckpointID(ctx)
+	if err != nil {
+		return id.EmptyCheckpointID, fmt.Errorf("generate checkpoint ID: %w", err)
+	}
+	return checkpointID, nil
 }
 
 // addCheckpointTrailer adds the Entire-Checkpoint trailer to a commit message.

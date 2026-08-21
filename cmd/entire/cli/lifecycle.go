@@ -1130,7 +1130,7 @@ func sessionEndCondenseDeadline(ag agent.Agent) time.Time {
 // (handleLifecycleSessionEnd) and the exited-session sweep
 // (finalizeExitedSessions), so the two stay in lockstep.
 //
-// The condense is fail-open (PostCommit retries on the next commit); an error
+// The condense is fail-open. Doctor retries no-files ENDED sessions; an error
 // marking the session ended is returned so callers can react, and skips the
 // condense since the state may be inconsistent. event may be nil when no hook
 // event drives the end (the sweep), which skips event-metadata persistence.
@@ -1152,14 +1152,11 @@ func sessionEndCondenseDeadline(ag agent.Agent) time.Time {
 // killed. The exited-owner sweep is the backstop for that: the session is
 // reclaimed on the next `entire status` / `entire doctor`.
 //
-// Losing the race costs duplication, not data. One window is worth knowing:
-// CondenseSession commits the checkpoint to entire/checkpoints/v1 inside the
-// MutateSessionState callback, and the state is saved only after that callback
-// returns. A kill in between leaves the checkpoint committed with
-// CheckpointTranscriptStart / LastCheckpointID / StepCount / FullyCondensed
-// un-advanced, so PostCommit mints a fresh checkpoint ID over the same
-// transcript range. Everywhere else, an incomplete condense simply leaves
-// FullyCondensed false and PostCommit retries.
+// Condensation reserves its checkpoint ID in session state before the durable
+// write. If the process dies after the checkpoint lands but before the remaining
+// bookkeeping is saved, a retry writes the same ID instead of creating a second
+// checkpoint. Doctor also reconciles the pre-reservation state left by older
+// versions when it can prove the stored session range and transcript match.
 func endSessionNow(ctx context.Context, event *agent.Event, sessionID string, guard func(*strategy.SessionState) bool, condenseDeadline time.Time, when endedAtPolicy) (ended bool, err error) {
 	ended, err = markSessionEnded(ctx, event, sessionID, guard, when)
 	if err != nil || !ended {
@@ -1975,6 +1972,11 @@ func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string,
 				slog.String("error", transErr.Error()))
 		}
 		state.EndedAt = &endedAt
+		if prepareErr := strategy.PrepareSessionEndCondensation(ctx, state); prepareErr != nil {
+			logging.Warn(logging.WithComponent(ctx, "lifecycle"), "failed to prepare session-end condensation",
+				slog.String("session_id", sessionID),
+				slog.String("error", prepareErr.Error()))
+		}
 		ended = true
 		return nil
 	})
