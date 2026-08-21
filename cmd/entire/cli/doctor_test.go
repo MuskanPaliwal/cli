@@ -499,6 +499,90 @@ func TestRunSessionsFix_ForceDiscardOutput_Indented(t *testing.T) {
 	}
 }
 
+// TestRunSessionsFix_NonInteractive_HintsForceInsteadOfPrompting — `entire
+// doctor` without --force used to open the stuck-session huh prompt even with
+// no TTY to ask on, crashing mid-scan with "bubbletea: could not open TTY" and
+// exiting 1. Non-interactive callers (agents, CI) must instead get the
+// diagnosis for EVERY stuck session (no early return after the first hint),
+// a Fix: line disclosing what --force would do, and the --force hint, with
+// the sessions left untouched.
+// newTestCmd is not used here because it discards the stderr buffer; this
+// test asserts stderr stays empty.
+func TestRunSessionsFix_NonInteractive_HintsForceInsteadOfPrompting(t *testing.T) {
+	// Cannot use t.Parallel() because t.Chdir modifies process-global state.
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	for _, id := range []string{"2026-08-17-doctor-no-tty", "2026-08-17-doctor-no-tty-2"} {
+		state := &strategy.SessionState{
+			SessionID:  id,
+			BaseCommit: testBaseCommit,
+			Phase:      session.PhaseActive,
+			StartedAt:  time.Now().Add(-2 * time.Hour),
+		}
+		require.NoError(t, strategy.SaveSessionState(context.Background(), state))
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	require.NoError(t, runSessionsFix(cmd, false))
+	assert.Empty(t, stderr.String())
+
+	output := stdout.String()
+	assert.Contains(t, output, "Found 2 stuck session(s):")
+	assert.Contains(t, output, "  Session: 2026-08-17-doctor-no-tty")
+	assert.Contains(t, output, "  Session: 2026-08-17-doctor-no-tty-2")
+	// No shadow branch exists, so --force would discard — the hint must say so.
+	assert.Contains(t, output, "  Fix: discard (no condensable checkpoint data).")
+	assert.Contains(t, output, "entire doctor --force")
+	assert.NotContains(t, output, "Discarded session")
+	assert.NotContains(t, output, "Condensed session")
+
+	// The sessions must survive untouched so --force (or an interactive run)
+	// can still act on them.
+	states, err := strategy.ListSessionStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, states, 2)
+	ids := []string{states[0].SessionID, states[1].SessionID}
+	assert.ElementsMatch(t, []string{"2026-08-17-doctor-no-tty", "2026-08-17-doctor-no-tty-2"}, ids)
+}
+
+func TestRunSessionsFix_NonInteractive_TaskContentHintMatchesForceCondense(t *testing.T) {
+	// Cannot use t.Parallel() because t.Chdir modifies process-global state.
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	state := &strategy.SessionState{
+		SessionID:  "2026-08-20-doctor-task-content",
+		BaseCommit: testBaseCommit,
+		Phase:      session.PhaseEnded,
+		StartedAt:  time.Now().Add(-2 * time.Hour),
+		TaskRecords: []session.TaskRecord{{
+			ToolUseID:   "toolu_doctor_task_content",
+			StartedAt:   time.Now().Add(-time.Hour),
+			CompletedAt: time.Now(),
+		}},
+	}
+	require.NoError(t, strategy.SaveSessionState(context.Background(), state))
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	require.NoError(t, runSessionsFix(cmd, false))
+	assert.Empty(t, stderr.String())
+
+	output := stdout.String()
+	assert.Contains(t, output, "  Fix: condense to permanent storage.")
+	assert.NotContains(t, output, "  Fix: discard (no condensable checkpoint data).")
+}
+
 // Doctor's logging setup must cover the whole command, not just the
 // exited-session sweep. With no exited session to finalize — the common case,
 // and the one this fixture builds — the sweep returns before it touches logging,
@@ -851,6 +935,20 @@ func TestConfirmDoctorFix_CancelledContext(t *testing.T) {
 	proceed, err := confirmDoctorFix(ctx, &out, "Apply fix?")
 	require.NoError(t, err)
 	assert.False(t, proceed)
+}
+
+// TestConfirmDoctorFix_NonInteractive_DeclinesWithoutPrompt — the disconnected
+// metadata check used to call confirmDoctorFix unguarded, so headless runs
+// (agents, CI) crashed opening /dev/tty ("could not open TTY"). Under `go
+// test` the environment is non-interactive by default, so the prompt must
+// decline cleanly with (false, nil) and print nothing.
+func TestConfirmDoctorFix_NonInteractive_DeclinesWithoutPrompt(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	proceed, err := confirmDoctorFix(context.Background(), &out, "Apply fix?")
+	require.NoError(t, err)
+	assert.False(t, proceed)
+	assert.Empty(t, out.String())
 }
 
 // setupDivergedMetadata points local v1 and origin's tracking ref at two

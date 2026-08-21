@@ -3094,9 +3094,9 @@ func TestNewRefreshTrailEnablementCmd_APIFailureExitsZero(t *testing.T) {
 // network) and that failure has to be logged to the repo's log file.
 //
 // Executed through the real root command, because the root PersistentPreRunE is
-// what opens the log file (and its PersistentPostRun is what flushes it) — the
-// same path the detached child takes through main.go. Constructing the
-// subcommand alone would exercise a wiring production never uses.
+// what opens the log file — the same path the detached child takes through
+// main.go. Constructing the subcommand alone would exercise a wiring production
+// never uses.
 func TestRefreshTrailEnablementCmd_LogsBackgroundFailureToFile(t *testing.T) {
 	setupStopTestRepo(t)
 	markRepoSetUpForLogging(t)
