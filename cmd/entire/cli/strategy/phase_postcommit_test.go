@@ -2481,9 +2481,21 @@ func TestCountWarnableStaleEndedSessions(t *testing.T) {
 			FullyCondensed: false,
 			StepCount:      3,
 		},
+		{
+			// Record-bearing: no steps and no shadow branch, but pending task
+			// records still condense — they never live on the shadow branch —
+			// so this counts where "no-shadow-branch" above does not.
+			SessionID:      "record-bearing",
+			BaseCommit:     "1234567890abcdef1234567890abcdef12345678",
+			WorktreeID:     warnableState.WorktreeID,
+			Phase:          session.PhaseEnded,
+			FullyCondensed: false,
+			StepCount:      0,
+			TaskRecords:    []session.TaskRecord{{ToolUseID: "tool-1"}},
+		},
 	}
 
-	assert.Equal(t, 1, countWarnableStaleEndedSessions(repo, sessions))
+	assert.Equal(t, 2, countWarnableStaleEndedSessions(repo, sessions))
 }
 
 // TestPostCommit_WarnStaleEndedSessions_AfterProcessing verifies that the

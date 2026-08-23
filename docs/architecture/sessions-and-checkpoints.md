@@ -171,6 +171,21 @@ the session's branch/worktree/base metadata to the target, clears target-local
 checkpoint windows and checkpoint IDs, and snapshots the target's current file
 changes so the next commit can link to the adopted session.
 
+**Background zombie sweep.** The session-start hook checks the shared
+session-state directory for zombies — non-ended sessions whose owning agent
+process has exited (including the common IDLE case), and ENDED sessions that
+still hold uncondensed checkpoint data more than 24h after ending (younger ones
+are left alone so PostCommit carry-forward keeps its chance). When any exist,
+it spawns a detached
+`__sweep_sessions` process (throttled to one spawn per repo per window via a
+flock-serialized marker in the git common dir) that finalizes/condenses them
+using the same engines as `entire doctor --force`, condense-only: the sweep
+has no interactive condense deadline and never initiates a discard — ended
+sessions without a shadow branch are left to `entire doctor` (and the existing
+orphan cleanup). The 7-day stale-session
+purge bounds the sweep's window: a zombie that stays unfixed past 7 days is
+removed by the purge, not the sweep. See `cmd/entire/cli/session_sweep.go`.
+
 ### Temporary Checkpoints
 
 Branch: `entire/<commit[:7]>-<worktreeHash[:6]>`
