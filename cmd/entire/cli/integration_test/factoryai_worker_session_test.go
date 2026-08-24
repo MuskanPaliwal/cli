@@ -12,11 +12,12 @@ import (
 // PostToolUse hook fires when the Worker is launched, before it has touched the
 // worktree, and the Worker then runs its own SessionStart/UserPromptSubmit/Stop
 // cycle. These tests pin the resulting attribution — a Worker's turn must land
-// as a task checkpoint on the parent, not as an unrelated top-level session.
+// as a task record on the parent, not as an unrelated top-level session.
 
 // TestFactoryDroidWorkerSessionBecomesTaskCheckpoint covers the regression that
-// broke TestFactoryTaskCheckpointExistsBeforeCommit: a Worker's work reached the
-// shadow branch, but under its own session ID, so no task checkpoint existed.
+// broke the E2E TestFactoryTaskRecordExistsBeforeCommit: a Worker's work reached
+// the shadow branch, but under its own session ID, so the parent had nothing
+// attributing it to the task.
 func TestFactoryDroidWorkerSessionBecomesTaskCheckpoint(t *testing.T) {
 	t.Parallel()
 

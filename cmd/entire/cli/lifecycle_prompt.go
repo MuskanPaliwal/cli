@@ -72,7 +72,8 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 		return nil
 	}
 
-	if err := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
+	var appendedSkillEvents []agent.SkillEvent
+	stateSaved, err := strategy.MutateSessionStateSaved(ctx, event.SessionID, func(state *strategy.SessionState) error {
 		// Condensation clears prompt.txt while holding the same lock. Keep the
 		// repair file and state writes ordered with that operation.
 		promptAppended, err := appendPromptToFileIfLastDiffers(ctx, event.SessionID, event.Prompt)
@@ -82,13 +83,17 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 		lastPrompt := session.TruncatePromptForStorage(event.Prompt)
 		lastPromptChanged := state.LastPrompt != lastPrompt
 		state.LastPrompt = lastPrompt
-		skillEventsChanged := appendPromptSkillEventToState(ag, event, state)
-		if !promptAppended && !lastPromptChanged && !skillEventsChanged {
+		appendedSkillEvents = appendPromptSkillEventToState(ag, event, state)
+		if !promptAppended && !lastPromptChanged && len(appendedSkillEvents) == 0 {
 			return strategy.ErrMutationSkip
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("update prompt storage: %w", err)
+	}
+	if stateSaved {
+		strategy.EmitSkillInvocationTelemetry(ctx, appendedSkillEvents)
 	}
 	return nil
 }

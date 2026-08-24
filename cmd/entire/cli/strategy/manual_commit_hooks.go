@@ -684,6 +684,10 @@ type postCommitActionHandler struct {
 	// Both failures and skips (no transcript/files) leave condensed=false, which
 	// correctly preserves shadow branches and defers FullyCondensed marking.
 	condensed bool
+	// newSkillEvents are the skill events condensation appended to session
+	// state; the PostCommit loop forwards them to telemetry after the
+	// session's MutateSessionState saves.
+	newSkillEvents []agent.SkillEvent
 }
 
 // parentCommitHash returns the first parent's hash as a string, or empty for initial commits.
@@ -707,7 +711,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	)
 
 	if shouldCondense {
-		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
+		h.condensed, h.newSkillEvents = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:        h.shadowRef,
 			headTree:         h.headTree,
 			parentTree:       h.parentTree,
@@ -736,7 +740,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	)
 
 	if shouldCondense {
-		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
+		h.condensed, h.newSkillEvents = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:        h.shadowRef,
 			headTree:         h.headTree,
 			parentTree:       h.parentTree,
@@ -1001,8 +1005,9 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 		}
 		sessionID := sess.SessionID
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
-		mutErr := MutateSessionState(iterCtx, sessionID, func(state *SessionState) error {
-			s.postCommitProcessSessionLocked(iterCtx, repo, state, &transitionCtx, checkpointID,
+		var newSkillEvents []agent.SkillEvent
+		stateSaved, mutErr := MutateSessionStateSaved(iterCtx, sessionID, func(state *SessionState) error {
+			newSkillEvents = s.postCommitProcessSessionLocked(iterCtx, repo, state, &transitionCtx, checkpointID,
 				head, commit, newHead, worktreePath, headTree, parentTree,
 				committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch, allAgentFiles,
 				sessionsWithCommittedFiles)
@@ -1012,6 +1017,9 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 			logging.Warn(logCtx, "post-commit: session mutation failed",
 				slog.String("session_id", sessionID),
 				slog.String("error", mutErr.Error()))
+		}
+		if stateSaved {
+			EmitSkillInvocationTelemetry(iterCtx, newSkillEvents)
 		}
 		iterSpan.End()
 	}
@@ -1198,7 +1206,7 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	uncondensedActiveOnBranch map[string]bool,
 	allAgentFiles map[string]struct{},
 	sessionsWithCommittedFiles int,
-) {
+) (newSkillEvents []agent.SkillEvent) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	reservedCheckpointID := state.PendingCondensationID()
@@ -1208,7 +1216,7 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 			slog.String("reserved_checkpoint_id", reservedCheckpointID.String()),
 			slog.String("commit_checkpoint_id", checkpointID.String()))
 		uncondensedActiveOnBranch[shadowBranchName] = true
-		return
+		return newSkillEvents
 	}
 
 	// Pre-resolve shadow branch ref and tree for this session.
@@ -1384,10 +1392,13 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	if state.Phase.IsActive() && !handler.condensed {
 		uncondensedActiveOnBranch[shadowBranchName] = true
 	}
+
+	return handler.newSkillEvents
 }
 
 // condenseAndUpdateState runs condensation for a session and updates state afterward.
-// Returns true if condensation succeeded.
+// Returns whether condensation succeeded, plus the skill events it appended to
+// session state (for telemetry after the surrounding session gate releases).
 func (s *ManualCommitStrategy) condenseAndUpdateState(
 	ctx context.Context,
 	repo *git.Repository,
@@ -1398,7 +1409,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	shadowBranchesToDelete map[string]struct{},
 	committedFiles map[string]struct{},
 	opts ...condenseOpts,
-) bool {
+) (condensed bool, newSkillEvents []agent.SkillEvent) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	result, err := s.CondenseSession(ctx, repo, checkpointID, state, committedFiles, opts...)
 	if err != nil {
@@ -1406,7 +1417,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 			slog.String("session_id", state.SessionID),
 			slog.String("error", err.Error()),
 		)
-		return false
+		return false, nil
 	}
 
 	if result.Skipped {
@@ -1414,7 +1425,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 			slog.String("session_id", state.SessionID),
 			slog.String("checkpoint_id", checkpointID.String()),
 		)
-		return false
+		return false, nil
 	}
 
 	// Track this shadow branch for cleanup
@@ -1451,7 +1462,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 		slog.Int("transcript_lines", result.TotalTranscriptLines),
 	)
 
-	return true
+	return true, result.NewSkillEvents
 }
 
 // updateBaseCommitIfChanged updates BaseCommit to newHead if it changed.
@@ -2804,6 +2815,46 @@ func precomputeTranscriptBlobsForFinalize(ctx context.Context, repo *git.Reposit
 	return precomputed
 }
 
+// redactFinalizedTranscript redacts the finalized full-session transcript,
+// delegating to redactSessionTranscript so finalize and post-commit condensation
+// share one pipeline. That sharing is load-bearing, not tidiness: both store the
+// same sanitized, image-externalized bytes for the same session under the same
+// prefix-cache key, so a divergence between them would splice a prefix produced
+// by one pipeline onto a suffix produced by the other. Going through the same
+// function -- including its injectable redactSessionJSONLBytes seam -- makes that
+// impossible rather than merely unlikely.
+//
+// ok=false means abandon this finalize pass, and is returned only for a degraded
+// scanner -- the caller must keep TurnCheckpointIDs so the next hook process
+// retries, since the degradation flag is per-process. Any other redaction failure
+// drops the transcript and returns ok=true, preserving the rest of the checkpoint
+// metadata: hooks have no retry path, and partial metadata beats none.
+func redactFinalizedTranscript(
+	logCtx context.Context,
+	repo *git.Repository,
+	sessionID string,
+	fullTranscript []byte,
+) (transcript redact.RedactedBytes, ok bool) {
+	redacted, _, err := redactSessionTranscript(logCtx, repo, sessionID, fullTranscript)
+	if err == nil {
+		return redacted, true
+	}
+
+	if errors.Is(err, redact.ErrScannerDegraded) {
+		logging.Warn(logCtx, "finalize: transcript redaction degraded, skipping",
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()),
+		)
+		return redact.RedactedBytes{}, false
+	}
+
+	logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
+		slog.String("session_id", sessionID),
+		slog.String("error", err.Error()),
+	)
+	return redact.RedactedBytes{}, true
+}
+
 // finalizeAllTurnCheckpoints replaces the provisional transcript in each checkpoint
 // created during this turn with the full session transcript.
 //
@@ -2889,7 +2940,10 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	}
 
 	ag, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; ExtractSkillEvents handles nil
-	skillEvents := mergeSkillEvents(state.SkillEvents, withSkillEventTurnID(agent.ExtractSkillEvents(ctx, ag, fullTranscript, 0), state.TurnID))
+	// Persist newly extracted events into state (the caller's MutateSessionState
+	// saves them); telemetry for them is emitted by the lifecycle turn-end
+	// handler, which snapshots state.SkillEvents growth around HandleTurnEnd.
+	_, skillEvents := persistNewSkillEvents(state, agent.ExtractSkillEvents(ctx, ag, fullTranscript, 0))
 
 	// Sanitize before externalizing and redacting, matching CondenseSession's
 	// sanitize -> externalize -> redact order. Skill events above are extracted from
@@ -2948,24 +3002,9 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	// prior condensation stored rather than letting an empty set clear them.
 	_, sidecarCapable := agent.AsSidecarImageProvider(ag)
 
-	_, redactSpan := perf.Start(logCtx, "redact_transcript")
-	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
-	redactSpan.End()
-	if redactErr != nil {
-		if errors.Is(redactErr, redact.ErrScannerDegraded) {
-			// Keep TurnCheckpointIDs: the flag is per-process, so the next
-			// hook process retries.
-			logging.Warn(logCtx, "finalize: transcript redaction degraded, skipping",
-				slog.String("session_id", state.SessionID),
-				slog.String("error", redactErr.Error()),
-			)
-			return 1
-		}
-		logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
-			slog.String("session_id", state.SessionID),
-			slog.String("error", redactErr.Error()),
-		)
-		redactedTranscript = redact.RedactedBytes{}
+	redactedTranscript, redactOK := redactFinalizedTranscript(logCtx, repo, state.SessionID, fullTranscript)
+	if !redactOK {
+		return 1
 	}
 
 	// Post-commit emits regex-only blobs; the writer joins + redacts
