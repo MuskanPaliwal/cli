@@ -563,6 +563,10 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return fmt.Errorf("invalid %s event: %w", event.Type, err)
 	}
+	// A Stop after an interrupted TurnStart must never reuse the prior turn's boundary.
+	if err := CleanupPrePromptState(ctx, sessionID); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("invalidate previous pre-prompt state: %w", err)
+	}
 
 	// Bound every session-state lock acquisition on the TurnStart path so a
 	// background lock holder can't stall the user's prompt (see the const doc).

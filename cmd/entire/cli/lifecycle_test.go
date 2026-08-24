@@ -809,6 +809,35 @@ func (m *mockCapturerAgent) ReadTranscript(_ string) ([]byte, error) {
 	return nil, errors.New("ReadTranscript must not reopen a captured source")
 }
 
+type blockingTurnStartCapturerAgent struct {
+	*mockLifecycleAgent
+
+	positionStarted chan struct{}
+	releasePosition chan struct{}
+}
+
+var (
+	_ agent.TranscriptAnalyzer = (*blockingTurnStartCapturerAgent)(nil)
+	_ agent.TranscriptCapturer = (*blockingTurnStartCapturerAgent)(nil)
+)
+
+func (m *blockingTurnStartCapturerAgent) GetTranscriptPosition(string) (int, error) {
+	close(m.positionStarted)
+	<-m.releasePosition
+	return 0, errors.New("position capture interrupted")
+}
+
+func (m *blockingTurnStartCapturerAgent) ExtractModifiedFilesFromOffset(string, int) ([]string, int, error) {
+	return nil, 0, nil
+}
+
+func (m *blockingTurnStartCapturerAgent) CaptureTranscript(
+	context.Context,
+	agent.TranscriptCaptureRequest,
+) (agent.TranscriptSnapshot, error) {
+	return agent.TranscriptSnapshot{}, nil
+}
+
 var _ agent.TranscriptPreparer = (*mockPreparerAgent)(nil)
 
 func (m *mockPreparerAgent) PrepareTranscript(_ context.Context, sessionRef string) error {
@@ -1032,6 +1061,51 @@ func TestHandleLifecycleTurnEnd_ModernCaptureRejectsUnmeasuredTurnStartPosition(
 	require.ErrorIs(t, err, agent.ErrTranscriptNotReady)
 	require.False(t, capturer.captureCalled)
 	require.False(t, capturer.readCalled)
+}
+
+func TestHandleLifecycleTurnStart_InvalidatesPreviousBoundaryBeforeCapture(t *testing.T) {
+	// Cannot use t.Parallel because repository resolution depends on t.Chdir.
+	workDir := t.TempDir()
+	testutil.InitRepo(t, workDir)
+	testutil.WriteFile(t, workDir, "README.md", "initial\n")
+	testutil.GitAdd(t, workDir, "README.md")
+	testutil.GitCommit(t, workDir, "initial")
+	t.Chdir(workDir)
+	paths.ClearWorktreeRootCache()
+
+	const sessionID = "turn-start-invalidates-stale-boundary"
+	statePath := prePromptStateFile(context.Background(), sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o750))
+	require.NoError(t, os.WriteFile(statePath, []byte(
+		`{"session_id":"turn-start-invalidates-stale-boundary","transcript_offset":2,"transcript_position_captured":true,"untracked_files":[]}`), 0o600))
+
+	ag := &blockingTurnStartCapturerAgent{
+		mockLifecycleAgent: newMockAgent(),
+		positionStarted:    make(chan struct{}),
+		releasePosition:    make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- handleLifecycleTurnStart(context.Background(), ag, &agent.Event{
+			Type:       agent.TurnStart,
+			SessionID:  sessionID,
+			SessionRef: filepath.Join(workDir, "transcript.jsonl"),
+			Prompt:     "repeat an earlier answer",
+		})
+	}()
+
+	select {
+	case <-ag.positionStarted:
+	case <-time.After(5 * time.Second):
+		close(ag.releasePosition)
+		t.Fatal("turn-start did not reach transcript position capture")
+	}
+	preState, err := LoadPrePromptState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Nil(t, preState, "the previous turn's boundary must be gone while current capture is incomplete")
+
+	close(ag.releasePosition)
+	require.NoError(t, <-done)
 }
 
 func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {

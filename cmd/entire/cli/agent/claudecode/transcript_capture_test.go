@@ -260,6 +260,24 @@ func TestCaptureTranscript_AcceptsCompleteFinalJSONWithoutNewline(t *testing.T) 
 	require.Equal(t, 1, snapshot.Position)
 }
 
+func TestCaptureTranscript_NormalizesFinalAssistantMessageLikeClaude(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	want := []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"  Fixed the parser.  "},{"type":"tool_use","name":"ignored"},{"type":"text","text":"Tests pass.  "}]}}`)
+	require.NoError(t, os.WriteFile(path, want, 0o600))
+	response := "Fixed the parser.  \nTests pass."
+
+	snapshot, err := (&ClaudeCodeAgent{}).captureTranscript(context.Background(), agent.TranscriptCaptureRequest{
+		SessionRef:    path,
+		StartPosition: 0,
+		FinalResponse: &response,
+	}, fastCaptureConfig)
+	require.NoError(t, err)
+	require.Equal(t, want, snapshot.Data)
+	require.Equal(t, 1, snapshot.Position)
+}
+
 func TestCaptureTranscript_MissingAndStaleFilesFailClosed(t *testing.T) {
 	t.Parallel()
 
@@ -309,6 +327,33 @@ func TestCaptureTranscript_ModernMarkerTimeoutFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrTranscriptNotReady)
 	require.Empty(t, snapshot.Data)
 	require.Zero(t, snapshot.Position)
+}
+
+func TestCaptureTranscript_DoesNotRereadUnchangedRejectedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(`{"type":"assistant","message":{"content":"Different"}}`+"\n"), 0o600))
+	config := fastCaptureConfig
+	config.maxWait = 150 * time.Millisecond
+	readAttempts := 0
+	config.readTranscript = func(
+		ctx context.Context,
+		path string,
+		fingerprint transcriptFingerprint,
+	) ([]byte, error) {
+		readAttempts++
+		return readObservedTranscript(ctx, path, fingerprint)
+	}
+	response := testFinalAssistantMessage
+
+	_, err := (&ClaudeCodeAgent{}).captureTranscript(context.Background(), agent.TranscriptCaptureRequest{
+		SessionRef:    path,
+		StartPosition: 0,
+		FinalResponse: &response,
+	}, config)
+	require.ErrorIs(t, err, agent.ErrTranscriptNotReady)
+	require.Equal(t, 1, readAttempts)
 }
 
 func TestCaptureTranscript_CancellationFailsClosed(t *testing.T) {

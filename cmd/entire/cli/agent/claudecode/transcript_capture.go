@@ -20,6 +20,7 @@ type captureConfig struct {
 	quietWindow    time.Duration
 	maxWait        time.Duration
 	staleThreshold time.Duration
+	readTranscript func(context.Context, string, transcriptFingerprint) ([]byte, error)
 }
 
 const (
@@ -78,8 +79,14 @@ func (c *ClaudeCodeAgent) captureTranscript(
 
 	ticker := time.NewTicker(config.pollInterval)
 	defer ticker.Stop()
+	readTranscript := config.readTranscript
+	if readTranscript == nil {
+		readTranscript = readObservedTranscript
+	}
 	stableSince := time.Now()
 	stableObservations := 1
+	var rejected transcriptFingerprint
+	hasRejected := false
 
 	for {
 		select {
@@ -119,8 +126,11 @@ func (c *ClaudeCodeAgent) captureTranscript(
 					continue
 				}
 			}
+			if hasRejected && sameTranscriptFingerprint(rejected, current) {
+				continue
+			}
 
-			data, readErr := readObservedTranscript(captureCtx, request.SessionRef, current)
+			data, readErr := readTranscript(captureCtx, request.SessionRef, current)
 			if readErr != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return agent.TranscriptSnapshot{}, fmt.Errorf("capture transcript canceled: %w", ctxErr)
@@ -144,9 +154,13 @@ func (c *ClaudeCodeAgent) captureTranscript(
 				if captureCtx.Err() != nil {
 					return agent.TranscriptSnapshot{}, captureWaitError(ctx, config.maxWait)
 				}
+				rejected = current
+				hasRejected = true
 				continue
 			}
 			if request.FinalResponse != nil && *request.FinalResponse != "" && finalAssistant != *request.FinalResponse {
+				rejected = current
+				hasRejected = true
 				continue
 			}
 			if captureCtx.Err() != nil {
@@ -285,7 +299,7 @@ func assistantText(message json.RawMessage) string {
 
 	var text string
 	if json.Unmarshal(parsed.Content, &text) == nil {
-		return text
+		return strings.TrimSpace(text)
 	}
 	var blocks []struct {
 		Type string `json:"type"`
@@ -294,11 +308,11 @@ func assistantText(message json.RawMessage) string {
 	if json.Unmarshal(parsed.Content, &blocks) != nil {
 		return ""
 	}
-	var joined strings.Builder
+	var textBlocks []string
 	for _, block := range blocks {
 		if block.Type == assistantContentBlockTypeText {
-			joined.WriteString(block.Text)
+			textBlocks = append(textBlocks, block.Text)
 		}
 	}
-	return joined.String()
+	return strings.TrimSpace(strings.Join(textBlocks, "\n"))
 }
