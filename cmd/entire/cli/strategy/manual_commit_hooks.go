@@ -1053,6 +1053,8 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 	// the time it runs.
 	condensedTelemetry := newCommitCondensedEmitter(worktreePath, newHead)
 
+	trailerOwned := anySessionOwnsCheckpoint(sessions, checkpointID)
+
 	loopCtx, processSessionsLoop := perf.StartLoop(ctx, "process_sessions")
 	for _, sess := range sessions {
 		if sess.FullyCondensed && sess.Phase == session.PhaseEnded {
@@ -1063,10 +1065,12 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 		var newSkillEvents []agent.SkillEvent
 		var condensedSignal *commitCondensedSignal
 		mutErr := MutateSessionStateOnSaved(iterCtx, sessionID, func(state *SessionState) error {
-			newSkillEvents, condensedSignal = s.postCommitProcessSessionLocked(iterCtx, repo, state, &transitionCtx, checkpointID,
+			var condensed bool
+			newSkillEvents, condensedSignal, condensed = s.postCommitProcessSessionLocked(iterCtx, repo, state, &transitionCtx, checkpointID,
 				head, commit, newHead, worktreePath, headTree, parentTree,
 				committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch, allAgentFiles,
 				sessionsWithCommittedFiles, condensedTelemetry)
+			trailerOwned = trailerOwned || condensed
 			return nil
 		}, func() {
 			EmitSkillInvocationTelemetry(iterCtx, newSkillEvents)
@@ -1080,6 +1084,8 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 		iterSpan.End()
 	}
 	processSessionsLoop.End()
+
+	logUnclaimedCheckpointTrailer(logCtx, checkpointID, sessions, trailerOwned, isRebase)
 
 	if err := s.updateCombinedAttributionForCheckpoint(ctx, repo, checkpointID, headTree, parentTree, worktreePath); err != nil {
 		logging.Warn(logCtx, "failed to update combined checkpoint attribution",
@@ -1115,6 +1121,74 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// anySessionOwnsCheckpoint reports whether any session already recorded cpID as
+// its most recent condensation. Ownership is what makes an Entire-Checkpoint
+// trailer resolvable, and it survives across commits: condenseAndUpdateState
+// stores the ID in LastCheckpointID so a later amend can restore the same
+// trailer. So a session owning cpID means the checkpoint exists, whether it was
+// written by this commit or the one being amended.
+//
+// Read from the pre-loop session snapshot, so it still counts a session that
+// PostCommit's loop skips as fully-condensed and ENDED — an amend whose owning
+// session has since finished.
+func anySessionOwnsCheckpoint(sessions []*SessionState, cpID id.CheckpointID) bool {
+	for _, state := range sessions {
+		if state.LastCheckpointID == cpID {
+			return true
+		}
+	}
+	return false
+}
+
+// logUnclaimedCheckpointTrailer records a commit whose Entire-Checkpoint
+// trailer no session condensed into. The case worth catching is a
+// trailer/condense divergence: PrepareCommitMsg stamped a session it judged
+// eligible and PostCommit then declined to condense it, leaving `entire
+// explain` on that commit resolving to nothing. Both halves individually look
+// like routine skips, so the divergence is invisible without this line.
+//
+// Two cases reach "no session condensed" while the checkpoint exists, and both
+// are excluded here: `claimed` covers amend, seeded from LastCheckpointID by
+// the commit being amended; `isSequenceOp` covers cherry-pick, revert, and
+// rebase replay, where the trailer rides along from a source commit whose
+// session may not exist in this worktree at all.
+//
+// `claimed` must come from postCommitProcessSessionLocked's condensed result,
+// never from its *commitCondensedSignal: newCommitCondensedSignal returns nil
+// for an amend that re-condenses a checkpoint it already reported, so the
+// telemetry signal is absent in exactly the case that must count as claimed.
+//
+// DEBUG, not WARN, because those are not all of them: `git merge --squash` and
+// `git commit -C` copy a trailer out of an existing commit message without
+// being sequencer operations, and PrepareCommitMsg deliberately never stamps a
+// squash (see its source switch), so no local session owns the inherited ID
+// and this cannot tell that from the real bug.
+//
+// Distinguishing those exactly would mean recording, at stamp time, that
+// Entire minted this trailer for this commit. PrepareCommitMsg writes no
+// session state at all today, so that adds a lock-taking write to a read-only
+// hook on the latency-critical path — not worth it for a diagnostic. An
+// authoritative check belongs in `entire doctor`, which can afford to ask the
+// checkpoint store whether the ID resolves.
+func logUnclaimedCheckpointTrailer(logCtx context.Context, checkpointID id.CheckpointID, sessions []*SessionState, claimed, isSequenceOp bool) {
+	if claimed || isSequenceOp {
+		return
+	}
+	phases := make([]string, 0, len(sessions))
+	totalTaskRecords := 0
+	for _, state := range sessions {
+		phases = append(phases, string(state.Phase))
+		totalTaskRecords += len(state.TaskRecords)
+	}
+	logging.Debug(logCtx, "post-commit: no session condensed into the commit's checkpoint trailer",
+		slog.String("strategy", "manual-commit"),
+		slog.String("checkpoint_id", checkpointID.String()),
+		slog.Int("sessions", len(sessions)),
+		slog.Any("session_phases", phases),
+		slog.Int("task_records", totalTaskRecords),
+	)
 }
 
 // updateCombinedAttributionForCheckpoint computes holistic attribution across all sessions.
@@ -1243,6 +1317,14 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 // Pre-resolved git objects (headTree, parentTree) are shared across all sessions;
 // per-session shadow ref/tree are resolved once here and threaded through sub-calls.
 //
+// The third result reports whether this session condensed into checkpointID.
+// It is distinct from the second (the telemetry signal, which is nil for an
+// amend re-condensing an already-reported checkpoint) and cannot be inferred
+// from state afterwards: carry-forward on a partial commit clears
+// LastCheckpointID that condenseAndUpdateState had just set, so the post-loop
+// state of a successful partial condensation is indistinguishable from never
+// having condensed.
+//
 // MUST be called from inside MutateSessionState. Mutations to state are persisted
 // by the caller's outer save — calling this function standalone silently loses
 // every field change (StepCount, FilesTouched, CheckpointTranscriptStart, …).
@@ -1283,7 +1365,7 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	allAgentFiles map[string]struct{},
 	sessionsWithCommittedFiles int,
 	condensedTelemetry *commitCondensedEmitter,
-) (newSkillEvents []agent.SkillEvent, condensedSignal *commitCondensedSignal) {
+) (newSkillEvents []agent.SkillEvent, condensedSignal *commitCondensedSignal, condensed bool) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	reservedCheckpointID := state.PendingCondensationID()
@@ -1293,7 +1375,7 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 			slog.String("reserved_checkpoint_id", reservedCheckpointID.String()),
 			slog.String("commit_checkpoint_id", checkpointID.String()))
 		uncondensedActiveOnBranch[shadowBranchName] = true
-		return newSkillEvents, condensedSignal
+		return newSkillEvents, condensedSignal, false
 	}
 
 	shadowRef, shadowTree := resolveShadowRefAndTree(ctx, repo, shadowBranchName)
@@ -1461,7 +1543,7 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 		uncondensedActiveOnBranch[shadowBranchName] = true
 	}
 
-	return handler.newSkillEvents, handler.condensedSignal
+	return handler.newSkillEvents, handler.condensedSignal, handler.condensed
 }
 
 // condenseAndUpdateState runs condensation for a session and updates state afterward.
@@ -1674,10 +1756,13 @@ func truncateHash(h string) string {
 // filterSessionsWithNewContent returns the sessions this commit may claim a
 // trailer for: those with new content beyond what was already condensed, minus
 // those whose only new content is a task record too stale (or in the wrong
-// phase) for idleWithTaskContent. Such a record still condenses — PostCommit
-// reaches it through sessionHasNewContent, so its transcript-so-far is never
-// stranded — but it must not mint an Entire-Checkpoint the commit's own
-// condensation then declines to write.
+// phase) for idleWithTaskContent. Such a record is not stranded — its
+// transcript-so-far is materialized by the session's final condensation at
+// endSessionNow, and by any later commit that does stamp a trailer — but it
+// must not mint an Entire-Checkpoint the commit's own condensation then
+// declines to write. Note the record is NOT rescued by this commit's own
+// PostCommit: withholding the trailer means PostCommit returns at its
+// no-trailer early exit before reaching any session.
 // Computes the staged files list once and reuses it across all sessions to avoid
 // redundant `git diff --cached` calls (previously called up to 3 times per session).
 func (s *ManualCommitStrategy) filterSessionsWithNewContent(ctx context.Context, repo *git.Repository, sessions []*SessionState) []*SessionState {
