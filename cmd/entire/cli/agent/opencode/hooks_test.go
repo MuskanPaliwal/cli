@@ -434,6 +434,35 @@ await plugin.event!({
     properties: { part: { messageID: "disposed-message", type: "text", text: "stale disposed prompt" } },
   },
 } as any)
+
+const pluginWithoutCurrentSession = await EntirePlugin({ directory: process.cwd() } as any)
+await pluginWithoutCurrentSession.event!({
+  event: {
+    type: "message.updated",
+    properties: { info: { id: "retained-message", role: "user", sessionID: "session-3" } },
+  },
+} as any)
+await pluginWithoutCurrentSession.event!({
+  event: {
+    type: "session.created",
+    properties: { info: { id: "session-4" } },
+  },
+} as any)
+await pluginWithoutCurrentSession.event!({
+  event: {
+    type: "session.deleted",
+    properties: { info: { id: "session-4" } },
+  },
+} as any)
+await pluginWithoutCurrentSession.event!({
+  event: { type: "server.instance.disposed", properties: {} },
+} as any)
+await pluginWithoutCurrentSession.event!({
+  event: {
+    type: "message.part.updated",
+    properties: { part: { messageID: "retained-message", type: "text", text: "stale shutdown prompt" } },
+  },
+} as any)
 `
 	harnessPath := filepath.Join(dir, "harness.ts")
 	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
@@ -490,6 +519,7 @@ await plugin.event!({
 		{Name: "turn-start", Prompt: ""},
 		{Name: "turn-start", Prompt: ""},
 		{Name: "prompt-update", Prompt: "survives session interleaving"},
+		{Name: "turn-start", Prompt: ""},
 		{Name: "turn-start", Prompt: ""},
 	}
 	t.Logf("captured prompt hooks: %+v", calls)

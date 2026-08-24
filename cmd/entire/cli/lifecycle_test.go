@@ -1936,7 +1936,7 @@ func TestDispatchLifecyclePromptUpdate_DoesNotDuplicateTurnEndBackfill(t *testin
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
-	const prompt = "/skill:trigger-analysis inspect the implementation"
+	prompt := "/skill:trigger-analysis " + strings.Repeat("inspect the implementation ", session.MaxLastPromptRunes)
 	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
 	require.NoError(t, os.WriteFile(transcriptPath, []byte(`{"type":"user","message":"test"}`+"\n"), 0o600))
 
@@ -1971,6 +1971,8 @@ func TestDispatchLifecyclePromptUpdate_DoesNotDuplicateTurnEndBackfill(t *testin
 
 	state, err := strategy.LoadSessionState(context.Background(), sessionID)
 	require.NoError(t, err)
+	require.Equal(t, session.TruncatePromptForStorage(prompt), state.LastPrompt)
+	require.NotEqual(t, prompt, state.LastPrompt)
 	require.Len(t, state.SkillEvents, 1)
 	require.Equal(t, "trigger-analysis", state.SkillEvents[0].Skill.Name)
 }

@@ -16,23 +16,36 @@ import (
 )
 
 func appendPromptToFile(ctx context.Context, sessionID, prompt string) error {
+	_, err := appendPrompt(ctx, sessionID, prompt, false)
+	return err
+}
+
+func appendPromptToFileIfLastDiffers(ctx context.Context, sessionID, prompt string) (bool, error) {
+	return appendPrompt(ctx, sessionID, prompt, true)
+}
+
+func appendPrompt(ctx context.Context, sessionID, prompt string, skipDuplicate bool) (bool, error) {
 	if prompt == "" {
-		return nil
+		return false, nil
 	}
 
 	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err := paths.AbsPath(ctx, sessionDir)
 	if err != nil {
-		return fmt.Errorf("resolve session metadata directory: %w", err)
+		return false, fmt.Errorf("resolve session metadata directory: %w", err)
 	}
 	if err := os.MkdirAll(sessionDirAbs, 0o750); err != nil {
-		return fmt.Errorf("create session metadata directory: %w", err)
+		return false, fmt.Errorf("create session metadata directory: %w", err)
 	}
 
 	promptPath := filepath.Join(sessionDirAbs, paths.PromptFileName)
 	existing, err := os.ReadFile(promptPath) //nolint:gosec // session metadata path
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read prompt.txt: %w", err)
+		return false, fmt.Errorf("read prompt.txt: %w", err)
+	}
+	prompts := checkpoint.SplitPromptContent(string(existing))
+	if skipDuplicate && len(prompts) > 0 && prompts[len(prompts)-1] == prompt {
+		return false, nil
 	}
 
 	content := prompt
@@ -40,9 +53,9 @@ func appendPromptToFile(ctx context.Context, sessionID, prompt string) error {
 		content = string(existing) + checkpoint.PromptSeparator + prompt
 	}
 	if err := os.WriteFile(promptPath, []byte(content), 0o600); err != nil { //nolint:gosec // path from internal metadata, not user input
-		return fmt.Errorf("write prompt.txt: %w", err)
+		return false, fmt.Errorf("write prompt.txt: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *agent.Event) error {
@@ -60,20 +73,19 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 	}
 
 	if err := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
-		// OpenCode may deliver prompt text after turn-end has already backfilled it.
-		if state.Phase == session.PhaseIdle && state.LastPrompt == event.Prompt {
-			if appendPromptSkillEventToState(ag, event, state) {
-				return nil
-			}
-			return strategy.ErrMutationSkip
-		}
 		// Condensation clears prompt.txt while holding the same lock. Keep the
 		// repair file and state writes ordered with that operation.
-		if err := appendPromptToFile(ctx, event.SessionID, event.Prompt); err != nil {
+		promptAppended, err := appendPromptToFileIfLastDiffers(ctx, event.SessionID, event.Prompt)
+		if err != nil {
 			return err
 		}
-		state.LastPrompt = session.TruncatePromptForStorage(event.Prompt)
-		appendPromptSkillEventToState(ag, event, state)
+		lastPrompt := session.TruncatePromptForStorage(event.Prompt)
+		lastPromptChanged := state.LastPrompt != lastPrompt
+		state.LastPrompt = lastPrompt
+		skillEventsChanged := appendPromptSkillEventToState(ag, event, state)
+		if !promptAppended && !lastPromptChanged && !skillEventsChanged {
+			return strategy.ErrMutationSkip
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("update prompt storage: %w", err)

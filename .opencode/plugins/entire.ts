@@ -276,13 +276,14 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
             // Fires when OpenCode shuts down (TUI close or `opencode run` exit).
             // session.deleted only fires on explicit user deletion, not on quit,
             // so this is the only reliable way to end sessions on exit.
-            if (!currentSessionID) break
             const sessionID = currentSessionID
             seenUserMessages.clear()
             promptlessTurnStarts.clear()
             messageStore.clear()
             currentSessionID = null
+            currentModel = null
             pendingInjection = null
+            if (!sessionID) break
             // Use sync variant: this is the last event before process exit.
             callHookSync("session-end", {
               session_id: sessionID,
