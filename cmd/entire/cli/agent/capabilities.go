@@ -18,10 +18,10 @@ type CapabilityDeclarer interface {
 //
 // Not every optional interface appears here: built-in-only capabilities that
 // have no external-protocol equivalent (HookFreshness, SidecarImageProvider,
-// TranscriptSanitizer, SubagentSessionResolver, SessionBaseDirProvider,
-// ModelExtractor, SkillEventExtractor) are intentionally excluded — their As*
-// helpers resolve by type assertion alone (see builtinCapability), with no
-// DeclaredCaps gate.
+// TranscriptSanitizer, TranscriptFetcher, SubagentSessionResolver,
+// SessionBaseDirProvider, ModelExtractor, SkillEventExtractor,
+// SessionEndBudgeter) are intentionally excluded — their As* helpers resolve by
+// type assertion alone (see builtinCapability), with no DeclaredCaps gate.
 type DeclaredCaps struct {
 	Hooks                  bool `json:"hooks"`
 	TranscriptAnalyzer     bool `json:"transcript_analyzer"`
@@ -127,6 +127,14 @@ func SanitizeTranscriptForStorage(ag Agent, data []byte) []byte {
 		return data
 	}
 	return sanitized
+}
+
+// AsTranscriptFetcher returns the agent as TranscriptFetcher if it implements
+// the interface. This is an optional capability (materializing a transcript on
+// demand for sessions with no hook-cached file), so it resolves by type
+// assertion alone with no DeclaredCaps gate.
+func AsTranscriptFetcher(ag Agent) (TranscriptFetcher, bool) {
+	return builtinCapability[TranscriptFetcher](ag)
 }
 
 // AsTokenCalculator returns the agent as TokenCalculator if it both

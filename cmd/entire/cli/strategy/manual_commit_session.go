@@ -110,10 +110,11 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		// with LastCheckpointID (needed for checkpoint ID reuse on subsequent commits).
 		// Clean up everything else: stale pre-state-machine sessions (empty phase),
 		// IDLE/ENDED sessions that were never condensed, etc.
+		// Record-bearing sessions hold condensable content off the shadow branch — never orphaned.
 		shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		refName := plumbing.NewBranchReferenceName(shadowBranch)
 		if _, err := repo.Reference(refName, true); err != nil {
-			if !state.Phase.IsActive() && state.LastCheckpointID.IsEmpty() {
+			if !state.Phase.IsActive() && state.LastCheckpointID.IsEmpty() && !state.HasTaskContent() {
 				//nolint:errcheck,gosec // G104: Cleanup is best-effort, shouldn't fail the list operation
 				store.Clear(ctx, state.SessionID)
 				continue
@@ -125,18 +126,38 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 	return states, nil
 }
 
-// isWarnableStaleEndedSession reports whether an ENDED session is still both
-// expensive in PostCommit and actionable via 'entire doctor'.
-func isWarnableStaleEndedSession(repo *git.Repository, state *SessionState) bool {
-	if state.Phase != session.PhaseEnded || state.FullyCondensed || state.StepCount <= 0 {
+// IsCondensableEndedSession reports whether an ENDED session still carries
+// uncondensed content AND can be salvaged by condensing
+// (CondenseSessionByID). Two shapes qualify: checkpoint steps whose shadow
+// branch still exists, and record-bearing sessions (pending subagent task
+// records), whose content never lives on the shadow branch and so needs no
+// branch to condense. ENDED sessions with steps but no shadow branch and no
+// task records are NOT condensable; fixing those means discarding state,
+// which the background sweep never initiates — those sessions are left to
+// `entire doctor` (and the existing orphan cleanup in listAllSessionStates).
+// Used by the PostCommit stale-session warning and the background zombie
+// sweep.
+func IsCondensableEndedSession(repo *git.Repository, state *SessionState) bool {
+	if state.Phase != session.PhaseEnded || state.FullyCondensed ||
+		(state.StepCount <= 0 && !state.HasTaskContent()) {
 		return false
 	}
 
-	// Re-check shadow branch existence even though listAllSessionStates already
-	// filters orphaned sessions. This is intentional: PostCommit deletes shadow
-	// branches during condensation, so a branch that existed at list-load time
-	// may be gone by the time we reach the warning check. Without this re-check
-	// we would warn about sessions that this commit just cleaned up.
+	// Record-bearing sessions qualify without a shadow branch: task records
+	// are stored off-branch, so condensation can materialize them regardless.
+	if state.HasTaskContent() {
+		return true
+	}
+
+	// Check shadow branch existence. For PostCommit this is a re-check —
+	// its list arrives via listAllSessionStates, which already filters
+	// orphaned sessions — and it is intentional even there: condensation
+	// deletes shadow branches, so a branch that existed at list-load time may
+	// be gone by the time the warning re-checks here, and we'd otherwise warn
+	// about a session this commit (or a concurrent condense) just cleaned up.
+	// The background zombie sweep, by contrast, arrives via the raw
+	// ListSessionStates, so for the sweep this is the PRIMARY shadow-branch
+	// check, not a re-check — it is what keeps the sweep condense-only.
 	shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranch)
 	_, err := repo.Reference(refName, true)
@@ -148,7 +169,7 @@ func isWarnableStaleEndedSession(repo *git.Repository, state *SessionState) bool
 func countWarnableStaleEndedSessions(repo *git.Repository, sessions []*SessionState) int {
 	n := 0
 	for _, state := range sessions {
-		if isWarnableStaleEndedSession(repo, state) {
+		if IsCondensableEndedSession(repo, state) {
 			n++
 		}
 	}
@@ -525,7 +546,7 @@ func (s *ManualCommitStrategy) CountOtherActiveSessionsWithCheckpoints(ctx conte
 		// Sessions from different base commits are independent and shouldn't be counted
 		if state.SessionID != currentSessionID &&
 			state.WorktreePath == currentWorktree &&
-			state.StepCount > 0 &&
+			(state.StepCount > 0 || state.HasTaskContent()) &&
 			state.BaseCommit == currentHead {
 			count++
 		}
