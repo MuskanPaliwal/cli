@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"runtime"
 
 	"github.com/entireio/cli/cmd/entire/cli/experimental"
@@ -101,12 +102,6 @@ func NewRootCmd() *cobra.Command {
 			ensureLogger(cmd)
 		},
 		PersistentPostRun: func(cmd *cobra.Command, _ []string) {
-			// Deferred so it runs after the telemetry and version-check calls
-			// below, which log, and so the hidden-command early return still
-			// flushes. main.go closes again for the paths cobra skips this hook
-			// on; Close is idempotent and nil-safe.
-			defer func() { _ = logging.LoggerFromContext(cmd.Context()).Close() }()
-
 			// Skip for hidden commands (walk parent chain — Cobra doesn't propagate Hidden)
 			for c := cmd; c != nil; c = c.Parent() {
 				if c.Hidden {
@@ -201,6 +196,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newSendAnalyticsCmd())
 	cmd.AddCommand(newCurlBashPostInstallCmd())
 	cmd.AddCommand(newRefreshTrailEnablementCmd())
+	cmd.AddCommand(newSweepSessionsCmd())
 
 	// Experimental command (developer-only visibility; setup/tune runners).
 	experimental.Register(cmd, newRunnerCmd()) // 'runner' (experimental)
@@ -238,7 +234,39 @@ func newSendAnalyticsCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			telemetry.SendEvent(args[0])
+			telemetry.SendEvents(args[0])
+		},
+	}
+}
+
+// newSweepSessionsCmd creates the hidden command the session-start hook
+// spawns detached to fix zombie sessions in the background (see
+// runSessionSweep). Not for direct use; `entire doctor` is the interactive
+// surface for the same repairs.
+func newSweepSessionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "__sweep_sessions",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Detached child with discarded stdout/stderr: make sure a file
+			// logger is attached so a failing background sweep (e.g. a zombie
+			// that can't self-heal) is diagnosable in .entire/logs/entire.log
+			// rather than vanishing. Idempotent, and it resolves the worktree
+			// root itself — a child whose worktree was removed between spawn
+			// and exec gets no logger rather than a stray .entire/logs/ in an
+			// arbitrary directory. The root PersistentPostRun closes whichever
+			// logger ends up on the context.
+			ensureLogger(cmd)
+			ctx := cmd.Context()
+			// Log the top-level error too: main.go prints RunE errors to
+			// stderr, which is io.Discard for a detached child — without this
+			// line a sweep that fails before its loop leaves no trace.
+			if err := runSessionSweep(ctx); err != nil {
+				logging.Error(ctx, "session sweep failed", slog.String("error", err.Error()))
+				return err
+			}
+			return nil
 		},
 	}
 }

@@ -161,8 +161,8 @@ Cobra-native aliases (no hint): `sessions` → `session`, `cp`/`checkpoints` →
 `checkpoint`.
 
 Hidden infrastructure commands: `hooks`, `trail`,
-`curl-bash-post-install`, `__send_analytics`, `mcp` (MCP stdio server for
-MCP-host agents).
+`curl-bash-post-install`, `__send_analytics`, `__sweep_sessions`, `mcp` (MCP
+stdio server for MCP-host agents).
 
 Diagnostic subcommands live alongside `doctor.go` as `doctor_logs.go` and
 `doctor_bundle.go`. Group roots and noun-group children live in files

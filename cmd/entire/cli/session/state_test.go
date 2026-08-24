@@ -10,10 +10,32 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestState_CondensationAttemptLifecycle(t *testing.T) {
+	t.Parallel()
+
+	state := &State{}
+	checkpointID := id.MustCheckpointID("111111111111")
+
+	require.True(t, state.PendingCondensationID().IsEmpty())
+	require.False(t, state.NeedsCondensationRecovery())
+
+	state.BeginCondensationAttempt(checkpointID)
+	require.Equal(t, checkpointID, state.PendingCondensationID())
+	require.False(t, state.NeedsCondensationRecovery())
+
+	state.RequireCondensationRecovery()
+	require.True(t, state.NeedsCondensationRecovery())
+
+	state.ClearCondensationAttempt()
+	require.True(t, state.PendingCondensationID().IsEmpty())
+	require.False(t, state.NeedsCondensationRecovery())
+}
 
 func TestState_NormalizeAfterLoad(t *testing.T) {
 	t.Parallel()

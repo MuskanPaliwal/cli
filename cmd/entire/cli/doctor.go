@@ -67,7 +67,10 @@ For each stuck session, you can choose to:
   - Skip: Leave the session as-is
 
 Use --force to condense all fixable sessions without prompting.  Sessions that can't
-be condensed will be discarded.`,
+be condensed will be discarded.
+
+Without a terminal to prompt on (agents, CI), doctor reports each issue and
+points at --force instead of prompting.`,
 		PreRunE: func(cmd *cobra.Command, _ []string) error {
 			// Cobra runs the persistent pre-runs before a command's own PreRunE,
 			// so the root hook has already put an initialized logger in this
@@ -163,11 +166,11 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 	}
 	defer repo.Close()
 
-	// Finalize any ACTIVE session whose agent process has exited (no SessionStop
+	// Finalize any non-ended session whose agent process has exited (no SessionStop
 	// hook fired). A gone process is unambiguous, so these are condensed on the
 	// spot rather than left for the interactive prompt below; the sweep marks
 	// them ended in place so classifySession won't re-flag them.
-	if n := finalizeExitedSessions(ctx, states); n > 0 {
+	if n := finalizeExitedSessions(ctx, states, time.Now().Add(interactiveSweepCondenseBudget)); n > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Finalized %d exited session(s) (agent process gone).\n\n", n)
 	}
 
@@ -195,6 +198,8 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Found %d stuck session(s):\n\n", len(stuck))
 
+	canPrompt := interactive.CanPromptInteractively()
+
 	for _, ss := range stuck {
 		displayStuckSession(cmd, ss)
 
@@ -213,6 +218,21 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Discarded session %s\n\n", ss.State.SessionID)
 				}
 			}
+			continue
+		}
+
+		// Degrade to warn-only when there is nobody to ask, same as
+		// checkGitHooks: an agent or CI run must not crash on a TTY prompt.
+		// Disclose what --force would do to this session, using the same
+		// predicate the force branch above applies.
+		if !canPrompt {
+			if canCondenseStuckSession(ss) {
+				fmt.Fprintln(cmd.OutOrStdout(), "  Fix: condense to permanent storage.")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "  Fix: discard (no condensable checkpoint data).")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "  Run `entire doctor --force` to apply it.")
+			fmt.Fprintln(cmd.OutOrStdout())
 			continue
 		}
 
@@ -493,6 +513,12 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	fmt.Fprintln(w, "  Fix: cherry-pick local checkpoints onto remote tip (preserves all data).")
 
 	if !force {
+		// Degrade to warn-only when there is nobody to ask, same as
+		// checkGitHooks: an agent or CI run must not crash on a TTY prompt.
+		if !interactive.CanPromptInteractively() {
+			fmt.Fprintln(w, "  Run `entire doctor --force` to apply it.")
+			return nil
+		}
 		proceed, promptErr := confirmDoctorFix(ctx, w, "Fix disconnected metadata branches?")
 		if promptErr != nil {
 			return promptErr
@@ -511,13 +537,21 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 }
 
 // confirmDoctorFix prompts to apply a doctor fix. Declining (which prints
-// "-> Skipped"), aborting (Ctrl+C), and context cancellation all return false
-// with no error.
+// "-> Skipped"), aborting (Ctrl+C), context cancellation, and a
+// non-interactive environment all return false with no error. Callers that
+// want to hint at `--force` for the non-interactive case should check
+// interactive.CanPromptInteractively themselves before calling; the guard
+// here is the safety net so no future call site can crash on a TTY prompt.
 func confirmDoctorFix(ctx context.Context, w io.Writer, title string) (bool, error) {
 	// huh opens the TTY during form startup regardless of context state, so
 	// guard explicitly to honor an already-cancelled command context.
 	if ctx.Err() != nil {
 		return false, nil //nolint:nilerr // cancelled context is a clean skip, not an error
+	}
+	// Never open the TTY prompt when there is nobody to ask (agents, CI):
+	// decline silently instead of crashing with "could not open TTY".
+	if !interactive.CanPromptInteractively() {
+		return false, nil
 	}
 	var confirmed bool
 	form := NewAccessibleForm(

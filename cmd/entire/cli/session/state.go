@@ -96,6 +96,14 @@ func (k Kind) IsImported() bool {
 	return k == KindImported
 }
 
+// CondensationAttempt records the durable intent for an in-progress
+// condensation. RecoveryPending is set only when doctor must first look for a
+// checkpoint written before attempt IDs existed.
+type CondensationAttempt struct {
+	CheckpointID    id.CheckpointID `json:"checkpoint_id"`
+	RecoveryPending bool            `json:"recovery_pending,omitempty"`
+}
+
 // State represents the state of an active session.
 // This is stored in .git/entire-sessions/<session-id>.json
 type State struct {
@@ -238,6 +246,10 @@ type State struct {
 	// Used to restore the Entire-Checkpoint trailer on amend and to identify
 	// sessions that have been condensed at least once. Cleared on new prompt.
 	LastCheckpointID id.CheckpointID `json:"last_checkpoint_id,omitempty"`
+
+	// CondensationAttempt is saved before a persistent checkpoint write so a
+	// retry after process death keeps both the intended ID and recovery mode.
+	CondensationAttempt *CondensationAttempt `json:"condensation_attempt,omitempty"`
 
 	// LastCheckpointCommitHash is the exact commit SHA that carried
 	// LastCheckpointID at condensation time. Used by the reconcile path to
@@ -619,6 +631,39 @@ func (s *State) NormalizeAfterLoad(ctx context.Context) {
 func (s *State) ClearLegacyTranscriptOffsets() {
 	s.CondensedTranscriptLines = 0
 	s.TranscriptLinesAtStart = 0
+}
+
+// PendingCondensationID returns the checkpoint ID reserved for an in-progress
+// condensation, or the empty ID when no attempt is pending.
+func (s *State) PendingCondensationID() id.CheckpointID {
+	if s.CondensationAttempt == nil {
+		return id.EmptyCheckpointID
+	}
+	return s.CondensationAttempt.CheckpointID
+}
+
+// BeginCondensationAttempt records a checkpoint ID before its persistent write.
+func (s *State) BeginCondensationAttempt(checkpointID id.CheckpointID) {
+	s.CondensationAttempt = &CondensationAttempt{CheckpointID: checkpointID}
+}
+
+// RequireCondensationRecovery keeps legacy orphan reconciliation enabled for
+// the current attempt. It has no effect when no attempt is pending.
+func (s *State) RequireCondensationRecovery() {
+	if s.CondensationAttempt != nil {
+		s.CondensationAttempt.RecoveryPending = true
+	}
+}
+
+// NeedsCondensationRecovery reports whether doctor must reconcile a checkpoint
+// written before attempt IDs existed.
+func (s *State) NeedsCondensationRecovery() bool {
+	return s.CondensationAttempt != nil && s.CondensationAttempt.RecoveryPending
+}
+
+// ClearCondensationAttempt completes or abandons the pending condensation.
+func (s *State) ClearCondensationAttempt() {
+	s.CondensationAttempt = nil
 }
 
 // RebaselineSubagentTokens snapshots the current cumulative subagent total

@@ -113,6 +113,8 @@ func (s *Store) Write(_ context.Context, req cp.WriteRequest) error {
 	switch r := req.(type) {
 	case cp.Session:
 		return s.writeSession(cp.WriteOptions(r))
+	case cp.ReservedSession:
+		return s.writeSession(cp.WriteOptions(r))
 	case cp.SessionTranscript:
 		return s.backfillTranscript(cp.UpdateOptions(r))
 	case cp.SessionSummary:
