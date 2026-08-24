@@ -250,7 +250,9 @@ func prepareTaskTranscriptForStorage(
 		return redact.RedactedBytes{}, nil, true, nil
 	}
 	externalized, assets := externalizeSessionImages(ctx, logCtx, state, sanitized)
-	redacted, _, err = redactSessionTranscript(logCtx, externalized)
+	// nil repo declines prefix reuse: a subagent transcript is written once per
+	// task, not appended across checkpoints, so there is nothing to reuse.
+	redacted, _, err = redactSessionTranscript(logCtx, nil, "", externalized)
 	if err != nil {
 		return redact.RedactedBytes{}, nil, false, err
 	}
@@ -577,7 +579,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// externalized, redacted copy is stored.
 	externalizedTranscript, extractedAssets, transcriptSizeBaseline := prepareTranscriptForStorage(ctx, logCtx, ag, state, sessionData.Transcript)
 
-	redactedTranscript, redactDuration := redactOrDrop(logCtx, externalizedTranscript, state.SessionID, checkpointID)
+	redactedTranscript, redactDuration := redactOrDrop(logCtx, repo, state.SessionID, externalizedTranscript, checkpointID)
 	if skipped := skipIfPostRedactionEmpty(logCtx, redactedTranscript, sessionData, state, checkpointID); skipped != nil {
 		return skipped, nil
 	}
@@ -760,8 +762,8 @@ func buildCondensationWriteOptions(
 // redactOrDrop runs redactSessionTranscript and, on failure, logs a warning
 // and returns empty bytes. Drop-on-failure is the long-standing contract here:
 // hooks have no retry path, and a failed redaction must not block the commit.
-func redactOrDrop(logCtx context.Context, transcript []byte, sessionID string, checkpointID id.CheckpointID) (redact.RedactedBytes, time.Duration) {
-	redactedTranscript, redactDuration, err := redactSessionTranscript(logCtx, transcript)
+func redactOrDrop(logCtx context.Context, repo *git.Repository, sessionID string, transcript []byte, checkpointID id.CheckpointID) (redact.RedactedBytes, time.Duration) {
+	redactedTranscript, redactDuration, err := redactSessionTranscript(logCtx, repo, sessionID, transcript)
 	if err != nil {
 		logging.Warn(logCtx, "failed to redact transcript secrets, dropping transcript for checkpoint",
 			slog.String("session_id", sessionID),
@@ -828,7 +830,17 @@ func newSkippedResult(checkpointID id.CheckpointID, sessionID string) *CondenseR
 // package and the checkpoint stores. Returns the redacted bytes and the duration
 // of the redaction operation for perf logging. Also the redaction step
 // prepareTaskTranscriptForStorage reuses for a subagent's own transcript.
-func redactSessionTranscript(ctx context.Context, transcript []byte) (redact.RedactedBytes, time.Duration, error) {
+//
+// A non-nil repo with a sessionID opts into prefix reuse (see
+// checkpoint/redact_cache.go); a nil repo or empty sessionID redacts the whole
+// content, which is what the per-subagent caller wants -- a task transcript is
+// not the append-only stream the cache assumes.
+func redactSessionTranscript(
+	ctx context.Context,
+	repo *git.Repository,
+	sessionID string,
+	transcript []byte,
+) (redact.RedactedBytes, time.Duration, error) {
 	start := time.Now()
 	_, span := perf.Start(ctx, "redact_transcript")
 	defer span.End()
@@ -837,7 +849,7 @@ func redactSessionTranscript(ctx context.Context, transcript []byte) (redact.Red
 		return redact.RedactedBytes{}, time.Since(start), nil
 	}
 
-	redacted, err := redactSessionJSONLBytes(ctx, transcript)
+	redacted, err := cpkg.RedactTranscriptCached(ctx, repo, sessionID, transcript, redactSessionJSONLBytes)
 	if err != nil {
 		span.RecordError(err)
 		return redact.RedactedBytes{}, time.Since(start), fmt.Errorf("failed to redact transcript secrets: %w", err)
