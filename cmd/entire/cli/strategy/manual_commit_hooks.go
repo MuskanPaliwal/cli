@@ -1315,12 +1315,13 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	}
 	transitionAndCondenseSpan.End()
 
-	// Record checkpoint ID for ACTIVE sessions so HandleTurnEnd can finalize
-	// with full transcript. IDLE/ENDED sessions already have complete transcripts.
+	// Record checkpoint IDs while a turn is active or its turn-end can still
+	// repeat. A blocking Claude Stop hook can resume work after the first Stop, so
+	// an IDLE phase alone does not prove its transcript is complete.
 	// NOTE: This check runs AFTER TransitionAndLog updated the phase. It relies on
 	// ACTIVE + GitCommit → ACTIVE (phase stays ACTIVE). If that state machine
 	// transition ever changed, this guard would silently stop recording IDs.
-	if handler.condensed && state.Phase.IsActive() {
+	if handler.condensed && shouldTrackTurnCheckpoint(state) {
 		state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID.String())
 	}
 
@@ -1394,6 +1395,10 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	}
 
 	return handler.newSkillEvents
+}
+
+func shouldTrackTurnCheckpoint(state *SessionState) bool {
+	return state.Phase.IsActive() || state.TurnEndPending
 }
 
 // condenseAndUpdateState runs condensation for a session and updates state afterward.
@@ -2410,6 +2415,8 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 
 		state.LastCheckpointID = ""
 		state.TurnCheckpointIDs = nil
+		state.TurnEndPending = false
+		state.TurnEndRefreshFailed = false
 		return nil
 	})
 	if turnStartErr == nil {
@@ -2752,6 +2759,9 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	// The provisional transcript from PostCommit is already persisted, so the
 	// checkpoint isn't lost - it just won't have the complete transcript.
 	errCount := s.finalizeAllTurnCheckpoints(ctx, state, capturedTranscript)
+	if state.TurnEndPending {
+		state.TurnEndRefreshFailed = errCount > 0
+	}
 	if errCount > 0 {
 		logCtx := logging.WithComponent(ctx, "checkpoint")
 		logging.Warn(logCtx, "HandleTurnEnd completed with errors (best-effort)",
@@ -2796,6 +2806,12 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	}
 
 	return nil
+}
+
+func clearFinalizedTurnCheckpointIDs(state *SessionState) {
+	if !state.TurnEndPending {
+		state.TurnCheckpointIDs = nil
+	}
 }
 
 // precomputeTranscriptBlobsForFinalize chunks + zlib-compresses the redacted
@@ -2888,8 +2904,9 @@ func redactFinalizedTranscript(
 // created during this turn with the full session transcript.
 //
 // This is called at turn end (stop hook). During the turn, PostCommit wrote whatever
-// transcript was available at commit time. Now we have the complete transcript and
-// replace it so every checkpoint has the full prompt-to-stop context.
+// transcript was available at commit time. A repeatable turn end refreshes the
+// same checkpoints on every Stop and retains their IDs until the next prompt or
+// session end seals the turn.
 //
 // Returns the number of errors encountered (best-effort: continues processing on error).
 func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, state *SessionState, capturedTranscript *agent.TranscriptSnapshot) int {
@@ -2917,7 +2934,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			slog.String("transcript_path", state.TranscriptPath),
 			slog.Any("error", err),
 		)
-		state.TurnCheckpointIDs = nil
+		clearFinalizedTurnCheckpointIDs(state)
 		return 1 // Count as error - all checkpoints will be skipped
 	}
 
@@ -2927,19 +2944,19 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		logging.Warn(logCtx, "finalize: failed to open repository",
 			slog.String("error", err.Error()),
 		)
-		state.TurnCheckpointIDs = nil
+		clearFinalizedTurnCheckpointIDs(state)
 		return 1 // Count as error - all checkpoints will be skipped
 	}
 	defer repo.Close()
 	policy, err := readLocalCheckpointPolicy(logCtx, repo)
 	if err != nil {
 		warnOrLogCheckpointPolicyReadFailure(logCtx, err)
-		state.TurnCheckpointIDs = nil
+		clearFinalizedTurnCheckpointIDs(state)
 		return 1
 	}
 	if !checkpointpolicy.CanSatisfyPolicy(policy) {
 		warnIfCheckpointPolicyNeedsUpgrade(logCtx, policy)
-		state.TurnCheckpointIDs = nil
+		clearFinalizedTurnCheckpointIDs(state)
 		return 1
 	}
 
@@ -3077,12 +3094,13 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		)
 	}
 
-	// Clear turn checkpoint IDs. Do NOT update CheckpointTranscriptStart here — it was
+	// Clear turn checkpoint IDs unless another Stop can extend this turn. Do NOT
+	// update CheckpointTranscriptStart here — it was
 	// already set correctly by PostCommit: condenseAndUpdateState sets it to the total
 	// transcript lines when condensing, and carryForwardToNewShadowBranch resets it to 0
 	// when carry-forward is active. Overwriting here would break carry-forward by making
 	// sessionHasNewContent think the transcript is fully consumed (no growth).
-	state.TurnCheckpointIDs = nil
+	clearFinalizedTurnCheckpointIDs(state)
 
 	return errCount
 }

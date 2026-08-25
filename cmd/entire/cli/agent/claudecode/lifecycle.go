@@ -19,6 +19,8 @@ import (
 var (
 	_ agent.TranscriptAnalyzer     = (*ClaudeCodeAgent)(nil)
 	_ agent.TranscriptCapturer     = (*ClaudeCodeAgent)(nil)
+	_ agent.TranscriptTurnAnalyzer = (*ClaudeCodeAgent)(nil)
+	_ agent.RepeatableTurnEnd      = (*ClaudeCodeAgent)(nil)
 	_ agent.TranscriptPreparer     = (*ClaudeCodeAgent)(nil)
 	_ agent.TokenCalculator        = (*ClaudeCodeAgent)(nil)
 	_ agent.ModelExtractor         = (*ClaudeCodeAgent)(nil)
@@ -27,6 +29,11 @@ var (
 	_ agent.HookResponseWriter     = (*ClaudeCodeAgent)(nil)
 	_ agent.ContextInjector        = (*ClaudeCodeAgent)(nil)
 )
+
+// TurnEndMayRepeat reports Claude Code's Stop-hook continuation contract: a
+// blocking Stop hook can make Claude continue and later emit another Stop
+// without another UserPromptSubmit event.
+func (c *ClaudeCodeAgent) TurnEndMayRepeat() bool { return true }
 
 // WriteHookResponse outputs a JSON hook response to stdout.
 // Claude Code reads this JSON and displays the systemMessage to the user.
@@ -181,6 +188,7 @@ func (c *ClaudeCodeAgent) parseSessionInfoEvent(stdin io.Reader, eventType agent
 	if eventType == agent.TurnEnd {
 		event.FinalResponse = raw.LastAssistantMessage.value
 		event.FinalResponsePresent = raw.LastAssistantMessage.present
+		event.StopHookActive = raw.StopHookActive
 	}
 	return event, nil
 }

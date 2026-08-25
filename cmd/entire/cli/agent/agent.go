@@ -256,6 +256,30 @@ type TranscriptCapturer interface {
 	CaptureTranscript(ctx context.Context, request TranscriptCaptureRequest) (TranscriptSnapshot, error)
 }
 
+// TranscriptAnalysis contains the current turn metadata derived from one
+// transcript parse.
+type TranscriptAnalysis struct {
+	ModifiedFiles []string
+	TokenUsage    *TokenUsage
+}
+
+// TranscriptTurnAnalyzer derives all transcript-backed turn metadata in one
+// pass so lifecycle does not parse the same snapshot once per consumer.
+type TranscriptTurnAnalyzer interface {
+	Agent
+
+	AnalyzeTranscriptTurn(transcriptData []byte, startPosition int, subagentsDir string) (*TranscriptAnalysis, error)
+}
+
+// RepeatableTurnEnd is implemented by agents whose turn-end hook can cause the
+// same assistant turn to continue and emit another turn-end event without a new
+// user-prompt event.
+type RepeatableTurnEnd interface {
+	Agent
+
+	TurnEndMayRepeat() bool
+}
+
 // TranscriptFetcher is implemented by agents that can materialize a session
 // transcript on demand (e.g. OpenCode via `opencode export`), including for
 // sessions Entire never tracked — where no hook-cached transcript file exists

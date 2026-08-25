@@ -789,12 +789,14 @@ type mockCapturerAgent struct {
 	captureCalled bool
 	readCalled    bool
 	afterCapture  func()
+	requests      []agent.TranscriptCaptureRequest
 }
 
 var _ agent.TranscriptCapturer = (*mockCapturerAgent)(nil)
 
-func (m *mockCapturerAgent) CaptureTranscript(_ context.Context, _ agent.TranscriptCaptureRequest) (agent.TranscriptSnapshot, error) {
+func (m *mockCapturerAgent) CaptureTranscript(_ context.Context, request agent.TranscriptCaptureRequest) (agent.TranscriptSnapshot, error) {
 	m.captureCalled = true
+	m.requests = append(m.requests, request)
 	if m.captureErr != nil {
 		return agent.TranscriptSnapshot{}, m.captureErr
 	}
@@ -802,6 +804,27 @@ func (m *mockCapturerAgent) CaptureTranscript(_ context.Context, _ agent.Transcr
 		m.afterCapture()
 	}
 	return m.snapshot, nil
+}
+
+type mockRepeatableCapturerAgent struct {
+	*mockCapturerAgent
+
+	position int
+}
+
+var (
+	_ agent.RepeatableTurnEnd  = (*mockRepeatableCapturerAgent)(nil)
+	_ agent.TranscriptAnalyzer = (*mockRepeatableCapturerAgent)(nil)
+)
+
+func (m *mockRepeatableCapturerAgent) TurnEndMayRepeat() bool { return true }
+
+func (m *mockRepeatableCapturerAgent) GetTranscriptPosition(string) (int, error) {
+	return m.position, nil
+}
+
+func (m *mockRepeatableCapturerAgent) ExtractModifiedFilesFromOffset(string, int) ([]string, int, error) {
+	return nil, m.position, nil
 }
 
 func (m *mockCapturerAgent) ReadTranscript(_ string) ([]byte, error) {
@@ -1061,6 +1084,85 @@ func TestHandleLifecycleTurnEnd_ModernCaptureRejectsUnmeasuredTurnStartPosition(
 	require.ErrorIs(t, err, agent.ErrTranscriptNotReady)
 	require.False(t, capturer.captureCalled)
 	require.False(t, capturer.readCalled)
+}
+
+func TestHandleLifecycleTurnEnd_RepeatableStopsReuseTurnBoundary(t *testing.T) {
+	// Cannot use t.Parallel because repository resolution depends on t.Chdir.
+	workDir := t.TempDir()
+	testutil.InitRepo(t, workDir)
+	testutil.WriteFile(t, workDir, "README.md", "initial\n")
+	testutil.GitAdd(t, workDir, "README.md")
+	testutil.GitCommit(t, workDir, "initial")
+	t.Chdir(workDir)
+	paths.ClearWorktreeRootCache()
+
+	sessionID := "repeatable-stop-boundary"
+	transcriptPath := filepath.Join(t.TempDir(), "transcript.jsonl")
+	first := []byte(`{"type":"assistant","message":{"content":"First."}}` + "\n")
+	require.NoError(t, os.WriteFile(transcriptPath, first, 0o600))
+
+	ag := &mockRepeatableCapturerAgent{
+		mockCapturerAgent: &mockCapturerAgent{
+			mockLifecycleAgent: *newMockAgent(),
+			snapshot: agent.TranscriptSnapshot{
+				Data:     first,
+				Position: 1,
+			},
+		},
+	}
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, &agent.Event{
+		Type:       agent.TurnStart,
+		SessionID:  sessionID,
+		SessionRef: transcriptPath,
+		Prompt:     "start",
+	}))
+
+	firstResponse := "First."
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, &agent.Event{
+		Type:          agent.TurnEnd,
+		SessionID:     sessionID,
+		SessionRef:    transcriptPath,
+		FinalResponse: &firstResponse,
+	}))
+
+	second := append([]byte(nil), first...)
+	second = append(second, []byte(`{"type":"assistant","message":{"content":"Second."}}`+"\n")...)
+	require.NoError(t, os.WriteFile(transcriptPath, second, 0o600))
+	ag.snapshot = agent.TranscriptSnapshot{Data: second, Position: 2}
+	secondResponse := "Second."
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, &agent.Event{
+		Type:           agent.TurnEnd,
+		SessionID:      sessionID,
+		SessionRef:     transcriptPath,
+		FinalResponse:  &secondResponse,
+		StopHookActive: true,
+	}))
+
+	require.Len(t, ag.requests, 2)
+	require.Zero(t, ag.requests[0].StartPosition)
+	require.Zero(t, ag.requests[1].StartPosition)
+	preState, err := LoadPrePromptState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, preState)
+
+	state, err := strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.True(t, state.TurnEndPending)
+	require.Equal(t, session.PhaseIdle, state.Phase)
+
+	ag.position = 2
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, &agent.Event{
+		Type:       agent.TurnStart,
+		SessionID:  sessionID,
+		SessionRef: transcriptPath,
+		Prompt:     "next",
+	}))
+	preState, err = LoadPrePromptState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, 2, preState.TranscriptOffset)
+	state, err = strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.False(t, state.TurnEndPending)
 }
 
 func TestHandleLifecycleTurnStart_InvalidatesPreviousBoundaryBeforeCapture(t *testing.T) {
@@ -1566,6 +1668,35 @@ func TestHandleLifecycleSessionEnd_EmptySessionID(t *testing.T) {
 	err := handleLifecycleSessionEnd(context.Background(), ag, event)
 	if err != nil {
 		t.Errorf("expected no error for empty session ID on SessionEnd, got: %v", err)
+	}
+}
+
+func TestSealPendingTurnAtSessionEnd(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		refreshFailed bool
+		wantIDs       []string
+	}{
+		"successful refresh releases recovery IDs": {},
+		"failed refresh preserves recovery IDs": {
+			refreshFailed: true,
+			wantIDs:       []string{"checkpoint"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := &strategy.SessionState{
+				TurnEndPending:       true,
+				TurnEndRefreshFailed: tt.refreshFailed,
+				TurnCheckpointIDs:    []string{"checkpoint"},
+			}
+			sealPendingTurnAtSessionEnd(state)
+			require.False(t, state.TurnEndPending)
+			require.Equal(t, tt.wantIDs, state.TurnCheckpointIDs)
+		})
 	}
 }
 

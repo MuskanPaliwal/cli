@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -30,6 +29,8 @@ const (
 	defaultStaleThreshold         = 2 * time.Minute
 	assistantContentBlockTypeText = "text"
 )
+
+var assistantRecordMarker = []byte(envelopeTypeAssistant)
 
 func defaultCaptureConfig() captureConfig {
 	return captureConfig{
@@ -79,6 +80,9 @@ func (c *ClaudeCodeAgent) captureTranscript(
 
 	ticker := time.NewTicker(config.pollInterval)
 	defer ticker.Stop()
+	immediate := make(chan time.Time, 1)
+	immediate <- time.Now()
+	poll := (<-chan time.Time)(immediate)
 	readTranscript := config.readTranscript
 	if readTranscript == nil {
 		readTranscript = readObservedTranscript
@@ -92,7 +96,8 @@ func (c *ClaudeCodeAgent) captureTranscript(
 		select {
 		case <-captureCtx.Done():
 			return agent.TranscriptSnapshot{}, captureWaitError(ctx, config.maxWait)
-		case <-ticker.C:
+		case <-poll:
+			poll = ticker.C
 			current, statErr := fingerprintTranscript(request.SessionRef)
 			if statErr != nil {
 				stableObservations = 0
@@ -236,52 +241,58 @@ func readObservedTranscript(ctx context.Context, path string, observed transcrip
 }
 
 func validateTranscriptSnapshot(ctx context.Context, data []byte, startPosition int, reconstructAssistant bool) (int, string, error) {
-	reader := bufio.NewReader(bytes.NewReader(data))
 	position := 0
 	latestAssistant := ""
 	var finalRecord []byte
-
-	for {
+	remaining := data
+	for len(remaining) > 0 {
 		if err := ctx.Err(); err != nil {
 			return 0, "", fmt.Errorf("validate transcript canceled: %w", err)
 		}
-		line, readErr := reader.ReadBytes('\n')
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return 0, "", fmt.Errorf("read transcript record: %w", readErr)
+		line := remaining
+		if newline := bytes.IndexByte(remaining, '\n'); newline >= 0 {
+			line = remaining[:newline]
+			remaining = remaining[newline+1:]
+		} else {
+			remaining = nil
 		}
-		if len(line) > 0 {
-			linePosition := position
-			position++
-			trimmed := bytes.TrimSpace(line)
-			if len(trimmed) > 0 {
-				finalRecord = trimmed
-				if reconstructAssistant && linePosition >= startPosition {
-					var envelope struct {
-						Type    string          `json:"type"`
-						Message json.RawMessage `json:"message"`
-					}
-					if err := json.Unmarshal(trimmed, &envelope); err != nil {
-						return 0, "", fmt.Errorf("parse transcript record: %w", err)
-					}
-					if envelope.Type == envelopeTypeAssistant {
-						if text := assistantText(envelope.Message); strings.TrimSpace(text) != "" {
-							latestAssistant = text
-						}
+
+		linePosition := position
+		position++
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		finalRecord = trimmed
+		if reconstructAssistant && linePosition >= startPosition {
+			if !json.Valid(trimmed) {
+				return 0, "", errors.New("parse transcript record: invalid JSON")
+			}
+			// Claude's transcript is producer-owned compact JSONL. Most records are
+			// user/tool metadata; avoid allocating an envelope for records that cannot
+			// contain the assistant type value.
+			if bytes.Contains(trimmed, assistantRecordMarker) {
+				var envelope struct {
+					Type    string          `json:"type"`
+					Message json.RawMessage `json:"message"`
+				}
+				if err := json.Unmarshal(trimmed, &envelope); err != nil {
+					return 0, "", fmt.Errorf("parse transcript record: %w", err)
+				}
+				if envelope.Type == envelopeTypeAssistant {
+					if text := assistantText(envelope.Message); strings.TrimSpace(text) != "" {
+						latestAssistant = text
 					}
 				}
 			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
 		}
 	}
 
 	if len(finalRecord) == 0 {
 		return 0, "", errors.New("transcript has no JSONL records")
 	}
-	var finalValue any
-	if err := json.Unmarshal(finalRecord, &finalValue); err != nil {
-		return 0, "", fmt.Errorf("parse final transcript record: %w", err)
+	if !json.Valid(finalRecord) {
+		return 0, "", errors.New("parse final transcript record: invalid JSON")
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, "", fmt.Errorf("validate transcript canceled: %w", err)

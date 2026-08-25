@@ -710,6 +710,10 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	if sessionID == "" {
 		sessionID = unknownSessionID
 	}
+	repeatableTurnEnd := false
+	if repeatable, ok := agent.AsRepeatableTurnEnd(ag); ok {
+		repeatableTurnEnd = repeatable.TurnEndMayRepeat()
+	}
 
 	// Fill model from hint file if the agent didn't provide it on this hook
 	if event.Model == "" && sessionID != unknownSessionID {
@@ -898,8 +902,18 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 
 	// Extract metadata via agent interface (modified files)
 	var modifiedFiles []string
+	var analyzedTokenUsage *agent.TokenUsage
 
-	if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
+	if turnAnalyzer, ok := agent.AsTranscriptTurnAnalyzer(ag); ok && capturedTranscript != nil {
+		analysis, analysisErr := turnAnalyzer.AnalyzeTranscriptTurn(transcriptData, transcriptOffset, subagentsDir)
+		if analysisErr != nil {
+			logging.Warn(logCtx, "failed to analyze captured transcript",
+				slog.String("error", analysisErr.Error()))
+		} else {
+			modifiedFiles = analysis.ModifiedFiles
+			analyzedTokenUsage = analysis.TokenUsage
+		}
+	} else if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
 		// Extract modified files - prefer SubagentAwareExtractor if available to include subagent files
 		if subagentExtractor, subOk := agent.AsSubagentAwareExtractor(ag); subOk {
 			if files, fileErr := subagentExtractor.ExtractAllModifiedFiles(transcriptData, transcriptOffset, subagentsDir); fileErr != nil {
@@ -1013,10 +1027,12 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	if totalChanges == 0 {
 		logging.Info(logCtx, "no files modified during session, skipping checkpoint")
 		recordCaptureDegraded(ctx, sessionID, captureDegraded)
-		transitionSessionTurnEnd(ctx, sessionID, event, capturedTranscript)
-		if cleanupErr := CleanupPrePromptState(ctx, sessionID); cleanupErr != nil {
-			logging.Warn(logCtx, "failed to cleanup pre-prompt state",
-				slog.String("error", cleanupErr.Error()))
+		transitionSessionTurnEnd(ctx, sessionID, event, capturedTranscript, repeatableTurnEnd)
+		if !repeatableTurnEnd {
+			if cleanupErr := CleanupPrePromptState(ctx, sessionID); cleanupErr != nil {
+				logging.Warn(logCtx, "failed to cleanup pre-prompt state",
+					slog.String("error", cleanupErr.Error()))
+			}
 		}
 		return nil
 	}
@@ -1067,7 +1083,10 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// to include subagent tokens.
 	tokenUsage := event.TokenUsage
 	if tokenUsage == nil {
-		tokenUsage = agent.CalculateTokenUsage(ctx, ag, transcriptData, transcriptLinesAtStart, subagentsDir)
+		tokenUsage = analyzedTokenUsage
+		if tokenUsage == nil {
+			tokenUsage = agent.CalculateTokenUsage(ctx, ag, transcriptData, transcriptLinesAtStart, subagentsDir)
+		}
 	}
 
 	// Persist the producer path as the session reference for future turns. This
@@ -1110,10 +1129,12 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 			}
 		}
 		recordCaptureDegraded(ctx, sessionID, degraded)
-		transitionSessionTurnEnd(ctx, sessionID, event, capturedTranscript)
-		if cleanupErr := CleanupPrePromptState(ctx, sessionID); cleanupErr != nil {
-			logging.Warn(logCtx, "failed to cleanup pre-prompt state",
-				slog.String("error", cleanupErr.Error()))
+		transitionSessionTurnEnd(ctx, sessionID, event, capturedTranscript, repeatableTurnEnd)
+		if !repeatableTurnEnd {
+			if cleanupErr := CleanupPrePromptState(ctx, sessionID); cleanupErr != nil {
+				logging.Warn(logCtx, "failed to cleanup pre-prompt state",
+					slog.String("error", cleanupErr.Error()))
+			}
 		}
 	}
 
@@ -1198,6 +1219,12 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	if _, err := endSessionNow(ctx, event, event.SessionID, nil, sessionEndCondenseDeadline(ag), endedNow); err != nil {
 		logging.Warn(logCtx, "failed to mark session ended",
 			slog.String("error", err.Error()))
+	}
+	if repeatable, ok := agent.AsRepeatableTurnEnd(ag); ok && repeatable.TurnEndMayRepeat() {
+		if cleanupErr := CleanupPrePromptState(ctx, event.SessionID); cleanupErr != nil {
+			logging.Warn(logCtx, "failed to cleanup repeatable turn boundary at session end",
+				slog.String("error", cleanupErr.Error()))
+		}
 	}
 
 	return nil
@@ -1926,7 +1953,7 @@ func saveSubagentSessionTaskStep(ctx context.Context, step subagentSessionStep) 
 
 	// Retire the subagent's own session the same way an ordinary turn-end does,
 	// so its phase and pre-prompt state do not linger as an active session.
-	transitionSessionTurnEnd(ctx, step.sessionID, step.event, nil)
+	transitionSessionTurnEnd(ctx, step.sessionID, step.event, nil, false)
 	if cleanupErr := CleanupPrePromptState(ctx, step.sessionID); cleanupErr != nil {
 		logging.Warn(logCtx, "failed to cleanup pre-prompt state",
 			slog.String("error", cleanupErr.Error()))
@@ -1988,11 +2015,12 @@ func recordCaptureDegraded(ctx context.Context, sessionID string, degraded bool)
 // transitionSessionTurnEnd transitions the session phase to IDLE and dispatches turn-end actions.
 // Passing the capture explicitly prevents finalization and position advancement
 // for this Stop from falling back to SessionState.TranscriptPath.
-func transitionSessionTurnEnd(ctx context.Context, sessionID string, event *agent.Event, capturedTranscript *agent.TranscriptSnapshot) {
+func transitionSessionTurnEnd(ctx context.Context, sessionID string, event *agent.Event, capturedTranscript *agent.TranscriptSnapshot, repeatable bool) {
 	logCtx := logging.WithComponent(ctx, "lifecycle")
 	var appendedSkillEvents []agent.SkillEvent
 	stateSaved, mutErr := strategy.MutateSessionStateSaved(ctx, sessionID, func(state *strategy.SessionState) error {
 		appendedSkillEvents = persistEventMetadataToState(event, state)
+		state.TurnEndPending = repeatable
 		if err := strategy.TransitionAndLog(ctx, state, session.EventTurnEnd, session.TransitionContext{}, session.NoOpActionHandler{}); err != nil {
 			logging.Warn(logCtx, "turn-end transition failed",
 				slog.String("error", err.Error()))
@@ -2092,6 +2120,7 @@ func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string,
 				slog.String("error", transErr.Error()))
 		}
 		state.EndedAt = &endedAt
+		sealPendingTurnAtSessionEnd(state)
 		if prepareErr := strategy.PrepareSessionEndCondensation(ctx, state); prepareErr != nil {
 			logging.Warn(logging.WithComponent(ctx, "lifecycle"), "failed to prepare session-end condensation",
 				slog.String("session_id", sessionID),
@@ -2110,6 +2139,13 @@ func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string,
 		strategy.EmitSkillInvocationTelemetry(ctx, appendedSkillEvents)
 	}
 	return ended, nil
+}
+
+func sealPendingTurnAtSessionEnd(state *strategy.SessionState) {
+	if state.TurnEndPending && !state.TurnEndRefreshFailed {
+		state.TurnCheckpointIDs = nil
+	}
+	state.TurnEndPending = false
 }
 
 // logFileChanges logs the files modified, created, and deleted during a session.

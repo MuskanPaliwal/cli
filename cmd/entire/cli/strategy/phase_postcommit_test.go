@@ -1280,6 +1280,34 @@ func TestPostCommit_IdleSession_DoesNotRecordTurnCheckpointIDs(t *testing.T) {
 		"TurnCheckpointIDs should not be populated for IDLE sessions")
 }
 
+func TestShouldTrackTurnCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		state *SessionState
+		want  bool
+	}{
+		"active turn": {
+			state: &SessionState{Phase: session.PhaseActive},
+			want:  true,
+		},
+		"repeatable stop chain": {
+			state: &SessionState{Phase: session.PhaseIdle, TurnEndPending: true},
+			want:  true,
+		},
+		"ordinary idle session": {
+			state: &SessionState{Phase: session.PhaseIdle},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, shouldTrackTurnCheckpoint(tt.state))
+		})
+	}
+}
+
 // TestHandleTurnEnd_PartialFailure verifies that HandleTurnEnd continues
 // processing remaining checkpoints when one UpdateCommitted call fails.
 // This locks the best-effort behavior: valid checkpoints get finalized even
@@ -1467,6 +1495,7 @@ func TestHandleTurnEnd_UsesCapturedTranscriptAfterSourceMutation(t *testing.T) {
 		TranscriptPath:            livePath,
 		CheckpointTranscriptStart: 1,
 		TurnCheckpointIDs:         []string{testTrailerCheckpointID.String()},
+		TurnEndPending:            true,
 	}
 
 	err = NewManualCommitStrategy().HandleTurnEnd(context.Background(), state, &agent.TranscriptSnapshot{
@@ -1475,12 +1504,25 @@ func TestHandleTurnEnd_UsesCapturedTranscriptAfterSourceMutation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, state.CheckpointTranscriptStart)
-	require.Empty(t, state.TurnCheckpointIDs)
+	require.Equal(t, []string{testTrailerCheckpointID.String()}, state.TurnCheckpointIDs)
 
 	content, err := store.ReadSessionContent(context.Background(), testTrailerCheckpointID, 0)
 	require.NoError(t, err)
 	require.Equal(t, captured, content.Transcript)
 	require.NotEqual(t, liveTranscript, content.Transcript)
+
+	continued := append([]byte(nil), captured...)
+	continued = append(continued, []byte(`{"type":"assistant","message":{"content":"continued response"}}`+"\n")...)
+	err = NewManualCommitStrategy().HandleTurnEnd(context.Background(), state, &agent.TranscriptSnapshot{
+		Data:     continued,
+		Position: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, state.CheckpointTranscriptStart)
+	require.Equal(t, []string{testTrailerCheckpointID.String()}, state.TurnCheckpointIDs)
+	content, err = store.ReadSessionContent(context.Background(), testTrailerCheckpointID, 0)
+	require.NoError(t, err)
+	require.Equal(t, continued, content.Transcript)
 }
 
 // setupSessionWithCheckpoint initializes a session and creates one checkpoint

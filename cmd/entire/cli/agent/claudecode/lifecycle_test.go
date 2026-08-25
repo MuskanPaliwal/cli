@@ -160,6 +160,15 @@ func TestParseHookEvent_TurnEnd(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_TurnEnd_PreservesStopHookActive(t *testing.T) {
+	t.Parallel()
+
+	input := `{"session_id":"session","transcript_path":"/tmp/stop.jsonl","stop_hook_active":true}`
+	event, err := (&ClaudeCodeAgent{}).ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
+	require.NoError(t, err)
+	require.True(t, event.StopHookActive)
+}
+
 func TestParseHookEvent_TurnEnd_PreservesFinalResponseFieldState(t *testing.T) {
 	t.Parallel()
 

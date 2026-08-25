@@ -63,7 +63,8 @@ func TestClaudeStop_CapturedTranscriptOwnsFinalizationAndPosition(t *testing.T) 
 	state, err := env.GetSessionState(sess.ID)
 	require.NoError(t, err)
 	require.Equal(t, session.PhaseIdle, state.Phase)
-	require.Empty(t, state.TurnCheckpointIDs)
+	require.Equal(t, []string{checkpointID}, state.TurnCheckpointIDs)
+	require.True(t, state.TurnEndPending)
 	require.Equal(t, strings.Count(string(captured), "\n"), state.CheckpointTranscriptStart)
 }
 

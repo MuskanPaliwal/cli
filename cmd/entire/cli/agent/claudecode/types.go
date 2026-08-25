@@ -43,6 +43,7 @@ type sessionInfoRaw struct {
 	TranscriptPath       string         `json:"transcript_path"`
 	Model                string         `json:"model,omitempty"`
 	LastAssistantMessage optionalString `json:"last_assistant_message"`
+	StopHookActive       bool           `json:"stop_hook_active,omitempty"`
 }
 
 type optionalString struct {

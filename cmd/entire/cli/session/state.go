@@ -199,10 +199,20 @@ type State struct {
 	// Lifecycle:
 	//   - Set in PostCommit when a checkpoint is condensed for an ACTIVE session
 	//   - Consumed in HandleTurnEnd to finalize all checkpoints with the full transcript
-	//   - Cleared in HandleTurnEnd after finalization completes
+	//   - Retained across repeatable turn-end events so a continuation can refresh them
+	//   - Otherwise cleared in HandleTurnEnd after finalization completes
 	//   - Cleared in InitializeSession when a new prompt starts
 	//   - Cleared when session is reset (ResetSession deletes the state file entirely)
 	TurnCheckpointIDs []string `json:"turn_checkpoint_ids,omitempty"`
+
+	// TurnEndPending keeps the current turn's checkpoint IDs recoverable after
+	// a repeatable turn-end event. A later turn-end refreshes those checkpoints;
+	// the next user prompt or session end seals the turn and clears this flag.
+	TurnEndPending bool `json:"turn_end_pending,omitempty"`
+
+	// TurnEndRefreshFailed preserves checkpoint IDs at session end when the most
+	// recent repeatable turn-end could not refresh them.
+	TurnEndRefreshFailed bool `json:"turn_end_refresh_failed,omitempty"`
 
 	// LastInteractionTime is updated on agent-interaction events (TurnStart,
 	// TurnEnd, SessionStop, Compaction) but NOT on git commit hooks.

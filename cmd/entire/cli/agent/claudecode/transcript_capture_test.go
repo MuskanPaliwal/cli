@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -18,6 +19,115 @@ var fastCaptureConfig = captureConfig{
 	staleThreshold: time.Minute,
 }
 
+func BenchmarkCaptureTranscriptModernReady(b *testing.B) {
+	for _, tt := range []struct {
+		name string
+		size int
+		tail bool
+	}{
+		{name: "64KiB", size: 64 << 10},
+		{name: "4MiB", size: 4 << 20},
+		{name: "70MiB", size: 70 << 20},
+		{name: "70MiBTail", size: 70 << 20, tail: true},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			path := filepath.Join(b.TempDir(), "transcript.jsonl")
+			data := benchmarkTranscript(tt.size)
+			require.NoError(b, os.WriteFile(path, data, 0o600))
+			response := testFinalAssistantMessage
+			startPosition := 0
+			if tt.tail {
+				startPosition = bytes.Count(data, []byte{'\n'}) - 1
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			b.ResetTimer()
+			for b.Loop() {
+				snapshot, err := (&ClaudeCodeAgent{}).CaptureTranscript(context.Background(), agent.TranscriptCaptureRequest{
+					SessionRef:    path,
+					StartPosition: startPosition,
+					FinalResponse: &response,
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(snapshot.Data) != len(data) {
+					b.Fatalf("captured %d bytes, want %d", len(snapshot.Data), len(data))
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCaptureTranscriptLegacyReady(b *testing.B) {
+	for _, tt := range []struct {
+		name string
+		size int
+	}{
+		{name: "64KiB", size: 64 << 10},
+		{name: "4MiB", size: 4 << 20},
+		{name: "70MiB", size: 70 << 20},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			path := filepath.Join(b.TempDir(), "transcript.jsonl")
+			data := benchmarkTranscript(tt.size)
+			require.NoError(b, os.WriteFile(path, data, 0o600))
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := (&ClaudeCodeAgent{}).CaptureTranscript(context.Background(), agent.TranscriptCaptureRequest{
+					SessionRef: path,
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkAnalyzeTranscriptTurn(b *testing.B) {
+	for _, tt := range []struct {
+		name string
+		size int
+		tail bool
+	}{
+		{name: "64KiB", size: 64 << 10},
+		{name: "4MiB", size: 4 << 20},
+		{name: "70MiB", size: 70 << 20},
+		{name: "70MiBTail", size: 70 << 20, tail: true},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			data := benchmarkTranscript(tt.size)
+			startPosition := 0
+			if tt.tail {
+				startPosition = bytes.Count(data, []byte{'\n'}) - 1
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := (&ClaudeCodeAgent{}).AnalyzeTranscriptTurn(data, startPosition, ""); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func benchmarkTranscript(size int) []byte {
+	content := bytes.Repeat([]byte("x"), 4<<10)
+	line := append([]byte(`{"type":"user","message":{"content":"`), content...)
+	line = append(line, []byte(`"}}`+"\n")...)
+	finalLine := []byte(`{"type":"assistant","message":{"content":"Done."}}` + "\n")
+	data := make([]byte, 0, size+len(line))
+	for len(data)+len(line)+len(finalLine) <= size {
+		data = append(data, line...)
+	}
+	return append(data, finalLine...)
+}
+
 func TestCaptureTranscript_LegacyStableUsesQuietWindow(t *testing.T) {
 	t.Parallel()
 
@@ -31,6 +141,26 @@ func TestCaptureTranscript_LegacyStableUsesQuietWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, snapshot.Data)
 	require.Equal(t, 1, snapshot.Position)
+}
+
+func TestCaptureTranscript_ModernCompleteSnapshotDoesNotWaitForFirstPoll(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	want := []byte(`{"type":"assistant","message":{"content":"Done."}}` + "\n")
+	require.NoError(t, os.WriteFile(path, want, 0o600))
+	config := fastCaptureConfig
+	config.pollInterval = time.Hour
+	config.maxWait = 250 * time.Millisecond
+	response := testFinalAssistantMessage
+
+	snapshot, err := (&ClaudeCodeAgent{}).captureTranscript(context.Background(), agent.TranscriptCaptureRequest{
+		SessionRef:    path,
+		StartPosition: 0,
+		FinalResponse: &response,
+	}, config)
+	require.NoError(t, err)
+	require.Equal(t, want, snapshot.Data)
 }
 
 func TestPrepareTranscript_RemainsBestEffortForNonStopCallers(t *testing.T) {
