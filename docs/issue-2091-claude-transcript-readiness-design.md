@@ -213,18 +213,16 @@ agents keep their current prepare-and-read behavior in this scoped change.
 Use this path when `FinalResponse` is non-nil and non-empty.
 
 1. Observe the transcript fingerprint.
-2. Wait one polling interval.
-3. Require the same file identity, size, and modification token.
-4. Open the file and record the handle's identity and size.
-5. Read exactly the observed byte range from that handle.
-6. Re-stat the handle and path.
-7. Retry if the file grew, shrank, changed identity, was replaced, or was
+2. Open the file and record the handle's identity and size.
+3. Read exactly the observed byte range from that handle.
+4. Re-stat the handle and path.
+5. Retry if the file grew, shrank, changed identity, was replaced, or was
    rewritten during the read.
-8. Require the final nonblank JSONL record to parse.
-9. Parse records after `StartPosition`.
-10. Reconstruct the latest non-empty assistant text in the current turn.
-11. Require it to equal `FinalResponse`.
-12. Return those exact bytes and their position.
+6. Require the final nonblank JSONL record to parse.
+7. Parse records after `StartPosition`.
+8. Reconstruct the latest non-empty assistant text in the current turn.
+9. Require it to equal `FinalResponse`.
+10. Return those exact bytes and their position.
 
 Do not use a raw substring search. JSON escaping, repeated responses, tool
 results, and user text can all create false matches.
@@ -245,8 +243,9 @@ A supplied modern marker that never matches must time out with an error. It
 must not silently downgrade to the legacy heuristic because that would hide a
 producer-contract violation.
 
-Expected healthy latency is one or two polling intervals, about 50 to 100 ms
-with the current 50 ms interval, plus one transcript read and validation.
+The modern path has no mandatory polling delay. Expected healthy latency is one
+transcript read and validation; polling is used only to retry a rejected or
+changing candidate.
 
 ## Legacy readiness path
 
@@ -285,8 +284,9 @@ not occur when the filesystem reports the same timestamp. That limitation is
 acceptable for Claude's append-oriented transcript producer; tests must not
 claim stronger rewrite detection than the fingerprint provides.
 
-Poll fingerprints, not full file contents. Read the complete transcript only
-after the relevant stability condition is met.
+Poll fingerprints, not full file contents. The modern path reads its initial
+candidate immediately because producer evidence determines readiness. The
+legacy path reads only after the fingerprint satisfies the quiet window.
 
 After opening the candidate file:
 
@@ -438,7 +438,7 @@ checks.
 Measure the healthy path before and after:
 
 - current stable fallback baseline, expected near 520 ms;
-- modern snapshot path, expected near 50 to 100 ms;
+- modern snapshot path, with no mandatory polling delay;
 - legacy path, expected to remain near 520 ms.
 
 Use broad deterministic timing bounds in tests. Treat the real Claude traces as

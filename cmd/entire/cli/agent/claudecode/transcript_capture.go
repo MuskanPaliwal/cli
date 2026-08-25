@@ -77,9 +77,12 @@ func (c *ClaudeCodeAgent) captureTranscript(
 	if time.Since(observed.modTime) > config.staleThreshold {
 		return agent.TranscriptSnapshot{}, fmt.Errorf("%w: transcript is stale", agent.ErrTranscriptNotReady)
 	}
+	modern := request.FinalResponse != nil && *request.FinalResponse != ""
 
 	ticker := time.NewTicker(config.pollInterval)
 	defer ticker.Stop()
+	// Producer evidence can validate the initial snapshot immediately. The
+	// legacy path still waits for quietWindow before it can return.
 	immediate := make(chan time.Time, 1)
 	immediate <- time.Now()
 	poll := (<-chan time.Time)(immediate)
@@ -88,7 +91,7 @@ func (c *ClaudeCodeAgent) captureTranscript(
 		readTranscript = readObservedTranscript
 	}
 	stableSince := time.Now()
-	stableObservations := 1
+	observedValid := true
 	var rejected transcriptFingerprint
 	hasRejected := false
 
@@ -100,31 +103,19 @@ func (c *ClaudeCodeAgent) captureTranscript(
 			poll = ticker.C
 			current, statErr := fingerprintTranscript(request.SessionRef)
 			if statErr != nil {
-				stableObservations = 0
+				observedValid = false
 				stableSince = time.Now()
 				continue
 			}
 			if time.Since(current.modTime) > config.staleThreshold {
-				stableObservations = 0
+				observedValid = false
 				stableSince = time.Now()
 				continue
 			}
-			if stableObservations == 0 {
+			if !observedValid || !sameTranscriptFingerprint(observed, current) {
 				observed = current
+				observedValid = true
 				stableSince = time.Now()
-				stableObservations = 1
-				continue
-			}
-			if !sameTranscriptFingerprint(observed, current) {
-				observed = current
-				stableSince = time.Now()
-				stableObservations = 1
-				continue
-			}
-			stableObservations++
-			modern := request.FinalResponse != nil && *request.FinalResponse != ""
-			if modern && stableObservations < 2 {
-				continue
 			}
 			if !modern {
 				if time.Since(stableSince) < config.quietWindow {
@@ -144,10 +135,11 @@ func (c *ClaudeCodeAgent) captureTranscript(
 					return agent.TranscriptSnapshot{}, captureWaitError(ctx, config.maxWait)
 				}
 				if errors.Is(readErr, errTranscriptChanged) {
+					observedValid = false
 					if refreshed, refreshErr := fingerprintTranscript(request.SessionRef); refreshErr == nil {
 						observed = refreshed
+						observedValid = true
 						stableSince = time.Now()
-						stableObservations = 1
 					}
 					continue
 				}

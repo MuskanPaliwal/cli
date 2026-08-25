@@ -143,7 +143,7 @@ func TestCaptureTranscript_LegacyStableUsesQuietWindow(t *testing.T) {
 	require.Equal(t, 1, snapshot.Position)
 }
 
-func TestCaptureTranscript_ModernCompleteSnapshotDoesNotWaitForFirstPoll(t *testing.T) {
+func TestCaptureTranscript_ModernReadyUsesSemanticEvidenceWithoutPollingDelay(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")

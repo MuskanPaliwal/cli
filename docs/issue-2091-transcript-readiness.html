@@ -551,7 +551,7 @@ all consumers use snapshot</div>
       <div class="flow" aria-label="Five-step recommended flow">
         <article class="flow-step"><span class="step-number">1</span><h3>Receive Stop</h3><p>Parse <code>last_assistant_message</code> from Claude's hook payload.</p></article>
         <article class="flow-step"><span class="step-number">2</span><h3>Anchor the turn</h3><p>Load the line offset measured before this prompt. A measured zero is valid; an unmeasured zero fails closed. This prevents a duplicate “Done.” from an older turn matching.</p></article>
-        <article class="flow-step"><span class="step-number">3</span><h3>Observe and read</h3><p>After two unchanged observations, read exactly that file identity and size into memory.</p></article>
+        <article class="flow-step"><span class="step-number">3</span><h3>Observe and read</h3><p>Read the observed file identity and size immediately; producer evidence determines modern readiness.</p></article>
         <article class="flow-step"><span class="step-number">4</span><h3>Validate</h3><p>Require valid JSONL and the expected final assistant response after the turn offset.</p></article>
         <article class="flow-step"><span class="step-number">5</span><h3>Own the bytes</h3><p>Write Entire's copy once. Metadata, tokens, offsets, and finalization all consume that snapshot.</p></article>
       </div>
