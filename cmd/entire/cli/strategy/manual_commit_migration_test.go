@@ -8,6 +8,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -273,4 +274,64 @@ func TestMigrateShadowBranch_MultiTrailerHEAD(t *testing.T) {
 	assert.True(t, migrated, "reconcile should fire on multi-trailer match")
 	assert.Equal(t, headHash, state.BaseCommit, "BaseCommit should advance to HEAD")
 	assert.Equal(t, headHash, state.AttributionBaseCommit, "AttributionBaseCommit should advance (reconcile path)")
+}
+
+func TestMigrateShadowBranch_ExistingDestinationAtSameHashIsIdempotent(t *testing.T) {
+	dir, oldBaseCommit := setupMigrationRepo(t)
+	t.Chdir(dir)
+
+	testutil.WriteFile(t, dir, "file.txt", "content")
+	testutil.GitAdd(t, dir, "file.txt")
+	testutil.GitCommit(t, dir, "new base")
+	newBaseCommit := testutil.GetHeadHash(t, dir)
+
+	oldShadowBranch := getShadowBranchNameForCommit(oldBaseCommit, "")
+	newShadowBranch := getShadowBranchNameForCommit(newBaseCommit, "")
+	testutil.RunGit(t, dir, "branch", oldShadowBranch, oldBaseCommit)
+	testutil.RunGit(t, dir, "branch", newShadowBranch, oldBaseCommit)
+
+	repo, err := OpenRepository(t.Context())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	state := &SessionState{BaseCommit: oldBaseCommit}
+	migrated, err := (&ManualCommitStrategy{}).migrateShadowBranchToBaseCommit(t.Context(), repo, state, newBaseCommit)
+	require.NoError(t, err)
+	assert.True(t, migrated)
+	assert.Equal(t, newBaseCommit, state.BaseCommit)
+	assert.False(t, testutil.BranchExists(t, dir, oldShadowBranch))
+
+	newRef, err := repo.Reference(plumbing.NewBranchReferenceName(newShadowBranch), true)
+	require.NoError(t, err)
+	assert.Equal(t, plumbing.NewHash(oldBaseCommit), newRef.Hash())
+}
+
+func TestMigrateShadowBranch_ExistingDestinationAtDifferentHashFails(t *testing.T) {
+	dir, oldBaseCommit := setupMigrationRepo(t)
+	t.Chdir(dir)
+
+	testutil.WriteFile(t, dir, "file.txt", "content")
+	testutil.GitAdd(t, dir, "file.txt")
+	testutil.GitCommit(t, dir, "new base")
+	newBaseCommit := testutil.GetHeadHash(t, dir)
+
+	oldShadowBranch := getShadowBranchNameForCommit(oldBaseCommit, "")
+	newShadowBranch := getShadowBranchNameForCommit(newBaseCommit, "")
+	testutil.RunGit(t, dir, "branch", oldShadowBranch, oldBaseCommit)
+	testutil.RunGit(t, dir, "branch", newShadowBranch, newBaseCommit)
+
+	repo, err := OpenRepository(t.Context())
+	require.NoError(t, err)
+	defer repo.Close()
+
+	state := &SessionState{BaseCommit: oldBaseCommit}
+	migrated, err := (&ManualCommitStrategy{}).migrateShadowBranchToBaseCommit(t.Context(), repo, state, newBaseCommit)
+	require.ErrorContains(t, err, "destination shadow branch points to")
+	assert.False(t, migrated)
+	assert.Equal(t, oldBaseCommit, state.BaseCommit)
+	assert.True(t, testutil.BranchExists(t, dir, oldShadowBranch))
+
+	newRef, err := repo.Reference(plumbing.NewBranchReferenceName(newShadowBranch), true)
+	require.NoError(t, err)
+	assert.Equal(t, plumbing.NewHash(newBaseCommit), newRef.Hash())
 }
