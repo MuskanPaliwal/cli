@@ -26,10 +26,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
-	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/imageextract"
-	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
@@ -52,68 +50,15 @@ var errStopIteration = errors.New("stop iteration")
 // unwrapped function.
 var chunkTranscript = agent.ChunkTranscript
 
-// writeSession writes a committed checkpoint to the entire/checkpoints/v1 branch.
-// Checkpoints are stored at sharded paths: <id[:2]>/<id[2:]>/
-//
-// Subagent task records (opts.Tasks) are written under tasks/<tool-use-id>/ —
-// see writeTaskRecordEntries.
-func (s *GitStore) writeSession(ctx context.Context, opts WriteOptions) error {
-	// Parity with this store's backfill writers and with the git-refs store: a
-	// canceled ctx means stop doing work, and creating a checkpoint is the most
-	// expensive write there is. Nothing below here observes cancellation
-	// (ensureSessionsBranch, tree building and CreateCommit all ignore ctx), so
-	// without this a bulk writer that ignores cancellation keeps minting
-	// checkpoints after Ctrl-C.
-	if err := ctx.Err(); err != nil {
-		return err //nolint:wrapcheck // Propagating context cancellation
+func (s *GitStore) rootTreeHashAt(commitHash plumbing.Hash) (plumbing.Hash, error) {
+	if commitHash.IsZero() {
+		return plumbing.ZeroHash, nil
 	}
-	// Validate identifiers to prevent path traversal and malformed data
-	if opts.CheckpointID.IsEmpty() {
-		return errors.New("invalid checkpoint options: checkpoint ID is required")
-	}
-	if err := validation.ValidateSessionID(opts.SessionID); err != nil {
-		return fmt.Errorf("invalid checkpoint options: %w", err)
-	}
-
-	// Ensure sessions branch exists
-	if err := s.ensureSessionsBranch(ctx); err != nil {
-		return fmt.Errorf("failed to ensure sessions branch: %w", err)
-	}
-
-	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	commit, err := s.repo.CommitObject(commitHash)
 	if err != nil {
-		return err
+		return plumbing.ZeroHash, fmt.Errorf("read primary metadata commit %s: %w", commitHash, err)
 	}
-
-	// Build the new checkpoint subtree from its current state on the v1 branch,
-	// then splice it back at the shard path. basePath keeps the v1 sharded layout
-	// so stored session-file pointers stay /<shard>/<id>/<n>/... as before.
-	existing, err := s.subtreeObjAt(rootTreeHash, opts.CheckpointID.Path())
-	if err != nil {
-		return err
-	}
-	checkpointSubtree, err := s.applySessionWrite(ctx, opts, existing, opts.CheckpointID.Path()+"/")
-	if err != nil {
-		return err
-	}
-
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, checkpointSubtree)
-	if err != nil {
-		return err
-	}
-	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
-	if err != nil {
-		return err
-	}
-
-	commitMsg := s.buildCommitMessage(opts)
-	newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
-	if err != nil {
-		return err
-	}
-
-	return s.setPrimaryRef(newCommitHash)
+	return commit.TreeHash, nil
 }
 
 // subtreeObjAt returns the tree object for one checkpoint's subtree within a root
@@ -210,27 +155,6 @@ func (s *GitStore) spliceCheckpointSubtree(rootTreeHash plumbing.Hash, checkpoin
 	return UpdateSubtree(s.repo, rootTreeHash, []string{shardPrefix}, []object.TreeEntry{
 		{Name: shardSuffix, Mode: filemode.Dir, Hash: checkpointSubtree},
 	}, UpdateSubtreeOptions{MergeMode: MergeKeepExisting})
-}
-
-// applySessionWrite applies a Session write to a checkpoint's current subtree
-// and returns the new checkpoint subtree hash. It is backing-independent: the
-// v1-branch store passes the sharded basePath and the per-checkpoint-ref
-// store passes "".
-func (s *treeWriter) applySessionWrite(ctx context.Context, opts WriteOptions, existing *object.Tree, basePath string) (plumbing.Hash, error) {
-	entries, err := s.flattenExisting(existing, basePath)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	if err := s.writeTaskRecordEntries(opts, basePath, entries); err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	if err := s.writeStandardCheckpointEntries(ctx, opts, basePath, entries); err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	return s.buildCheckpointSubtree(ctx, entries, basePath)
 }
 
 // applyAttributionBackfill rewrites the checkpoint root summary's combined
@@ -464,31 +388,6 @@ func (s *treeWriter) applyTranscriptBackfill(ctx context.Context, opts UpdateOpt
 	}
 
 	return s.buildCheckpointSubtree(ctx, entries, basePath)
-}
-
-// writeTaskRecordEntries materializes each of opts.Tasks into
-// tasks/<tool-use-id>/{agent-<agent-id>.jsonl, task.json} inside the
-// checkpoint tree at basePath. Iterates unconditionally — an empty Tasks
-// slice (every session before subagent-work durability landed, and every
-// session with no subagent work) is a no-op — replacing the old
-// opts.IsTask/opts.ToolUseID single-task-per-checkpoint route, which no
-// producer ever set (#2058's "dead writer": the whole path was unreachable).
-// Transcript content is expected pre-redacted by the caller (the condensation
-// materializer runs the same sanitize -> externalize -> redact pipeline the
-// session transcript gets); this writer does no redaction of its own.
-func (s *treeWriter) writeTaskRecordEntries(opts WriteOptions, basePath string, entries map[string]object.TreeEntry) error {
-	for _, task := range opts.Tasks {
-		if err := validation.ValidateToolUseID(task.ToolUseID); err != nil {
-			return fmt.Errorf("invalid task payload: %w", err)
-		}
-		if err := validation.ValidateAgentID(task.AgentID); err != nil {
-			return fmt.Errorf("invalid task payload: %w", err)
-		}
-		if err := s.writeTaskRecordEntry(task, basePath, entries); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // writeTaskRecordEntry writes one TaskPayload's agent-<agent-id>.jsonl (when
@@ -776,9 +675,9 @@ func (s *treeWriter) writeCheckpointSummary(opts WriteOptions, basePath string, 
 	hasReview := opts.HasReview
 	hasInvestigation := opts.HasInvestigation
 	// imported is the umbrella flag: true when any session in this checkpoint
-	// was imported (Kind == "imported"). Compared as a literal because the
-	// session package imports checkpoint, so we can't reference its constant.
-	imported := opts.Kind == "imported"
+	// was imported. The session package imports checkpoint, so its constant is
+	// deliberately mirrored here.
+	imported := opts.Kind == checkpointKindImported
 	commitSHA := opts.CommitSHA
 	rootMetadataPath := checkpointSubtreePath(basePath, paths.MetadataFileName)
 	if entry, exists := entries[rootMetadataPath]; exists {
@@ -849,33 +748,32 @@ func (s *GitStore) backfillAttribution(ctx context.Context, checkpointID id.Chec
 		return err
 	}
 
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
-	if err != nil {
-		return err
-	}
-
-	existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
-	if err != nil {
-		return err
-	}
-	checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, checkpointID.Path()+"/", combinedAttribution)
-	if err != nil {
-		return err
-	}
-
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Update checkpoint summary for %s", checkpointID)
-	newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
-	if err != nil {
-		return err
-	}
-
-	return s.setPrimaryRef(newCommitHash)
+	_, err := RunRefTransaction(ctx, s.repo, s.refs.Primary, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		if parentHash.IsZero() {
+			return plumbing.ZeroHash, false, ErrCheckpointNotFound
+		}
+		rootTreeHash, err := s.rootTreeHashAt(parentHash)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, checkpointID.Path()+"/", combinedAttribution)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+		return newCommitHash, true, err
+	})
+	return err
 }
 
 // findSessionIndex returns the index of an existing session with the given ID,
@@ -1269,38 +1167,6 @@ func redactCodeLearnings(cls []CodeLearning) []CodeLearning {
 // readMetadataFromBlob reads Metadata from a blob hash.
 func (s *treeWriter) readMetadataFromBlob(hash plumbing.Hash) (*Metadata, error) {
 	return readJSONFromBlob[Metadata](s.repo, hash)
-}
-
-// buildCommitMessage constructs the commit message with proper trailers.
-// The commit subject is always "Checkpoint: <id>" for consistency.
-// If CommitSubject is provided, it's included in the body.
-//
-// No task-metadata trailer is written here: the old single-task-per-checkpoint
-// route (Entire-Metadata-Task, still read by the ephemeral shadow-branch
-// listing path) fed it from the now-deleted IsTask/ToolUseID fields, which no
-// producer ever set — this trailer was always absent on real checkpoints.
-// opts.Tasks can now name several tasks in one checkpoint, so there is no
-// single path to trailer-point at even in principle.
-func (s *treeWriter) buildCommitMessage(opts WriteOptions) string {
-	var commitMsg strings.Builder
-
-	// Subject line is always the checkpoint ID for consistent formatting
-	fmt.Fprintf(&commitMsg, "Checkpoint: %s\n\n", opts.CheckpointID)
-
-	// Include custom description in body if provided
-	if opts.CommitSubject != "" {
-		commitMsg.WriteString(opts.CommitSubject + "\n\n")
-	}
-	fmt.Fprintf(&commitMsg, "%s: %s\n", trailers.SessionTrailerKey, opts.SessionID)
-	fmt.Fprintf(&commitMsg, "%s: %s\n", trailers.StrategyTrailerKey, opts.Strategy)
-	if opts.Agent != "" {
-		fmt.Fprintf(&commitMsg, "%s: %s\n", trailers.AgentTrailerKey, opts.Agent)
-	}
-	if opts.EphemeralBranch != "" {
-		fmt.Fprintf(&commitMsg, "%s: %s\n", trailers.EphemeralBranchTrailerKey, opts.EphemeralBranch)
-	}
-
-	return commitMsg.String()
 }
 
 // taskRecordMetadata is the on-disk shape of a materialized task record's
@@ -1715,34 +1581,32 @@ func (s *GitStore) backfillSummary(ctx context.Context, checkpointID id.Checkpoi
 		return err
 	}
 
-	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
-	if err != nil {
-		return err
-	}
-
-	existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
-	if err != nil {
-		return err
-	}
-	checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, checkpointID.Path()+"/", summary)
-	if err != nil {
-		return err
-	}
-
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
-	newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
-	if err != nil {
-		return err
-	}
-
-	return s.setPrimaryRef(newCommitHash)
+	_, err := RunRefTransaction(ctx, s.repo, s.refs.Primary, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		if parentHash.IsZero() {
+			return plumbing.ZeroHash, false, ErrCheckpointNotFound
+		}
+		rootTreeHash, err := s.rootTreeHashAt(parentHash)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, checkpointID.Path()+"/", summary)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
+		newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+		return newCommitHash, true, err
+	})
+	return err
 }
 
 // backfillTranscript replaces the transcript, prompts, and context for an existing
@@ -1766,38 +1630,36 @@ func (s *GitStore) backfillTranscript(ctx context.Context, opts UpdateOptions) e
 		return err
 	}
 
-	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
-	if err != nil {
-		return err
-	}
-
-	existing, err := s.subtreeObjAt(rootTreeHash, opts.CheckpointID.Path())
-	if err != nil {
-		return err
-	}
-	checkpointSubtree, err := s.applyTranscriptBackfill(ctx, opts, existing, opts.CheckpointID.Path()+"/")
-	if err != nil {
-		return err
-	}
-
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, checkpointSubtree)
-	if err != nil {
-		return err
-	}
-	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize transcript for Checkpoint: %s", opts.CheckpointID)
-	newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
-	if err != nil {
-		return err
-	}
-
-	return s.setPrimaryRef(newCommitHash)
+	_, err := RunRefTransaction(ctx, s.repo, s.refs.Primary, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		if parentHash.IsZero() {
+			return plumbing.ZeroHash, false, ErrCheckpointNotFound
+		}
+		rootTreeHash, err := s.rootTreeHashAt(parentHash)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		existing, err := s.subtreeObjAt(rootTreeHash, opts.CheckpointID.Path())
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, err := s.applyTranscriptBackfill(ctx, opts, existing, opts.CheckpointID.Path()+"/")
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, checkpointSubtree)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+		return newCommitHash, true, err
+	})
+	return err
 }
 
 // updateSessionMetadata reads the session metadata blob from entries, applies
@@ -2142,31 +2004,23 @@ func (s *GitStore) requireSessionsBranch() error {
 
 // ensureSessionsBranch ensures the primary metadata ref exists.
 func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
-	_, err := s.repo.Reference(s.refs.Primary, true)
-	if err == nil {
-		return nil // Branch exists
-	}
-	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return fmt.Errorf("failed to check sessions branch: %w", err)
-	}
-
-	// Create orphan branch with empty tree
-	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
-	if err != nil {
-		return err
-	}
-	emptyTreeHash, err = s.maybeMergeVercelConfig(ctx, emptyTreeHash)
-	if err != nil {
-		return err
-	}
-
-	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
-	if err != nil {
-		return err
-	}
-
-	return s.setPrimaryRef(commitHash)
+	_, err := RunRefTransaction(ctx, s.repo, s.refs.Primary, func(current plumbing.Hash) (plumbing.Hash, bool, error) {
+		if !current.IsZero() {
+			return current, false, nil
+		}
+		emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		emptyTreeHash, err = s.maybeMergeVercelConfig(ctx, emptyTreeHash)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+		commitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
+		return commitHash, true, err
+	})
+	return err
 }
 
 func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plumbing.Hash) (plumbing.Hash, error) {
@@ -2654,11 +2508,14 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 // CreateCommit creates a git commit object with the given tree, parent, message, and author.
 // If parentHash is ZeroHash, the commit is created without a parent (orphan commit).
 func CreateCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
-	now := time.Now()
+	return createCommitAt(ctx, repo, treeHash, parentHash, message, authorName, authorEmail, time.Now())
+}
+
+func createCommitAt(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string, when time.Time) (plumbing.Hash, error) {
 	sig := object.Signature{
 		Name:  authorName,
 		Email: authorEmail,
-		When:  now,
+		When:  when,
 	}
 
 	commit := &object.Commit{

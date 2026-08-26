@@ -16,7 +16,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // ListHydrationTimeout is the per-ref budget for hydrating names-only List stubs
@@ -113,111 +112,15 @@ func remoteListDiscoveryEnabled(ctx context.Context) bool {
 // Write dispatches a persistent write request to the matching ref operation,
 // mirroring the git-branch store's Write.
 func (s *gitRefsStore) Write(ctx context.Context, req WriteRequest) error {
-	switch r := req.(type) {
-	case Session:
-		return s.writeSession(ctx, WriteOptions(r))
-	case ReservedSession:
-		return s.writeSession(ctx, WriteOptions(r))
-	case SessionTranscript:
-		return s.backfillTranscript(ctx, UpdateOptions(r))
-	case SessionSummary:
-		return s.backfillSummary(ctx, r.CheckpointID, r.Summary)
-	case CheckpointAttribution:
-		return s.backfillAttribution(ctx, r.CheckpointID, r.Attribution)
-	default:
-		return fmt.Errorf("checkpoint: unsupported write request %T", req)
-	}
-}
-
-// refBase resolves a checkpoint ref's current tip commit (the parent for the
-// next write) and subtree object (the checkpoint's current contents) with a
-// LOCAL-ONLY lookup. A missing ref yields (ZeroHash, nil) so the next write
-// becomes an orphan commit — correct for creates, whose ref never exists yet
-// (locally or remotely); probing the remote would add a doomed round-trip to
-// every condensation and, with a fetcher configured, fail offline writes.
-// Backfills, which target an existing checkpoint, use refBaseForBackfill
-// instead. Migration (migrate.go) also uses refBase deliberately: it imports
-// from the LOCAL v1 branch and must never probe the remote, even though its
-// target ref may already exist. One writeSession caller does target an
-// existing checkpoint — attach, which adds a session to it — but attach
-// pre-fetches and verifies the ref's presence itself (refreshCheckpoint)
-// before writing, so the local-only probe is safe there too.
-func (s *gitRefsStore) refBase(cid id.CheckpointID) (plumbing.Hash, *object.Tree, error) {
-	refName, err := RefName(cid)
-	if err != nil {
-		return plumbing.ZeroHash, nil, err
-	}
-	ref, err := s.repo.Reference(refName, true)
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return plumbing.ZeroHash, nil, nil // no ref yet → new checkpoint (orphan)
-	}
-	if err != nil {
-		// A real lookup failure (IO/corruption), not an absent ref: surface it
-		// rather than silently starting a fresh orphan history over the ref.
-		return plumbing.ZeroHash, nil, fmt.Errorf("resolve checkpoint ref %s: %w", refName, err)
-	}
-	return s.refTip(cid, ref)
-}
-
-// refBaseForBackfill resolves like refBase, but a ref missing locally is
-// first fetched once from the remote (resolveRefMaybeFetch) when a fetcher is
-// configured: a backfill targets an EXISTING checkpoint that may have been
-// written or migrated on another machine, and declaring it absent without
-// looking remotely diverges from the read path — the backfill would be
-// handled as targeting a nonexistent checkpoint while reads, which DO fetch,
-// serve the refs copy, leaving the backfilled data permanently invisible.
-// A ref absent even after the fetch yields (ZeroHash, nil), which the
-// backfill helpers report as ErrCheckpointNotFound — the signal that the
-// checkpoint does not exist in this backend. A fetch FAILURE is returned
-// as-is: transient unavailability must never masquerade as absence, because
-// a caller or routing layer acting on a false "absent" would misdirect the
-// backfill (e.g. onto a stale copy in another backend) instead of retrying.
-func (s *gitRefsStore) refBaseForBackfill(ctx context.Context, cid id.CheckpointID) (plumbing.Hash, *object.Tree, error) {
-	ref, err := s.resolveRefMaybeFetch(ctx, cid)
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return plumbing.ZeroHash, nil, nil // genuinely absent → backfill reports not-found
-	}
-	if err != nil {
-		return plumbing.ZeroHash, nil, err
-	}
-	return s.refTip(cid, ref)
-}
-
-// refTip reads the commit and tree at a resolved checkpoint ref.
-func (s *gitRefsStore) refTip(cid id.CheckpointID, ref *plumbing.Reference) (plumbing.Hash, *object.Tree, error) {
-	commit, err := s.repo.CommitObject(ref.Hash())
-	if err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("read checkpoint commit %s: %w", ref.Hash(), err)
-	}
-	tree, err := commit.Tree()
-	if err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("read checkpoint tree for %s: %w", cid, err)
-	}
-	return ref.Hash(), tree, nil
-}
-
-// setRef points a checkpoint's ref at a new commit and records it for push.
-// Enqueue is best-effort: a write that lands locally but fails to enqueue must
-// not fail condensation. The ref is still local; only its remote sync is missed
-// until a later write to the same checkpoint re-enqueues it.
-func (s *gitRefsStore) setRef(ctx context.Context, cid id.CheckpointID, hash plumbing.Hash) error {
-	refName, err := RefName(cid)
-	if err != nil {
-		return err
-	}
-	if err := s.repo.Storer.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
-		return fmt.Errorf("set checkpoint ref %s to %s: %w", refName, hash, err)
-	}
-	s.enqueueForPush(ctx, refName)
-	return nil
+	return dispatchPersistentWrite(ctx, s, req)
 }
 
 // enqueueForPush records refName in the push-discovery queue, logging (never
 // returning) on failure so the local ref write still succeeds.
 //
 // The queue is resolved with the cancellation stripped from ctx. By the time we
-// get here the ref is already written locally (go-git ref writes don't observe
-// ctx), and the queue is the ONLY push-discovery mechanism there is — see the
+// get here the ref is already written locally, and the queue is the ONLY
+// push-discovery mechanism there is — see the
 // pushQueueFileName doc. A ref that misses the queue is never pushed, and the
 // writers above are idempotent, so a re-run skips it as already-present and
 // never re-enqueues it: it stays local-only forever. Resolving the queue shells
@@ -238,40 +141,6 @@ func (s *gitRefsStore) enqueueForPush(ctx context.Context, refName plumbing.Refe
 	}
 }
 
-func (s *gitRefsStore) writeSession(ctx context.Context, opts WriteOptions) error {
-	// Parity with the backfill writers above and with GitStore.writeSession: a
-	// canceled ctx means stop doing work, and creating a checkpoint is the most
-	// expensive write there is (tree building plus a commit). Without this a
-	// bulk writer that ignores cancellation — `entire import` was one — keeps
-	// minting checkpoints after Ctrl-C.
-	if err := ctx.Err(); err != nil {
-		return err //nolint:wrapcheck // Propagating context cancellation
-	}
-	if opts.CheckpointID.IsEmpty() {
-		return errors.New("invalid checkpoint options: checkpoint ID is required")
-	}
-	if err := validation.ValidateSessionID(opts.SessionID); err != nil {
-		return fmt.Errorf("invalid checkpoint options: %w", err)
-	}
-
-	parentHash, existing, err := s.refBase(opts.CheckpointID)
-	if err != nil {
-		return err
-	}
-
-	checkpointSubtree, err := s.applySessionWrite(ctx, opts, existing, "")
-	if err != nil {
-		return err
-	}
-
-	commitMsg := s.buildCommitMessage(opts)
-	commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
-	if err != nil {
-		return err
-	}
-	return s.setRef(ctx, opts.CheckpointID, commitHash)
-}
-
 func (s *gitRefsStore) backfillTranscript(ctx context.Context, opts UpdateOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err //nolint:wrapcheck // Propagating context cancellation
@@ -280,26 +149,29 @@ func (s *gitRefsStore) backfillTranscript(ctx context.Context, opts UpdateOption
 		return errors.New("invalid update options: checkpoint ID is required")
 	}
 
-	parentHash, existing, err := s.refBaseForBackfill(ctx, opts.CheckpointID)
+	refName, err := s.prepareRefForBackfill(ctx, opts.CheckpointID)
 	if err != nil {
 		return err
 	}
-
-	// applyTranscriptBackfill returns ErrCheckpointNotFound when the ref has no
-	// root summary yet (existing == nil → empty entries), matching the git-branch
-	// store's behavior for backfilling an unknown checkpoint.
-	checkpointSubtree, err := s.applyTranscriptBackfill(ctx, opts, existing, "")
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize transcript for Checkpoint: %s", opts.CheckpointID)
-	commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+	_, err = RunRefTransaction(ctx, s.repo, refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		existing, err := s.checkpointTreeAt(parentHash, opts.CheckpointID)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, err := s.applyTranscriptBackfill(ctx, opts, existing, "")
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+		return commitHash, true, err
+	})
 	if err != nil {
 		return err
 	}
-	return s.setRef(ctx, opts.CheckpointID, commitHash)
+	s.enqueueForPush(ctx, refName)
+	return nil
 }
 
 func (s *gitRefsStore) backfillSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error {
@@ -307,23 +179,29 @@ func (s *gitRefsStore) backfillSummary(ctx context.Context, checkpointID id.Chec
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	parentHash, existing, err := s.refBaseForBackfill(ctx, checkpointID)
+	refName, err := s.prepareRefForBackfill(ctx, checkpointID)
 	if err != nil {
 		return err
 	}
-
-	checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, "", summary)
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
-	commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+	_, err = RunRefTransaction(ctx, s.repo, refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		existing, err := s.checkpointTreeAt(parentHash, checkpointID)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, "", summary)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
+		commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+		return commitHash, true, err
+	})
 	if err != nil {
 		return err
 	}
-	return s.setRef(ctx, checkpointID, commitHash)
+	s.enqueueForPush(ctx, refName)
+	return nil
 }
 
 func (s *gitRefsStore) backfillAttribution(ctx context.Context, checkpointID id.CheckpointID, combinedAttribution *Attribution) error {
@@ -331,23 +209,58 @@ func (s *gitRefsStore) backfillAttribution(ctx context.Context, checkpointID id.
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	parentHash, existing, err := s.refBaseForBackfill(ctx, checkpointID)
+	refName, err := s.prepareRefForBackfill(ctx, checkpointID)
 	if err != nil {
 		return err
 	}
-
-	checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, "", combinedAttribution)
-	if err != nil {
-		return err
-	}
-
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Update checkpoint summary for %s", checkpointID)
-	commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+	_, err = RunRefTransaction(ctx, s.repo, refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		existing, err := s.checkpointTreeAt(parentHash, checkpointID)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, "", combinedAttribution)
+		if err != nil {
+			return plumbing.ZeroHash, false, err
+		}
+		commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
+		return commitHash, true, err
+	})
 	if err != nil {
 		return err
 	}
-	return s.setRef(ctx, checkpointID, commitHash)
+	s.enqueueForPush(ctx, refName)
+	return nil
+}
+
+func (s *gitRefsStore) prepareRefForBackfill(ctx context.Context, checkpointID id.CheckpointID) (plumbing.ReferenceName, error) {
+	refName, err := RefName(checkpointID)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.resolveRefMaybeFetch(ctx, checkpointID); err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return "", ErrCheckpointNotFound
+		}
+		return "", err
+	}
+	return refName, nil
+}
+
+func (s *gitRefsStore) checkpointTreeAt(commitHash plumbing.Hash, checkpointID id.CheckpointID) (*object.Tree, error) {
+	if commitHash.IsZero() {
+		return nil, nil //nolint:nilnil // new checkpoint ref
+	}
+	commit, err := s.repo.CommitObject(commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("read checkpoint commit %s: %w", commitHash, err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("read checkpoint tree for %s: %w", checkpointID, err)
+	}
+	return tree, nil
 }
 
 // checkpointTree resolves a FetchingTree rooted at a checkpoint's ref commit

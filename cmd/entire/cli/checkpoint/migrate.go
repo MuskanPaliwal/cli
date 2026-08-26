@@ -58,7 +58,6 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 		return result, fmt.Errorf("read v1 checkpoint branch: %w", err)
 	}
 
-	refsStore := newGitRefsStore(repo)
 	authorName, authorEmail := GetGitAuthorFromRepo(repo)
 	queue, err := PushQueueForRepo(ctx, repo)
 	if err != nil {
@@ -81,22 +80,8 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 			return fmt.Errorf("ref name for checkpoint %s: %w", cid, err)
 		}
 
-		// The existing ref drives the idempotency check and the new commit's
-		// parent. refBase separates three cases we must not conflate:
-		//   - no ref yet (nil error, zero hash): a brand-new orphan.
-		//   - ref present but its commit object is missing (corrupt or pruned):
-		//     treat as absent and re-import as an orphan rather than parenting on
-		//     a bad hash, which would corrupt the commit graph for fetch+replay.
-		//   - a genuine read failure (transient IO, a concurrent repack): do NOT
-		//     clobber a possibly-valid ref with an orphan; abort this checkpoint
-		//     so an idempotent re-run can retry once the repo is readable again.
-		parent, _, err := refsStore.refBase(cid)
-		switch {
-		case err == nil:
-			// parent is the ref tip, or zero when the ref is absent.
-		case errors.Is(err, plumbing.ErrObjectNotFound):
-			parent = plumbing.ZeroHash
-		default:
+		parent, err := ReadRefHash(repo, refName)
+		if err != nil {
 			return fmt.Errorf("resolve existing ref for checkpoint %s: %w", cid, err)
 		}
 		// This snapshot is already imported when it appears anywhere on the
@@ -117,36 +102,44 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 			return nil
 		}
 
-		if alreadyImported {
-			// The snapshot is on the ref, but a prior run may have written the
-			// ref and then failed before enqueuing it (an Enqueue error, or a
-			// crash between setRef and Enqueue), leaving it queued for a push
-			// that never comes — and every later run would skip it here. Enqueue
-			// unconditionally so the "queued for push" contract survives a
-			// partial earlier run; duplicates collapse on Drain and an
-			// already-pushed ref is a no-op on the next push.
-			if err := queue.Enqueue(refName); err != nil {
-				return fmt.Errorf("enqueue checkpoint %s for push: %w", cid, err)
+		wrote := false
+		_, err = RunRefTransaction(ctx, repo, refName, func(current plumbing.Hash) (plumbing.Hash, bool, error) {
+			wrote = false
+			if treeInRefHistory(repo, current, migratedTree) {
+				return current, false, nil
 			}
-			result.Skipped++
-			return nil
-		}
 
-		msg := fmt.Sprintf("Import checkpoint %s (migrated from git-branch)", cid)
-		commitHash, err := CreateCommit(ctx, repo, migratedTree, parent, msg, authorName, authorEmail)
+			parentForCommit := current
+			if !current.IsZero() {
+				if _, commitErr := repo.CommitObject(current); commitErr != nil {
+					if !errors.Is(commitErr, plumbing.ErrObjectNotFound) {
+						return plumbing.ZeroHash, false, fmt.Errorf("read existing checkpoint ref %s: %w", refName, commitErr)
+					}
+					parentForCommit = plumbing.ZeroHash
+				}
+			}
+
+			msg := fmt.Sprintf("Import checkpoint %s (migrated from git-branch)", cid)
+			commitHash, commitErr := CreateCommit(ctx, repo, migratedTree, parentForCommit, msg, authorName, authorEmail)
+			if commitErr != nil {
+				return plumbing.ZeroHash, false, fmt.Errorf("commit checkpoint %s: %w", cid, commitErr)
+			}
+			wrote = true
+			return commitHash, true, nil
+		})
 		if err != nil {
-			return fmt.Errorf("commit checkpoint %s: %w", cid, err)
-		}
-		if err := refsStore.setRef(ctx, cid, commitHash); err != nil {
 			return fmt.Errorf("set ref for checkpoint %s: %w", cid, err)
 		}
-		// setRef's own enqueue is best-effort (a condensation write must not
-		// fail on it); the migration's queued-for-push contract needs a
-		// guaranteed one. Duplicates collapse on Drain.
+		// The migration's queued-for-push contract is strict. Duplicates collapse
+		// on Drain, including a retry which discovers the tree already imported.
 		if err := queue.Enqueue(refName); err != nil {
 			return fmt.Errorf("enqueue checkpoint %s for push: %w", cid, err)
 		}
-		result.Migrated = append(result.Migrated, cid)
+		if wrote {
+			result.Migrated = append(result.Migrated, cid)
+		} else {
+			result.Skipped++
+		}
 		return nil
 	})
 	if walkErr != nil {

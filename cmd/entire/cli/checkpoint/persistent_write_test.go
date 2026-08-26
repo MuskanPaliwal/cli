@@ -40,6 +40,40 @@ func TestWrite_DispatchesEachRequest(t *testing.T) {
 		t.Fatalf("checkpoint not created by Session: summary=%v err=%v", summary, err)
 	}
 
+	// ReservedSession uses the same builder through its distinct dispatch arm.
+	reservedID := id.MustCheckpointID("b1b2c3d4e5f6")
+	if err := store.Write(ctx, ReservedSession{
+		CheckpointID: reservedID,
+		SessionID:    "reserved-session",
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}); err != nil {
+		t.Fatalf("Write(ReservedSession) error = %v", err)
+	}
+	reservedSummary, err := store.Read(ctx, reservedID)
+	if err != nil || reservedSummary == nil {
+		t.Fatalf("checkpoint not created by ReservedSession: summary=%v err=%v", reservedSummary, err)
+	}
+
+	// BatchSessions is a checkpoint-level write with canonical multi-session
+	// semantics, not an alias of ReservedSession dispatch.
+	batchID := id.MustCheckpointID("c1b2c3d4e5f6")
+	if err := store.Write(ctx, BatchSessions{
+		CheckpointID: batchID,
+		Sessions: []ReservedSession{
+			{CheckpointID: batchID, SessionID: "session-b"},
+			{CheckpointID: batchID, SessionID: "session-a"},
+		},
+		AuthorName:  "Test",
+		AuthorEmail: "test@test.com",
+	}); err != nil {
+		t.Fatalf("Write(BatchSessions) error = %v", err)
+	}
+	batchSummary, err := store.Read(ctx, batchID)
+	if err != nil || batchSummary == nil || len(batchSummary.Sessions) != 2 {
+		t.Fatalf("checkpoint not created by BatchSessions: summary=%v err=%v", batchSummary, err)
+	}
+
 	// SessionTranscript replaces the session transcript.
 	full := []byte("full line 1\nfull line 2\n")
 	if err := store.Write(ctx, SessionTranscript{

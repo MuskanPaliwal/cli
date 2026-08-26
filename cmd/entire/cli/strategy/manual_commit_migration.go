@@ -129,9 +129,9 @@ func (s *ManualCommitStrategy) migrateShadowBranchToBaseCommit(ctx context.Conte
 	// Old shadow branch exists - move it to new base commit
 	newRefName := plumbing.NewBranchReferenceName(newShadowBranch)
 
-	// Create new reference pointing to same commit as old shadow branch
-	newRef := plumbing.NewHashReference(newRefName, oldRef.Hash())
-	if err := repo.Storer.SetReference(newRef); err != nil {
+	// The destination must still be absent; a concurrent writer which created
+	// it owns newer state and must not be overwritten by this rename.
+	if err := checkpoint.CompareAndSwapRef(ctx, repo, newRefName, oldRef.Hash(), plumbing.ZeroHash); err != nil {
 		return false, fmt.Errorf("failed to create new shadow branch %s: %w", newShadowBranch, err)
 	}
 

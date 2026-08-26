@@ -101,7 +101,7 @@ func (s *ephemeralStore) writeCheckpoint(ctx context.Context, opts WriteEphemera
 
 	commitMsg := trailers.FormatShadowCommit(opts.CommitMessage, opts.MetadataDir, opts.SessionID)
 
-	repoRoot, commonDir, err := s.repoDirs(ctx)
+	commonDir, err := s.repoCommonDir(ctx)
 	if err != nil {
 		return WriteEphemeralResult{}, fmt.Errorf("failed to resolve repo dirs: %w", err)
 	}
@@ -147,7 +147,7 @@ func (s *ephemeralStore) writeCheckpoint(ctx context.Context, opts WriteEphemera
 				return fmt.Errorf("failed to create commit: %w", cErr)
 			}
 
-			refErr := casUpdateShadowBranchRef(ctx, repoRoot, shadowBranchName, commitHash, parentHash)
+			refErr := casUpdateShadowBranchRef(ctx, s.repo, shadowBranchName, commitHash, parentHash)
 			if refErr == nil {
 				result = WriteEphemeralResult{
 					CommitHash: commitHash,
@@ -303,7 +303,7 @@ func (s *ephemeralStore) writeTask(ctx context.Context, opts WriteEphemeralTaskO
 	candidateFiles = append(candidateFiles, opts.NewFiles...)
 	allFiles := filterGitIgnoredFiles(ctx, s.repo, candidateFiles)
 
-	repoRoot, commonDir, err := s.repoDirs(ctx)
+	commonDir, err := s.repoCommonDir(ctx)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to resolve repo dirs: %w", err)
 	}
@@ -331,7 +331,7 @@ func (s *ephemeralStore) writeTask(ctx context.Context, opts WriteEphemeralTaskO
 				return fmt.Errorf("failed to create commit: %w", cErr)
 			}
 
-			refErr := casUpdateShadowBranchRef(ctx, repoRoot, shadowBranchName, commitHash, parentHash)
+			refErr := casUpdateShadowBranchRef(ctx, s.repo, shadowBranchName, commitHash, parentHash)
 			if refErr == nil {
 				resultHash = commitHash
 				return nil

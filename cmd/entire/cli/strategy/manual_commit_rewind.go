@@ -512,9 +512,11 @@ func (s *ManualCommitStrategy) resetShadowBranchToCheckpoint(ctx context.Context
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 
-	// Update the reference to point to the checkpoint commit
-	ref := plumbing.NewHashReference(refName, commit.Hash)
-	if err := repo.Storer.SetReference(ref); err != nil {
+	expected, err := cpkg.ReadRefHash(repo, refName)
+	if err != nil {
+		return fmt.Errorf("failed to read shadow branch: %w", err)
+	}
+	if err := cpkg.CompareAndSwapRef(ctx, repo, refName, commit.Hash, expected); err != nil {
 		return fmt.Errorf("failed to update shadow branch: %w", err)
 	}
 

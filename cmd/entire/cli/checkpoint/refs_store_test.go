@@ -777,7 +777,9 @@ func TestGitRefsStore_EnqueuesForPushDuringShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, store.setRef(ctx, cid, head.Hash()))
+	refName := mustRefName(t, cid)
+	require.NoError(t, CompareAndSwapRef(context.Background(), store.repo, refName, head.Hash(), plumbing.ZeroHash))
+	store.enqueueForPush(ctx, refName)
 
 	q, err := PushQueueForRepo(context.Background(), store.repo)
 	require.NoError(t, err)
