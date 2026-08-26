@@ -43,6 +43,24 @@ type preparedBatchSession struct {
 	metadata  *Metadata
 }
 
+type persistentRefWriter interface {
+	batchRefName(checkpointID id.CheckpointID) (plumbing.ReferenceName, error)
+	batchRepo() *git.Repository
+	prepareBatchRef(ctx context.Context) error
+	afterBatchPublish(ctx context.Context, refName plumbing.ReferenceName)
+}
+
+type batchRefWriter interface {
+	persistentRefWriter
+	prepareBatchSessions(ctx context.Context, req BatchSessions) (*preparedBatchSessions, error)
+	buildPreparedBatchCommit(ctx context.Context, prepared *preparedBatchSessions, parentHash plumbing.Hash) (plumbing.Hash, error)
+}
+
+type attributionRefWriter interface {
+	persistentRefWriter
+	buildPreparedAttributionCommit(ctx context.Context, checkpointID id.CheckpointID, attribution *Attribution, parentHash plumbing.Hash, authorName, authorEmail string) (plumbing.Hash, error)
+}
+
 type finalBatchSession struct {
 	metadata         *Metadata
 	hasReview        bool
@@ -260,37 +278,11 @@ func (s *GitStore) writeBatchSessions(ctx context.Context, req BatchSessions) er
 	if err != nil {
 		return err
 	}
-	if err := s.ensureSessionsBranch(ctx); err != nil {
-		return fmt.Errorf("failed to ensure sessions branch: %w", err)
-	}
+	return writePreparedBatch(ctx, s, prepared)
+}
 
-	commitMsg := buildBatchCommitMessage(prepared.request)
-	_, err = RunRefTransaction(ctx, s.repo, s.refs.Primary, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
-		rootTreeHash, err := s.rootTreeHashAt(parentHash)
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		existing, err := s.subtreeObjAt(rootTreeHash, prepared.request.CheckpointID.Path())
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		checkpointSubtree, _, err := s.applyPreparedBatch(ctx, prepared, existing, prepared.request.CheckpointID.Path()+"/")
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, prepared.request.CheckpointID, checkpointSubtree)
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		newCommitHash, err := createCommitAt(ctx, s.repo, newTreeHash, parentHash, commitMsg,
-			prepared.request.AuthorName, prepared.request.AuthorEmail, prepared.request.CommitTime)
-		return newCommitHash, true, err
-	})
-	return err
+func (s *GitStore) batchRefName(id.CheckpointID) (plumbing.ReferenceName, error) {
+	return s.refs.Primary, nil
 }
 
 func (s *gitRefsStore) writeBatchSessions(ctx context.Context, req BatchSessions) error {
@@ -301,28 +293,127 @@ func (s *gitRefsStore) writeBatchSessions(ctx context.Context, req BatchSessions
 	if err != nil {
 		return err
 	}
-	refName, err := RefName(prepared.request.CheckpointID)
+	return writePreparedBatch(ctx, s, prepared)
+}
+
+func (s *gitRefsStore) batchRefName(checkpointID id.CheckpointID) (plumbing.ReferenceName, error) {
+	return RefName(checkpointID)
+}
+
+func (s *GitStore) batchRepo() *git.Repository {
+	return s.repo
+}
+
+func (s *gitRefsStore) batchRepo() *git.Repository {
+	return s.repo
+}
+
+func (s *GitStore) prepareBatchRef(ctx context.Context) error {
+	if err := s.ensureSessionsBranch(ctx); err != nil {
+		return fmt.Errorf("failed to ensure sessions branch: %w", err)
+	}
+	return nil
+}
+
+func (*GitStore) afterBatchPublish(context.Context, plumbing.ReferenceName) {}
+
+func (*gitRefsStore) prepareBatchRef(context.Context) error {
+	return nil
+}
+
+func (s *gitRefsStore) afterBatchPublish(ctx context.Context, refName plumbing.ReferenceName) {
+	s.enqueueForPush(ctx, refName)
+}
+
+func (s *GitStore) buildPreparedBatchCommit(ctx context.Context, prepared *preparedBatchSessions, parentHash plumbing.Hash) (plumbing.Hash, error) {
+	rootTreeHash, err := s.rootTreeHashAt(parentHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	existing, err := s.subtreeObjAt(rootTreeHash, prepared.request.CheckpointID.Path())
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	checkpointSubtree, _, err := s.applyPreparedBatch(ctx, prepared, existing, prepared.request.CheckpointID.Path()+"/")
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, prepared.request.CheckpointID, checkpointSubtree)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return createCommitAt(ctx, s.repo, newTreeHash, parentHash, buildBatchCommitMessage(prepared.request),
+		prepared.request.AuthorName, prepared.request.AuthorEmail, prepared.request.CommitTime)
+}
+
+func (s *gitRefsStore) buildPreparedBatchCommit(ctx context.Context, prepared *preparedBatchSessions, parentHash plumbing.Hash) (plumbing.Hash, error) {
+	existing, err := s.checkpointTreeAt(parentHash, prepared.request.CheckpointID)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	checkpointSubtree, _, err := s.applyPreparedBatch(ctx, prepared, existing, "")
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return createCommitAt(ctx, s.repo, checkpointSubtree, parentHash, buildBatchCommitMessage(prepared.request),
+		prepared.request.AuthorName, prepared.request.AuthorEmail, prepared.request.CommitTime)
+}
+
+func (s *GitStore) buildPreparedAttributionCommit(ctx context.Context, checkpointID id.CheckpointID, attribution *Attribution, parentHash plumbing.Hash, authorName, authorEmail string) (plumbing.Hash, error) {
+	if parentHash.IsZero() {
+		return plumbing.ZeroHash, ErrCheckpointNotFound
+	}
+	rootTreeHash, err := s.rootTreeHashAt(parentHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, checkpointID.Path()+"/", attribution)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return CreateCommit(ctx, s.repo, newTreeHash, parentHash, fmt.Sprintf("Update checkpoint summary for %s", checkpointID), authorName, authorEmail)
+}
+
+func (s *gitRefsStore) buildPreparedAttributionCommit(ctx context.Context, checkpointID id.CheckpointID, attribution *Attribution, parentHash plumbing.Hash, authorName, authorEmail string) (plumbing.Hash, error) {
+	existing, err := s.checkpointTreeAt(parentHash, checkpointID)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	checkpointSubtree, err := s.applyAttributionBackfill(ctx, existing, "", attribution)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, fmt.Sprintf("Update checkpoint summary for %s", checkpointID), authorName, authorEmail)
+}
+
+func writePreparedBatch(ctx context.Context, writer batchRefWriter, prepared *preparedBatchSessions) error {
+	refName, err := writer.batchRefName(prepared.request.CheckpointID)
 	if err != nil {
 		return err
 	}
-	commitMsg := buildBatchCommitMessage(prepared.request)
-	_, err = RunRefTransaction(ctx, s.repo, refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
-		existing, err := s.checkpointTreeAt(parentHash, prepared.request.CheckpointID)
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		checkpointSubtree, _, err := s.applyPreparedBatch(ctx, prepared, existing, "")
-		if err != nil {
-			return plumbing.ZeroHash, false, err
-		}
-		commitHash, err := createCommitAt(ctx, s.repo, checkpointSubtree, parentHash, commitMsg,
-			prepared.request.AuthorName, prepared.request.AuthorEmail, prepared.request.CommitTime)
+	if err := writer.prepareBatchRef(ctx); err != nil {
+		return err
+	}
+	_, err = RunRefTransaction(ctx, writer.batchRepo(), refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
+		commitHash, err := writer.buildPreparedBatchCommit(ctx, prepared, parentHash)
 		return commitHash, true, err
 	})
 	if err != nil {
 		return err
 	}
-	s.enqueueForPush(ctx, refName)
+	writer.afterBatchPublish(ctx, refName)
 	return nil
 }
 

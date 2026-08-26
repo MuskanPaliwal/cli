@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 // kindRoutingStore resolves id-keyed reads across the two git backends so a repo
@@ -288,6 +289,46 @@ func (s *kindRoutingStore) writeReservedRequest(ctx context.Context, checkpointI
 			updateReadTarget = existing != nil
 		}
 	}
+	if batch, ok := req.(BatchSessions); ok && updateReadTarget {
+		first, firstOK := target.(batchRefWriter)
+		second, secondOK := readTarget.(batchRefWriter)
+		if firstOK && secondOK {
+			if err := writeBatchToBoth(ctx, batch, first, second); err != nil {
+				return err
+			}
+			logging.Info(ctx, "checkpoint: reserved batch written atomically to both backends",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("target_backend", targetType),
+				slog.String("primary_backend", s.primaryType))
+			return nil
+		}
+	}
+	if reserved, ok := req.(ReservedSession); ok && updateReadTarget {
+		firstBatch, firstBatchOK := target.(batchRefWriter)
+		secondBatch, secondBatchOK := readTarget.(batchRefWriter)
+		firstAttribution, firstAttributionOK := target.(attributionRefWriter)
+		secondAttribution, secondAttributionOK := readTarget.(attributionRefWriter)
+		if firstBatchOK && secondBatchOK && firstAttributionOK && secondAttributionOK {
+			batch, err := CanonicalizeBatchSessions(singleSessionBatch(WriteOptions(reserved)))
+			if err != nil {
+				return err
+			}
+			if err := writeBatchToBoth(ctx, batch, firstBatch, secondBatch); err != nil {
+				return err
+			}
+			opts := WriteOptions(reserved)
+			if opts.CombinedAttribution != nil {
+				if err := writeAttributionToBoth(ctx, opts.CheckpointID, opts.CombinedAttribution, firstAttribution, secondAttribution); err != nil {
+					return err
+				}
+			}
+			logging.Info(ctx, "checkpoint: reserved session written atomically to both backends",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("target_backend", targetType),
+				slog.String("primary_backend", s.primaryType))
+			return nil
+		}
+	}
 	if err := target.Write(ctx, req); err != nil {
 		return err //nolint:wrapcheck // target error is the operation's error, surfaced verbatim
 	}
@@ -304,6 +345,101 @@ func (s *kindRoutingStore) writeReservedRequest(ctx context.Context, checkpointI
 		slog.String("target_backend", targetType),
 		slog.String("primary_backend", s.primaryType),
 		slog.Bool("updated_existing_read_target", updateReadTarget))
+	return nil
+}
+
+func writeBatchToBoth(ctx context.Context, req BatchSessions, first, second batchRefWriter) error {
+	repo := first.batchRepo()
+	if repo != second.batchRepo() {
+		return errors.New("checkpoint: atomic batch write requires both backends to share a repository")
+	}
+	preparedFirst, err := first.prepareBatchSessions(ctx, req)
+	if err != nil {
+		return err
+	}
+	preparedSecond, err := second.prepareBatchSessions(ctx, req)
+	if err != nil {
+		return err
+	}
+	if err := first.prepareBatchRef(ctx); err != nil {
+		return err
+	}
+	if err := second.prepareBatchRef(ctx); err != nil {
+		return err
+	}
+	firstRef, err := first.batchRefName(req.CheckpointID)
+	if err != nil {
+		return err
+	}
+	secondRef, err := second.batchRefName(req.CheckpointID)
+	if err != nil {
+		return err
+	}
+	if firstRef == secondRef {
+		return fmt.Errorf("checkpoint: atomic batch write requires distinct refs, both are %s", firstRef)
+	}
+	if err := RunRefTransactions(ctx, repo, []plumbing.ReferenceName{firstRef, secondRef}, func(current map[plumbing.ReferenceName]plumbing.Hash) (map[plumbing.ReferenceName]plumbing.Hash, bool, error) {
+		firstCommit, err := first.buildPreparedBatchCommit(ctx, preparedFirst, current[firstRef])
+		if err != nil {
+			return nil, false, err
+		}
+		secondCommit, err := second.buildPreparedBatchCommit(ctx, preparedSecond, current[secondRef])
+		if err != nil {
+			return nil, false, err
+		}
+		return map[plumbing.ReferenceName]plumbing.Hash{
+			firstRef:  firstCommit,
+			secondRef: secondCommit,
+		}, true, nil
+	}); err != nil {
+		return err
+	}
+	first.afterBatchPublish(ctx, firstRef)
+	second.afterBatchPublish(ctx, secondRef)
+	return nil
+}
+
+func writeAttributionToBoth(ctx context.Context, checkpointID id.CheckpointID, attribution *Attribution, first, second attributionRefWriter) error {
+	repo := first.batchRepo()
+	if repo != second.batchRepo() {
+		return errors.New("checkpoint: atomic attribution write requires both backends to share a repository")
+	}
+	if err := first.prepareBatchRef(ctx); err != nil {
+		return err
+	}
+	if err := second.prepareBatchRef(ctx); err != nil {
+		return err
+	}
+	firstRef, err := first.batchRefName(checkpointID)
+	if err != nil {
+		return err
+	}
+	secondRef, err := second.batchRefName(checkpointID)
+	if err != nil {
+		return err
+	}
+	if firstRef == secondRef {
+		return fmt.Errorf("checkpoint: atomic attribution write requires distinct refs, both are %s", firstRef)
+	}
+	authorName, authorEmail := GetGitAuthorFromRepo(repo)
+	if err := RunRefTransactions(ctx, repo, []plumbing.ReferenceName{firstRef, secondRef}, func(current map[plumbing.ReferenceName]plumbing.Hash) (map[plumbing.ReferenceName]plumbing.Hash, bool, error) {
+		firstCommit, err := first.buildPreparedAttributionCommit(ctx, checkpointID, attribution, current[firstRef], authorName, authorEmail)
+		if err != nil {
+			return nil, false, err
+		}
+		secondCommit, err := second.buildPreparedAttributionCommit(ctx, checkpointID, attribution, current[secondRef], authorName, authorEmail)
+		if err != nil {
+			return nil, false, err
+		}
+		return map[plumbing.ReferenceName]plumbing.Hash{
+			firstRef:  firstCommit,
+			secondRef: secondCommit,
+		}, true, nil
+	}); err != nil {
+		return err
+	}
+	first.afterBatchPublish(ctx, firstRef)
+	second.afterBatchPublish(ctx, secondRef)
 	return nil
 }
 

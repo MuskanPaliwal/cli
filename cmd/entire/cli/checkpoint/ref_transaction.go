@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,17 @@ func (e *RefConflictError) Unwrap() error {
 // idempotent no-op and returns current without invoking git update-ref.
 type RefMutation func(current plumbing.Hash) (next plumbing.Hash, changed bool, err error)
 
+// RefUpdate describes one compare-and-swap in a multi-ref transaction.
+type RefUpdate struct {
+	Ref      plumbing.ReferenceName
+	New      plumbing.Hash
+	Expected plumbing.Hash
+}
+
+// MultiRefMutation rebuilds a set of ref updates from their current tips.
+// changed=false is an idempotent no-op.
+type MultiRefMutation func(current map[plumbing.ReferenceName]plumbing.Hash) (next map[plumbing.ReferenceName]plumbing.Hash, changed bool, err error)
+
 type beforeRefCASKey struct{}
 
 func withBeforeRefCAS(ctx context.Context, hook func()) context.Context {
@@ -139,6 +151,78 @@ func RunRefTransaction(
 	panic("unreachable")
 }
 
+// RunRefTransactions retries a logical mutation that publishes several refs
+// atomically. The callback is invoked again after every CAS conflict, so it
+// must rebuild all affected objects from the current tips.
+func RunRefTransactions(
+	ctx context.Context,
+	repo *git.Repository,
+	refNames []plumbing.ReferenceName,
+	mutate MultiRefMutation,
+) error {
+	if len(refNames) == 0 {
+		return errors.New("multi-ref transaction: at least one ref is required")
+	}
+	ordered := append([]plumbing.ReferenceName(nil), refNames...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	for i := 1; i < len(ordered); i++ {
+		if ordered[i] == ordered[i-1] {
+			return fmt.Errorf("multi-ref transaction: duplicate ref %s", ordered[i])
+		}
+	}
+
+	for attempt := range refTransactionMaxAttempts {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // canonical context cancellation
+		}
+		current := make(map[plumbing.ReferenceName]plumbing.Hash, len(ordered))
+		for _, refName := range ordered {
+			refHash, err := ReadRefHash(repo, refName)
+			if err != nil {
+				return err
+			}
+			current[refName] = refHash
+		}
+
+		var next map[plumbing.ReferenceName]plumbing.Hash
+		var changed bool
+		var err error
+		objectLock := repositoryObjectLock(repo)
+		func() {
+			objectLock.Lock()
+			defer objectLock.Unlock()
+			next, changed, err = mutate(current)
+		}()
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return nil
+		}
+
+		updates := make([]RefUpdate, 0, len(ordered))
+		for _, refName := range ordered {
+			newHash, ok := next[refName]
+			if !ok || newHash.IsZero() {
+				return fmt.Errorf("multi-ref transaction %s produced an empty target", refName)
+			}
+			updates = append(updates, RefUpdate{Ref: refName, New: newHash, Expected: current[refName]})
+		}
+		if err := CompareAndSwapRefs(ctx, repo, updates); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrRefConflict) {
+			return err
+		}
+		if attempt+1 == refTransactionMaxAttempts {
+			return fmt.Errorf("update %d refs after %d attempts: %w", len(ordered), refTransactionMaxAttempts, ErrRefConflict)
+		}
+		if err := refTransactionBackoff(ctx, attempt); err != nil {
+			return err
+		}
+	}
+	panic("unreachable")
+}
+
 // ReadRefHash returns a ref's current hash, or ZeroHash when it does not exist.
 func ReadRefHash(repo *git.Repository, refName plumbing.ReferenceName) (plumbing.Hash, error) {
 	ref, err := repo.Reference(refName, true)
@@ -160,20 +244,49 @@ func CompareAndSwapRef(
 	refName plumbing.ReferenceName,
 	newHash, expected plumbing.Hash,
 ) error {
-	if newHash.IsZero() {
-		return errors.New("compare-and-swap ref: new hash is required")
+	return CompareAndSwapRefs(ctx, repo, []RefUpdate{{Ref: refName, New: newHash, Expected: expected}})
+}
+
+// CompareAndSwapRefs atomically updates all refs when every expected tip still
+// matches. Native Git's update-ref transaction is the lock interoperability
+// boundary across hooks, worktrees, and other Git clients.
+func CompareAndSwapRefs(ctx context.Context, repo *git.Repository, updates []RefUpdate) error {
+	if len(updates) == 0 {
+		return errors.New("compare-and-swap refs: at least one update is required")
+	}
+	ordered := append([]RefUpdate(nil), updates...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Ref < ordered[j].Ref })
+	for i, update := range ordered {
+		if update.Ref == "" {
+			return errors.New("compare-and-swap refs: ref name is required")
+		}
+		if update.New.IsZero() {
+			return fmt.Errorf("compare-and-swap refs %s: new hash is required", update.Ref)
+		}
+		if i > 0 && ordered[i-1].Ref == update.Ref {
+			return fmt.Errorf("compare-and-swap refs: duplicate ref %s", update.Ref)
+		}
 	}
 	root, err := repositoryWorktreeRoot(repo)
 	if err != nil {
 		return err
 	}
 
-	oldValue := strings.Repeat("0", newHash.HexSize())
-	if !expected.IsZero() {
-		oldValue = expected.String()
+	commands := []string{"start"}
+	for _, update := range ordered {
+		oldValue := strings.Repeat("0", update.New.HexSize())
+		if !update.Expected.IsZero() {
+			oldValue = update.Expected.String()
+		}
+		commands = append(commands, fmt.Sprintf("update %s %s %s", update.Ref, update.New, oldValue))
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "update-ref", refName.String(), newHash.String(), oldValue)
+	commands = append(commands, "commit")
+	if hook, ok := ctx.Value(beforeRefCASKey{}).(func()); ok {
+		hook()
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "update-ref", "--stdin")
 	cmd.Env = append(gitCommandEnv(), "LC_ALL=C", "LANG=C")
+	cmd.Stdin = strings.NewReader(strings.Join(commands, "\n") + "\n")
 	output, runErr := cmd.CombinedOutput()
 	if runErr == nil {
 		return nil
@@ -182,15 +295,23 @@ func CompareAndSwapRef(
 		return err //nolint:wrapcheck // canonical context cancellation
 	}
 
-	actual, readErr := ReadRefHash(repo, refName)
 	detail := strings.TrimSpace(string(output))
-	if readErr == nil && (actual != expected || strings.Contains(detail, "cannot lock ref") || strings.Contains(detail, "but expected")) {
-		return &RefConflictError{Ref: refName, Expected: expected, Actual: actual}
+	actuals := make(map[plumbing.ReferenceName]plumbing.Hash, len(ordered))
+	for _, update := range ordered {
+		actual, readErr := ReadRefHash(repo, update.Ref)
+		if readErr != nil {
+			return fmt.Errorf("git update-ref transaction failed (%s), then ref reread failed: %w", detail, readErr)
+		}
+		actuals[update.Ref] = actual
+		if actual != update.Expected {
+			return &RefConflictError{Ref: update.Ref, Expected: update.Expected, Actual: actual}
+		}
 	}
-	if readErr != nil {
-		return fmt.Errorf("git update-ref %s failed (%s), then ref reread failed: %w", refName, detail, readErr)
+	if strings.Contains(detail, "cannot lock ref") || strings.Contains(detail, "but expected") {
+		update := ordered[0]
+		return &RefConflictError{Ref: update.Ref, Expected: update.Expected, Actual: actuals[update.Ref]}
 	}
-	return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, runErr)
+	return fmt.Errorf("git update-ref transaction: %s: %w", detail, runErr)
 }
 
 // MoveRefIfUnchanged atomically moves expectedSource from sourceRef to

@@ -2,7 +2,6 @@ package checkpoint
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -74,13 +73,6 @@ func (s *fanoutStore) Write(ctx context.Context, req WriteRequest) error {
 		}
 		req = canonical
 	}
-	if summary, ok := req.(SessionSummary); ok && summary.SessionID == "" {
-		resolved, err := s.resolveLegacySummaryTarget(ctx, summary)
-		if err != nil {
-			return err
-		}
-		req = resolved
-	}
 	if err := s.primary.Write(ctx, req); err != nil {
 		return err //nolint:wrapcheck // primary error is the operation's error, surfaced verbatim
 	}
@@ -91,25 +83,6 @@ func (s *fanoutStore) Write(ctx context.Context, req WriteRequest) error {
 		}
 	}
 	return nil
-}
-
-func (s *fanoutStore) resolveLegacySummaryTarget(ctx context.Context, req SessionSummary) (SessionSummary, error) {
-	summary, err := s.primary.Read(ctx, req.CheckpointID)
-	if err != nil {
-		return req, fmt.Errorf("resolve summary target checkpoint: %w", err)
-	}
-	if summary == nil || len(summary.Sessions) == 0 {
-		return req, ErrCheckpointNotFound
-	}
-	meta, err := s.primary.ReadSessionMetadata(ctx, req.CheckpointID, len(summary.Sessions)-1)
-	if err != nil {
-		return req, fmt.Errorf("resolve summary target session: %w", err)
-	}
-	if meta == nil || meta.SessionID == "" {
-		return req, &SessionNotFoundError{CheckpointID: req.CheckpointID}
-	}
-	req.SessionID = meta.SessionID
-	return req, nil
 }
 
 // fanoutStoreWithAuthor adds the optional AuthorReader capability when the

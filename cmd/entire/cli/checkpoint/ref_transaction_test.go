@@ -75,6 +75,59 @@ func TestCompareAndSwapRef_CreateSHA256Ref(t *testing.T) {
 	}
 }
 
+func TestCompareAndSwapRefs_IsAtomic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "initial.txt", "initial")
+	testutil.GitAdd(t, dir, "initial.txt")
+	testutil.GitCommit(t, dir, "initial")
+	repo, err := gitrepo.OpenPath(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer repo.Close()
+	initial, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read initial HEAD: %v", err)
+	}
+	testutil.WriteFile(t, dir, "next.txt", "next")
+	testutil.GitAdd(t, dir, "next.txt")
+	testutil.GitCommit(t, dir, "next")
+	next, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read next HEAD: %v", err)
+	}
+
+	first := plumbing.ReferenceName("refs/entire/atomic/first")
+	second := plumbing.ReferenceName("refs/entire/atomic/second")
+	if err := CompareAndSwapRefs(t.Context(), repo, []RefUpdate{
+		{Ref: first, New: initial.Hash(), Expected: plumbing.ZeroHash},
+		{Ref: second, New: initial.Hash(), Expected: plumbing.ZeroHash},
+	}); err != nil {
+		t.Fatalf("create refs: %v", err)
+	}
+
+	err = CompareAndSwapRefs(t.Context(), repo, []RefUpdate{
+		{Ref: first, New: next.Hash(), Expected: initial.Hash()},
+		{Ref: second, New: next.Hash(), Expected: plumbing.ZeroHash},
+	})
+	if !errors.Is(err, ErrRefConflict) {
+		t.Fatalf("atomic conflict error = %v, want ErrRefConflict", err)
+	}
+	firstAfter, err := ReadRefHash(repo, first)
+	if err != nil {
+		t.Fatalf("read first ref: %v", err)
+	}
+	secondAfter, err := ReadRefHash(repo, second)
+	if err != nil {
+		t.Fatalf("read second ref: %v", err)
+	}
+	if firstAfter != initial.Hash() || secondAfter != initial.Hash() {
+		t.Fatalf("partial update: first=%s second=%s, want both %s", firstAfter, secondAfter, initial.Hash())
+	}
+}
+
 func TestRunRefTransaction_RebuildsAfterConflict(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
