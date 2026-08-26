@@ -195,11 +195,11 @@ func (s *treeWriter) applyAttributionBackfill(ctx context.Context, existing *obj
 	return s.buildCheckpointSubtree(ctx, entries, basePath)
 }
 
-// applySummaryBackfill rewrites the latest session's summary on the checkpoint's
+// applySummaryBackfill rewrites the requested session's summary on the checkpoint's
 // current subtree, returning the new subtree hash and that session's ID (for the
 // commit message). Returns ErrCheckpointNotFound when the checkpoint has no root
 // summary.
-func (s *treeWriter) applySummaryBackfill(ctx context.Context, existing *object.Tree, basePath string, summary *Summary) (plumbing.Hash, string, error) {
+func (s *treeWriter) applySummaryBackfill(ctx context.Context, existing *object.Tree, basePath, sessionID string, summary *Summary) (plumbing.Hash, string, error) {
 	entries, err := s.flattenExisting(existing, basePath)
 	if err != nil {
 		return plumbing.ZeroHash, "", err
@@ -216,9 +216,15 @@ func (s *treeWriter) applySummaryBackfill(ctx context.Context, existing *object.
 		return plumbing.ZeroHash, "", fmt.Errorf("failed to read checkpoint summary: %w", err)
 	}
 
-	// Find the latest session's metadata path (0-based indexing)
-	latestIndex := len(checkpointSummary.Sessions) - 1
-	sessionMetadataPath := checkpointSubtreePath(basePath, strconv.Itoa(latestIndex), paths.MetadataFileName)
+	targetIndex := len(checkpointSummary.Sessions) - 1
+	if sessionID != "" {
+		var findErr error
+		targetIndex, findErr = s.findSessionIndexByID(basePath, entries, checkpointSummary, sessionID)
+		if findErr != nil {
+			return plumbing.ZeroHash, "", findErr
+		}
+	}
+	sessionMetadataPath := checkpointSubtreePath(basePath, strconv.Itoa(targetIndex), paths.MetadataFileName)
 	sessionEntry, exists := entries[sessionMetadataPath]
 	if !exists {
 		return plumbing.ZeroHash, "", fmt.Errorf("session metadata not found at %s", sessionMetadataPath)
@@ -802,6 +808,24 @@ func (s *treeWriter) findSessionIndex(ctx context.Context, basePath string, exis
 		}
 	}
 	return len(existingSummary.Sessions)
+}
+
+func (s *treeWriter) findSessionIndexByID(basePath string, entries map[string]object.TreeEntry, summary *CheckpointSummary, sessionID string) (int, error) {
+	for i := range len(summary.Sessions) {
+		path := checkpointSubtreePath(basePath, strconv.Itoa(i), paths.MetadataFileName)
+		entry, exists := entries[path]
+		if !exists {
+			return -1, fmt.Errorf("session metadata not found at %s", path)
+		}
+		meta, err := s.readMetadataFromBlob(entry.Hash)
+		if err != nil {
+			return -1, fmt.Errorf("read session metadata at %s: %w", path, err)
+		}
+		if meta.SessionID == sessionID {
+			return i, nil
+		}
+	}
+	return -1, &SessionNotFoundError{CheckpointID: summary.CheckpointID, SessionID: sessionID}
 }
 
 // reaggregateFromEntries reads all session metadata from the entries map and
@@ -1408,7 +1432,7 @@ func (s *GitStore) ReadLatestSessionContent(ctx context.Context, checkpointID id
 // ReadSessionContentByID reads a session's content by its session ID.
 // This is useful when you have the session ID but don't know its index within the checkpoint.
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
-// Returns an error if no session with the given ID exists in the checkpoint.
+// Returns ErrSessionNotFound if no session with the given ID exists in the checkpoint.
 func (s *GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string) (*SessionContent, error) {
 	summary, err := s.Read(ctx, checkpointID)
 	if err != nil {
@@ -1429,7 +1453,7 @@ func (s *GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.C
 		}
 	}
 
-	return nil, fmt.Errorf("session %q not found in checkpoint %s", sessionID, checkpointID)
+	return nil, &SessionNotFoundError{CheckpointID: checkpointID, SessionID: sessionID}
 }
 
 // List lists all committed checkpoints from the entire/checkpoints/v1 branch.
@@ -1569,9 +1593,9 @@ func (s *GitStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]b
 	return content.Transcript, content.Metadata.SessionID, nil
 }
 
-// backfillSummary updates the summary field in the latest session's metadata.
+// backfillSummary updates the summary field in the requested session's metadata.
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
-func (s *GitStore) backfillSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error {
+func (s *GitStore) backfillSummary(ctx context.Context, req SessionSummary) error {
 	if err := ctx.Err(); err != nil {
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}
@@ -1582,6 +1606,7 @@ func (s *GitStore) backfillSummary(ctx context.Context, checkpointID id.Checkpoi
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	targetSessionID := req.SessionID
 	_, err := RunRefTransaction(ctx, s.repo, s.refs.Primary, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
 		if parentHash.IsZero() {
 			return plumbing.ZeroHash, false, ErrCheckpointNotFound
@@ -1590,19 +1615,22 @@ func (s *GitStore) backfillSummary(ctx context.Context, checkpointID id.Checkpoi
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		existing, err := s.subtreeObjAt(rootTreeHash, checkpointID.Path())
+		existing, err := s.subtreeObjAt(rootTreeHash, req.CheckpointID.Path())
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, checkpointID.Path()+"/", summary)
+		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, req.CheckpointID.Path()+"/", targetSessionID, req.Summary)
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, checkpointSubtree)
+		if targetSessionID == "" {
+			targetSessionID = sessionID
+		}
+		newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, req.CheckpointID, checkpointSubtree)
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
+		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", req.CheckpointID, sessionID)
 		newCommitHash, err := CreateCommit(ctx, s.repo, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 		return newCommitHash, true, err
 	})

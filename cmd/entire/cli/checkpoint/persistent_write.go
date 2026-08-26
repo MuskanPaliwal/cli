@@ -10,7 +10,7 @@ import (
 type persistentWriteBackend interface {
 	writeBatchSessions(ctx context.Context, req BatchSessions) error
 	backfillTranscript(ctx context.Context, opts UpdateOptions) error
-	backfillSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error
+	backfillSummary(ctx context.Context, req SessionSummary) error
 	backfillAttribution(ctx context.Context, checkpointID id.CheckpointID, attribution *Attribution) error
 }
 
@@ -33,7 +33,7 @@ func dispatchPersistentWrite(ctx context.Context, backend persistentWriteBackend
 	case SessionTranscript:
 		return backend.backfillTranscript(ctx, UpdateOptions(r))
 	case SessionSummary:
-		return backend.backfillSummary(ctx, r.CheckpointID, r.Summary)
+		return backend.backfillSummary(ctx, r)
 	case CheckpointAttribution:
 		return backend.backfillAttribution(ctx, r.CheckpointID, r.Attribution)
 	default:

@@ -210,7 +210,15 @@ func (s *Store) writeSessionSummary(r cp.SessionSummary) error {
 	if sc == nil || len(sc.Sessions) == 0 {
 		return fmt.Errorf("fsstore: cannot set summary for unknown checkpoint %s", r.CheckpointID)
 	}
-	sc.Sessions[len(sc.Sessions)-1].Metadata.Summary = checkpoint.RedactSummary(r.Summary)
+	targetSessionID := r.SessionID
+	if targetSessionID == "" {
+		targetSessionID = sc.Sessions[len(sc.Sessions)-1].SessionID
+	}
+	idx := sessionIndexByID(sc.Sessions, targetSessionID)
+	if idx < 0 {
+		return &checkpoint.SessionNotFoundError{CheckpointID: r.CheckpointID, SessionID: targetSessionID}
+	}
+	sc.Sessions[idx].Metadata.Summary = checkpoint.RedactSummary(r.Summary)
 	return s.save(sc)
 }
 

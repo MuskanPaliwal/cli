@@ -174,26 +174,30 @@ func (s *gitRefsStore) backfillTranscript(ctx context.Context, opts UpdateOption
 	return nil
 }
 
-func (s *gitRefsStore) backfillSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error {
+func (s *gitRefsStore) backfillSummary(ctx context.Context, req SessionSummary) error {
 	if err := ctx.Err(); err != nil {
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	refName, err := s.prepareRefForBackfill(ctx, checkpointID)
+	refName, err := s.prepareRefForBackfill(ctx, req.CheckpointID)
 	if err != nil {
 		return err
 	}
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	targetSessionID := req.SessionID
 	_, err = RunRefTransaction(ctx, s.repo, refName, func(parentHash plumbing.Hash) (plumbing.Hash, bool, error) {
-		existing, err := s.checkpointTreeAt(parentHash, checkpointID)
+		existing, err := s.checkpointTreeAt(parentHash, req.CheckpointID)
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, "", summary)
+		checkpointSubtree, sessionID, err := s.applySummaryBackfill(ctx, existing, "", targetSessionID, req.Summary)
 		if err != nil {
 			return plumbing.ZeroHash, false, err
 		}
-		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, sessionID)
+		if targetSessionID == "" {
+			targetSessionID = sessionID
+		}
+		commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", req.CheckpointID, sessionID)
 		commitHash, err := CreateCommit(ctx, s.repo, checkpointSubtree, parentHash, commitMsg, authorName, authorEmail)
 		return commitHash, true, err
 	})

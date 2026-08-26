@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	checkpointID "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -326,7 +327,7 @@ func TestMigrateShadowBranch_ExistingDestinationAtDifferentHashFails(t *testing.
 
 	state := &SessionState{BaseCommit: oldBaseCommit}
 	migrated, err := (&ManualCommitStrategy{}).migrateShadowBranchToBaseCommit(t.Context(), repo, state, newBaseCommit)
-	require.ErrorContains(t, err, "destination shadow branch points to")
+	require.ErrorIs(t, err, checkpoint.ErrRefMoveConflict)
 	assert.False(t, migrated)
 	assert.Equal(t, oldBaseCommit, state.BaseCommit)
 	assert.True(t, testutil.BranchExists(t, dir, oldShadowBranch))

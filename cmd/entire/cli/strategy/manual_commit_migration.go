@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -118,39 +119,23 @@ func (s *ManualCommitStrategy) migrateShadowBranchToBaseCommit(ctx context.Conte
 	oldRefName := plumbing.NewBranchReferenceName(oldShadowBranch)
 	oldRef, err := repo.Reference(oldRefName, true)
 	if err != nil {
+		if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return false, fmt.Errorf("failed to read shadow branch %s: %w", oldShadowBranch, err)
+		}
 		// Old shadow branch doesn't exist - just update state.BaseCommit
 		// This can happen if this is the first checkpoint after HEAD changed
 		state.BaseCommit = newBaseCommit
 		logging.Info(logging.WithComponent(ctx, "migration"), "updated session base commit",
 			slog.String("new_base", newBaseCommit[:7]))
-		return true, nil //nolint:nilerr // err is "reference not found" which is fine - just need to update state
+		return true, nil
 	}
 
-	// Old shadow branch exists - move it to new base commit
-	newRefName := plumbing.NewBranchReferenceName(newShadowBranch)
-
-	_, err = checkpoint.RunRefTransaction(ctx, repo, newRefName, func(current plumbing.Hash) (plumbing.Hash, bool, error) {
-		switch {
-		case current.IsZero():
-			return oldRef.Hash(), true, nil
-		case current == oldRef.Hash():
-			return current, false, nil
-		default:
-			return plumbing.ZeroHash, false, fmt.Errorf("destination shadow branch points to %s, expected %s", current, oldRef.Hash())
-		}
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to create new shadow branch %s: %w", newShadowBranch, err)
+	// Old shadow branch exists - move it to the new base commit atomically.
+	if err := checkpoint.MoveShadowBranchIfUnchanged(ctx, repo, oldShadowBranch, newShadowBranch, oldRef.Hash()); err != nil {
+		return false, fmt.Errorf("failed to move shadow branch %s to %s: %w", oldShadowBranch, newShadowBranch, err)
 	}
 
-	// Delete old reference via CLI (go-git v5's RemoveReference doesn't persist with packed refs/worktrees)
 	logCtx := logging.WithComponent(ctx, "migration")
-	if err := DeleteBranchCLI(ctx, oldShadowBranch); err != nil {
-		// Non-fatal: log but continue - the important thing is the new branch exists
-		logging.Warn(logCtx, "failed to remove old shadow branch",
-			slog.String("shadow_branch", oldShadowBranch),
-			slog.String("error", err.Error()))
-	}
 
 	logging.Info(logCtx, "moved shadow branch (HEAD changed during session)",
 		slog.String("from", oldShadowBranch),

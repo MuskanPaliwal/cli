@@ -146,8 +146,13 @@ func TestStore_SessionSummaryAndAttribution(t *testing.T) {
 		CheckpointID: cid, SessionID: "sess-1", Strategy: "manual-commit",
 		Transcript: redact.AlreadyRedacted([]byte("t")),
 	}))
+	require.NoError(t, store.Write(ctx, cp.Session{
+		CheckpointID: cid, SessionID: "sess-2", Strategy: "manual-commit",
+		Transcript: redact.AlreadyRedacted([]byte("t2")),
+	}))
 	require.NoError(t, store.Write(ctx, cp.SessionSummary{
-		CheckpointID: cid, Summary: &cp.Summary{Intent: "do a thing", Outcome: "did it"},
+		CheckpointID: cid, SessionID: "sess-1",
+		Summary: &cp.Summary{Intent: "do a thing", Outcome: "did it"},
 	}))
 	require.NoError(t, store.Write(ctx, cp.CheckpointAttribution{
 		CheckpointID: cid, Attribution: &cp.Attribution{AgentLines: 10, AgentPercentage: 80},
@@ -157,6 +162,9 @@ func TestStore_SessionSummaryAndAttribution(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, meta.Summary)
 	assert.Equal(t, "do a thing", meta.Summary.Intent)
+	meta, err = store.ReadSessionMetadata(ctx, cid, 1)
+	require.NoError(t, err)
+	assert.Nil(t, meta.Summary)
 
 	summary, err := store.Read(ctx, cid)
 	require.NoError(t, err)

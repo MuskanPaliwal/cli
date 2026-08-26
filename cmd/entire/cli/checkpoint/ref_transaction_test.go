@@ -1,12 +1,14 @@
 package checkpoint
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
+	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -113,5 +115,166 @@ func TestRunRefTransaction_RebuildsAfterConflict(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("mutation calls = %d, want 2", calls)
+	}
+}
+
+func TestMoveRefIfUnchanged_CreatesDestinationAndDeletesSource(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, source, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := MoveRefIfUnchanged(t.Context(), repo, source, destination, hash); err != nil {
+		t.Fatalf("move refs: %v", err)
+	}
+	assertRefHash(t, repo, source, plumbing.ZeroHash)
+	assertRefHash(t, repo, destination, hash)
+}
+
+func TestMoveRefIfUnchanged_ExistingDestinationIsIdempotent(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, source, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := CompareAndSwapRef(t.Context(), repo, destination, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := MoveRefIfUnchanged(t.Context(), repo, source, destination, hash); err != nil {
+		t.Fatalf("idempotent move: %v", err)
+	}
+	assertRefHash(t, repo, source, plumbing.ZeroHash)
+	assertRefHash(t, repo, destination, hash)
+}
+
+func TestMoveRefIfUnchanged_DifferentDestinationPreservesSource(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	otherHash := setupMoveRefRepoWithSecondCommit(t, repo)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, source, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := CompareAndSwapRef(t.Context(), repo, destination, otherHash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := MoveRefIfUnchanged(t.Context(), repo, source, destination, hash); !errors.Is(err, ErrRefMoveConflict) {
+		t.Fatalf("move error = %v, want ErrRefMoveConflict", err)
+	}
+	assertRefHash(t, repo, source, hash)
+	assertRefHash(t, repo, destination, otherHash)
+}
+
+func TestMoveRefIfUnchanged_MovedSourceChangesNeitherRef(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	otherHash := setupMoveRefRepoWithSecondCommit(t, repo)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, source, otherHash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := MoveRefIfUnchanged(t.Context(), repo, source, destination, hash); !errors.Is(err, ErrRefMoveConflict) {
+		t.Fatalf("move error = %v, want ErrRefMoveConflict", err)
+	}
+	assertRefHash(t, repo, source, otherHash)
+	assertRefHash(t, repo, destination, plumbing.ZeroHash)
+}
+
+func TestMoveRefIfUnchanged_SourceAdvancesAfterObservationChangesNeitherRef(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	otherHash := setupMoveRefRepoWithSecondCommit(t, repo)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, source, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	ctx := withBeforeRefCAS(t.Context(), func() {
+		if err := CompareAndSwapRef(context.Background(), repo, source, otherHash, hash); err != nil {
+			t.Fatalf("advance source: %v", err)
+		}
+	})
+	if err := MoveRefIfUnchanged(ctx, repo, source, destination, hash); !errors.Is(err, ErrRefMoveConflict) {
+		t.Fatalf("move error = %v, want ErrRefMoveConflict", err)
+	}
+	assertRefHash(t, repo, source, otherHash)
+	assertRefHash(t, repo, destination, plumbing.ZeroHash)
+}
+
+func TestMoveRefIfUnchanged_MissingSourceWithMatchingDestinationIsIdempotent(t *testing.T) {
+	t.Parallel()
+	repo, hash := setupMoveRefRepo(t)
+	source := plumbing.ReferenceName("refs/heads/entire/source")
+	destination := plumbing.ReferenceName("refs/heads/entire/destination")
+
+	if err := CompareAndSwapRef(t.Context(), repo, destination, hash, plumbing.ZeroHash); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := MoveRefIfUnchanged(t.Context(), repo, source, destination, hash); err != nil {
+		t.Fatalf("idempotent missing-source move: %v", err)
+	}
+	assertRefHash(t, repo, source, plumbing.ZeroHash)
+	assertRefHash(t, repo, destination, hash)
+}
+
+func setupMoveRefRepo(t *testing.T) (*git.Repository, plumbing.Hash) {
+	t.Helper()
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "initial.txt", "initial")
+	testutil.GitAdd(t, dir, "initial.txt")
+	testutil.GitCommit(t, dir, "initial")
+	repo, err := gitrepo.OpenPath(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read HEAD: %v", err)
+	}
+	return repo, head.Hash()
+}
+
+func setupMoveRefRepoWithSecondCommit(t *testing.T, repo *git.Repository) plumbing.Hash {
+	t.Helper()
+	_, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read initial HEAD: %v", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("open worktree: %v", err)
+	}
+	dir := worktree.Filesystem().Root()
+	testutil.WriteFile(t, dir, "second.txt", "second")
+	testutil.GitAdd(t, dir, "second.txt")
+	testutil.GitCommit(t, dir, "second")
+	second, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read second HEAD: %v", err)
+	}
+	return second.Hash()
+}
+
+func assertRefHash(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName, want plumbing.Hash) {
+	t.Helper()
+	got, err := ReadRefHash(repo, refName)
+	if err != nil {
+		t.Fatalf("read %s: %v", refName, err)
+	}
+	if got != want {
+		t.Fatalf("%s = %s, want %s", refName, got, want)
 	}
 }

@@ -59,7 +59,10 @@ type (
 var (
 	ErrCheckpointNotFound = apicheckpoint.ErrCheckpointNotFound
 	ErrNoTranscript       = apicheckpoint.ErrNoTranscript
+	ErrSessionNotFound    = apicheckpoint.ErrSessionNotFound
 )
+
+type SessionNotFoundError = apicheckpoint.SessionNotFoundError
 
 // Contract helper functions, re-exported as thin wrappers rather than vars so
 // the facade symbols can't be reassigned by consumers.

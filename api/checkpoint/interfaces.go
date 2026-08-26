@@ -75,10 +75,12 @@ type BatchSessions struct {
 // at stop time without clobbering sibling fields. (session-level)
 type SessionTranscript UpdateOptions
 
-// SessionSummary rewrites only the summary of the checkpoint's latest session.
+// SessionSummary rewrites only the summary of the named session. An empty
+// SessionID is retained for legacy callers and is resolved once by the writer.
 // (session-level)
 type SessionSummary struct {
 	CheckpointID id.CheckpointID
+	SessionID    string
 	Summary      *Summary
 }
 

@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 // ErrShadowRefBusy is returned by casUpdateShadowBranchRef when the ref has
 // moved since the caller read it. Callers retry with a fresh parent.
 var ErrShadowRefBusy = errors.New("shadow branch ref moved (CAS mismatch)")
+
+// ErrShadowBranchMoved means the caller's base no longer names the current
+// shadow branch and migration must be retried before publishing.
+var ErrShadowBranchMoved = errors.New("shadow branch base changed during write")
 
 // shadowRefMaxRetries bounds the WriteTemporary retry loop. With the
 // per-shadow-branch flock held, our own writers never collide; this budget
@@ -101,16 +106,63 @@ func shadowBranchLockPath(commonDir, branchName string) (string, error) {
 // commonDir is the git common directory (from s.repoDirs); it locates the
 // lock file independently of the process cwd.
 func withShadowBranchFlock(commonDir, branchName string, fn func() error) error {
-	path, err := shadowBranchLockPath(commonDir, branchName)
+	return withShadowBranchFlocks(commonDir, []string{branchName}, fn)
+}
+
+func withShadowBranchFlocks(commonDir string, branchNames []string, fn func() error) error {
+	ordered := append([]string(nil), branchNames...)
+	sort.Strings(ordered)
+	unique := ordered[:0]
+	for _, branchName := range ordered {
+		if len(unique) == 0 || unique[len(unique)-1] != branchName {
+			unique = append(unique, branchName)
+		}
+	}
+
+	releases := make([]func(), 0, len(unique))
+	for _, branchName := range unique {
+		path, err := shadowBranchLockPath(commonDir, branchName)
+		if err != nil {
+			for i := len(releases) - 1; i >= 0; i-- {
+				releases[i]()
+			}
+			return err
+		}
+		release, err := flock.Acquire(path)
+		if err != nil {
+			for i := len(releases) - 1; i >= 0; i-- {
+				releases[i]()
+			}
+			return fmt.Errorf("acquire shadow flock %s: %w", branchName, err)
+		}
+		releases = append(releases, release)
+	}
+	defer func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}()
+	return fn()
+}
+
+// MoveShadowBranchIfUnchanged locks both shadow branches before moving their
+// refs atomically.
+func MoveShadowBranchIfUnchanged(
+	ctx context.Context,
+	repo *git.Repository,
+	sourceBranch, destinationBranch string,
+	expectedSource plumbing.Hash,
+) error {
+	commonDir, err := resolveGitCommonDir(ctx, repo)
 	if err != nil {
 		return err
 	}
-	release, err := flock.Acquire(path)
-	if err != nil {
-		return fmt.Errorf("acquire shadow flock %s: %w", branchName, err)
-	}
-	defer release()
-	return fn()
+	return withShadowBranchFlocks(commonDir, []string{sourceBranch, destinationBranch}, func() error {
+		return MoveRefIfUnchanged(ctx, repo,
+			plumbing.NewBranchReferenceName(sourceBranch),
+			plumbing.NewBranchReferenceName(destinationBranch),
+			expectedSource)
+	})
 }
 
 // tryDeleteLooseObject best-effort removes a loose object file. Used to
