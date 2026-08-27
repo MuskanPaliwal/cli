@@ -9,6 +9,11 @@ import (
 
 var githubRepoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$`)
 
+// jurisdictionSlugPattern is the same rule the entire.io gateway validates its
+// `?jurisdiction=` selector against (a short lowercase slug such as "us" or
+// "eu"), so a value that passes here is never rejected as malformed there.
+var jurisdictionSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
 func ResolveOptions(
 	flagLocal bool,
 	flagSince string,
@@ -16,13 +21,21 @@ func ResolveOptions(
 	flagAllBranches bool,
 	flagRepos []string,
 	flagVoice string,
+	flagJurisdiction string,
 	flagInsecureHTTPAuth bool,
 	currentBranch func() (string, error),
 ) (Options, error) {
 	flagRepos = normalizeScopeValues(flagRepos)
+	jurisdiction, err := NormalizeJurisdiction(flagJurisdiction)
+	if err != nil {
+		return Options{}, err
+	}
 
 	if flagLocal && len(flagRepos) > 0 {
 		return Options{}, errors.New("--repos cannot be used with --local")
+	}
+	if flagLocal && jurisdiction != "" {
+		return Options{}, errors.New("--jurisdiction cannot be used with --local (cloud dispatch only)")
 	}
 	if !flagLocal && flagAllBranches {
 		return Options{}, errors.New("--all-branches only applies to --local (cloud dispatch uses each repo's default branch)")
@@ -61,8 +74,23 @@ func ResolveOptions(
 		AllBranches:           flagAllBranches,
 		ImplicitCurrentBranch: implicitCurrentBranch,
 		Voice:                 flagVoice,
+		Jurisdiction:          jurisdiction,
 		InsecureHTTPAuth:      flagInsecureHTTPAuth,
 	}, nil
+}
+
+// NormalizeJurisdiction lowercases and trims a --jurisdiction value and checks
+// it is a jurisdiction slug (e.g. "us", "eu"). Empty is valid and means the
+// caller's home jurisdiction.
+func NormalizeJurisdiction(value string) (string, error) {
+	jurisdiction := strings.ToLower(strings.TrimSpace(value))
+	if jurisdiction == "" {
+		return "", nil
+	}
+	if !jurisdictionSlugPattern.MatchString(jurisdiction) {
+		return "", fmt.Errorf("invalid --jurisdiction %q: expected a jurisdiction slug such as us or eu", strings.TrimSpace(value))
+	}
+	return jurisdiction, nil
 }
 
 func normalizeScopeValues(values []string) []string {

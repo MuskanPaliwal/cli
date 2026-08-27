@@ -50,6 +50,10 @@ const (
 	dispatchWizardBranchAll     = "all"
 
 	dispatchWizardVoiceCustom = "custom"
+
+	// dispatchWizardJurisdictionHome labels the blank selector: the caller's
+	// home jurisdiction, which is where the gateway routes when none is sent.
+	dispatchWizardJurisdictionHome = "home"
 )
 
 type dispatchWizardState struct {
@@ -59,6 +63,7 @@ type dispatchWizardState struct {
 	currentBranch    string
 	currentBranchErr error
 	selectedRepos    []string
+	jurisdiction     string
 	voicePreset      string
 	voiceCustom      string
 	confirmRun       bool
@@ -109,6 +114,19 @@ func (s dispatchWizardState) showRepoPicker() bool {
 	return !s.isLocal()
 }
 
+// showJurisdiction: a cloud dispatch is routed to one jurisdiction's cell, so
+// the selector only exists in cloud mode. Blank keeps the home default.
+func (s dispatchWizardState) showJurisdiction() bool {
+	return !s.isLocal()
+}
+
+func (s dispatchWizardState) resolveJurisdiction() string {
+	if s.isLocal() {
+		return ""
+	}
+	return strings.TrimSpace(s.jurisdiction)
+}
+
 func (s dispatchWizardState) showLocalBranchMode() bool {
 	return s.isLocal()
 }
@@ -125,6 +143,7 @@ func (s dispatchWizardState) resolve() (dispatchpkg.Options, error) {
 		allBranches,
 		s.resolveCloudRepos(),
 		s.voiceValue(),
+		s.resolveJurisdiction(),
 		false,
 		func() (string, error) {
 			return s.currentBranch, nil
@@ -163,11 +182,19 @@ func buildDispatchWizardSummary(opts dispatchpkg.Options, scope string) string {
 		mode = "local"
 	}
 
-	return strings.Join([]string{
+	lines := []string{
 		"Mode: " + mode,
 		"Scope: " + scope,
 		"Branches: " + branches,
-	}, "\n")
+	}
+	if opts.Mode != dispatchpkg.ModeLocal {
+		jurisdiction := dispatchWizardJurisdictionHome
+		if j := strings.TrimSpace(opts.Jurisdiction); j != "" {
+			jurisdiction = j
+		}
+		lines = append(lines, "Jurisdiction: "+jurisdiction)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func resolvedDispatchScope(opts dispatchpkg.Options) string {
@@ -195,6 +222,7 @@ func buildDispatchCommand(opts dispatchpkg.Options) string {
 		renderStringFlag("--since", strings.TrimSpace(opts.Since)),
 		mapBoolToFlag(opts.AllBranches, "--all-branches"),
 		renderStringFlag("--repos", strings.Join(opts.RepoPaths, ",")),
+		renderStringFlag("--jurisdiction", strings.TrimSpace(opts.Jurisdiction)),
 		renderStringFlag("--voice", strings.TrimSpace(opts.Voice)),
 	}), " ")
 }
@@ -281,6 +309,21 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 		).WithHideFunc(func() bool {
 			return !state.showRepoPicker()
 		}),
+		huh.NewGroup(
+			huh.NewInput().
+				Placeholder(dispatchWizardJurisdictionHome).
+				Value(&state.jurisdiction).
+				Validate(func(value string) error {
+					if !state.showJurisdiction() {
+						return nil
+					}
+					_, err := dispatchpkg.NormalizeJurisdiction(value)
+					return err //nolint:wrapcheck // validation message is already user-facing
+				}),
+		).Title("Jurisdiction").Description("Optional slug (e.g. us, eu) whose cell generates and stores the dispatch. Blank uses your home jurisdiction; the selected repos must be placed there.").
+			WithHideFunc(func() bool {
+				return !state.showJurisdiction()
+			}),
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Options(

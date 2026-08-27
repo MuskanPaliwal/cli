@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +74,7 @@ func TestCloudClient_CreateDispatch_Happy(t *testing.T) {
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestCloudClient_CreateDispatch_SetsVersionedUserAgent(t *testing.T) {
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestCloudClient_CreateDispatch_OmitsBranchesAndOrgsFromPayload(t *testing.T
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ func TestCloudClient_CreateDispatch_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestCloudClient(t, srv.URL, "")
-	_, err := client.CreateDispatch(ctx, CreateDispatchRequest{Repos: []string{"x/y"}})
+	_, err := client.CreateDispatch(ctx, CreateDispatchRequest{Repos: []string{"x/y"}}, "")
 	if err == nil || !strings.Contains(err.Error(), "entire login") {
 		t.Fatalf("expected auth error, got %v", err)
 	}
@@ -202,7 +203,7 @@ func TestCloudClient_CreateDispatch_EscapesErrorBody(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestCloudClient(t, srv.URL, "t")
-	_, err := client.CreateDispatch(ctx, CreateDispatchRequest{Repos: []string{"x/y"}})
+	_, err := client.CreateDispatch(ctx, CreateDispatchRequest{Repos: []string{"x/y"}}, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -234,7 +235,7 @@ func TestCloudClient_CreateDispatch_IgnoresUnknownResponseFields(t *testing.T) {
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("expected forward-compatible decode, got error: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestCloudClient_CreateDispatch_AcceptsBranchesResponseField(t *testing.T) {
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +302,7 @@ func TestCloudClient_CreateDispatch_AcceptsAllBranchesSentinelInResponseField(t 
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +337,7 @@ func TestCloudClient_CreateDispatch_AcceptsVoiceResponseField(t *testing.T) {
 		Since:    "2026-04-09T00:00:00Z",
 		Until:    "2026-04-16T00:00:00Z",
 		Generate: true,
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,4 +350,174 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestCloudClient_CreateDispatch_SendsJurisdictionSelectorAsQueryOnly(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != testDispatchEndpoint {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get(jurisdictionQueryParam); got != "us" {
+			t.Errorf("expected ?jurisdiction=us, got query %q", r.URL.RawQuery)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, ok := body["jurisdiction"]; ok {
+			t.Errorf("jurisdiction is a gateway query selector and must not be in the body: %v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"jurisdiction":"us","window":{"normalized_since":"2026-04-09T00:00:00Z","normalized_until":"2026-04-16T00:00:00Z"},"covered_repos":["entireio/cli"],"repos":[],"generated_markdown":"hi"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := newTestCloudClient(t, srv.URL, "t")
+	got, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{
+		Repos:    []string{testRepoFullName},
+		Since:    "2026-04-09T00:00:00Z",
+		Until:    "2026-04-16T00:00:00Z",
+		Generate: true,
+	}, "us")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Jurisdiction != "us" || got.GeneratedMarkdown != "hi" {
+		t.Fatalf("unexpected response: %+v", got)
+	}
+}
+
+func TestCloudClient_CreateDispatch_HomeSendsNoSelectorAndLabelsHome(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has(jurisdictionQueryParam) {
+			t.Errorf("home-jurisdiction request must not send a selector, got query %q", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"window":{"normalized_since":"2026-04-09T00:00:00Z","normalized_until":"2026-04-16T00:00:00Z"},"covered_repos":["entireio/cli"],"repos":[],"generated_markdown":"hi"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := newTestCloudClient(t, srv.URL, "t")
+	got, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{testRepoFullName}, Generate: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Jurisdiction != "" {
+		t.Fatalf("an unstamped home response stays unlabelled, got %q", got.Jurisdiction)
+	}
+}
+
+func TestCloudClient_CreateDispatch_RepoNotFoundNamesTargetJurisdiction(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{
+		"gateway wording":   `{"error":"Repository not found or not available in its region: entirehq/ferrata, entirehq/entire-plans"}`,
+		"cell wording":      `{"error":"repository not found: entirehq/ferrata, entirehq/entire-plans"}`,
+		"huma detail shape": `{"title":"Not Found","status":404,"detail":"repository not found: entirehq/ferrata, entirehq/entire-plans"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(body)) //nolint:errcheck // test fixture response
+			}))
+			defer srv.Close()
+
+			client := newTestCloudClient(t, srv.URL, "t")
+			_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata"}}, "au")
+			var notFound *RepoNotFoundError
+			if !errors.As(err, &notFound) {
+				t.Fatalf("expected *RepoNotFoundError, got %T: %v", err, err)
+			}
+			if notFound.Jurisdiction != "au" {
+				t.Fatalf("expected jurisdiction au, got %q", notFound.Jurisdiction)
+			}
+			if len(notFound.Repos) != 2 || notFound.Repos[0] != "entirehq/ferrata" || notFound.Repos[1] != "entirehq/entire-plans" {
+				t.Fatalf("unexpected repos: %v", notFound.Repos)
+			}
+			msg := err.Error()
+			if !strings.HasPrefix(msg, "In AU: ") || !strings.Contains(msg, "entirehq/ferrata, entirehq/entire-plans.") {
+				t.Fatalf("expected jurisdiction-prefixed message, got %q", msg)
+			}
+			if !strings.Contains(msg, "--jurisdiction <slug>") || !strings.Contains(msg, "mirror it there") {
+				t.Fatalf("expected remediation hint, got %q", msg)
+			}
+		})
+	}
+}
+
+func TestCloudClient_CreateDispatch_RepoNotFoundAtHomeSaysSo(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"repository not found: entirehq/ferrata"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := newTestCloudClient(t, srv.URL, "t")
+	_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata"}}, "")
+	if err == nil || !strings.HasPrefix(err.Error(), "In your home jurisdiction: repository not found: entirehq/ferrata.") {
+		t.Fatalf("expected home-jurisdiction wording, got %v", err)
+	}
+}
+
+func TestCloudClient_CreateDispatch_Other404StaysGeneric(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no checkpoints in window"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := newTestCloudClient(t, srv.URL, "t")
+	_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"x/y"}}, "")
+	if err == nil || !strings.Contains(err.Error(), "dispatch service returned status 404") {
+		t.Fatalf("expected the generic status error, got %v", err)
+	}
+	var notFound *RepoNotFoundError
+	if errors.As(err, &notFound) {
+		t.Fatalf("an empty-window 404 is not a repo-not-found error: %v", err)
+	}
+}
+
+func TestErrorMessageFromBody(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		``:                                   "",
+		`not json`:                           "",
+		`{"error":"a"}`:                      "a",
+		`{"detail":"b"}`:                     "b",
+		`{"message":"c"}`:                    "c",
+		`{"error":"","detail":"  d  "}`:      "d",
+		`{"title":"Not Found","status":404}`: "",
+	}
+	for body, want := range cases {
+		if got := errorMessageFromBody(body); got != want {
+			t.Errorf("errorMessageFromBody(%q) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+func TestParseNotFoundRepos(t *testing.T) {
+	t.Parallel()
+
+	got := parseNotFoundRepos("Repository not found or not available in its region: a/b, c/d ,, e/f")
+	if len(got) != 3 || got[0] != "a/b" || got[1] != "c/d" || got[2] != "e/f" {
+		t.Fatalf("unexpected repos: %v", got)
+	}
+	if got := parseNotFoundRepos("repository not found"); got != nil {
+		t.Fatalf("expected nil for message without a repo list, got %v", got)
+	}
 }
