@@ -442,8 +442,8 @@ func TestCloudClient_CreateDispatch_RepoNotFoundNamesTargetJurisdiction(t *testi
 				t.Fatalf("unexpected repos: %v", notFound.Repos)
 			}
 			msg := err.Error()
-			if !strings.HasPrefix(msg, "In AU: ") || !strings.Contains(msg, "entirehq/ferrata, entirehq/entire-plans.") {
-				t.Fatalf("expected jurisdiction-prefixed message, got %q", msg)
+			if !strings.HasPrefix(msg, "In AU: repository not found: entirehq/ferrata, entirehq/entire-plans. Pick a jurisdiction") {
+				t.Fatalf("expected our own jurisdiction-prefixed sentence regardless of gateway wording, got %q", msg)
 			}
 			if !strings.Contains(msg, "--jurisdiction <slug>") || !strings.Contains(msg, "mirror it there") {
 				t.Fatalf("expected remediation hint, got %q", msg)
@@ -455,7 +455,7 @@ func TestCloudClient_CreateDispatch_RepoNotFoundNamesTargetJurisdiction(t *testi
 	}
 }
 
-func TestCloudClient_CreateDispatch_RepoNotFoundGatewayAlreadyNamesJurisdiction(t *testing.T) {
+func TestCloudClient_CreateDispatch_RepoNotFoundIgnoresGatewayProse(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -466,8 +466,13 @@ func TestCloudClient_CreateDispatch_RepoNotFoundGatewayAlreadyNamesJurisdiction(
 
 	client := newTestCloudClient(t, srv.URL, "t")
 	_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata"}}, "us")
-	if err == nil || !strings.HasPrefix(err.Error(), "Repository not found in jurisdiction us: entirehq/ferrata. Pick a jurisdiction") {
-		t.Fatalf("expected no double jurisdiction label, got %v", err)
+	if err == nil || !strings.HasPrefix(err.Error(), "In US: repository not found: entirehq/ferrata. Pick a jurisdiction") {
+		t.Fatalf("expected a single jurisdiction label, got %v", err)
+	}
+	// Unparseable message: fall back to the gateway's own sentence.
+	unparsed := &RepoNotFoundError{Jurisdiction: "us", Message: "repository not found"}
+	if !strings.HasPrefix(unparsed.Error(), "In US: repository not found. Pick") {
+		t.Fatalf("expected message fallback, got %q", unparsed.Error())
 	}
 }
 

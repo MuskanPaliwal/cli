@@ -259,8 +259,26 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	loadScope := sync.OnceValue(func() *dispatchWizardScope {
 		return loadDispatchWizardScope(ctx, currentRepo)
 	})
+	jurisdiction := &dispatchJurisdictionAccessor{state: &state}
 
-	form := NewAccessibleForm(
+	validateRepos := func(value []string) error {
+		selected := normalizeDispatchWizardSelections(value)
+		if len(selected) == 0 {
+			return errors.New("select at least one repo")
+		}
+		if len(selected) > dispatchpkg.CloudRepoLimit {
+			return fmt.Errorf("select at most %d repos", dispatchpkg.CloudRepoLimit)
+		}
+		return nil
+	}
+	repoPicker := huh.NewMultiSelect[string]().
+		Title("Repos").
+		Description(fmt.Sprintf("Press / to filter. Up to %d repos.", dispatchpkg.CloudRepoLimit)).
+		Filterable(true).
+		Value(&state.selectedRepos).
+		Validate(validateRepos)
+
+	groups := []*huh.Group{
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Options(
@@ -269,39 +287,37 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 				).
 				Value(&state.modeChoice),
 		).Title("Mode").Description("Choose where the dispatch should run."),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				OptionsFunc(func() []huh.Option[string] { return loadScope().options() }, nil).
-				Value(&state.jurisdiction),
-		).Title("Jurisdiction").Description("A dispatch covers repos placed in one jurisdiction and is generated there. Only repos placed in the selection are offered next.").
-			WithHideFunc(func() bool {
-				return !state.showRepoPicker()
-			}),
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Repos").
-				Description(fmt.Sprintf("Press / to filter. Up to %d repos.", dispatchpkg.CloudRepoLimit)).
-				Filterable(true).
+	}
+	if IsAccessibleMode() {
+		// huh's accessible runner ignores hide funcs and never evaluates an
+		// OptionsFunc, so dynamic groups cannot work there: the jurisdiction
+		// picker is skipped (--jurisdiction remains the way to scope) and the
+		// repo list is resolved up front, unscoped.
+		repoPicker.Options(buildDispatchRepoOptions(loadScope().reposIn(""))...)
+		groups = append(groups, huh.NewGroup(repoPicker))
+	} else {
+		groups = append(groups,
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					OptionsFunc(func() []huh.Option[string] { return loadScope().options() }, nil).
+					Accessor(jurisdiction),
+			).Title("Jurisdiction").Description("A dispatch covers repos placed in one jurisdiction and is generated there. Only repos placed in the selection are offered next.").
+				WithHideFunc(func() bool {
+					return !state.showRepoPicker()
+				}),
+			huh.NewGroup(
 				// Re-evaluated when the jurisdiction changes; huh also narrows
 				// the bound selection to the new options, so a repo picked
 				// under another jurisdiction never rides along.
-				OptionsFunc(func() []huh.Option[string] {
-					return buildDispatchRepoOptions(loadScope().reposIn(state.jurisdiction))
-				}, &state.jurisdiction).
-				Value(&state.selectedRepos).
-				Validate(func(value []string) error {
-					selected := normalizeDispatchWizardSelections(value)
-					if len(selected) == 0 {
-						return errors.New("select at least one repo")
-					}
-					if len(selected) > dispatchpkg.CloudRepoLimit {
-						return fmt.Errorf("select at most %d repos", dispatchpkg.CloudRepoLimit)
-					}
-					return nil
-				}),
-		).WithHideFunc(func() bool {
-			return !state.showRepoPicker()
-		}),
+				repoPicker.OptionsFunc(func() []huh.Option[string] {
+					return buildDispatchRepoOptions(loadScope().reposIn(jurisdiction.Snapshot()))
+				}, &state.jurisdiction),
+			).WithHideFunc(func() bool {
+				return !state.showRepoPicker()
+			}),
+		)
+	}
+	groups = append(groups,
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Options(
@@ -370,6 +386,7 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 				Value(&state.confirmRun),
 		).Title("Confirm").Description("Review the resolved command and run it."),
 	)
+	form := NewAccessibleForm(groups...)
 
 	fmt.Fprintln(cmd.OutOrStdout())
 

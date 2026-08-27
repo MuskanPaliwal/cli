@@ -464,3 +464,22 @@ func TestServerMode_JurisdictionIsSentAsQuerySelector(t *testing.T) {
 		t.Fatalf("bad text: %q", got.GeneratedText)
 	}
 }
+
+func TestCheckDispatchJurisdiction(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	if err := checkDispatchJurisdiction(ctx, "", "us"); err != nil {
+		t.Fatalf("no selector sent: any stamp is fine, got %v", err)
+	}
+	if err := checkDispatchJurisdiction(ctx, "eu", " EU "); err != nil {
+		t.Fatalf("matching stamp must pass, got %v", err)
+	}
+	if err := checkDispatchJurisdiction(ctx, "eu", ""); err != nil {
+		t.Fatalf("an unstamped response (older gateway) is tolerated, got %v", err)
+	}
+	err := checkDispatchJurisdiction(ctx, "eu", "us")
+	if err == nil || err.Error() != "dispatch was generated in jurisdiction US, not the requested EU" {
+		t.Fatalf("a wrong-region result must fail, got %v", err)
+	}
+}

@@ -52,6 +52,15 @@ func TestNewDispatchWizardScope(t *testing.T) {
 			reposIn:     map[string]string{"": "a/one"},
 		},
 		{
+			name:        "home unknown: unplaced repos stay selectable under Home",
+			repos:       []string{"a/placed", "a/unplaced"},
+			placements:  map[string][]string{"a/placed": {"us"}},
+			wantJuris:   "us",
+			wantDefault: "us",
+			wantOptions: "US,Home",
+			reposIn:     map[string]string{"us": "a/placed", "": "a/unplaced"},
+		},
+		{
 			name:        "single jurisdiction is the default",
 			repos:       []string{"a/one"},
 			placements:  map[string][]string{"a/one": {"us"}},

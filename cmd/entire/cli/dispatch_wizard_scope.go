@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/huh/v2"
@@ -15,9 +16,13 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
-// dispatchWizardScopeTimeout bounds the control-plane repo index read behind
-// the wizard's jurisdiction picker (the budget code search gives the same call).
-const dispatchWizardScopeTimeout = 10 * time.Second
+// dispatchWizardScopeTimeout bounds the control-plane repo index walk behind
+// the wizard's jurisdiction picker (the budget code search gives the same
+// call); dispatchWizardScopeBudget caps how many index entries it follows.
+const (
+	dispatchWizardScopeTimeout = 10 * time.Second
+	dispatchWizardScopeBudget  = 5000
+)
 
 // Seams for the wizard's cloud catalogue, swapped in tests.
 var (
@@ -33,16 +38,17 @@ var (
 // Everything is precomputed once by newDispatchWizardScope; the form reads it
 // on every render. A repo the control plane does not place (or, with no
 // placement data at all, every repo) is attributed to home, which is where the
-// gateway routes when no selector is sent. Only READY placements count — a
-// cell cannot generate from a copy still syncing — which deliberately differs
-// from routedRepoPlacement's single elected primary (a search-indexing rule).
+// gateway routes when no selector is sent — under the "" key when home is
+// unknown, offered as a plain "Home" choice so the repo stays selectable. Only
+// READY placements count — a cell cannot generate from a copy still syncing —
+// which deliberately differs from routedRepoPlacement's single elected primary
+// (a search-indexing rule).
 type dispatchWizardScope struct {
 	// repos are the offerable slugs (repos with checkpoints), recent-first.
 	repos []string
 	// byJurisdiction lists the offerable repos per jurisdiction, in repos order.
 	byJurisdiction map[string][]string
-	// jurisdictions are the keys of byJurisdiction, sorted; "" (placement-less
-	// repos with home unknown) is not a jurisdiction a user could pick.
+	// jurisdictions are the non-empty keys of byJurisdiction, sorted.
 	jurisdictions []string
 	// defaultJurisdiction is home when the caller has repos there, else the
 	// jurisdiction holding the most repos (ties alphabetical), else "".
@@ -61,41 +67,41 @@ func newDispatchWizardScope(repos []string, placements map[string][]string, home
 			jurisdictions = []string{home}
 		}
 		for _, j := range jurisdictions {
-			if j != "" {
-				scope.byJurisdiction[j] = append(scope.byJurisdiction[j], slug)
-			}
+			scope.byJurisdiction[j] = append(scope.byJurisdiction[j], slug)
 		}
 	}
-	scope.jurisdictions = slices.Sorted(maps.Keys(scope.byJurisdiction))
+	scope.jurisdictions = slices.DeleteFunc(slices.Sorted(maps.Keys(scope.byJurisdiction)), func(j string) bool { return j == "" })
 	for _, j := range scope.jurisdictions {
 		if j == home {
 			scope.defaultJurisdiction = j
 			break
 		}
-		if len(scope.byJurisdiction[j]) > len(scope.byJurisdiction[scope.defaultJurisdiction]) {
+		if scope.defaultJurisdiction == "" || len(scope.byJurisdiction[j]) > len(scope.byJurisdiction[scope.defaultJurisdiction]) {
 			scope.defaultJurisdiction = j
 		}
 	}
 	return scope
 }
 
-// reposIn lists the offerable repos in a jurisdiction; "" (nothing picked)
-// offers every repo.
+// reposIn lists the offerable repos in a jurisdiction. "" is the unscoped
+// bucket (home unknown): the repos without a placement, or every repo when
+// nothing is placed at all.
 func (s *dispatchWizardScope) reposIn(jurisdiction string) []string {
+	if repos, ok := s.byJurisdiction[jurisdiction]; ok {
+		return repos
+	}
 	if jurisdiction == "" {
 		return s.repos
 	}
-	return s.byJurisdiction[jurisdiction]
+	return nil
 }
 
 // options renders the jurisdiction select, default first — huh seeds the bound
-// value from the first option, so the ordering IS the default. With nothing
-// eligible the single "Home" option keeps the selector unsent.
+// value from the first option, so the ordering IS the default. The unscoped
+// "Home" ("" — selector unsent) choice appears when it holds repos, and alone
+// when nothing is placed anywhere.
 func (s *dispatchWizardScope) options() []huh.Option[string] {
-	if len(s.jurisdictions) == 0 {
-		return []huh.Option[string]{huh.NewOption("Home", "")}
-	}
-	options := make([]huh.Option[string], 0, len(s.jurisdictions))
+	options := make([]huh.Option[string], 0, len(s.jurisdictions)+1)
 	for _, j := range s.jurisdictions {
 		label := strings.ToUpper(j)
 		if j == s.home {
@@ -108,7 +114,35 @@ func (s *dispatchWizardScope) options() []huh.Option[string] {
 			options = append(options, option)
 		}
 	}
+	if len(s.byJurisdiction[""]) > 0 || len(options) == 0 {
+		options = append(options, huh.NewOption("Home", ""))
+	}
 	return options
+}
+
+// dispatchJurisdictionAccessor is the Jurisdiction select's value accessor. huh
+// writes it on the Bubble Tea loop, while the repo picker's OptionsFunc reads
+// the chosen jurisdiction from a tea.Cmd goroutine — so the accessor keeps an
+// atomic snapshot for that reader, and the plain field for the loop (which is
+// also what the repo picker's binding hashes to know when to refresh).
+type dispatchJurisdictionAccessor struct {
+	state    *dispatchWizardState
+	snapshot atomic.Pointer[string]
+}
+
+func (a *dispatchJurisdictionAccessor) Get() string { return a.state.jurisdiction }
+
+func (a *dispatchJurisdictionAccessor) Set(value string) {
+	a.state.jurisdiction = value
+	a.snapshot.Store(&value)
+}
+
+// Snapshot is the goroutine-safe read of the last value huh set.
+func (a *dispatchJurisdictionAccessor) Snapshot() string {
+	if v := a.snapshot.Load(); v != nil {
+		return *v
+	}
+	return ""
 }
 
 // loadDispatchWizardScope fetches the three independent sources concurrently:
@@ -140,7 +174,7 @@ func loadDispatchWizardScope(ctx context.Context, currentRepo string) *dispatchW
 	return newDispatchWizardScope(repos, placements, home)
 }
 
-// defaultListDispatchWizardPlacements reads the caller's repo index from the
+// defaultListDispatchWizardPlacements walks the caller's repo index from the
 // control plane, keeping per repo the jurisdictions of its READY placements.
 func defaultListDispatchWizardPlacements(ctx context.Context) (map[string][]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, dispatchWizardScopeTimeout)
@@ -150,17 +184,34 @@ func defaultListDispatchWizardPlacements(ctx context.Context) (map[string][]stri
 	if err != nil {
 		return nil, fmt.Errorf("control plane unavailable: %w", err)
 	}
-	index, err := client.ListRepos(ctx, coreapi.ListReposParams{})
+	truncated := false
+	entries, partial, err := fetchPagesBounded(ctx, dispatchWizardScopeBudget, func(ctx context.Context, cursor string) ([]coreapi.RepoIndexEntry, string, error) {
+		params := coreapi.ListReposParams{}
+		if cursor != "" {
+			params.PageToken = coreapi.NewOptString(cursor)
+		}
+		out, err := client.ListRepos(ctx, params)
+		if err != nil {
+			return nil, "", err //nolint:wrapcheck // the caller logs and degrades; no extra context to add
+		}
+		next := out.NextPageToken.Or("")
+		// Truncated with a cursor is just "more pages"; without one the server
+		// itself could not reach every repo.
+		if out.Truncated && next == "" {
+			truncated = true
+		}
+		return out.Repos, next, nil
+	})
 	if err != nil {
-		return nil, err //nolint:wrapcheck // the caller logs and degrades; no extra context to add
+		return nil, err
 	}
-	if index.Truncated {
-		// Repos beyond the truncation point are attributed to home; the
-		// --jurisdiction flag still reaches them.
+	if partial || truncated {
+		// Repos beyond the walk are attributed to home; the --jurisdiction
+		// flag still reaches them.
 		logging.Warn(ctx, "repo index truncated; dispatch wizard may attribute some repos to home")
 	}
-	out := make(map[string][]string, len(index.Repos))
-	for _, entry := range index.Repos {
+	out := make(map[string][]string, len(entries))
+	for _, entry := range entries {
 		if slug := strings.ToLower(strings.TrimSpace(entry.FullName)); slug != "" {
 			out[slug] = readyPlacementJurisdictions(entry.Placements)
 		}

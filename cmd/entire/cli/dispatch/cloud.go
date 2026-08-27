@@ -74,6 +74,11 @@ type CreateDispatchRequest struct {
 }
 
 type CreateDispatchResponse struct {
+	// Jurisdiction is the slug the gateway stamps onto the response: the
+	// jurisdiction whose cell the dispatch was generated from. Empty from a
+	// gateway that predates the selector — see runServer for how a sent
+	// selector is checked against it.
+	Jurisdiction      string      `json:"jurisdiction,omitempty"`
 	Window            APIWindow   `json:"window"`
 	Title             string      `json:"title,omitempty"`
 	CoveredRepos      []string    `json:"covered_repos,omitempty"`
@@ -173,17 +178,18 @@ type RepoNotFoundError struct {
 const repoNotFoundPrefix = "repository not found"
 
 func (e *RepoNotFoundError) Error() string {
-	// A gateway that already names the jurisdiction in its sentence
-	// ("Repository not found in jurisdiction us: …") is not labelled twice.
-	message := e.Message
-	if !strings.Contains(strings.ToLower(message), "jurisdiction") {
-		scope := "your home jurisdiction"
-		if j := strings.TrimSpace(e.Jurisdiction); j != "" {
-			scope = strings.ToUpper(j)
-		}
-		message = "In " + scope + ": " + message
+	scope := "your home jurisdiction"
+	if j := strings.TrimSpace(e.Jurisdiction); j != "" {
+		scope = strings.ToUpper(j)
 	}
-	return message + ". Pick a jurisdiction the repository is mirrored into (entire dispatch --jurisdiction <slug>), or mirror it there."
+	// Render our own sentence when the repos were parsed, so the wording does
+	// not depend on (or double up with) the gateway's prose; fall back to its
+	// message only when parsing found nothing.
+	sentence := e.Message
+	if len(e.Repos) > 0 {
+		sentence = repoNotFoundPrefix + ": " + strings.Join(e.Repos, ", ")
+	}
+	return "In " + scope + ": " + sentence + ". Pick a jurisdiction the repository is mirrored into (entire dispatch --jurisdiction <slug>), or mirror it there."
 }
 
 func (e *RepoNotFoundError) Unwrap() error { return e.Cause }
@@ -286,11 +292,11 @@ func (c *CloudClient) doJSON(ctx context.Context, method, path string, reqBody, 
 	}
 	if checkErr := api.CheckResponse(resp); checkErr != nil {
 		logging.Warn(ctx, "dispatch request failed", "method", method, "path", path, "status_code", resp.StatusCode)
-		var httpErr *api.HTTPError
-		if errors.As(checkErr, &httpErr) {
-			return &statusError{HTTPError: httpErr}
+		httpErr, ok := checkErr.(*api.HTTPError) //nolint:errorlint // CheckResponse returns the concrete type unwrapped
+		if !ok {
+			return fmt.Errorf("dispatch service: %w", checkErr)
 		}
-		return checkErr //nolint:wrapcheck // CheckResponse only returns *api.HTTPError; defensive
+		return &statusError{HTTPError: httpErr}
 	}
 	if out == nil {
 		return nil

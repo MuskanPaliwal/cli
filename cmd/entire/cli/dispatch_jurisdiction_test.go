@@ -14,6 +14,7 @@ import (
 // withFakeCellCore) and therefore must not run in parallel.
 
 func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testing.T) {
+	stubDispatchWizardScopeSources(t, nil, nil, "au")
 	withFakeCellCore(t, &fakeCellCore{repos: &coreapi.ListReposOutputBody{Repos: []coreapi.RepoIndexEntry{{
 		FullName: "entirehq/ferrata",
 		Placements: []coreapi.RepoPlacement{
@@ -35,9 +36,9 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 	if !strings.HasPrefix(msg, "In AU: repository not found: entirehq/ferrata.") {
 		t.Fatalf("expected the dispatch error to lead, got %q", msg)
 	}
-	// Deduped, sorted, ready-only, flag-valid: the processing EU copy and the
-	// malformed slug are not offered.
-	if !strings.HasSuffix(msg, "\n  entirehq/ferrata is placed in: au, us") {
+	// Deduped, ready-only, flag-valid, and never the jurisdiction that just
+	// failed: the processing EU copy, the malformed slug and AU are not offered.
+	if !strings.HasSuffix(msg, "\n  entirehq/ferrata is placed in: us") {
 		t.Fatalf("expected placement hint, got %q", msg)
 	}
 	var notFound *dispatchpkg.RepoNotFoundError
@@ -46,21 +47,22 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 	}
 }
 
-func TestDescribeDispatchRepoNotFound_NoReadyPlacementSaysSo(t *testing.T) {
-	// The fake returns the same row for every filter, so both slugs resolve to
-	// the same unready entry; the identity check drops the mismatching one.
+func TestDescribeDispatchRepoNotFound_NoReadyPlacementElsewhereSaysSo(t *testing.T) {
+	// Home path (no selector): the home jurisdiction is the one that failed,
+	// so a repo READY only at home has nothing else to offer. The fake returns
+	// the same row for every filter; the identity check drops the mismatch.
+	stubDispatchWizardScopeSources(t, nil, nil, "us")
 	withFakeCellCore(t, &fakeCellCore{repos: &coreapi.ListReposOutputBody{Repos: []coreapi.RepoIndexEntry{{
 		FullName:   "entirehq/plans",
-		Placements: []coreapi.RepoPlacement{{ID: "p1", Jurisdiction: "us", Status: coreapi.RepoPlacementStatusFailed}},
+		Placements: []coreapi.RepoPlacement{{ID: "p1", Jurisdiction: "us", Status: coreapi.RepoPlacementStatusReady}},
 	}}}})
 
 	err := describeDispatchRepoNotFound(context.Background(), &dispatchpkg.RepoNotFoundError{
-		Jurisdiction: "us",
-		Repos:        []string{"entirehq/ferrata", "entirehq/plans"},
-		Message:      "repository not found: entirehq/ferrata, entirehq/plans",
+		Repos:   []string{"entirehq/ferrata", "entirehq/plans"},
+		Message: "repository not found: entirehq/ferrata, entirehq/plans",
 	})
 	msg := err.Error()
-	if !strings.Contains(msg, "\n  entirehq/plans has no ready placement in any jurisdiction") {
+	if !strings.Contains(msg, "\n  entirehq/plans has no ready placement in another jurisdiction") {
 		t.Fatalf("expected no-placement hint, got %q", msg)
 	}
 	if strings.Contains(msg, "entirehq/ferrata is placed in") || strings.Contains(msg, "entirehq/ferrata has no") {

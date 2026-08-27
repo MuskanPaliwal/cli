@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,19 +35,26 @@ func describeDispatchRepoNotFound(ctx context.Context, err error) error {
 	if len(placements) == 0 {
 		return err
 	}
+	// The jurisdiction that just answered "not found" is not a suggestion:
+	// the selector that was sent, or the caller's home when none was.
+	failed := notFound.Jurisdiction
+	if failed == "" {
+		failed = resolveDispatchWizardHome(ctx)
+	}
 
 	var b strings.Builder
 	b.WriteString(err.Error())
 	for _, repo := range notFound.Repos {
 		jurisdictions, ok := placements[repo]
-		switch {
-		case !ok:
+		if !ok {
 			continue
-		case len(jurisdictions) == 0:
-			fmt.Fprintf(&b, "\n  %s has no ready placement in any jurisdiction", repo)
-		default:
-			fmt.Fprintf(&b, "\n  %s is placed in: %s", repo, strings.Join(jurisdictions, ", "))
 		}
+		jurisdictions = slices.DeleteFunc(slices.Clone(jurisdictions), func(j string) bool { return j == failed })
+		if len(jurisdictions) == 0 {
+			fmt.Fprintf(&b, "\n  %s has no ready placement in another jurisdiction", repo)
+			continue
+		}
+		fmt.Fprintf(&b, "\n  %s is placed in: %s", repo, strings.Join(jurisdictions, ", "))
 	}
 	return &hintError{msg: b.String(), errs: []error{err}}
 }
