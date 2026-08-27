@@ -363,9 +363,8 @@ func TestRunDispatchWizard_ProceedsWhenCurrentBranchCannotBeResolved(t *testing.
 	t.Cleanup(func() {
 		runDispatchWizardForm = oldRunForm
 	})
-	// The wizard starts loading its cloud catalogue in the background; keep
-	// that off the network.
-	stubDispatchWizardScopeSources(t, []string{"entireio/cli"}, nil, nil, "")
+	// Keep the wizard's cloud catalogue off the network.
+	stubDispatchWizardScopeSources(t, []string{"entireio/cli"}, nil, "")
 
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())

@@ -575,11 +575,12 @@ func requireSafeExchangeURL(label, raw string) error {
 	return nil
 }
 
-// HomeJurisdiction returns the caller's home jurisdiction slug — the
-// home_jurisdiction claim of the login the CLI would route with (ENTIRE_TOKEN
-// when set, else the active stored context), normalized. "" when the claim is
-// absent.
-func HomeJurisdiction(ctx context.Context, insecureHTTP bool) (string, error) {
+// HomeJurisdictionFromActiveLogin returns the home_jurisdiction claim of the
+// login the CLI would route with (subject precedence as in JurisdictionToken),
+// normalized; "" when absent. It is the routing default, not the account's
+// authoritative home — that is /me's global.homeJurisdiction, which `entire
+// auth status` prefers and only falls back to this claim for an older core.
+func HomeJurisdictionFromActiveLogin(ctx context.Context, insecureHTTP bool) (string, error) {
 	subject, err := resolveCellSubject(ctx, insecureHTTP)
 	if err != nil {
 		return "", err
