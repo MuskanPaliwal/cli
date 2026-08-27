@@ -21,6 +21,7 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 			{ID: "p2", Jurisdiction: "us", Status: coreapi.RepoPlacementStatusReady},
 			{ID: "p3", Jurisdiction: "eu", Status: coreapi.RepoPlacementStatusProcessing},
 			{ID: "p4", Jurisdiction: "au", Status: coreapi.RepoPlacementStatusReady},
+			{ID: "p5", Jurisdiction: "not a label", Status: coreapi.RepoPlacementStatusReady},
 		},
 	}}}})
 
@@ -34,7 +35,8 @@ func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testin
 	if !strings.HasPrefix(msg, "In AU: repository not found: entirehq/ferrata.") {
 		t.Fatalf("expected the dispatch error to lead, got %q", msg)
 	}
-	// Deduped, sorted, ready-only: the processing EU copy is not offered.
+	// Deduped, sorted, ready-only, flag-valid: the processing EU copy and the
+	// malformed slug are not offered.
 	if !strings.HasSuffix(msg, "\n  entirehq/ferrata is placed in: au, us") {
 		t.Fatalf("expected placement hint, got %q", msg)
 	}

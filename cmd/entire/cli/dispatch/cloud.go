@@ -160,26 +160,33 @@ func (b *APIBranches) UnmarshalJSON(data []byte) error {
 // RepoNotFoundError is the gateway's 404 for a repo that is not placed in (or
 // not visible in) the jurisdiction the request was routed to — a repo mirrored
 // only in US, requested from an AU home, is simply unknown to the AU cell.
-// Jurisdiction is the selector the caller sent ("" = home); Repos are the slugs
-// the gateway named, when its message listed them; Message is its sentence.
+// Jurisdiction is the selector the caller sent ("" = home); Repos are the
+// requested slugs the gateway's message named; Message is its sentence; Cause
+// is the underlying *api.HTTPError.
 type RepoNotFoundError struct {
 	Jurisdiction string
 	Repos        []string
 	Message      string
+	Cause        error
 }
 
 const repoNotFoundPrefix = "repository not found"
 
 func (e *RepoNotFoundError) Error() string {
-	scope := "your home jurisdiction"
-	if j := strings.TrimSpace(e.Jurisdiction); j != "" {
-		scope = strings.ToUpper(j)
+	// A gateway that already names the jurisdiction in its sentence
+	// ("Repository not found in jurisdiction us: …") is not labelled twice.
+	message := e.Message
+	if !strings.Contains(strings.ToLower(message), "jurisdiction") {
+		scope := "your home jurisdiction"
+		if j := strings.TrimSpace(e.Jurisdiction); j != "" {
+			scope = strings.ToUpper(j)
+		}
+		message = "In " + scope + ": " + message
 	}
-	return fmt.Sprintf(
-		"In %s: %s. Pick a jurisdiction the repository is mirrored into (entire dispatch --jurisdiction <slug>), or mirror it there.",
-		scope, e.Message,
-	)
+	return message + ". Pick a jurisdiction the repository is mirrored into (entire dispatch --jurisdiction <slug>), or mirror it there."
 }
+
+func (e *RepoNotFoundError) Unwrap() error { return e.Cause }
 
 // statusError keeps the dispatch command's established non-2xx wording while
 // exposing the shared *api.HTTPError underneath (errors.As /
@@ -212,8 +219,9 @@ func (c *CloudClient) CreateDispatch(ctx context.Context, reqBody CreateDispatch
 			strings.HasPrefix(strings.ToLower(httpErr.Message), repoNotFoundPrefix) {
 			return nil, &RepoNotFoundError{
 				Jurisdiction: jurisdiction,
-				Repos:        parseNotFoundRepos(httpErr.Message),
+				Repos:        parseNotFoundRepos(httpErr.Message, reqBody.Repos),
 				Message:      httpErr.Message,
+				Cause:        err,
 			}
 		}
 		return nil, err
@@ -221,15 +229,27 @@ func (c *CloudClient) CreateDispatch(ctx context.Context, reqBody CreateDispatch
 	return &out, nil
 }
 
-// parseNotFoundRepos pulls the distinct slugs out of a "repository not found:
-// a/b, c/d" message. Best-effort: an unexpected format yields nil and the
-// caller still has the message.
-func parseNotFoundRepos(message string) []string {
+// parseNotFoundRepos pulls the slugs out of a "repository not found: a/b, c/d"
+// message, keeping only the repos this request asked for (in the request's
+// spelling) so downstream lookups are bounded by CloudRepoLimit and never fan
+// out over arbitrary prose. Best-effort: an unexpected format yields nil and
+// the caller still has the message.
+func parseNotFoundRepos(message string, requested []string) []string {
 	_, rest, ok := strings.Cut(message, ":")
 	if !ok {
 		return nil
 	}
-	return normalizeScopeValues(strings.Split(rest, ","))
+	named := normalizeScopeValues(strings.Split(rest, ","))
+	var repos []string
+	for _, repo := range requested {
+		for _, candidate := range named {
+			if strings.EqualFold(candidate, repo) {
+				repos = append(repos, repo)
+				break
+			}
+		}
+	}
+	return repos
 }
 
 func (c *CloudClient) doJSON(ctx context.Context, method, path string, reqBody, out any) error {

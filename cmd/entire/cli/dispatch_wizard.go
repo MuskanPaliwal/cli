@@ -298,7 +298,11 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 					return err //nolint:wrapcheck // validation message is already user-facing
 				}),
 		).Title("Jurisdiction").Description("Optional slug (e.g. us, eu) whose cell generates and stores the dispatch. Blank uses your home jurisdiction; the selected repos must be placed there.").
-			WithHideFunc(state.isLocal),
+			// A closure, not the method value state.isLocal: that would copy the
+			// value receiver once and freeze the answer to the initial mode.
+			WithHideFunc(func() bool {
+				return !state.showRepoPicker()
+			}),
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Options(

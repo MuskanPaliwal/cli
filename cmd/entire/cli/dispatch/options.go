@@ -82,7 +82,7 @@ func ResolveOptions(
 func NormalizeJurisdiction(value string) (string, error) {
 	jurisdiction, err := auth.NormalizeJurisdiction(value)
 	if err != nil {
-		return "", fmt.Errorf("invalid --jurisdiction %q: expected a jurisdiction slug such as us or eu", strings.TrimSpace(value))
+		return "", fmt.Errorf("invalid --jurisdiction %q (expected a jurisdiction slug such as us or eu): %w", strings.TrimSpace(value), err)
 	}
 	return jurisdiction, nil
 }

@@ -430,7 +430,7 @@ func TestCloudClient_CreateDispatch_RepoNotFoundNamesTargetJurisdiction(t *testi
 			defer srv.Close()
 
 			client := newTestCloudClient(t, srv.URL, "t")
-			_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata"}}, "au")
+			_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata", "entirehq/entire-plans", "entirehq/present"}}, "au")
 			var notFound *RepoNotFoundError
 			if !errors.As(err, &notFound) {
 				t.Fatalf("expected *RepoNotFoundError, got %T: %v", err, err)
@@ -448,7 +448,26 @@ func TestCloudClient_CreateDispatch_RepoNotFoundNamesTargetJurisdiction(t *testi
 			if !strings.Contains(msg, "--jurisdiction <slug>") || !strings.Contains(msg, "mirror it there") {
 				t.Fatalf("expected remediation hint, got %q", msg)
 			}
+			if !api.IsHTTPErrorStatus(err, http.StatusNotFound) {
+				t.Fatalf("expected the *api.HTTPError to stay in the chain, got %v", err)
+			}
 		})
+	}
+}
+
+func TestCloudClient_CreateDispatch_RepoNotFoundGatewayAlreadyNamesJurisdiction(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"Repository not found in jurisdiction us: entirehq/ferrata"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := newTestCloudClient(t, srv.URL, "t")
+	_, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{"entirehq/ferrata"}}, "us")
+	if err == nil || !strings.HasPrefix(err.Error(), "Repository not found in jurisdiction us: entirehq/ferrata. Pick a jurisdiction") {
+		t.Fatalf("expected no double jurisdiction label, got %v", err)
 	}
 }
 
@@ -494,11 +513,15 @@ func TestCloudClient_CreateDispatch_Other404StaysGeneric(t *testing.T) {
 func TestParseNotFoundRepos(t *testing.T) {
 	t.Parallel()
 
-	got := parseNotFoundRepos("Repository not found or not available in its region: a/b, c/d ,, e/f, a/b")
-	if len(got) != 3 || got[0] != "a/b" || got[1] != "c/d" || got[2] != "e/f" {
-		t.Fatalf("unexpected repos: %v", got)
+	requested := []string{"A/B", "c/d", "e/f", "g/h"}
+	got := parseNotFoundRepos("Repository not found or not available in its region: a/b, c/d ,, e/f, a/b, evil/injected", requested)
+	if len(got) != 3 || got[0] != "A/B" || got[1] != "c/d" || got[2] != "e/f" {
+		t.Fatalf("expected only requested repos, in the request's spelling, got %v", got)
 	}
-	if got := parseNotFoundRepos("repository not found"); got != nil {
+	if got := parseNotFoundRepos("repository not found", requested); got != nil {
 		t.Fatalf("expected nil for message without a repo list, got %v", got)
+	}
+	if got := parseNotFoundRepos("repository not found: check the repo is onboarded", requested); got != nil {
+		t.Fatalf("prose after the colon must not become repo lookups, got %v", got)
 	}
 }
