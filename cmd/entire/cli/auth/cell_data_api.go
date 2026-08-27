@@ -575,6 +575,22 @@ func requireSafeExchangeURL(label, raw string) error {
 	return nil
 }
 
+// HomeJurisdiction returns the caller's home jurisdiction slug — the
+// home_jurisdiction claim of the login the CLI would route with (ENTIRE_TOKEN
+// when set, else the active stored context), normalized. "" when the claim is
+// absent.
+func HomeJurisdiction(ctx context.Context, insecureHTTP bool) (string, error) {
+	subject, err := resolveCellSubject(ctx, insecureHTTP)
+	if err != nil {
+		return "", err
+	}
+	jurisdiction, err := HomeJurisdictionFromLoginJWT(subject.loginJWT)
+	if err != nil {
+		return "", err
+	}
+	return NormalizeJurisdiction(jurisdiction)
+}
+
 // HomeJurisdictionFromLoginJWT reads the home_jurisdiction claim without
 // verifying the signature — callers only route with it; the server
 // re-verifies. Returns "" (no error) when the claim is absent so each
