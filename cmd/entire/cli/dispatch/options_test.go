@@ -222,15 +222,15 @@ func TestNormalizeJurisdiction(t *testing.T) {
 		{in: "us-", wantErr: true},
 		{in: strings.Repeat("a", 41), wantErr: true},
 	} {
-		got, err := NormalizeJurisdiction(tc.in)
+		got, err := normalizeJurisdiction(tc.in)
 		if tc.wantErr {
 			if err == nil || !strings.Contains(err.Error(), "invalid --jurisdiction") {
-				t.Errorf("NormalizeJurisdiction(%q): expected slug error, got %q, %v", tc.in, got, err)
+				t.Errorf("normalizeJurisdiction(%q): expected slug error, got %q, %v", tc.in, got, err)
 			}
 			continue
 		}
 		if err != nil || got != tc.want {
-			t.Errorf("NormalizeJurisdiction(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+			t.Errorf("normalizeJurisdiction(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
 		}
 	}
 }

@@ -23,7 +23,7 @@ func ResolveOptions(
 	currentBranch func() (string, error),
 ) (Options, error) {
 	flagRepos = normalizeScopeValues(flagRepos)
-	jurisdiction, err := NormalizeJurisdiction(flagJurisdiction)
+	jurisdiction, err := normalizeJurisdiction(flagJurisdiction)
 	if err != nil {
 		return Options{}, err
 	}
@@ -76,10 +76,10 @@ func ResolveOptions(
 	}, nil
 }
 
-// NormalizeJurisdiction applies auth's single jurisdiction rule to the
+// normalizeJurisdiction applies auth's single jurisdiction rule to the
 // --jurisdiction flag (empty = the caller's home jurisdiction), phrasing the
 // rejection in the flag's terms.
-func NormalizeJurisdiction(value string) (string, error) {
+func normalizeJurisdiction(value string) (string, error) {
 	jurisdiction, err := auth.NormalizeJurisdiction(value)
 	if err != nil {
 		return "", fmt.Errorf("invalid --jurisdiction (expected a slug such as us or eu): %w", err)
