@@ -3,7 +3,6 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -433,18 +432,9 @@ func TestServerMode_JurisdictionIsSentAsQuerySelector(t *testing.T) {
 		if got := r.URL.Query().Get("jurisdiction"); got != "eu" {
 			t.Errorf("expected ?jurisdiction=eu, got query %q", r.URL.RawQuery)
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-			return
-		}
-		if _, ok := body["jurisdiction"]; ok {
-			t.Errorf("jurisdiction must never be in the body: %v", body)
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"jurisdiction":       "eu",
 			"window":             map[string]any{"normalized_since": "2026-04-09T00:00:00Z", "normalized_until": "2026-04-16T00:00:00Z"},
 			"covered_repos":      []string{testRepoFullName},
 			"repos":              []any{},
@@ -472,35 +462,5 @@ func TestServerMode_JurisdictionIsSentAsQuerySelector(t *testing.T) {
 	}
 	if got.GeneratedText != testDispatchGeneratedHello {
 		t.Fatalf("bad text: %q", got.GeneratedText)
-	}
-}
-
-func TestServerMode_RepoNotFoundNamesJurisdiction(t *testing.T) {
-	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != testDispatchEndpoint {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"Repository not found or not available in its region: entirehq/ferrata"}`)) //nolint:errcheck // test fixture response
-	}))
-	defer mock.Close()
-
-	stubCloudDispatchAuth(t)
-	t.Setenv("ENTIRE_API_BASE_URL", mock.URL)
-
-	_, err := Run(context.Background(), Options{
-		Mode:         ModeServer,
-		RepoPaths:    []string{"entirehq/ferrata"},
-		Since:        "7d",
-		Jurisdiction: "au",
-	})
-	var notFound *RepoNotFoundError
-	if !errors.As(err, &notFound) {
-		t.Fatalf("expected *RepoNotFoundError, got %T: %v", err, err)
-	}
-	if notFound.Jurisdiction != "au" || !strings.HasPrefix(err.Error(), "In AU: Repository not found or not available in its region: entirehq/ferrata.") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }

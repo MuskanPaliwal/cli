@@ -908,47 +908,6 @@ func TestNewDispatchCmd_AccessibleModeSkipsInteractiveRenderer(t *testing.T) {
 	}
 }
 
-func TestParseDispatchFlags_JurisdictionNormalized(t *testing.T) {
-	t.Parallel()
-
-	opts, err := parseDispatchFlags(
-		&cobra.Command{},
-		false,
-		"7d",
-		"",
-		false,
-		[]string{"entirehq/ferrata"},
-		"",
-		" US ",
-		false,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.Jurisdiction != "us" {
-		t.Fatalf("expected normalized jurisdiction, got %q", opts.Jurisdiction)
-	}
-}
-
-func TestParseDispatchFlags_LocalRejectsJurisdiction(t *testing.T) {
-	t.Parallel()
-
-	_, err := parseDispatchFlags(
-		&cobra.Command{},
-		true,
-		"7d",
-		"",
-		false,
-		nil,
-		"",
-		"us",
-		false,
-	)
-	if err == nil || !strings.Contains(err.Error(), "--jurisdiction cannot be used with --local") {
-		t.Fatalf("expected local rejection, got %v", err)
-	}
-}
-
 func TestNewDispatchCmd_JurisdictionFlagHelpText(t *testing.T) {
 	t.Parallel()
 

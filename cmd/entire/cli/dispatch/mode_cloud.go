@@ -89,8 +89,6 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		Generate: true,
 		Voice:    resolvedDispatchVoicePreference(opts.Voice),
 	}
-	// One dispatch = one jurisdiction: the gateway routes the request to the
-	// cell of opts.Jurisdiction ("" = home) and generates it there.
 	response, err := cloud.CreateDispatch(ctx, reqBody, opts.Jurisdiction)
 	if err != nil {
 		return nil, err

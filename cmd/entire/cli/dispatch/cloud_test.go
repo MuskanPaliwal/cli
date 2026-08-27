@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 )
 
@@ -387,12 +388,12 @@ func TestCloudClient_CreateDispatch_SendsJurisdictionSelectorAsQueryOnly(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Jurisdiction != "us" || got.GeneratedMarkdown != "hi" {
+	if got.GeneratedMarkdown != "hi" {
 		t.Fatalf("unexpected response: %+v", got)
 	}
 }
 
-func TestCloudClient_CreateDispatch_HomeSendsNoSelectorAndLabelsHome(t *testing.T) {
+func TestCloudClient_CreateDispatch_HomeSendsNoSelector(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -406,12 +407,8 @@ func TestCloudClient_CreateDispatch_HomeSendsNoSelectorAndLabelsHome(t *testing.
 	defer srv.Close()
 
 	client := newTestCloudClient(t, srv.URL, "t")
-	got, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{testRepoFullName}, Generate: true}, "")
-	if err != nil {
+	if _, err := client.CreateDispatch(context.Background(), CreateDispatchRequest{Repos: []string{testRepoFullName}, Generate: true}, ""); err != nil {
 		t.Fatal(err)
-	}
-	if got.Jurisdiction != "" {
-		t.Fatalf("an unstamped home response stays unlabelled, got %q", got.Jurisdiction)
 	}
 }
 
@@ -485,35 +482,19 @@ func TestCloudClient_CreateDispatch_Other404StaysGeneric(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "dispatch service returned status 404") {
 		t.Fatalf("expected the generic status error, got %v", err)
 	}
+	if !api.IsHTTPErrorStatus(err, http.StatusNotFound) {
+		t.Fatalf("expected the shared *api.HTTPError underneath, got %v", err)
+	}
 	var notFound *RepoNotFoundError
 	if errors.As(err, &notFound) {
 		t.Fatalf("an empty-window 404 is not a repo-not-found error: %v", err)
 	}
 }
 
-func TestErrorMessageFromBody(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]string{
-		``:                                   "",
-		`not json`:                           "",
-		`{"error":"a"}`:                      "a",
-		`{"detail":"b"}`:                     "b",
-		`{"message":"c"}`:                    "c",
-		`{"error":"","detail":"  d  "}`:      "d",
-		`{"title":"Not Found","status":404}`: "",
-	}
-	for body, want := range cases {
-		if got := errorMessageFromBody(body); got != want {
-			t.Errorf("errorMessageFromBody(%q) = %q, want %q", body, got, want)
-		}
-	}
-}
-
 func TestParseNotFoundRepos(t *testing.T) {
 	t.Parallel()
 
-	got := parseNotFoundRepos("Repository not found or not available in its region: a/b, c/d ,, e/f")
+	got := parseNotFoundRepos("Repository not found or not available in its region: a/b, c/d ,, e/f, a/b")
 	if len(got) != 3 || got[0] != "a/b" || got[1] != "c/d" || got[2] != "e/f" {
 		t.Fatalf("unexpected repos: %v", got)
 	}

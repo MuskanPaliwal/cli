@@ -436,27 +436,22 @@ func TestDispatchWizardState_JurisdictionIsCloudOnly(t *testing.T) {
 
 	state := newDispatchWizardState()
 	state.jurisdiction = " us "
-	if state.showJurisdiction() {
-		t.Fatal("local mode must not show the jurisdiction input")
-	}
-	if got := state.resolveJurisdiction(); got != "" {
-		t.Fatalf("local mode must not carry a jurisdiction, got %q", got)
-	}
-
-	state.modeChoice = dispatchWizardModeServer
-	state.selectedRepos = []string{"entireio/cli"}
-	if !state.showJurisdiction() {
-		t.Fatal("cloud mode must show the jurisdiction input")
-	}
-	if got := state.resolveJurisdiction(); got != "us" {
-		t.Fatalf("expected trimmed jurisdiction, got %q", got)
-	}
 	opts, err := state.resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if opts.Jurisdiction != "" {
+		t.Fatalf("local mode must not carry a jurisdiction, got %q", opts.Jurisdiction)
+	}
+
+	state.modeChoice = dispatchWizardModeServer
+	state.selectedRepos = []string{"entireio/cli"}
+	opts, err = state.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if opts.Jurisdiction != "us" {
-		t.Fatalf("expected resolved options to carry the jurisdiction, got %q", opts.Jurisdiction)
+		t.Fatalf("expected resolved options to carry the normalized jurisdiction, got %q", opts.Jurisdiction)
 	}
 
 	state.jurisdiction = "not a slug"

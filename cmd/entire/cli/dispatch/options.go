@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
 
 var githubRepoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$`)
-
-// jurisdictionSlugPattern is the same rule the entire.io gateway validates its
-// `?jurisdiction=` selector against (a short lowercase slug such as "us" or
-// "eu"), so a value that passes here is never rejected as malformed there.
-var jurisdictionSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 func ResolveOptions(
 	flagLocal bool,
@@ -79,15 +76,12 @@ func ResolveOptions(
 	}, nil
 }
 
-// NormalizeJurisdiction lowercases and trims a --jurisdiction value and checks
-// it is a jurisdiction slug (e.g. "us", "eu"). Empty is valid and means the
-// caller's home jurisdiction.
+// NormalizeJurisdiction applies auth's single jurisdiction rule to the
+// --jurisdiction flag (empty = the caller's home jurisdiction), phrasing the
+// rejection in the flag's terms.
 func NormalizeJurisdiction(value string) (string, error) {
-	jurisdiction := strings.ToLower(strings.TrimSpace(value))
-	if jurisdiction == "" {
-		return "", nil
-	}
-	if !jurisdictionSlugPattern.MatchString(jurisdiction) {
+	jurisdiction, err := auth.NormalizeJurisdiction(value)
+	if err != nil {
 		return "", fmt.Errorf("invalid --jurisdiction %q: expected a jurisdiction slug such as us or eu", strings.TrimSpace(value))
 	}
 	return jurisdiction, nil

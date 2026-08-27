@@ -219,7 +219,8 @@ func TestNormalizeJurisdiction(t *testing.T) {
 		{in: "-us", wantErr: true},
 		{in: "us east", wantErr: true},
 		{in: "us.entire.io", wantErr: true},
-		{in: strings.Repeat("a", 33), wantErr: true},
+		{in: "us-", wantErr: true},
+		{in: strings.Repeat("a", 41), wantErr: true},
 	} {
 		got, err := NormalizeJurisdiction(tc.in)
 		if tc.wantErr {

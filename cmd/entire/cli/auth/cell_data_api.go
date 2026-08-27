@@ -387,12 +387,27 @@ func resolveJurisdiction(override, loginJWT string) (string, error) {
 			return "", err
 		}
 	}
-	jurisdiction = strings.ToLower(strings.TrimSpace(jurisdiction))
+	jurisdiction, err := NormalizeJurisdiction(jurisdiction)
+	if err != nil {
+		return "", fmt.Errorf("%w; refusing to route", err)
+	}
 	if jurisdiction == "" {
 		return "", errors.New("login token has no home_jurisdiction claim; cannot route to entire-api cell")
 	}
+	return jurisdiction, nil
+}
+
+// NormalizeJurisdiction is the one rule for a user- or claim-supplied
+// jurisdiction: trimmed, lowercased, and constrained to a single DNS label
+// (`--jurisdiction US`, `" us "` and `us` all yield `us`). Empty is returned as
+// "" without error so callers can apply their own default (home).
+func NormalizeJurisdiction(value string) (string, error) {
+	jurisdiction := strings.ToLower(strings.TrimSpace(value))
+	if jurisdiction == "" {
+		return "", nil
+	}
 	if !jurisdictionLabelPattern.MatchString(jurisdiction) {
-		return "", fmt.Errorf("jurisdiction %q is not a valid label; refusing to route", jurisdiction)
+		return "", fmt.Errorf("jurisdiction %q is not a valid label", jurisdiction)
 	}
 	return jurisdiction, nil
 }
