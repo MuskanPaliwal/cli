@@ -215,8 +215,7 @@ func (s *kindRoutingStore) Write(ctx context.Context, req WriteRequest) error {
 	case writeRequestCreate:
 		return s.writer.Write(ctx, req) //nolint:wrapcheck // primary error is the operation's error, surfaced verbatim
 	case writeRequestReserved:
-		_, strictProbe := normalized.(BatchSessions)
-		return s.writeReservedRequest(ctx, checkpointID, normalized, strictProbe)
+		return s.writeReservedRequest(ctx, checkpointID, normalized)
 	case writeRequestBackfill:
 		// Continue below.
 	default:
@@ -249,7 +248,7 @@ func (s *kindRoutingStore) Write(ctx context.Context, req WriteRequest) error {
 	return err //nolint:wrapcheck // ErrCheckpointNotFound from the final store, surfaced verbatim
 }
 
-func (s *kindRoutingStore) writeReservedRequest(ctx context.Context, checkpointID id.CheckpointID, req WriteRequest, strictProbe bool) error {
+func (s *kindRoutingStore) writeReservedRequest(ctx context.Context, checkpointID id.CheckpointID, req WriteRequest) error {
 	if s.primaryType != BackendTypeGitBranch && s.primaryType != BackendTypeGitRefs {
 		// An unrecognised primary tells us nothing about which backend minted the
 		// ID, and picking one anyway would bypass the configured primary and all of
@@ -270,24 +269,13 @@ func (s *kindRoutingStore) writeReservedRequest(ctx context.Context, checkpointI
 	updateReadTarget := false
 	if readTarget != target {
 		existing, err := readTarget.Read(ctx, checkpointID)
-		switch {
-		case err != nil && strictProbe:
-			return fmt.Errorf("checkpoint: probe read-preferred backend before batch write: %w", err)
-		case err != nil:
-			// Not fatal. readOrder puts this store ahead of target for this ID, and
-			// firstResolved falls through a non-final store that errors, so the
-			// target write below still resolves through normal reads. The cost of
-			// skipping the update is a migrated copy left stale — the same lag the
-			// mirror fan-out contract already permits — whereas failing here would
-			// abandon a condensation over a transient fetch error in the backend the
-			// checkpoint is not even stored in.
-			logging.Warn(ctx, "checkpoint: reserved session could not check the read-preferred backend; writing the ID's backend only",
-				slog.String("checkpoint_id", checkpointID.String()),
-				slog.String("primary_backend", s.primaryType),
-				slog.String("error", err.Error()))
-		default:
-			updateReadTarget = existing != nil
+		if err != nil {
+			// A read-preferred copy may exist remotely even when its probe fails.
+			// Publishing only the ID-selected backend could leave that copy stale,
+			// and normal reads would prefer it when the backend recovers.
+			return fmt.Errorf("checkpoint: probe read-preferred backend before reserved write: %w", err)
 		}
+		updateReadTarget = existing != nil
 	}
 	if batch, ok := req.(BatchSessions); ok && updateReadTarget {
 		first, firstOK := target.(batchRefWriter)
