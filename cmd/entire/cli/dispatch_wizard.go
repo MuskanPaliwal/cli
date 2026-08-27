@@ -292,8 +292,9 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 		// huh's accessible runner ignores hide funcs and never evaluates an
 		// OptionsFunc, so dynamic groups cannot work there: the jurisdiction
 		// picker is skipped (--jurisdiction remains the way to scope) and the
-		// repo list is resolved up front, unscoped.
-		repoPicker.Options(buildDispatchRepoOptions(loadScope().reposIn(""))...)
+		// repo list is resolved up front with EVERY offerable repo — not
+		// reposIn(""), which is the unplaced bucket once placements are known.
+		repoPicker.Options(buildDispatchRepoOptions(loadScope().repos)...)
 		groups = append(groups, huh.NewGroup(repoPicker))
 	} else {
 		groups = append(groups,
