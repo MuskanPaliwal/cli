@@ -3675,7 +3675,6 @@ func TestHandleLifecycleSubagentEnd_SubagentStop_TranscriptOnlyBeforeFirstSaveSt
 		NewFiles:                 []string{},
 		DeletedFiles:             []string{},
 		MetadataDir:              metadataDir,
-		MetadataDirAbs:           metadataDirAbs,
 		CommitMessage:            "Checkpoint 1",
 		AuthorName:               "Test",
 		AuthorEmail:              "test@test.com",
