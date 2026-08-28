@@ -28,7 +28,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/imageextract"
-	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
@@ -395,33 +394,6 @@ func (s *treeWriter) applyTranscriptBackfill(ctx context.Context, opts UpdateOpt
 	}
 
 	return s.buildCheckpointSubtree(ctx, entries, basePath)
-}
-
-// writeTaskRecordEntries materializes each of opts.Tasks into
-// tasks/<tool-use-id>/{agent-<agent-id>.jsonl, task.json} inside the
-// checkpoint tree at basePath. Iterates unconditionally — an empty Tasks
-// slice (every session before subagent-work durability landed, and every
-// session with no subagent work) is a no-op — replacing the old
-// opts.IsTask/opts.ToolUseID single-task-per-checkpoint route, which no
-// producer ever set (#2058's "dead writer": the whole path was unreachable).
-// Transcript content is expected pre-redacted by the caller (the condensation
-// materializer runs the same sanitize -> externalize -> redact pipeline the
-// session transcript gets), so this writer does not redact it again. The one
-// thing it does redact is task.json's free-text task_description, which the
-// record carries verbatim — see writeTaskRecordEntry.
-func (s *treeWriter) writeTaskRecordEntries(opts WriteOptions, basePath string, entries map[string]object.TreeEntry) error {
-	for _, task := range opts.Tasks {
-		if err := validation.ValidateToolUseID(task.ToolUseID); err != nil {
-			return fmt.Errorf("invalid task payload: %w", err)
-		}
-		if err := validation.ValidateAgentID(task.AgentID); err != nil {
-			return fmt.Errorf("invalid task payload: %w", err)
-		}
-		if err := s.writeTaskRecordEntry(task, basePath, entries); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // writeTaskRecordEntry writes one TaskPayload's agent-<agent-id>.jsonl (when
