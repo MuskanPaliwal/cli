@@ -1,19 +1,1 @@
 yupp
-
----
-
-creatw a draft pr
-
----
-
-yupp
-
----
-
-but there is this also mentioned: Worth considering more broadly: the suffix rule has now been widened twice for the same failure mode (signature -> *signature -> this). A small allowlist of known reasoning-payload field names, or a rule keyed on the enclosing object's type (thinking, reasoning), would stop the next provider from hitting it. Happy to take direction on which shape you prefer.
-
-A regression test alongside the existing shouldSkipJSONLField cases in redact/redact_test.go would cover it.
-
----
-
-yupp
