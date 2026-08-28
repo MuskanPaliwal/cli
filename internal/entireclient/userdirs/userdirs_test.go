@@ -119,3 +119,27 @@ func TestEnsurePrivateDir_LeavesAlreadyPrivateDirAlone(t *testing.T) {
 		t.Errorf("mode = %04o, want 0500 preserved", got)
 	}
 }
+
+func TestEnsurePrivateDir_PreservesOwnerBitsWhileTightening(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("unix permission bits are synthetic on Windows")
+	}
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "entire")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if err := userdirs.EnsurePrivateDir(dir); err != nil {
+		t.Fatalf("EnsurePrivateDir: %v", err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := st.Mode().Perm(); got != 0o500 {
+		t.Errorf("mode = %04o, want 0500 (group/other cleared, owner untouched)", got)
+	}
+}

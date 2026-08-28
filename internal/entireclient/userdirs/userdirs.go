@@ -50,7 +50,7 @@ func Cache() string {
 }
 
 // EnsurePrivateDir creates dir as a private, user-only directory (0700) and,
-// when it already exists with group or other access, tightens it back to 0700.
+// when it already exists with group or other access, clears those bits.
 //
 // The tightening step is the point. Config() holds bearer tokens — the login
 // JWTs in contexts.json and the file token store's tokens.json — and those
@@ -61,9 +61,12 @@ func Cache() string {
 // the first login used to leave it 0755 for good, and the credential stores'
 // own MkdirAll(0700) could never repair it.
 //
-// An already-private directory is left exactly as the user set it, so a mode
-// stricter than 0700 (0500, say) survives. Only group and other bits are
-// cleared.
+// Only the group and other bits are ever cleared: the owner bits are carried
+// across untouched, so a directory the user deliberately made stricter than
+// 0700 stays that way whether or not it also needed tightening (0500 survives,
+// 0555 becomes 0500). Masking can leave the owner no access at all, which is
+// the same thing an already-private 0000 directory gets: this function makes a
+// directory private, and does not claim to make it usable.
 //
 // Windows has no unix permission bits (Go reports synthetic modes and Chmod
 // only toggles the read-only flag), so the tightening step is skipped there.
@@ -81,9 +84,7 @@ func EnsurePrivateDir(dir string) error {
 	if info.Mode().Perm()&0o077 == 0 {
 		return nil
 	}
-	//nolint:gosec // G302 is about file modes; 0700 on a directory is the
-	// strictest mode that still lets the owner traverse and list it.
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, info.Mode().Perm()&^0o077); err != nil {
 		return fmt.Errorf("tighten %s: %w", dir, err)
 	}
 	return nil
