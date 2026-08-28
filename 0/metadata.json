@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M14QBVM11XQ1ZD7QCVZXMBST",
+  "session_id": "01a04926-e486-73c0-a147-e5cb6ae70223",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T17:41:02.897797Z",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/session/state.go",
+    "cmd/entire/cli/status.go",
+    "cmd/entire/cli/strategy/manual_commit.go",
+    "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/phase_postcommit_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "396d7819e04b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 238602,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 9615360,
+    "output_tokens": 36197,
+    "api_call_count": 87
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T17:41:02.79014Z",
+    "agent_lines": 21,
+    "agent_removed": 27,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 15,
+    "total_committed": 21,
+    "total_lines_changed": 63,
+    "agent_percentage": 76.19047619047619,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 163,
+      "user_lines_removed": 15,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/session/state.go": 2,
+        "cmd/entire/cli/status.go": 2,
+        "cmd/entire/cli/strategy/manual_commit.go": 18,
+        "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go": 106,
+        "cmd/entire/cli/strategy/manual_commit_hooks.go": 32,
+        "cmd/entire/cli/strategy/phase_postcommit_test.go": 3
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/session/state.go": 4,
+        "cmd/entire/cli/status.go": 2,
+        "cmd/entire/cli/strategy/manual_commit.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_hooks.go": 5,
+        "cmd/entire/cli/strategy/phase_postcommit_test.go": 3
+      }
+    }
+  ]
+}
