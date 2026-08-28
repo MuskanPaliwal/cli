@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.10.3-nightly.202608270913.f6091af37",
+  "checkpoint_id": "01M140E0KVEV54XQNQRHNGFGA3",
+  "session_id": "bc672864-443f-4853-9847-47e288e22503",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T11:00:14.879884Z",
+  "branch": "improve-process-sessions-batching-stage3",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/strategy/commit_hook_perf_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "40a015b98f81",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 136,
+    "cache_creation_tokens": 238479,
+    "cache_read_tokens": 11167493,
+    "output_tokens": 51062,
+    "api_call_count": 68
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T11:00:14.838028Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 21732,
+    "human_modified": 501,
+    "human_removed": 0,
+    "total_committed": 21803,
+    "total_lines_changed": 25081,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 333,
+      "user_lines_removed": 97,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 333
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 97
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+I want to continue discussing and possibly working on Entire CLI issue #2091, `process_sessions` condensation latency.
+
+  Context:
+  - Repo: entireio/cli. Issue: https://github.com/entireio/cli/issues/2091
+  - Use the existing `improve-process-sessions-condensation` worktree. Find it with `git worktree list`.
+  - Scope is item 2 only, synchronous PostCommit work in `process_sessions`.
+  - One uncommitted file contains measurement-only changes to `TestCommitHookPerformance`. Review and preserve that work. No production behavior has changed.
+  - The corrected test uses full history, unique bases and shadow trees, packed refs, real per-session transcripts, committed-file overlap, and the documented session mix. It asserts that intended
+  ENDED sessions condense, update state, and clean up their refs.
+
+  Measurements from cold runs:
+  - 100 sessions, 67 condensations: PostCommit 4.851s, `process_sessions` 3.776s, storage 1.185s.
+  - 200 sessions, 134 condensations: PostCommit 11.032s, `process_sessions` 9.225s, storage 4.100s.
+  - 500 sessions, 335 condensations: PostCommit 39.502s, `process_sessions` 35.219s, storage 23.243s.
+  - Condensations grew 5x while storage time grew 19.6x. Repeated checkpoint-tree rebuild, aggregation, commit creation, and ref publication are the dominant high-count cost.
+  - `find_sessions_for_worktree` took only 17ms, 31ms, and 74ms. The `LastCheckpointID` ref shortcut is valid but cannot solve #2091.
+
+  Before implementation:
+  - Read local instructions and independently review the diff, live issue and CI, "Commit Hook Performance Analysis", PostCommit, CondenseSession, both git storage modes, routing, mirrors, task
+  records, locks, and recovery.
+  - Decide whether batching is still the best next change, too risky, stale, or replaceable by a smaller storage fix. Discuss that decision with the user before production edits.
+
+  Immediate work:
+  - Finish the tagged test cleanup. It currently compiles.
+  - A tag-aware lint run found complexity in `seedHookPerfSessions`, an avoidable `fmt.Sprintf` for `completed work for <session>`, and two unused `nolint:gosec` directives. Refactor rather than
+  hiding complexity behind an unexplained suppression, then rerun tag-aware lint.
+  - The focused strategy suite and all three tagged scenarios passed before the latest lint-only edits. `mise run check` also passed, including race tests and both no-cost canaries. Rerun formatting,
+  tagged compile, at least the 100-session scenario, tag-aware lint, and `mise run check` after cleanup.
+  - Keep the diff measurement-only, report exact commands and results, then recommend the production patch.
+
+  Batching constraints if recommended:
+  - Batch one checkpoint ID, preserve session order, and publish one complete tree update per primary backend.
+  - Retry with the same checkpoint ID and upsert by SessionID.
+  - Preserve partial-failure recovery across storage publication, per-session state saves, routing copies, and mirrors.
+  - Do not clear completed task records or delete a shadow ref until durable storage and that session's state save succeed.
+  - Handle concurrent state changes with deterministic locking or a durable journal and generation check.
+  - Preserve git-branch, git-refs, routing, fanout, ordering, checkpoint ID reuse, task-record behavior, and combined attribution.
+
+  Non-goals:
+  - No age-only pruning, latency-floor work, transcript-readiness work, redaction-prefix reuse, or unrelated doctor trace changes.
+  - Do not run paid real-agent E2E tests.
+  - Do not push, create or update a PR, merge, close the issue, label, or post publicly unless asked.
+
+  Output:
+  - Start with an independent review and recommendation.
+  - Finish and validate the measurement-only change.
+  - Explain the next design and failure modes, then pause for user agreement before production edits.
