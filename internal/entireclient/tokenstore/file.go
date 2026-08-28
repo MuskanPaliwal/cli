@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
 // goosWindows is runtime.GOOS on Windows, where unix permission bits don't
@@ -41,7 +43,7 @@ type fileStore struct {
 // withFileLock runs fn while holding an exclusive flock on f.path + ".lock".
 // The lock coordinates across processes; the in-process mu handles goroutines.
 func (f *fileStore) withFileLock(fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(f.path), 0700); err != nil {
+	if err := userdirs.EnsurePrivateDir(filepath.Dir(f.path)); err != nil {
 		return fmt.Errorf("creating token store directory: %w", err)
 	}
 

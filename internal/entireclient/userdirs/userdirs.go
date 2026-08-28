@@ -14,8 +14,10 @@
 package userdirs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/entireio/cli/internal/testdirs"
 )
@@ -45,4 +47,44 @@ func Cache() string {
 	}
 	home, _ := os.UserHomeDir() //nolint:errcheck // best-effort default
 	return filepath.Join(home, ".cache", "entire")
+}
+
+// EnsurePrivateDir creates dir as a private, user-only directory (0700) and,
+// when it already exists with group or other access, tightens it back to 0700.
+//
+// The tightening step is the point. Config() holds bearer tokens — the login
+// JWTs in contexts.json and the file token store's tokens.json — and those
+// files are written 0600, but a mode-0755 parent leaks their existence and
+// hands anyone on the box a directory they can traverse and enumerate. Because
+// os.MkdirAll is a no-op on an existing path, whichever caller created the
+// directory first fixes its mode permanently: a version check that ran before
+// the first login used to leave it 0755 for good, and the credential stores'
+// own MkdirAll(0700) could never repair it.
+//
+// An already-private directory is left exactly as the user set it, so a mode
+// stricter than 0700 (0500, say) survives. Only group and other bits are
+// cleared.
+//
+// Windows has no unix permission bits (Go reports synthetic modes and Chmod
+// only toggles the read-only flag), so the tightening step is skipped there.
+func EnsurePrivateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", dir, err)
+	}
+	if info.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+	//nolint:gosec // G302 is about file modes; 0700 on a directory is the
+	// strictest mode that still lets the owner traverse and list it.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("tighten %s: %w", dir, err)
+	}
+	return nil
 }
