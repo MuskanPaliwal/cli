@@ -21,7 +21,7 @@ func stubCloudDispatchAuth(t *testing.T) {
 	t.Helper()
 	oldResource := lookupResourceToken
 	oldRequire := requireSecureDispatchURL
-	lookupResourceToken = func(_ context.Context, _ string) (string, error) {
+	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
 		return testCloudDispatchToken, nil
 	}
 	requireSecureDispatchURL = func(string) error { return nil }
@@ -371,7 +371,7 @@ func TestServerMode_InsecureHTTPAuthBypassesSecureURLCheck(t *testing.T) {
 
 	oldResource := lookupResourceToken
 	oldNow := nowUTC
-	lookupResourceToken = func(_ context.Context, _ string) (string, error) {
+	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
 		return testCloudDispatchToken, nil
 	}
 	nowUTC = func() time.Time { return time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC) }
@@ -403,7 +403,7 @@ func TestServerMode_InsecureHTTPAuthBypassesSecureURLCheck(t *testing.T) {
 // leak reaches users.
 func TestServerMode_RejectsPlainHTTPBaseURL(t *testing.T) {
 	oldResource := lookupResourceToken
-	lookupResourceToken = func(_ context.Context, _ string) (string, error) {
+	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
 		return testCloudDispatchToken, nil
 	}
 	t.Cleanup(func() { lookupResourceToken = oldResource })

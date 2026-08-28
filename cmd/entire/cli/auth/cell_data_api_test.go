@@ -641,3 +641,35 @@ func TestCellClientFactory_UsesLoginJWTDirectly(t *testing.T) {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 }
+
+func TestResolveAccountAccessToken_ReturnsRefreshedLoginJWTWithoutExchange(t *testing.T) {
+	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
+	t.Setenv("ENTIRE_API_BASE_URL", "https://entire.io")
+	t.Setenv("ENTIRE_API_AUDIENCE_TEMPLATE", "")
+	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "")
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	coreSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("unexpected token exchange: the account access token is the login JWT itself")
+	}))
+	defer coreSrv.Close()
+
+	svc := tokenstore.CoreKeyringService(coreSrv.URL)
+	loginJWT := makeJWT(t, fmt.Sprintf(`{"iss":%q,"scope":"offline_access entire:session entire:api-access","home_jurisdiction":"us","exp":%d}`, coreSrv.URL, time.Now().Add(2*time.Hour).Unix()))
+	if err := tokenstore.Set(svc, "me", tokenstore.EncodeTokenWithExpiration(loginJWT, 7200)); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+	ctxObj := &contexts.Context{Name: "me@core", CoreURL: coreSrv.URL, Handle: "me", KeychainService: svc}
+	t.Cleanup(SetResolveContextForCellAPIForTest(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		return ctxObj, nil
+	}))
+
+	got, err := ResolveAccountAccessToken(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ResolveAccountAccessToken: %v", err)
+	}
+	if got != loginJWT {
+		t.Fatalf("expected the stored login JWT to be returned verbatim")
+	}
+}

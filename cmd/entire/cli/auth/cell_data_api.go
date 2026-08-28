@@ -575,6 +575,31 @@ func requireSafeExchangeURL(label, raw string) error {
 	return nil
 }
 
+// ResolveAccountAccessToken returns the caller's account access token — the
+// active context's refreshed login JWT (scope entire:session) — for bearer
+// calls to the data plane at api.BaseURL() (the entire.io gateway).
+//
+// The gateway authenticates a bearer of this shape directly and mints the
+// per-jurisdiction cell tokens itself (COR-1095). The narrower token from
+// ResolveDataAPIToken — an RFC 8693 exchange for the data host's audience —
+// is NOT usable there any more: the gateway must re-exchange it at entire-core
+// to reach a cell, and core refuses a non-session subject
+// ("subject_token is not a session credential"). Every released CLI's
+// `dispatch` failed this way from 2026-08-20 until callers moved here.
+//
+// Resolution goes through resolveStoredCellSubject, i.e. the data host's
+// /.well-known discovery picks (and validates) the login context — the same
+// rule as ResolveDataAPIToken and NewEntireAPICellClient, so pointing the CLI
+// at another environment still requires `entire auth use`. Like those, it does
+// not consult ENTIRE_TOKEN.
+func ResolveAccountAccessToken(ctx context.Context, insecureHTTP bool) (string, error) {
+	subject, err := resolveStoredCellSubject(ctx, insecureHTTP)
+	if err != nil {
+		return "", err
+	}
+	return subject.loginJWT, nil
+}
+
 // HomeJurisdictionFromActiveLogin returns the home_jurisdiction claim of the
 // login the CLI would route with (subject precedence as in JurisdictionToken),
 // normalized; "" when absent. It is the routing default, not the account's

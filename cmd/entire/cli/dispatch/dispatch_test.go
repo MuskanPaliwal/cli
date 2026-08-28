@@ -10,7 +10,7 @@ import (
 
 func TestRun_ServerAllowsRepos(t *testing.T) {
 	oldResource := lookupResourceToken
-	lookupResourceToken = func(_ context.Context, _ string) (string, error) {
+	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
 		return "", auth.ErrNotLoggedIn
 	}
 	t.Cleanup(func() {

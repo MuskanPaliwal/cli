@@ -30,14 +30,9 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		}
 	}
 
-	// Resolve a bearer scoped to the dispatch service host. In split-host
-	// deployments the tokenmanager runs an RFC 8693 exchange so the
-	// bearer carries the data-API audience rather than the auth-host
-	// one; single-host setups hit the same-host shortcut and return the
-	// core token unchanged. OriginOnly strips any path the operator may
-	// have included in ENTIRE_API_BASE_URL — tokenmanager validates
-	// Resource as a strict origin URL.
-	token, err := lookupResourceToken(ctx, api.OriginOnly(baseURL))
+	// The gateway wants the account access token (login JWT) as bearer; it
+	// mints the per-jurisdiction cell token itself. See lookupResourceToken.
+	token, err := lookupResourceToken(ctx, opts.InsecureHTTPAuth)
 	if errors.Is(err, auth.ErrNotLoggedIn) {
 		return nil, errors.New("dispatch requires login — run `entire login`")
 	}

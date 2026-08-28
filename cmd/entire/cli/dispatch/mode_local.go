@@ -27,12 +27,14 @@ import (
 )
 
 var (
-	// lookupResourceToken returns a bearer for the given data-API base URL.
-	// Production wiring goes through auth.ResolveDataAPIToken so the dispatch
-	// host's /.well-known/entire-api.json picks the matching login context
-	// (a host that doesn't advertise discovery is a surfaced error). Tests
-	// swap to a fixed-token closure.
-	lookupResourceToken = auth.ResolveDataAPIToken
+	// lookupResourceToken returns the bearer for the dispatch gateway at
+	// api.BaseURL(): the account access token (login JWT), which the gateway
+	// accepts directly and uses to mint cell tokens for the target
+	// jurisdiction. Not the exchanged data-API token — see
+	// auth.ResolveAccountAccessToken for why that stopped working. The data
+	// host's /.well-known discovery still picks the matching login context.
+	// Tests swap to a fixed-token closure.
+	lookupResourceToken = auth.ResolveAccountAccessToken
 
 	nowUTC = func() time.Time { return time.Now().UTC() }
 )
