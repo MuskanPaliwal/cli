@@ -105,7 +105,7 @@ func (s contextTokenStore) DeleteTokens(string) error {
 	return nil
 }
 
-// newContextTokenManager builds the per-context auth-go tokenmanager that both
+// newContextTokenManager builds the per-context auth-go tokenmanager that
 // NewRefreshingLoginProvider sits on. Keying
 // Issuer on c.CoreURL is the whole point: store reads, the refresh grant, and
 // the STS exchange all target that context's core, so a multi-core user's
