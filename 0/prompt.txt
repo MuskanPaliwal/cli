@@ -1,0 +1,201 @@
+I want to discuss and possibly work on: Entire CLI issue #2091, implementing checkpoint-level batching for manual-commit `process_sessions` condensation
+
+Context:
+- Repository: `entireio/cli`. Live issue: https://github.com/entireio/cli/issues/2091. Relevant branch: `improve-process-sessions-condensation`.
+- Scope is issue item 2 only: synchronous `PostCommit` work inside the manual-commit strategy's `process_sessions` loop.
+- A prior independent review recommended checkpoint-level batching because both `git-branch` and `git-refs` use the shared checkpoint-tree writer, and each session write currently flattens the growing checkpoint subtree, upserts one session, reaggregates metadata, rebuilds the tree, creates a Git commit, and publishes a ref. This creates work resembling `1 + 2 + ... + N`.
+- Treat that recommendation as starting context, not a decision. You own the fresh review and should decide whether batching is still correct, stale, already solved, over-scoped, or better replaced by a smaller storage change.
+- Reviewed measurements were: 100 sessions / 67 condensations: `PostCommit` 4.851s, `process_sessions` 3.776s, storage 1.185s; 200 / 134: 11.032s, 9.225s, 4.100s; 500 / 335: 39.502s, 35.219s, 23.243s. Normalized non-storage work stayed near 36-39ms per condensation, while storage rose from 17.7ms to 69.4ms. A later 100-session proof reproduced 67 condensations with `PostCommit` 4.645s, `process_sessions` 3.641s, and storage 1.176s.
+- One uncommitted Go performance-test file contains measurement-only fixture and lint-cleanup changes. Preserve and independently review it. It uses full repository history, unique bases and shadow trees, packed refs, real per-session transcripts, committed-file overlap, and the documented production-like phase mix; it asserts intended ENDED sessions condense, update state, and clean up refs. No production behavior has been changed yet.
+- The previous review found two production hazards that batching must not inherit: storage publication followed by a failed state save may still leave a shadow ref eligible for deletion, and checkpoint storage publications currently have no shared persistent ref lock/CAS boundary across writers.
+- The branch was 57 commits behind `upstream/main` at the prior review, and current upstream CI was not fully green. Re-check both facts live. Do not merge, rebase, or discard the uncommitted test work without explicit user agreement.
+
+Before doing any implementation:
+- Find the right repository and branch worktree with `git worktree list`; do not assume where the agent was launched.
+- Read all local agent and repository instructions.
+- Re-check the live issue, remotes, branch divergence, current CI, and recent upstream changes.
+- Extensively inspect the uncommitted diff, the document titled "Commit Hook Performance Analysis", `PostCommit`, `postCommitProcessSessionLocked`, `CondenseSession`, `MutateSessionState`, `CondensationAttempt`, the shared checkpoint tree writer, `git-branch`, `git-refs`, `kindRoutingStore`, `fanoutStore`, task-record materialization, shadow-ref cleanup, storage/state locks, and interrupted-condensation recovery.
+- Inspect recent commits and available Entire checkpoint/session history for recorded intent instead of inferring intent where provenance exists.
+- Re-evaluate the measurements and decide whether batching is still the smallest coherent fix. Compare it explicitly with incremental tree surgery, aggregate-delta updates, fewer publications, and a `LastCheckpointID` shortcut.
+- Analyze every crash boundary and concurrent state transition before editing production code. Stop and discuss any assumption that could cause session data loss, state rollback, routing splits, premature task/ref cleanup, or lost concurrent writes.
+
+Task:
+- If the independent review still supports batching, implement the smallest coherent checkpoint-level batch boundary that eliminates repeated growing-checkpoint reconstruction and publication across both Git storage modes.
+- Preserve one checkpoint ID, retry with the same ID, stable ordered selection by `SessionID`, and idempotent upsert by `SessionID`. Existing entries under the same checkpoint ID must remain intact.
+- The shared tree writer should flatten the existing checkpoint once, apply all ordered session upserts to one candidate, aggregate metadata once from the finalized candidate, build once, and perform one complete primary publication.
+- Keep routing checkpoint-scoped: sibling sessions for one checkpoint must never split between `git-branch` and `git-refs`, including after backend configuration changes. Keep the ordered batch intact through primary publication and mirror fanout.
+- Add a durable batch journal plus generation/revision snapshots, or demonstrate an equally safe deterministic-locking design. Preparation must produce immutable per-session snapshots without holding every session lock through expensive storage work. All single-session and batch storage writers that can target the same ref must share a persistent serialization/CAS boundary.
+- Revalidate each session during finalization. If its generation matches, durably save its condensed state before marking cleanup safe. If it was superseded, retain the valid published snapshot while preserving newer local state and recovery data for a later checkpoint; never overwrite the newer state.
+- Preserve partial-failure recovery across candidate creation, primary ref publication, journal advancement, per-session state saves, routing copies, mirrors, completed task records, and shadow refs. Recovery after a crash immediately following ref publication must be able to verify the intended batch without blindly republishing or losing entries.
+- Do not clear a completed task record or delete a shadow ref until durable primary storage and that session's state save have succeeded. A shared shadow ref is deletable only when every dependent session is safe, and deletion must verify that the ref still points to the prepared snapshot.
+- Preserve the existing primary-authoritative, mirror-fail-soft contract. If mirror/routing-copy failures need later retry, expose and journal destination status without rolling back durable primary session data.
+- Preserve combined attribution's fail-soft contract. It currently runs as a separate post-write backfill because attribution must use the complete finalized trustworthy session set and avoid inflation from intermediate session subsets. Prefer retaining this separate constant-cost backfill for the first implementation unless code evidence shows that computing from an assembled but unpublished candidate preserves exactly the same filters and union semantics. Attribution failure must never discard durable session data.
+- Recalculate combined attribution across the complete final checkpoint: existing entries plus all successfully incoming/upserted sessions, applying the existing trustworthy-session filters.
+- Keep the change focused. Non-goals: age-only pruning, latency-floor work, transcript-readiness changes, redaction-prefix reuse, unrelated doctor-trace changes, and paid real-agent E2E tests.
+
+Validation:
+- Add focused tests for both `git-branch` and `git-refs`, stable order, retry/same-ID upsert, existing-plus-incoming entries, partial state-save failure, generation mismatch, crash recovery before and after primary publication, routing after backend changes, primary versus mirror failure, task-record retention, shared-shadow cleanup, and fail-soft combined attribution.
+- Run formatting, tag-aware compilation and lint for the performance fixture, the focused strategy/storage suites, all three tagged performance scenarios, and `mise run check`.
+- A previous `mise run check` had formatting/lint and the strategy suite pass, but failed in the unrelated integration test `TestExternalCommand_SigintReachesPlugin` because the plugin never reached ready state. Re-check rather than assuming it is flaky; report any recurrence exactly. Do not run paid real-agent E2E tests.
+- Report exact commands, timings for the tagged scenarios, test outcomes, and the final changed-file scope. Compare storage scaling before and after; do not claim success from absolute latency alone.
+
+Output:
+- Start with independent review findings and a recommendation: batching, smaller storage fix, or no change. Separate facts backed by code/history/measurements from design inference.
+- Before editing, present explicit durability phases and a failure/recovery matrix covering every journal, publication, state-save, routing/mirror, task-record, generation-mismatch, and shared-shadow boundary. Discuss material changes with the user if the fresh review changes the agreed direction or expands scope.
+- Then give the implementation/patch summary and explain how routing, locking, retry, ordering, combined attribution, and cleanup invariants are preserved.
+- If you edit code, keep it tightly scoped and report exact proof run.
+- Do not push, create or update a PR, merge, close the issue, label it, or post public comments unless explicitly told.
+ let's implement the fix here
+
+---
+
+<task-notification>
+<task-id>a775def230d76f376</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-improve-process-sessions-condensation/c9892365-25d7-4fec-9d33-040a8e8ddf29/tasks/a775def230d76f376.output</output-file>
+<status>completed</status>
+<summary>Agent "Check provenance and CI status for batching idea" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings (research fork, read-only)
+
+**1. Batching — nothing shipped, per direct evidence:**
+- `git log --all --grep="batch"/"2091"/"condens"` across upstream/main and all reachable refs surfaces **no commit implementing checkpoint-level batching for `process_sessions`**. The only "2091"-grep hits are this repo's own Entire checkpoint commits (`entire/checkpoints/*` shadow branches store this very session's prompts as commit messages) — self-referential noise from dogfooding, not upstream signal.
+- `gh pr list --search "process_sessions batch"` → **zero results**. `gh pr list --search "checkpoint batching"` → hits are all unrelated (OPF batching #1246, v2 migration, git-refs backend #1566, argv batching #1235) — none touch `process_sessions`/condensation batching.
+- `gh pr list --search "2091"` → three hits: **#2092** (doctor trace aggregation, merged) and **#2107** ("reuse redaction prefixes at condensation and Stop finalize", merged 2026-08-24) — this is issue item 4, already marked "DONE in #2107" in the issue body, consistent. **#2099** open, unrelated (Claude Code transcript capture). No PR addresses item 2.
+- CONFIRMED: `docs/architecture/commit-hook-perf-analysis.md` has had only 6 commits, all from its original authoring (Feb 2026) through an Aug-2026 doc-trap correction — none touched the "Optimization Opportunities" section or added implementation.
+- CONFIRMED: `findSessionsForWorktree` (upstream/main, `manual_commit_session.go:206`) does pure state-file listing with worktree-matching logic — no ref resolution, no "skip orphan check for `LastCheckpointID` sessions" short-circuit exists. That specific doc-listed optimization (item 4, ref-scan reduction) is unimplemented, but it's a different, unrelated item from item 2 (batching).
+
+**Conclusion: batching (item 2) is unimplemented and un-attempted anywhere in history or open PRs.** This is a fact, not inference.
+
+**2. CI health — anomaly, needs re-check by parent, not resolved here:**
+`gh run list --branch main --limit 20` returned only runs from **2026-08-04/08-05**, despite the parent's own earlier call (same command) in this same session returning **2026-08-24** runs including an in-progress E2E run and a failing "License Check" on PR #2107's merge. This fork's result set is stale/paginated differently (likely a `gh` cache or rate-limit artifact) — **do not treat my listing as current CI truth**; the parent's live Aug-24 data (in-progress E2E, one red License Check on #2107) is the fresher read. Re-run `gh run list` directly rather than trusting this fork's copy.
+
+**3. Divergence:** `git rev-list --left-right --count upstream/main...HEAD` = **86 0** — branch is 86 commits behind upstream/main, 0 ahead (confirmed, matches parent's earlier check).
+
+**4. Sibling worktrees:** `fix-hook-latency-floor` and `improve-transcript-redaction-reuse` are both sitting at `4de797b18` (same as `main`/this branch) with **no local commits of their own** — they're unstarted worktrees, not active in-progress work on issue #2091 items 1/3/4. Nothing to avoid stepping on there currently.</result>
+<usage><subagent_tokens>124836</subagent_tokens><tool_uses>4</tool_uses><duration_ms>62950</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a42786482dd17b928</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-improve-process-sessions-condensation/c9892365-25d7-4fec-9d33-040a8e8ddf29/tasks/a42786482dd17b928.output</output-file>
+<status>completed</status>
+<summary>Agent "Read locking, recovery, shadow-ref cleanup architecture" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now I have enough to write the report.
+
+**Task restated**: research MutateSessionState locking, CondensationAttempt recovery lifecycle, ref-publication CAS, shadow-ref cleanup ordering, and doctor's stuck-session detection, all file:line cited, no code changes.
+
+## MutateSessionState (lock type/scope, storage I/O under lock)
+
+`cmd/entire/cli/strategy/session_state.go:525-567`. Cross-process lock is an OS-level `flock` on `.git/entire-session-locks/&lt;sessionID&gt;.lock` (per-session, not per-worktree), acquired in `acquireSessionGate` (:572+). Layered over it is an in-process `sync.Map` gate (`sessionMutationGate`, :468) keyed by session ID, giving goroutine-reentrancy so nested `MutateSessionState` calls on the same session in the same goroutine share the already-loaded state pointer and skip a second load/save (:535-544) — only the outermost call's `SaveSessionState` (:563) persists anything.
+
+Doc comment at :512-517 states explicitly and deliberately: **storage I/O runs while the lock is held today.** "PostCommit's callback, for example, runs CondenseSession (shadow-branch tree builds, transcript compaction) inside the gate. That's deliberate... A concurrent PostToolUse on the same session waits for the commit to finish." So the existing design already accepts holding a per-session flock across expensive storage work — this is a real, intentional precedent for "session locks held through expensive work," not something batching introduces new.
+
+## CondensationAttempt lifecycle and crash-recovery behavior
+
+Fields/methods: `session/state.go:638-667` (`PendingCondensationID`, `BeginCondensationAttempt`, `RequireCondensationRecovery`, `NeedsCondensationRecovery`, `ClearCondensationAttempt`).
+
+`BeginCondensationAttempt` is called from exactly one place, `ensureCondensationAttemptID` (`manual_commit_condensation.go:1572-1582`), reached only from the **eager/doctor paths**: `PrepareSessionEndCondensation` (session-end, :1591-1602), `reserveDoctorCondensationAttempt` (:1604-1613), and `CondenseAndMarkFullyCondensed`'s reservation branch (:1790-1798). **PostCommit's own path never calls it** — PostCommit gets its checkpoint ID from the commit trailer (`trailers.ParseCheckpoint`, `manual_commit_hooks.go:909`), which for ENDED sessions was itself minted earlier by `PrepareSessionEndCondensation` at session-end and is durably stored in `state.CondensationAttempt` at that point.
+
+`ClearCondensationAttempt` is only ever invoked through `resetCheckpointWindow` (`manual_commit_git.go:491-497`) or directly on the "skip/no-op" branches (:1597, 1726, 1739). `resetCheckpointWindow` is, per its own comment (:482-484), the single reset site shared by all three condensation callers (`CondenseSessionByID`, `CondenseAndMarkFullyCondensed`, `condenseAndUpdateState` — PostCommit's), and it is also where completed task records are dropped (:486-490, `removeCompletedTaskRecords`).
+
+Crash-point behavior, given all of the above mutations (the `state *SessionState` in memory) are only durable once `MutateSessionState`'s outer `SaveSessionState` call (`session_state.go:563`) completes:
+
+- **(a) Crash after `BeginCondensationAttempt` but before the storage write**: nothing durable happened (the reservation itself lives only in the in-memory `state` until the outer save). If the reservation call and `CondenseSession` are in the *same* `MutateSessionState` invocation (true for `PrepareSessionEndCondensation`+later condense, and for the doctor/eager paths per :1627-1691 / :1790-1852, which use *two separate* `MutateSessionState` calls — one to reserve, a second to condense), a crash between them **does** leave the reservation durably saved (first call's outer save completed) with checkpoint ID recorded but no storage write yet — safe, retryable, no data written.
+- **(b) Crash after storage write (`store.Write` at `manual_commit_condensation.go:615`) succeeds but before the outer `SaveSessionState`**: all of `resetCheckpointWindow`'s mutations (clear attempt, drop completed task records, `LastCheckpointID`, etc.) are in-memory only and are **lost**. On disk, the session still shows the old `CondensationAttempt.CheckpointID` (from the earlier durable reservation) and its task records still marked completed-but-present. This is precisely the state `state.NeedsCondensationRecovery()` / `recoverInterruptedCondensation` (`manual_commit_condensation.go:598-605`) is built to detect and reconcile on retry — via `condenseOpts.reconcileInterrupted`, set explicitly by the doctor (`CondenseSessionByID`, :1661) and eager-condense (`CondenseAndMarkFullyCondensed`, :1827) callers, **not** by PostCommit's `condenseAndUpdateState`/`postCommitProcessSessionLocked`.
+- **(c) Crash after the outer save**: fully durable and consistent — `CondensationAttempt` cleared, `LastCheckpointID` set.
+
+`postCommitProcessSessionLocked` (`manual_commit_hooks.go:1204-1212`): if `state.PendingCondensationID()` is non-empty and **differs** from the current commit's `checkpointID`, it logs a warning, marks the session's shadow branch as `uncondensedActiveOnBranch` (preserved, not deleted), and **returns without processing the session at all** for this commit. If it **matches** the current checkpoint, PostCommit proceeds normally (implicitly a same-ID retry) — but note PostCommit does not pass `reconcileInterrupted: true`, so this "matching ID" retry path does not exercise `recoverInterruptedCondensation`; it just re-runs `CondenseSession` from scratch under the same ID, relying on `store.Write` being an idempotent upsert.
+
+## Ref publication CAS / serialization across concurrent writers
+
+No shared persistent lock or CAS boundary exists for the **local** ref itself. `SafelyAdvanceLocalRef` (`common.go:157-198`) reads the current local ref hash, computes a merge-base against the target, and either fast-forwards or replays divergent commits (`replayLocalRefFromBase`/`replayDisconnectedLocalRef`) — this is divergence-tolerant *history* logic (handles shared-remote rewrites, shallow clones), not concurrency control. It reads-then-writes with no captured "expected old value" enforced atomically against a concurrent writer; two processes calling it concurrently on the same `localRefName` race exactly as the parent's brief states ("no shared persistent ref lock/CAS boundary across writers"). I found no TODO/comment in `common.go` claiming this is solved; the function's entire comment block is about correctness of *history reconciliation*, not about mutual exclusion.
+
+## Shadow-ref deletion ordering vs. storage write and state save — hazard confirmed
+
+`shadowBranchesToDelete[shadowBranchName] = struct{}{}` is set unconditionally inside `condenseAndUpdateState` (`manual_commit_hooks.go:1421`) immediately after `CondenseSession` returns success — this call happens *inside* the `MutateSessionState` closure, i.e., **before** the outer `SaveSessionState` for that session has run. Back in `PostCommit`'s loop (:1004-1015), if that outer save then fails, the error is only logged as a `Warn` (:1011-1014) — nothing removes the session's shadow branch name from `shadowBranchesToDelete`. After the full session loop, the cleanup pass (:1028-1047) deletes every entry in `shadowBranchesToDelete` unconditionally except when `uncondensedActiveOnBranch[shadowBranchName]` is set — and that guard only covers ACTIVE sessions whose condensation didn't happen, not a state-save failure on an already-condensed session. **So yes: this is a real, present-day hazard, not something batching would introduce** — storage can publish successfully, the shadow ref gets queued and then deleted, while the session's local state file never got `LastCheckpointID` written (because the outer save failed), leaving local state believing the session is still uncondensed with its data now only reachable via the (already-published) checkpoint, not the shadow branch. I found no code comment acknowledging this specific ordering gap.
+
+## Doctor/status stuck-session detection
+
+`doctor.go:297-310`: for a `PhaseEnded` session, `FullyCondensed` short-circuits to "not stuck" (:300-301). Otherwise: if `state.HasTaskContent()` is true, it's reported stuck as `"ended with uncondensed checkpoint data"` unconditionally (:304-305, because task records never live on the shadow branch and its absence must not hide them). Else, it's only flagged stuck if `state.StepCount &gt; 0` **and** a shadow branch still exists (`hasShadowBranch`, :307-310). `finalizeExitedSessions` (`session_finalize.go:46`) is the sweep that runs this check (via `OwnerExited`, gated earlier at :280-283 for a dead owner process) from `entire status` and `entire doctor`.</result>
+<usage><subagent_tokens>143534</subagent_tokens><tool_uses>17</tool_uses><duration_ms>151883</duration_ms></usage>
+</task-notification>
+
+---
+
+keep going, let me know when the review's ready
+
+---
+
+<task-notification>
+<task-id>acd3bcc599e0bb11c</task-id>
+<tool-use-id>toolu_01PVVzEf2sXg3usTFWQEKR3g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-improve-process-sessions-condensation/c9892365-25d7-4fec-9d33-040a8e8ddf29/tasks/acd3bcc599e0bb11c.output</output-file>
+<status>failed</status>
+<summary>Agent "Read condensation + storage writer architecture" failed: Agent stalled: no progress for 600s (stream watchdog did not recover)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Review Findings
+
+## Facts (code/history-grounded)
+
+**Batching hypothesis confirmed by code, not just the prior review.** Both backends funnel through the same embedded `*treeWriter`:
+- Git-branch: `GitStore.writeSession` (`checkpoint/persistent.go:59-120`) — `getSessionsBranchRef()` (O(1), no flatten, `parse_tree.go:466`) → `subtreeObjAt` (read this checkpoint's current subtree) → `applySessionWrite` → `flattenExisting` (flattens **this checkpoint's own subtree**, proportional to sessions already in it) → `writeStandardCheckpointEntries` → `reaggregateFromEntries` (recomputes the whole summary from the entries map every call, `persistent.go:770`) → `buildCheckpointSubtree` → `spliceCheckpointSubtree` → `CreateCommit` → `setPrimaryRef`.
+- Git-refs: `gitRefsStore.writeSession` (`refs_store.go:241-273`) — same `applySessionWrite`/`treeWriter` machinery, `refBase` instead of branch-root, `setRef` instead of `setPrimaryRef`.
+
+For a checkpoint accumulating N sibling sessions written sequentially in the `PostCommit` loop (`manual_commit_hooks.go:997-1018`, one `MutateSessionState` per session), each write reflattens+reaggregates+rebuilds+commits+publishes over an ever-growing checkpoint subtree → the `1+2+…+N` shape, matching the measured non-storage-flat/storage-scaling split in both the prior review and issue #2091's own re-measurement ("`process_sessions` … 27 of 93 slow traces … ~73–103ms per accumulated session"). **Issue #2091 (still open, unassigned on item 2) explicitly names batch condensation as the remaining, largest win** — this is not stale.
+
+**Routing invariant already holds by construction, and is documented as load-bearing.** `condensationSessionWriteRequest` (`manual_commit_condensation.go:653-680`) always sends `ReservedSession`, with an explicit comment explaining why per-session routing-by-reservation would split a checkpoint across backends and why routing must be **checkpoint-scoped, decided once**. `kindRoutingStore.writeReservedSession` (`routing_store.go:243+`) dispatches purely by `checkpointID.Kind()` (ULID→refs, hex→primary), which is fixed at ID-mint time and identical for every session sharing one `checkpointID`. A batch that keeps one `checkpointID` for the whole loop (already true today) inherits this guarantee for free.
+
+**A working CAS primitive already exists and is unused on the hot path.** go-git v6's `storer.CheckAndSetReference` is implemented by both ref backends this repo can hit — the standard filesystem storer (`storage/filesystem/reference.go:20`, via `dotgit.SetRef(ref, old)`) and the reftable CLI-backed storer (`gitrepo/reftable.go:224-243`, via `git update-ref &lt;ref&gt; &lt;new&gt; &lt;old&gt;`, mapping a real conflict to `storage.ErrReferenceHasChanged`). It's already used in production: `strategy.atomicSetV1Ref` (`manual_commit_opf_rewrite.go:813-830`), for the pre-push OPF rewrite. **But `GitStore.setPrimaryRef` (`checkpoint/store.go:115-120`) and `gitRefsStore.setRef` (`refs_store.go:~200`) both do blind `SetReference`, no CAS.** This is the exact gap the task calls "no shared persistent ref lock/CAS boundary across writers" — and it's pre-existing, not something batching introduces. `entire/checkpoints/v1` is a branch shared across worktrees of one repo, so two worktrees committing near-simultaneously can lose an update today.
+
+**Shadow-ref-deletion-before-durable-save hazard confirmed in code.** In `PostCommit`, `shadowBranchesToDelete[shadowBranchName]` is set inside `condenseAndUpdateState` (`manual_commit_hooks.go:1421`) immediately after `CondenseSession` succeeds — **before** the outer `MutateSessionState` save runs. If that save fails, the code only logs a warning (`manual_commit_hooks.go:1011-1015`) and does **not** remove the branch from the delete set; deletion at the end of `PostCommit` (`:1029-1046`) is unconditional on that map. This matches the review's second named hazard exactly.
+
+**Upsert-by-SessionID and full reaggregation already exist per-call.** `findSessionIndex` reuses an existing slot for a matching `SessionID` or appends (`persistent.go:571`); `writeCheckpointSummary`/`reaggregateFromEntries` recompute the whole summary from the entries map every call. This is what makes each of the N per-session writes cost O(current checkpoint size) instead of O(1).
+
+**The "generation" mechanism the task asks for already exists, per session.** `BeginCondensationAttempt`/`PendingCondensationID`/`ClearCondensationAttempt` (`session/state.go:638-667`) is a durable, per-session reservation already used exactly as a prepare→(release lock)→finalize→revalidate pattern by `CondenseSessionByID` (`manual_commit_condensation.go:1627-1691`, two separate `MutateSessionState` calls with a `PendingCondensationID() != checkpointID` revalidation gate) and by `CondenseAndMarkFullyCondensed`. `resetCheckpointWindow` (`manual_commit_git.go:491-497`) is the single documented post-write mutation site — comment: "every one of the three callers only reaches here after a successful (non-skipped) CondenseSession write" — and it's what clears the reservation and drops completed task records (`removeCompletedTaskRecords`). Combined attribution's separate backfill pass is confirmed exactly as expected: `updateCombinedAttributionForCheckpoint` (`manual_commit_hooks.go:1060-1176`) runs after the whole session loop, reads the finalized checkpoint via `store.Read`/`store.ReadSessionMetadata`, and gates per-session inclusion on `metadata.SaveStepCount == 0` → skip.
+
+**Environment re-checked live**: worktree is at `improve-process-sessions-condensation`, 86 commits behind `upstream/main`, 0 ahead (more behind than the 57 previously noted — re-verify before any future rebase discussion, not needed for this change). `origin` is your fork; `upstream` push is disabled (safe). Latest `upstream/main` commit (`#2034` merge) has Lint/Tests/License Check green, E2E in progress at check time — no red CI on main. The uncommitted `commit_hook_perf_test.go` diff is measurement/fixture-only (richer fixture realism, per-perf-log-line timing readback, assertions that seeded/condensed state matches expectations) — no production code touched, consistent with what you described; I'll leave it in place.
+
+## Design inference (mine, not yet code)
+
+Recommendation: **batching is correct and still the smallest coherent fix.** I'd implement it as a new `WriteRequest` variant (`BatchSessions`) handled inside the existing `treeWriter`/`GitStore`/`gitRefsStore`, so `kindRoutingStore` and `fanoutStore` need only trivial additions (route by `checkpointID.Kind()` like `ReservedSession`; `fanoutStore.Write` is already request-type-agnostic). For durability, I'd **reuse the existing CAS primitive and per-session reservation** rather than build a new journal file:
+
+- **Prepare** (per session, under its own flock, unchanged from today): extract/redact/attribute, reserve `checkpointID` via `BeginCondensationAttempt` (durable — this persisted reservation *is* the batch's journal entry; the batch's membership is reconstructible by re-scanning sessions for `PendingCondensationID() == checkpointID`), release lock. Stable order = sort by `SessionID`.
+- **Build candidate** (no session locks held): flatten the checkpoint's existing subtree **once**, apply each ordered session's upsert into the same entries map **without** re-reaggregating between sessions, aggregate the summary **once**, build the tree **once**.
+- **Publish**: `CheckAndSetReference(new, old)` against the ref read at flatten time — same mechanism as `atomicSetV1Ref`. On `ErrReferenceHasChanged`, re-flatten from the new tip and retry the whole candidate build (bounded retries) rather than blindly overwrite.
+- **Finalize** (per session, own flock): re-check `PendingCondensationID() == checkpointID`. Match → run `resetCheckpointWindow` + existing post-condense field updates (unchanged), *then* mark that session's shadow branch deletable (fixing the ordering hazard — deletable only after this save lands). Mismatch (superseded) → do nothing to state; the checkpoint still durably holds that session's snapshot, nothing is lost, no cleanup for it this round.
+- **Crash recovery**: before rebuilding, do a targeted check against the *known* reserved `checkpointID` (single `store.Read` + `ReadSessionMetadata` per session, reusing `findInterruptedCondensation`'s field-equality logic but scoped to one checkpoint instead of scanning all of them) to detect "already published, don't redo" without an O(all checkpoints) scan per session.
+- Same CAS treatment applies to the **existing single-session path** (`setPrimaryRef`/`setRef`), since both old and new writers can target the same ref.
+
+This satisfies the task's explicit escape hatch — "or demonstrate an equally safe deterministic-locking design" — using primitives already proven in this codebase (`atomicSetV1Ref`, `CondenseSessionByID`'s two-phase pattern) instead of adding a new file format.
+
+## Two things I want your call on before I write code</result>
+</task-notification>
+
+---
+
+the issue suggests this approach?
+
+---
+
+okay then we are in the right direction. first prepare a in depth technical doc
+
+---
+
+what adjustment could it be?
+
+---
+
+yupp
+
+---
+
+/handoff
+
+---
+
+/handoff for the technical doc to be reviewed by another agent

@@ -1,0 +1,165 @@
+{
+  "cli_version": "0.10.3-nightly.202608270913.f6091af37",
+  "checkpoint_id": "01M140E5G5B76JBZMJP8ATC4K7",
+  "session_id": "c9892365-25d7-4fec-9d33-040a8e8ddf29",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T11:00:19.471093Z",
+  "branch": "improve-process-sessions-batching-stage3",
+  "checkpoints_count": 9,
+  "save_step_count": 9,
+  "files_touched": [
+    "cmd/entire/cli/strategy/commit_hook_perf_test.go",
+    "docs/architecture/checkpoint-batch-condensation.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "e7cc1fe4cf12",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 344440,
+    "cache_read_tokens": 6570404,
+    "output_tokens": 71451,
+    "api_call_count": 43,
+    "subagent_tokens": {
+      "input_tokens": 102,
+      "cache_creation_tokens": 345388,
+      "cache_read_tokens": 7063837,
+      "output_tokens": 12998,
+      "api_call_count": 51
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-handoff-2026-08-25T06:44:34.202274Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "handoff"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ed4957e09da5",
+      "timestamp": "2026-08-25T06:44:34.202274Z",
+      "native": {
+        "command": "/handoff"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/handoff",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-handoff-2026-08-25T06:44:49.247948Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "handoff"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "e7cc1fe4cf12",
+      "timestamp": "2026-08-25T06:44:49.247948Z",
+      "native": {
+        "command": "/handoff"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/handoff",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T11:00:19.417716Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 21118,
+    "human_modified": 1115,
+    "human_removed": 0,
+    "total_committed": 21706,
+    "total_lines_changed": 25081,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 404,
+      "user_lines_removed": 123,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 404
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 123
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 404,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 404,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 404,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 404,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 404,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 924,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 924,
+      "agent_lines_removed": 123
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 992,
+      "agent_lines_removed": 123
+    }
+  ]
+}
