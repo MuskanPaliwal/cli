@@ -575,22 +575,6 @@ func requireSafeExchangeURL(label, raw string) error {
 	return nil
 }
 
-// ResolveAccountAccessToken returns the caller's account access token — the
-// active context's refreshed login JWT — for bearer calls to the data plane at
-// api.BaseURL() (the entire.io gateway). The gateway accepts it directly and
-// mints per-jurisdiction cell tokens itself; the narrower exchanged token from
-// ResolveDataAPIToken can no longer be re-exchanged there (core refuses a
-// non-session subject). The data host's /.well-known discovery still picks and
-// validates the login context; ENTIRE_TOKEN is not consulted, as for
-// NewEntireAPICellClient. Honours EnableInsecureHTTP.
-func ResolveAccountAccessToken(ctx context.Context) (string, error) {
-	subject, err := resolveStoredCellSubject(ctx, insecureHTTPEnabled())
-	if err != nil {
-		return "", err
-	}
-	return subject.loginJWT, nil
-}
-
 // HomeJurisdictionFromLoginJWT reads the home_jurisdiction claim without
 // verifying the signature — callers only route with it; the server
 // re-verifies. Returns "" (no error) when the claim is absent so each

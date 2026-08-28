@@ -30,7 +30,9 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		}
 	}
 
-	token, err := lookupGatewayToken(ctx)
+	// OriginOnly strips any path the operator may have included in
+	// ENTIRE_API_BASE_URL — discovery keys off the host.
+	token, err := lookupResourceToken(ctx, api.OriginOnly(baseURL))
 	if errors.Is(err, auth.ErrNotLoggedIn) {
 		return nil, errors.New("dispatch requires login — run `entire login`")
 	}

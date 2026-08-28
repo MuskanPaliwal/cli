@@ -27,10 +27,12 @@ import (
 )
 
 var (
-	// lookupGatewayToken returns the bearer for the dispatch gateway at
-	// api.BaseURL() (see auth.ResolveAccountAccessToken). Tests swap to a
-	// fixed-token closure.
-	lookupGatewayToken = auth.ResolveAccountAccessToken
+	// lookupResourceToken returns a bearer for the given data-API base URL.
+	// Production wiring goes through auth.ResolveDataAPIToken so the dispatch
+	// host's /.well-known/entire-api.json picks the matching login context
+	// (a host that doesn't advertise discovery is a surfaced error). Tests
+	// swap to a fixed-token closure.
+	lookupResourceToken = auth.ResolveDataAPIToken
 
 	nowUTC = func() time.Time { return time.Now().UTC() }
 )
