@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -22,10 +23,14 @@ func init() {
 
 type CopilotCLI struct{}
 
+const copilotPromptPattern = `(?m:^\s*❯\s*$)|← open sidebar`
+
+var copilotPromptRegexp = regexp.MustCompile(copilotPromptPattern)
+
 func (c *CopilotCLI) Name() string               { return "copilot-cli" }
 func (c *CopilotCLI) Binary() string             { return "copilot" }
 func (c *CopilotCLI) EntireAgent() string        { return "copilot-cli" }
-func (c *CopilotCLI) PromptPattern() string      { return `(?m:^\s*❯\s*$)|← open sidebar` }
+func (c *CopilotCLI) PromptPattern() string      { return copilotPromptPattern }
 func (c *CopilotCLI) TimeoutMultiplier() float64 { return 1.5 }
 
 func (c *CopilotCLI) IsTransientError(out Output, err error) bool {
@@ -299,7 +304,34 @@ func copilotPromptReady(content string) bool {
 	if isStartupDialog(content) || strings.Contains(strings.ToLower(content), "choose which sessions to restore") {
 		return false
 	}
-	return regexp.MustCompile((&CopilotCLI{}).PromptPattern()).MatchString(content)
+	return copilotPromptRegexp.MatchString(content)
+}
+
+func resolveGHConfigDir(goos, home, explicit, xdgConfig, appData string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if xdgConfig != "" {
+		return filepath.Join(xdgConfig, "gh")
+	}
+	if goos == "windows" && appData != "" {
+		return filepath.Join(appData, "GitHub CLI")
+	}
+	if home != "" {
+		return filepath.Join(home, ".config", "gh")
+	}
+	return ""
+}
+
+func currentGHConfigDir() string {
+	home, _ := os.UserHomeDir()
+	return resolveGHConfigDir(
+		runtime.GOOS,
+		home,
+		os.Getenv("GH_CONFIG_DIR"),
+		os.Getenv("XDG_CONFIG_HOME"),
+		os.Getenv("AppData"),
+	)
 }
 
 func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, error) {
@@ -324,12 +356,7 @@ func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, err
 			envArgs = append(envArgs, key+"="+v)
 		}
 	}
-	ghConfigDir := os.Getenv("GH_CONFIG_DIR")
-	if ghConfigDir == "" {
-		if userConfigDir, configErr := os.UserConfigDir(); configErr == nil {
-			ghConfigDir = filepath.Join(userConfigDir, "gh")
-		}
-	}
+	ghConfigDir := currentGHConfigDir()
 	if ghConfigDir != "" {
 		envArgs = append(envArgs, "GH_CONFIG_DIR="+ghConfigDir)
 	}

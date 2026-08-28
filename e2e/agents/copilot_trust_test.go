@@ -1,6 +1,9 @@
 package agents
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // trustDialogPane is a trimmed capture of Copilot v1.0.63's interactive
 // startup dialog. Note the footer renders the navigation hint lowercase
@@ -96,5 +99,57 @@ func TestCopilotPromptReady_RejectsSessionRestorePicker(t *testing.T) {
 Failed to restore interrupted sessions: Error: Session abc is already in use`
 	if copilotPromptReady(restorePicker) {
 		t.Fatal("session restore picker should not be recognized as an interactive prompt")
+	}
+}
+
+func TestResolveGHConfigDir(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		goos      string
+		home      string
+		explicit  string
+		xdgConfig string
+		appData   string
+		want      string
+	}{
+		{
+			name:     "explicit override",
+			goos:     "darwin",
+			home:     "/Users/tester",
+			explicit: "/tmp/gh-auth",
+			want:     "/tmp/gh-auth",
+		},
+		{
+			name:      "XDG config",
+			goos:      "linux",
+			home:      "/home/tester",
+			xdgConfig: "/tmp/xdg",
+			want:      filepath.Join("/tmp/xdg", "gh"),
+		},
+		{
+			name:    "Windows AppData",
+			goos:    "windows",
+			home:    `C:\Users\tester`,
+			appData: `C:\Users\tester\AppData\Roaming`,
+			want:    filepath.Join(`C:\Users\tester\AppData\Roaming`, "GitHub CLI"),
+		},
+		{
+			name: "macOS uses gh fallback instead of os.UserConfigDir",
+			goos: "darwin",
+			home: "/Users/tester",
+			want: filepath.Join("/Users/tester", ".config", "gh"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveGHConfigDir(tt.goos, tt.home, tt.explicit, tt.xdgConfig, tt.appData)
+			if got != tt.want {
+				t.Fatalf("resolveGHConfigDir() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
