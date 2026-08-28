@@ -439,6 +439,101 @@ return fmt.Errorf("unknown strategy: %s", name)
 - `root.go` - Sets `SilenceErrors: true` on root command
 - `main.go` - Checks for `SilentError` before printing
 
+### `.entire` Must Be a Directory
+
+`<worktree-root>/.entire` is either absent or a real directory. A regular file, a
+symlink — **including a symlink pointing at a perfectly good directory** — a
+FIFO, a socket, or a device is a broken repo, and a command that would read or
+write through the path stops instead.
+
+`paths.ValidateEntireDirAt(worktreeRoot)` / `paths.RequireEntireDir(ctx)`
+(`paths/entiredir.go`) are the only implementation. The stat is `Lstat`, not
+`Stat`, which is the whole point: `.entire` holds session metadata, transcripts,
+and the redaction settings that decide what may be committed, so a path someone
+else owns the far end of is not one we write through. Absent is fine (Entire is
+not enabled yet, or `enable` is about to create it). A stat error other than
+"not exist" is a failure — it is not evidence the invariant is violated, but it
+is not evidence it holds either, and the caller's next move is to write there.
+Not memoized, deliberately: the `Lstat` is free next to the `git rev-parse` that
+precedes it, and a cached "it was fine" is stale in a long-lived `entire mcp`.
+
+**Three failure conditions, each identified positively.** `ErrEntireDirNotDirectory`
+(the path exists and is the wrong type), `ErrEntireDirUnreadable` (`Lstat`
+itself failed, so nothing is known about the path), and
+`ErrRepositoryUnresolved` (the worktree root would not resolve, so there is no
+path to inspect yet). Callers print a remedy, and the three remedies are
+different things: replace the path, fix ownership/permissions, fix git. Match
+them with `errors.Is` and give an unmatched error **no** remedy — an `else`
+branch is how a filesystem `EACCES` came to be answered with advice about
+`safe.directory`, printed directly under a line that already said "permission
+denied". `writeEntireDirRemedy` and `writeEntireDirDiagnosis` (doctor's
+labelled variant: BROKEN / UNREADABLE / UNVERIFIED) both take the error as a
+parameter so every branch is reachable in a test; staging a genuinely
+unreadable `.entire` is impractical, since removing execute permission on the
+repo root breaks worktree-root discovery first and exercises the wrong branch.
+
+**Guarded is the default.** The root `PersistentPreRunE` runs the check for every
+command, above both `settings.IsSetUpAny` and `ensureLogger` because each of
+those already touches the path. A command opts out with
+`exemptFromEntireDirCheck(cmd)` (`entiredir_guard.go`), which sets an annotation
+that `skipsEntireDirCheck` inherits down the parent chain, so annotating a group
+root covers its children. Exemption is registered at the `AddCommand` call in
+`root.go`, so the whole set reads as one list.
+
+Exempt means "this command needs nothing under `.entire`" — control-plane and
+account commands, `version`/`labs`/`completion`, and `doctor`. It does **not**
+mean "write through it anyway": `checkEntireDirBeforeRun` returns
+`safe == false` for an exempt command in a broken repo, which is what keeps
+`ensureLogger` from creating `.entire/logs` through the symlink. `newLogger`
+repeats the check for the callers that build a logger outside the pre-run.
+
+The pre-run is not the only enforcement point. `LoadEntireSettings` repeats the
+check, because the pre-run does not cover everything: external plugins are
+dispatched from `main.go` before cobra runs at all, and exempt commands still
+reach settings through the post-run telemetry path. Settings are read *from* the
+directory in question, so loading them is the one operation those callers have
+in common — the duplicated `Lstat` on the ordinary path buys the guarantee that
+the check happens at least once on the unusual ones.
+
+Outside a git repository there is no worktree root and so nothing to validate,
+and the check is skipped rather than failing. Commands that need a repository
+report its absence themselves, with a message about the repository rather than
+about `.entire`.
+
+**That skip requires git's positive verdict, not merely a failed lookup.**
+`WorktreeRoot` classifies its own failure and wraps `paths.ErrNotARepository`
+only when git ran, exited non-zero, and said "not a git repository"; exit code
+128 alone is not the signal, since git also uses it for dubious ownership and
+permission failures, both of which happen *inside* a repository. Locale
+variables are pinned to C for that subprocess so the message is recognisable on
+a translated machine. Every other outcome — git missing from `PATH`, a cancelled
+context, a killed child, success with empty output — fails closed.
+
+The reason is that "we could not find out" is not the same as "there is nothing
+here", and guessing costs more than a skipped check: `settingsAbsPaths` falls
+back to a path relative to the *current directory* when the root will not
+resolve, so a wrong guess reads `./.entire/settings.json` — through the very
+symlink the guard exists to reject. Refusing to run on a machine whose git is
+broken is the cheaper mistake. Do not "simplify" `RequireEntireDir` back to
+treating any `WorktreeRoot` error as absence.
+
+Every exemption needs an entry in `entireDirCheckExemptions`
+(`entiredir_guard_test.go`) giving the reason; `TestEntireDirCheckExemptions`
+fails both on an unlisted exemption and on a stale entry, so an exemption added
+to silence a failing test does not pass for a considered one. `help` and
+`agent-help` are deliberately guarded — someone asking what they can do in this
+repo is told the repo is broken rather than handed a working command list.
+`entire <command> --help` is unaffected in every case, because cobra returns
+`flag.ErrHelp` before it runs any `PersistentPreRunE`; that and `doctor` are the
+escape hatches.
+
+`doctor` is exempt so that it can run **on** a broken repo, which is only worth
+doing if it says what is wrong: `reportBrokenEntireDir` runs in the doctor
+group's `PersistentPreRunE` — ahead of doctor's own `PreRunE`, which loads
+redaction settings from `.entire/settings.json`, and ahead of `doctor logs` /
+`doctor bundle`, which read `.entire/logs` — prints the diagnosis, and stops. It
+does not auto-fix: what occupies the path may be someone's data.
+
 ### Settings
 
 All settings access should go through the `settings` package (`cmd/entire/cli/settings/`).
