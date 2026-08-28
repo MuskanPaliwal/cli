@@ -37,7 +37,7 @@ type Options struct {
 	ImplicitCurrentBranch bool
 	Voice                 string
 	// Jurisdiction is the slug (e.g. "us") of the jurisdiction whose cell
-	// generates and stores a cloud dispatch. Empty means the caller's home
+	// generates a cloud dispatch. Empty means the caller's home
 	// jurisdiction — the pre-selector behaviour. Cloud mode only.
 	Jurisdiction     string
 	InsecureHTTPAuth bool
