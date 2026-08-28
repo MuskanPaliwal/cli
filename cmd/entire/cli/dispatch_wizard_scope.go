@@ -84,17 +84,24 @@ func newDispatchWizardScope(repos []string, placements map[string][]string, home
 	return scope
 }
 
-// reposIn lists the offerable repos in a jurisdiction. "" is the unscoped
-// bucket: repos without a placement when home is unknown (every repo, when
-// nothing is placed at all).
+// reposIn lists the offerable repos in a jurisdiction. "" (or the select's
+// dispatchWizardJurisdictionHome sentinel) is the unscoped bucket: repos
+// without a placement when home is unknown (every repo, when nothing is placed
+// at all).
 func (s *dispatchWizardScope) reposIn(jurisdiction string) []string {
+	if jurisdiction == dispatchWizardJurisdictionHome {
+		jurisdiction = ""
+	}
 	return s.byJurisdiction[jurisdiction]
 }
 
 // options renders the jurisdiction select, default first — huh seeds the bound
 // value from the first option, so the ordering IS the default. The unscoped
-// "Home" ("" — selector unsent) choice appears when it holds repos, and alone
-// when nothing is placed anywhere.
+// "Home" choice (selector unsent) appears when it holds repos, and alone when
+// nothing is placed anywhere. Its value is the dispatchWizardJurisdictionHome
+// sentinel, never "": huh pre-selects the option equal to the field's current
+// value, and the field starts at "", so a ""-valued option would steal the
+// default whenever it is listed. resolve() maps the sentinel back to "".
 func (s *dispatchWizardScope) options() []huh.Option[string] {
 	options := make([]huh.Option[string], 0, len(s.jurisdictions)+1)
 	for _, j := range s.jurisdictions {
@@ -110,7 +117,7 @@ func (s *dispatchWizardScope) options() []huh.Option[string] {
 		}
 	}
 	if len(s.byJurisdiction[""]) > 0 || len(options) == 0 {
-		options = append(options, huh.NewOption("Home", ""))
+		options = append(options, huh.NewOption("Home", dispatchWizardJurisdictionHome))
 	}
 	return options
 }

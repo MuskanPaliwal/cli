@@ -32,7 +32,7 @@ func TestNewDispatchWizardScope(t *testing.T) {
 			wantJuris:   "au,eu,us",
 			wantDefault: "au",
 			wantOptions: "AU (home),EU,US",
-			reposIn:     map[string]string{"us": "acme/us-only,acme/both", "au": "acme/unplaced", "": ""},
+			reposIn:     map[string]string{"us": "acme/us-only,acme/both", "au": "acme/unplaced", "": "", dispatchWizardJurisdictionHome: ""},
 		},
 		{
 			name:        "busiest wins when home has no repos",
@@ -58,7 +58,7 @@ func TestNewDispatchWizardScope(t *testing.T) {
 			wantJuris:   "us",
 			wantDefault: "us",
 			wantOptions: "US,Home",
-			reposIn:     map[string]string{"us": "a/placed", "": "a/unplaced"},
+			reposIn:     map[string]string{"us": "a/placed", "": "a/unplaced", dispatchWizardJurisdictionHome: "a/unplaced"},
 		},
 		{
 			name:        "single jurisdiction is the default",
@@ -90,6 +90,9 @@ func TestNewDispatchWizardScope(t *testing.T) {
 			labels := make([]string, 0)
 			for _, option := range scope.options() {
 				labels = append(labels, option.Key)
+				if option.Value == "" {
+					t.Fatalf("option %q has the empty value, which huh would pre-select over the default", option.Key)
+				}
 			}
 			if got := strings.Join(labels, ","); got != tc.wantOptions {
 				t.Fatalf("options = %q, want %q (default must render first)", got, tc.wantOptions)

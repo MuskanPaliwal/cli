@@ -52,8 +52,10 @@ const (
 
 	dispatchWizardVoiceCustom = "custom"
 
-	// dispatchWizardJurisdictionHome labels the blank selector: the caller's
-	// home jurisdiction, which is where the gateway routes when none is sent.
+	// dispatchWizardJurisdictionHome is the jurisdiction select's value for
+	// "send no selector" (the gateway then routes to the caller's home) and
+	// the summary label for it. A sentinel rather than "" because huh
+	// pre-selects the option matching the field's initial "" value.
 	dispatchWizardJurisdictionHome = "home"
 )
 
@@ -122,7 +124,7 @@ func (s dispatchWizardState) showLocalBranchMode() bool {
 func (s dispatchWizardState) resolve() (dispatchpkg.Options, error) {
 	allBranches := s.isLocal() && s.localBranchMode == dispatchWizardBranchAll
 	jurisdiction := ""
-	if !s.isLocal() {
+	if !s.isLocal() && s.jurisdiction != dispatchWizardJurisdictionHome {
 		jurisdiction = s.jurisdiction
 	}
 	if s.isLocal() && !allBranches && s.currentBranchErr != nil {

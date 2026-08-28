@@ -460,6 +460,16 @@ func TestDispatchWizardState_JurisdictionIsCloudOnly(t *testing.T) {
 	if _, err := state.resolve(); err == nil || !strings.Contains(err.Error(), "invalid --jurisdiction") {
 		t.Fatalf("expected slug validation through resolve, got %v", err)
 	}
+
+	// The select's "Home" choice is a sentinel; it must resolve to "no selector".
+	state.jurisdiction = dispatchWizardJurisdictionHome
+	opts, err = state.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Jurisdiction != "" {
+		t.Fatalf("Home must resolve to an empty jurisdiction, got %q", opts.Jurisdiction)
+	}
 }
 
 func TestBuildDispatchCommand_Jurisdiction(t *testing.T) {
