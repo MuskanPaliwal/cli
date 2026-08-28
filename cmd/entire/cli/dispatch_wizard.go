@@ -290,11 +290,14 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	}
 	if IsAccessibleMode() {
 		// huh's accessible runner ignores hide funcs and never evaluates an
-		// OptionsFunc, so dynamic groups cannot work there: the jurisdiction
-		// picker is skipped (--jurisdiction remains the way to scope) and the
-		// repo list is resolved up front with EVERY offerable repo — not
-		// reposIn(""), which is the unplaced bucket once placements are known.
-		repoPicker.Options(buildDispatchRepoOptions(loadScope().repos)...)
+		// OptionsFunc, so the jurisdiction picker cannot be dynamic there.
+		// Route to the default jurisdiction (home when the caller has repos
+		// there) and offer only the repos placed in it, so what is offered and
+		// where the request is sent agree. Scoping to another jurisdiction is
+		// `entire dispatch --jurisdiction <slug> --repos <slug>` (no wizard).
+		scope := loadScope()
+		state.jurisdiction = scope.defaultJurisdiction
+		repoPicker.Options(buildDispatchRepoOptions(scope.reposIn(scope.defaultJurisdiction))...)
 		groups = append(groups, huh.NewGroup(repoPicker))
 	} else {
 		groups = append(groups,

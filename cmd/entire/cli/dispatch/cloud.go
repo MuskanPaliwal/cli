@@ -165,14 +165,26 @@ func (b *APIBranches) UnmarshalJSON(data []byte) error {
 // RepoNotFoundError is the gateway's 404 for a repo that is not placed in (or
 // not visible in) the jurisdiction the request was routed to — a repo mirrored
 // only in US, requested from an AU home, is simply unknown to the AU cell.
-// Jurisdiction is the selector the caller sent ("" = home); Repos are the
-// requested slugs the gateway's message named; Message is its sentence; Cause
-// is the underlying *api.HTTPError.
+// Jurisdiction is the selector the caller sent ("" = home) and Home the
+// caller's home jurisdiction when known (so callers know which cell answered
+// when no selector was sent); Repos are the requested slugs the gateway's
+// message named; Message is its sentence; Cause is the underlying
+// *api.HTTPError.
 type RepoNotFoundError struct {
 	Jurisdiction string
+	Home         string
 	Repos        []string
 	Message      string
 	Cause        error
+}
+
+// FailedJurisdiction is the jurisdiction whose cell answered "not found": the
+// selector when one was sent, else the home jurisdiction ("" if unknown).
+func (e *RepoNotFoundError) FailedJurisdiction() string {
+	if j := strings.TrimSpace(e.Jurisdiction); j != "" {
+		return j
+	}
+	return e.Home
 }
 
 const repoNotFoundPrefix = "repository not found"

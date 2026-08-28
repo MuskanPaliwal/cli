@@ -85,16 +85,10 @@ func newDispatchWizardScope(repos []string, placements map[string][]string, home
 }
 
 // reposIn lists the offerable repos in a jurisdiction. "" is the unscoped
-// bucket (home unknown): the repos without a placement, or every repo when
-// nothing is placed at all.
+// bucket: repos without a placement when home is unknown (every repo, when
+// nothing is placed at all).
 func (s *dispatchWizardScope) reposIn(jurisdiction string) []string {
-	if repos, ok := s.byJurisdiction[jurisdiction]; ok {
-		return repos
-	}
-	if jurisdiction == "" {
-		return s.repos
-	}
-	return nil
+	return s.byJurisdiction[jurisdiction]
 }
 
 // options renders the jurisdiction select, default first — huh seeds the bound
@@ -225,15 +219,14 @@ func defaultListDispatchWizardPlacements(ctx context.Context) (map[string][]stri
 // and the request's routing agree on which login they mean.
 func defaultResolveDispatchWizardHome(ctx context.Context) string {
 	token, err := auth.ResolveDataAPIToken(ctx, api.BaseURL())
-	if err == nil {
-		var home string
-		if home, err = auth.HomeJurisdictionFromLoginJWT(token); err == nil {
-			home, err = auth.NormalizeJurisdiction(home)
-		}
-		if err == nil {
-			return home
-		}
+	if err != nil {
+		logging.Debug(ctx, "dispatch wizard: home jurisdiction unavailable", "error", err)
+		return ""
 	}
-	logging.Debug(ctx, "dispatch wizard: home jurisdiction unavailable", "error", err)
-	return ""
+	home, err := auth.HomeJurisdictionFromLoginJWT(token)
+	if err != nil {
+		logging.Debug(ctx, "dispatch wizard: home jurisdiction unavailable", "error", err)
+		return ""
+	}
+	return home
 }

@@ -32,7 +32,7 @@ func TestNewDispatchWizardScope(t *testing.T) {
 			wantJuris:   "au,eu,us",
 			wantDefault: "au",
 			wantOptions: "AU (home),EU,US",
-			reposIn:     map[string]string{"us": "acme/us-only,acme/both", "au": "acme/unplaced", "": "acme/us-only,acme/both,acme/eu-only,acme/unplaced"},
+			reposIn:     map[string]string{"us": "acme/us-only,acme/both", "au": "acme/unplaced", "": ""},
 		},
 		{
 			name:        "busiest wins when home has no repos",

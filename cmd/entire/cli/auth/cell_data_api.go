@@ -577,9 +577,11 @@ func requireSafeExchangeURL(label, raw string) error {
 
 // HomeJurisdictionFromLoginJWT reads the home_jurisdiction claim without
 // verifying the signature — callers only route with it; the server
-// re-verifies. Returns "" (no error) when the claim is absent so each
-// caller can phrase its own missing-claim error. Shared with
-// git-remote-entire's jurisdiction git auth.
+// re-verifies. The claim is normalized (NormalizeJurisdiction), so a
+// malformed label is an error here and every reader sees one spelling.
+// Returns "" (no error) when the claim is absent so each caller can phrase
+// its own missing-claim error. Shared with git-remote-entire's jurisdiction
+// git auth.
 func HomeJurisdictionFromLoginJWT(loginJWT string) (string, error) {
 	parts := strings.Split(loginJWT, ".")
 	if len(parts) < 2 {
@@ -595,7 +597,7 @@ func HomeJurisdictionFromLoginJWT(loginJWT string) (string, error) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", fmt.Errorf("parse login token payload: %w", err)
 	}
-	return claims.HomeJurisdiction, nil
+	return NormalizeJurisdiction(claims.HomeJurisdiction)
 }
 
 type clusterListingRow struct {

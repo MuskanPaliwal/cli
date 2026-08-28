@@ -14,7 +14,6 @@ import (
 // withFakeCellCore) and therefore must not run in parallel.
 
 func TestDescribeDispatchRepoNotFound_AppendsPlacementHintAndKeepsType(t *testing.T) {
-	stubDispatchWizardScopeSources(t, nil, nil, "au")
 	withFakeCellCore(t, &fakeCellCore{repos: &coreapi.ListReposOutputBody{Repos: []coreapi.RepoIndexEntry{{
 		FullName: "entirehq/ferrata",
 		Placements: []coreapi.RepoPlacement{
@@ -51,13 +50,13 @@ func TestDescribeDispatchRepoNotFound_NoReadyPlacementElsewhereSaysSo(t *testing
 	// Home path (no selector): the home jurisdiction is the one that failed,
 	// so a repo READY only at home has nothing else to offer. The fake returns
 	// the same row for every filter; the identity check drops the mismatch.
-	stubDispatchWizardScopeSources(t, nil, nil, "us")
 	withFakeCellCore(t, &fakeCellCore{repos: &coreapi.ListReposOutputBody{Repos: []coreapi.RepoIndexEntry{{
 		FullName:   "entirehq/plans",
 		Placements: []coreapi.RepoPlacement{{ID: "p1", Jurisdiction: "us", Status: coreapi.RepoPlacementStatusReady}},
 	}}}})
 
 	err := describeDispatchRepoNotFound(context.Background(), &dispatchpkg.RepoNotFoundError{
+		Home:    "us",
 		Repos:   []string{"entirehq/ferrata", "entirehq/plans"},
 		Message: "repository not found: entirehq/ferrata, entirehq/plans",
 	})

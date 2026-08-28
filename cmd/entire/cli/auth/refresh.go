@@ -106,11 +106,12 @@ func (s contextTokenStore) DeleteTokens(string) error {
 }
 
 // newContextTokenManager builds the per-context auth-go tokenmanager that
-// NewRefreshingLoginProvider sits on. Keying
-// Issuer on c.CoreURL is the whole point: store reads, the refresh grant, and
-// the STS exchange all target that context's core, so a multi-core user's
-// credentials never travel to (or get keyed under) a host the context
-// doesn't belong to.
+// NewRefreshingLoginProvider sits on. Keying Issuer on c.CoreURL is the whole
+// point: store reads and the refresh grant target that context's core, so a
+// multi-core user's credentials never travel to (or get keyed under) a host
+// the context doesn't belong to. No RFC 8693 exchange runs through it any
+// more — data-plane bearers are the login JWT itself (ResolveDataAPIToken) and
+// jurisdiction tokens are minted via httputil.PostOAuthToken.
 //
 // transport carries the caller's TLS configuration; allowInsecureHTTP permits
 // an http:// core/resource for loopback/dev.
@@ -124,7 +125,6 @@ func newContextTokenManager(c *contexts.Context, transport http.RoundTripper, al
 	mgr, err := tokenmanager.New(tokenmanager.Config{
 		Issuer:            strings.TrimRight(c.CoreURL, "/"),
 		ClientID:          oauthClientID,
-		STSPath:           oauthSTSPath,
 		RefreshPath:       oauthTokenPath,
 		Store:             contextTokenStore{service: c.KeychainService, handle: c.Handle},
 		Transport:         transport,

@@ -35,12 +35,8 @@ func describeDispatchRepoNotFound(ctx context.Context, err error) error {
 	if len(placements) == 0 {
 		return err
 	}
-	// The jurisdiction that just answered "not found" is not a suggestion:
-	// the selector that was sent, or the caller's home when none was.
-	failed := notFound.Jurisdiction
-	if failed == "" {
-		failed = resolveDispatchWizardHome(ctx)
-	}
+	// The jurisdiction that just answered "not found" is not a suggestion.
+	failed := notFound.FailedJurisdiction()
 
 	var b strings.Builder
 	b.WriteString(err.Error())

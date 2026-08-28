@@ -30,9 +30,7 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		}
 	}
 
-	// OriginOnly strips any path the operator may have included in
-	// ENTIRE_API_BASE_URL — discovery keys off the host.
-	token, err := lookupResourceToken(ctx, api.OriginOnly(baseURL))
+	token, err := lookupResourceToken(ctx, baseURL)
 	if errors.Is(err, auth.ErrNotLoggedIn) {
 		return nil, errors.New("dispatch requires login — run `entire login`")
 	}
@@ -87,6 +85,12 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 	}
 	response, err := cloud.CreateDispatch(ctx, reqBody, opts.Jurisdiction)
 	if err != nil {
+		// With no selector the home cell answered; say which one, from the
+		// token already in hand, so the hint can exclude it.
+		var notFound *RepoNotFoundError
+		if errors.As(err, &notFound) && notFound.Jurisdiction == "" {
+			notFound.Home, _ = auth.HomeJurisdictionFromLoginJWT(token) //nolint:errcheck // best-effort label on an error already being returned
+		}
 		return nil, err
 	}
 	if err := checkDispatchJurisdiction(ctx, opts.Jurisdiction, response.Jurisdiction); err != nil {
