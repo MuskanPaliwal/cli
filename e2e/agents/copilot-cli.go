@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -23,7 +25,7 @@ type CopilotCLI struct{}
 func (c *CopilotCLI) Name() string               { return "copilot-cli" }
 func (c *CopilotCLI) Binary() string             { return "copilot" }
 func (c *CopilotCLI) EntireAgent() string        { return "copilot-cli" }
-func (c *CopilotCLI) PromptPattern() string      { return `❯` }
+func (c *CopilotCLI) PromptPattern() string      { return `(?m:^\s*❯\s*$)|← open sidebar` }
 func (c *CopilotCLI) TimeoutMultiplier() float64 { return 1.5 }
 
 func (c *CopilotCLI) IsTransientError(out Output, err error) bool {
@@ -293,20 +295,43 @@ func isStartupDialog(content string) bool {
 		strings.Contains(lower, "enter to select")
 }
 
+func copilotPromptReady(content string) bool {
+	if isStartupDialog(content) || strings.Contains(strings.ToLower(content), "choose which sessions to restore") {
+		return false
+	}
+	return regexp.MustCompile((&CopilotCLI{}).PromptPattern()).MatchString(content)
+}
+
 func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, error) {
 	bin, err := exec.LookPath(c.Binary())
 	if err != nil {
 		return nil, fmt.Errorf("agent binary not found: %w", err)
 	}
 
-	// Forward auth-related env vars into the tmux session. tmux starts a new
-	// shell that doesn't inherit Go's os.Environ(), so without this the
-	// session can lose both token-based auth and local gh/copilot login state.
-	var envArgs []string
-	for _, key := range []string{"COPILOT_GITHUB_TOKEN", "HOME", "TERM", "XDG_CONFIG_HOME", "GH_CONFIG_DIR"} {
+	// Give each interactive session its own Copilot state. Copilot stores all
+	// sessions under ~/.copilot, so sharing HOME lets parallel tests see and
+	// attempt to restore one another's still-running sessions.
+	sessionHome, err := os.MkdirTemp("", "copilot-e2e-home-*")
+	if err != nil {
+		return nil, fmt.Errorf("create isolated Copilot home: %w", err)
+	}
+
+	// Forward auth-related env vars into the tmux session. Keep GitHub CLI auth
+	// pointed at the caller's real config while HOME points at isolated state.
+	envArgs := []string{"HOME=" + sessionHome}
+	for _, key := range []string{"COPILOT_GITHUB_TOKEN", "TERM", "XDG_CONFIG_HOME"} {
 		if v := os.Getenv(key); v != "" {
 			envArgs = append(envArgs, key+"="+v)
 		}
+	}
+	ghConfigDir := os.Getenv("GH_CONFIG_DIR")
+	if ghConfigDir == "" {
+		if userConfigDir, configErr := os.UserConfigDir(); configErr == nil {
+			ghConfigDir = filepath.Join(userConfigDir, "gh")
+		}
+	}
+	if ghConfigDir != "" {
+		envArgs = append(envArgs, "GH_CONFIG_DIR="+ghConfigDir)
 	}
 	args := append([]string{"env"}, envArgs...)
 	args = append(args, bin, "--model", "claude-haiku-4.5", "--allow-all")
@@ -316,20 +341,22 @@ func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, err
 	unset := []string{"CI", "GITHUB_ACTIONS", "ENTIRE_TEST_TTY"}
 	s, err := NewTmuxSession(name, dir, unset, args[0], args[1:]...)
 	if err != nil {
+		_ = os.RemoveAll(sessionHome)
 		return nil, err
 	}
+	s.OnClose(func() { _ = os.RemoveAll(sessionHome) })
 
-	// Dismiss startup dialogs (folder trust, etc.) then wait for the "❯" prompt.
+	// Dismiss startup dialogs (folder trust, etc.) then wait for the input prompt.
 	// Copilot CLI shows a "Confirm folder trust" dialog in interactive mode for
 	// new directories. "Yes" is pre-selected, so Enter dismisses it.
 	foundPrompt := false
 	for range 5 {
-		content, err := s.WaitFor(`(❯|(?i:enter to select))`, 30*time.Second)
+		content, err := s.WaitFor(`(?:`+c.PromptPattern()+`|(?i:enter to select))`, 30*time.Second)
 		if err != nil {
 			_ = s.Close()
 			return nil, fmt.Errorf("waiting for startup prompt: %w", err)
 		}
-		if strings.Contains(content, "❯") && !isStartupDialog(content) {
+		if copilotPromptReady(content) {
 			foundPrompt = true
 			break
 		}

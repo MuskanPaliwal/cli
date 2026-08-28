@@ -180,9 +180,10 @@ func (c *Claude) StartSession(ctx context.Context, dir string) (Session, error) 
 		if !strings.Contains(content, "Enter to confirm") {
 			break
 		}
-		// The bypass permissions dialog defaults to "No, exit" —
-		// arrow down to "Yes, I accept" before confirming.
-		if strings.Contains(content, "Yes, I accept") {
+		// Permission and workspace-trust dialogs can default to "No, exit".
+		// Move to the affirmative option before confirming whenever No is
+		// visibly selected, independent of the current wording of the Yes option.
+		if claudeStartupSelectionIsNo(content) {
 			_ = s.SendKeys("Down")
 			time.Sleep(200 * time.Millisecond)
 		}
@@ -192,6 +193,16 @@ func (c *Claude) StartSession(ctx context.Context, dir string) (Session, error) 
 	s.stableAtSend = ""
 
 	return s, nil
+}
+
+func claudeStartupSelectionIsNo(content string) bool {
+	for line := range strings.SplitSeq(content, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(line, "❯") && strings.Contains(lower, "no, exit") {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanConfigDir creates an isolated temp directory for CLAUDE_CONFIG_DIR so

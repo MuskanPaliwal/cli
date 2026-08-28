@@ -32,6 +32,21 @@ const interactivePromptPane = ` Tip: /app
 
  / commands · ? help                                  Claude Haiku 4.5`
 
+// copilotV1081PromptPane is the idle prompt captured from CI after Copilot
+// v1.0.81 replaced the bare "❯" marker with a bordered input area.
+const copilotV1081PromptPane = `Current   Sessions   Issues   Pull requests   Gists
+
+╭─╮╭─╮
+╰─╯╰─╯  Copilot v1.0.81 uses AI.
+█ ▘▝ █  Check for mistakes.
+ ▔▔▔▔
+
+/tmp/e2e-repo-3026103693 [⎇ master%]
+╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+← open sidebar · / commands · ? help · tab next tab           Claude Haiku 4.5`
+
 // TestIsStartupDialog_DetectsLowercaseTrustFooter is the regression guard for
 // the Copilot v1.0.63 break: the trust dialog must be recognized even though
 // its footer is lowercase ("enter to select"), so the StartSession dismissal
@@ -62,5 +77,24 @@ func TestIsStartupDialog_IgnoresInteractivePrompt(t *testing.T) {
 	t.Parallel()
 	if isStartupDialog(interactivePromptPane) {
 		t.Fatal("bare interactive prompt should not be classified as a startup dialog")
+	}
+}
+
+func TestCopilotPromptPattern_MatchesV1081InputArea(t *testing.T) {
+	t.Parallel()
+
+	if !copilotPromptReady(copilotV1081PromptPane) {
+		t.Fatal("Copilot v1.0.81 bordered input area should be recognized as ready")
+	}
+}
+
+func TestCopilotPromptReady_RejectsSessionRestorePicker(t *testing.T) {
+	t.Parallel()
+
+	const restorePicker = `Choose which sessions to restore. Sessions that were open when Copilot stopped are preselected.
+┃ ❯ • 1. create a markdown file  Idle  just now
+Failed to restore interrupted sessions: Error: Session abc is already in use`
+	if copilotPromptReady(restorePicker) {
+		t.Fatal("session restore picker should not be recognized as an interactive prompt")
 	}
 }
