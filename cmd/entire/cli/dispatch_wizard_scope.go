@@ -219,11 +219,20 @@ func defaultListDispatchWizardPlacements(ctx context.Context) (map[string][]stri
 	return out, nil
 }
 
+// defaultResolveDispatchWizardHome reads home_jurisdiction from the same
+// account access token the dispatch itself will send, so the picker's default
+// and the request's routing agree on which login they mean.
 func defaultResolveDispatchWizardHome(ctx context.Context) string {
-	home, err := auth.HomeJurisdictionFromActiveLogin(ctx, false)
-	if err != nil {
-		logging.Debug(ctx, "dispatch wizard: home jurisdiction unavailable", "error", err)
-		return ""
+	token, err := auth.ResolveAccountAccessToken(ctx)
+	if err == nil {
+		var home string
+		if home, err = auth.HomeJurisdictionFromLoginJWT(token); err == nil {
+			home, err = auth.NormalizeJurisdiction(home)
+		}
+		if err == nil {
+			return home
+		}
 	}
-	return home
+	logging.Debug(ctx, "dispatch wizard: home jurisdiction unavailable", "error", err)
+	return ""
 }

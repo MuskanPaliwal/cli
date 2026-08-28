@@ -576,45 +576,19 @@ func requireSafeExchangeURL(label, raw string) error {
 }
 
 // ResolveAccountAccessToken returns the caller's account access token — the
-// active context's refreshed login JWT (scope entire:session) — for bearer
-// calls to the data plane at api.BaseURL() (the entire.io gateway).
-//
-// The gateway authenticates a bearer of this shape directly and mints the
-// per-jurisdiction cell tokens itself (COR-1095). The narrower token from
-// ResolveDataAPIToken — an RFC 8693 exchange for the data host's audience —
-// is NOT usable there any more: the gateway must re-exchange it at entire-core
-// to reach a cell, and core refuses a non-session subject
-// ("subject_token is not a session credential"). Every released CLI's
-// `dispatch` failed this way from 2026-08-20 until callers moved here.
-//
-// Resolution goes through resolveStoredCellSubject, i.e. the data host's
-// /.well-known discovery picks (and validates) the login context — the same
-// rule as ResolveDataAPIToken and NewEntireAPICellClient, so pointing the CLI
-// at another environment still requires `entire auth use`. Like those, it does
-// not consult ENTIRE_TOKEN.
-func ResolveAccountAccessToken(ctx context.Context, insecureHTTP bool) (string, error) {
-	subject, err := resolveStoredCellSubject(ctx, insecureHTTP)
+// active context's refreshed login JWT — for bearer calls to the data plane at
+// api.BaseURL() (the entire.io gateway). The gateway accepts it directly and
+// mints per-jurisdiction cell tokens itself; the narrower exchanged token from
+// ResolveDataAPIToken can no longer be re-exchanged there (core refuses a
+// non-session subject). The data host's /.well-known discovery still picks and
+// validates the login context; ENTIRE_TOKEN is not consulted, as for
+// NewEntireAPICellClient. Honours EnableInsecureHTTP.
+func ResolveAccountAccessToken(ctx context.Context) (string, error) {
+	subject, err := resolveStoredCellSubject(ctx, insecureHTTPEnabled())
 	if err != nil {
 		return "", err
 	}
 	return subject.loginJWT, nil
-}
-
-// HomeJurisdictionFromActiveLogin returns the home_jurisdiction claim of the
-// login the CLI would route with (subject precedence as in JurisdictionToken),
-// normalized; "" when absent. It is the routing default, not the account's
-// authoritative home — that is /me's global.homeJurisdiction, which `entire
-// auth status` prefers and only falls back to this claim for an older core.
-func HomeJurisdictionFromActiveLogin(ctx context.Context, insecureHTTP bool) (string, error) {
-	subject, err := resolveCellSubject(ctx, insecureHTTP)
-	if err != nil {
-		return "", err
-	}
-	jurisdiction, err := HomeJurisdictionFromLoginJWT(subject.loginJWT)
-	if err != nil {
-		return "", err
-	}
-	return NormalizeJurisdiction(jurisdiction)
 }
 
 // HomeJurisdictionFromLoginJWT reads the home_jurisdiction claim without

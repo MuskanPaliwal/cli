@@ -27,14 +27,10 @@ import (
 )
 
 var (
-	// lookupResourceToken returns the bearer for the dispatch gateway at
-	// api.BaseURL(): the account access token (login JWT), which the gateway
-	// accepts directly and uses to mint cell tokens for the target
-	// jurisdiction. Not the exchanged data-API token — see
-	// auth.ResolveAccountAccessToken for why that stopped working. The data
-	// host's /.well-known discovery still picks the matching login context.
-	// Tests swap to a fixed-token closure.
-	lookupResourceToken = auth.ResolveAccountAccessToken
+	// lookupGatewayToken returns the bearer for the dispatch gateway at
+	// api.BaseURL() (see auth.ResolveAccountAccessToken). Tests swap to a
+	// fixed-token closure.
+	lookupGatewayToken = auth.ResolveAccountAccessToken
 
 	nowUTC = func() time.Time { return time.Now().UTC() }
 )

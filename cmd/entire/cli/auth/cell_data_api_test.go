@@ -642,21 +642,25 @@ func TestCellClientFactory_UsesLoginJWTDirectly(t *testing.T) {
 	}
 }
 
-func TestResolveAccountAccessToken_ReturnsRefreshedLoginJWTWithoutExchange(t *testing.T) {
+// seedStoredLoginContext isolates config/token storage, seeds one active login
+// context whose core is a server that fails the test on ANY request (so a path
+// that must not exchange or list can be asserted by silence), and returns the
+// seeded login JWT.
+func seedStoredLoginContext(t *testing.T) string {
+	t.Helper()
 	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
 	t.Setenv("ENTIRE_API_BASE_URL", "https://entire.io")
 	t.Setenv("ENTIRE_API_AUDIENCE_TEMPLATE", "")
 	t.Setenv("ENTIRE_CORE_BASE_URL_TEMPLATE", "")
-	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
-	t.Cleanup(restore)
+	t.Cleanup(tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json")))
 
-	coreSrv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("unexpected token exchange: the account access token is the login JWT itself")
+	coreSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected core request %s %s", r.Method, r.URL.Path)
 	}))
-	defer coreSrv.Close()
+	t.Cleanup(coreSrv.Close)
 
 	svc := tokenstore.CoreKeyringService(coreSrv.URL)
-	loginJWT := makeJWT(t, fmt.Sprintf(`{"iss":%q,"scope":"offline_access entire:session entire:api-access","home_jurisdiction":"us","exp":%d}`, coreSrv.URL, time.Now().Add(2*time.Hour).Unix()))
+	loginJWT := makeJWT(t, fmt.Sprintf(`{"iss":%q,"home_jurisdiction":"us","exp":%d}`, coreSrv.URL, time.Now().Add(2*time.Hour).Unix()))
 	if err := tokenstore.Set(svc, "me", tokenstore.EncodeTokenWithExpiration(loginJWT, 7200)); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
@@ -664,12 +668,17 @@ func TestResolveAccountAccessToken_ReturnsRefreshedLoginJWTWithoutExchange(t *te
 	t.Cleanup(SetResolveContextForCellAPIForTest(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
 		return ctxObj, nil
 	}))
+	return loginJWT
+}
 
-	got, err := ResolveAccountAccessToken(context.Background(), false)
+func TestResolveAccountAccessToken_ReturnsLoginJWTWithoutExchange(t *testing.T) {
+	loginJWT := seedStoredLoginContext(t)
+
+	got, err := ResolveAccountAccessToken(context.Background())
 	if err != nil {
 		t.Fatalf("ResolveAccountAccessToken: %v", err)
 	}
 	if got != loginJWT {
-		t.Fatalf("expected the stored login JWT to be returned verbatim")
+		t.Fatal("expected the stored login JWT to be returned verbatim")
 	}
 }

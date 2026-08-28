@@ -30,9 +30,7 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		}
 	}
 
-	// The gateway wants the account access token (login JWT) as bearer; it
-	// mints the per-jurisdiction cell token itself. See lookupResourceToken.
-	token, err := lookupResourceToken(ctx, opts.InsecureHTTPAuth)
+	token, err := lookupGatewayToken(ctx)
 	if errors.Is(err, auth.ErrNotLoggedIn) {
 		return nil, errors.New("dispatch requires login — run `entire login`")
 	}

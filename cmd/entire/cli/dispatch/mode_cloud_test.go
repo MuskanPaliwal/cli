@@ -19,14 +19,14 @@ import (
 // itself should not call this helper.
 func stubCloudDispatchAuth(t *testing.T) {
 	t.Helper()
-	oldResource := lookupResourceToken
+	oldResource := lookupGatewayToken
 	oldRequire := requireSecureDispatchURL
-	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
+	lookupGatewayToken = func(context.Context) (string, error) {
 		return testCloudDispatchToken, nil
 	}
 	requireSecureDispatchURL = func(string) error { return nil }
 	t.Cleanup(func() {
-		lookupResourceToken = oldResource
+		lookupGatewayToken = oldResource
 		requireSecureDispatchURL = oldRequire
 	})
 }
@@ -369,14 +369,14 @@ func TestServerMode_InsecureHTTPAuthBypassesSecureURLCheck(t *testing.T) {
 	}))
 	defer mock.Close()
 
-	oldResource := lookupResourceToken
+	oldResource := lookupGatewayToken
 	oldNow := nowUTC
-	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
+	lookupGatewayToken = func(context.Context) (string, error) {
 		return testCloudDispatchToken, nil
 	}
 	nowUTC = func() time.Time { return time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() {
-		lookupResourceToken = oldResource
+		lookupGatewayToken = oldResource
 		nowUTC = oldNow
 	})
 
@@ -402,11 +402,11 @@ func TestServerMode_InsecureHTTPAuthBypassesSecureURLCheck(t *testing.T) {
 // fire. If a future refactor drops the check, this test breaks before the
 // leak reaches users.
 func TestServerMode_RejectsPlainHTTPBaseURL(t *testing.T) {
-	oldResource := lookupResourceToken
-	lookupResourceToken = func(_ context.Context, _ bool) (string, error) {
+	oldResource := lookupGatewayToken
+	lookupGatewayToken = func(context.Context) (string, error) {
 		return testCloudDispatchToken, nil
 	}
-	t.Cleanup(func() { lookupResourceToken = oldResource })
+	t.Cleanup(func() { lookupGatewayToken = oldResource })
 
 	t.Setenv("ENTIRE_API_BASE_URL", "http://dispatch.example.invalid")
 
