@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 const goosWindows = "windows"
@@ -23,6 +24,7 @@ func clearGlobalHooksPath(t *testing.T, repoDir string) {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "config", "--local", "core.hooksPath", filepath.Join(repoDir, ".git", "hooks"))
 	cmd.Dir = repoDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set local core.hooksPath: %v", err)
 	}
@@ -38,6 +40,7 @@ func initHooksTestRepo(t *testing.T) (string, string) {
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
@@ -55,6 +58,7 @@ func TestGetGitDirInPath_RegularRepo(t *testing.T) {
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
@@ -97,6 +101,7 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init main repo: %v", err)
 	}
@@ -105,12 +110,14 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 	// Configure git user for the commit
 	cmd = exec.CommandContext(ctx, "git", "config", "user.email", "test@test.com")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git email: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "config", "user.name", "Test User")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git name: %v", err)
 	}
@@ -118,6 +125,7 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 	// Disable GPG signing for test commits
 	cmd = exec.CommandContext(ctx, "git", "config", "commit.gpgsign", "false")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure commit.gpgsign: %v", err)
 	}
@@ -130,12 +138,14 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 
 	cmd = exec.CommandContext(ctx, "git", "add", ".")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git add: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "commit", "-m", "initial")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git commit: %v", err)
 	}
@@ -143,6 +153,7 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 	// Create a worktree
 	cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreeDir, "-b", "feature")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to create worktree: %v", err)
 	}
@@ -193,6 +204,7 @@ func TestGetHooksDirInPath_RegularRepo(t *testing.T) {
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
@@ -254,6 +266,7 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
@@ -261,6 +274,7 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 	// Relative core.hooksPath should resolve relative to repo root.
 	cmd = exec.CommandContext(ctx, "git", "config", "core.hooksPath", ".githooks")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set relative core.hooksPath: %v", err)
 	}
@@ -277,6 +291,7 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 	absHooksPath := filepath.Join(tmpDir, "abs-hooks")
 	cmd = exec.CommandContext(ctx, "git", "config", "core.hooksPath", absHooksPath)
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set absolute core.hooksPath: %v", err)
 	}
@@ -298,6 +313,7 @@ func TestInstallGitHook_HooksPathNotADirectory(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
@@ -311,6 +327,7 @@ func TestInstallGitHook_HooksPathNotADirectory(t *testing.T) {
 	}
 	cmd = exec.CommandContext(ctx, "git", "config", "core.hooksPath", hooksPath)
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set core.hooksPath: %v", err)
 	}
@@ -354,11 +371,13 @@ func TestInstallGitHook_HooksPathUnderNonDirectory(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
 	cmd = exec.CommandContext(ctx, "git", "config", "core.hooksPath", "/dev/null/hooks")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set core.hooksPath: %v", err)
 	}
@@ -384,12 +403,14 @@ func TestInstallGitHook_HooksPathNonexistentIsCreated(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
 	hooksPath := filepath.Join(tmpDir, "githooks-not-yet-created")
 	cmd = exec.CommandContext(ctx, "git", "config", "core.hooksPath", hooksPath)
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set core.hooksPath: %v", err)
 	}
@@ -444,6 +465,7 @@ func TestInstallGitHook_WorktreeInstallsInCommonHooks(t *testing.T) {
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
 	cmd.Dir = worktreeDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("failed to get worktree git dir: %v", err)
@@ -478,6 +500,7 @@ func initHooksWorktreeRepo(t *testing.T) (string, string) {
 	ctx := context.Background()
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init main repo: %v", err)
 	}
@@ -485,18 +508,21 @@ func initHooksWorktreeRepo(t *testing.T) (string, string) {
 
 	cmd = exec.CommandContext(ctx, "git", "config", "user.email", "test@test.com")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git email: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "config", "user.name", "Test User")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git name: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "config", "commit.gpgsign", "false")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure commit.gpgsign: %v", err)
 	}
@@ -508,18 +534,21 @@ func initHooksWorktreeRepo(t *testing.T) (string, string) {
 
 	cmd = exec.CommandContext(ctx, "git", "add", ".")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git add: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "commit", "-m", "initial")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git commit: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreeDir, "-b", "feature")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to create worktree: %v", err)
 	}
@@ -600,18 +629,21 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	// Initialize main repo with a commit
 	cmd := exec.CommandContext(ctx, "git", "init")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init main repo: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "config", "user.email", "test@test.com")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git email: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "config", "user.name", "Test User")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure git name: %v", err)
 	}
@@ -619,6 +651,7 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	// Disable GPG signing for test commits
 	cmd = exec.CommandContext(ctx, "git", "config", "commit.gpgsign", "false")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to configure commit.gpgsign: %v", err)
 	}
@@ -630,12 +663,14 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 
 	cmd = exec.CommandContext(ctx, "git", "add", ".")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git add: %v", err)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "commit", "-m", "initial")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to git commit: %v", err)
 	}
@@ -643,6 +678,7 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	// Create a worktree
 	cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreeDir, "-b", "feature")
 	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to create worktree: %v", err)
 	}
@@ -658,6 +694,7 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	// Get the worktree's git dir and simulate rebase state there
 	cmd = exec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
 	cmd.Dir = worktreeDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("failed to get git dir: %v", err)
@@ -1101,6 +1138,7 @@ func TestInstallGitHook_CoreHooksPathRelative(t *testing.T) {
 	// Simulate Husky-style override: hooks live outside .git/hooks.
 	cmd := exec.CommandContext(ctx, "git", "config", "core.hooksPath", ".husky/_")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set core.hooksPath: %v", err)
 	}
@@ -1145,6 +1183,7 @@ func TestRemoveGitHook_CoreHooksPathRelative(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "config", "core.hooksPath", ".husky/_")
 	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to set core.hooksPath: %v", err)
 	}
