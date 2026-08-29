@@ -68,6 +68,114 @@ func TestClaudeStop_CapturedTranscriptOwnsFinalizationAndPosition(t *testing.T) 
 	require.Equal(t, strings.Count(string(captured), "\n"), state.CheckpointTranscriptStart)
 }
 
+func TestClaudeSessionEnd_RefreshesPendingStopSnapshot(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	sess := env.NewSession()
+	const (
+		prompt            = "Create session_end.go"
+		firstResponse     = "Initial response complete."
+		continuedResponse = "Continuation captured at session end."
+	)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	require.NoError(t, env.SimulateUserPromptSubmitWithPromptAndTranscriptPath(sess.ID, prompt, sess.TranscriptPath))
+
+	env.WriteFile("session_end.go", "package sessionend\n")
+	sess.TranscriptBuilder.AddUserMessage(prompt)
+	toolID := sess.TranscriptBuilder.AddToolUse("mcp__acp__Write", "session_end.go", "package sessionend\n")
+	sess.TranscriptBuilder.AddToolResult(toolID)
+	sess.TranscriptBuilder.AddAssistantMessage(firstResponse)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+
+	env.GitCommitWithShadowHooks("Add session-end fixture", "session_end.go")
+	checkpointID := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
+	require.NotEmpty(t, checkpointID)
+	require.NoError(t, env.SimulateStopWithFinalResponse(sess.ID, sess.TranscriptPath, firstResponse))
+
+	sess.TranscriptBuilder.AddAssistantMessage(continuedResponse)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	require.NoError(t, env.SimulateSessionEnd(sess.ID))
+
+	finalized, found := env.ReadFileFromBranch(
+		paths.MetadataBranchName,
+		SessionFilePath(checkpointID, paths.TranscriptFileName),
+	)
+	require.True(t, found)
+	require.Contains(t, finalized, continuedResponse)
+
+	state, err := env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.PhaseEnded, state.Phase)
+	require.Empty(t, state.TurnCheckpointIDs)
+	require.False(t, state.TurnEndPending)
+	require.False(t, state.TurnEndRefreshRequired)
+	require.Equal(t, 1, state.SessionTurnCount)
+}
+
+func TestClaudeSessionEnd_FailedRefreshRetriesAfterResume(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	sess := env.NewSession()
+	const (
+		prompt            = "Create recover.go"
+		firstResponse     = "Initial checkpoint response."
+		continuedResponse = "Response written before interruption."
+		resumePrompt      = "Resume recovery"
+		recoveredResponse = "Recovery complete."
+	)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	require.NoError(t, env.SimulateUserPromptSubmitWithPromptAndTranscriptPath(sess.ID, prompt, sess.TranscriptPath))
+
+	env.WriteFile("recover.go", "package recover\n")
+	sess.TranscriptBuilder.AddUserMessage(prompt)
+	toolID := sess.TranscriptBuilder.AddToolUse("mcp__acp__Write", "recover.go", "package recover\n")
+	sess.TranscriptBuilder.AddToolResult(toolID)
+	sess.TranscriptBuilder.AddAssistantMessage(firstResponse)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	env.GitCommitWithShadowHooks("Add recovery fixture", "recover.go")
+	checkpointID := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
+	require.NotEmpty(t, checkpointID)
+	require.NoError(t, env.SimulateStopWithFinalResponse(sess.ID, sess.TranscriptPath, firstResponse))
+
+	sess.TranscriptBuilder.AddAssistantMessage(continuedResponse)
+	require.NoError(t, os.Remove(sess.TranscriptPath))
+	require.NoError(t, env.SimulateSessionEnd(sess.ID))
+
+	state, err := env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, session.PhaseEnded, state.Phase)
+	require.Equal(t, []string{checkpointID}, state.TurnCheckpointIDs)
+	require.True(t, state.TurnEndRefreshRequired)
+	require.False(t, state.TurnEndPending)
+
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	require.NoError(t, env.SimulateUserPromptSubmitWithPromptAndTranscriptPath(sess.ID, resumePrompt, sess.TranscriptPath))
+	state, err = env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{checkpointID}, state.TurnCheckpointIDs)
+	require.True(t, state.TurnEndRefreshRequired)
+
+	sess.TranscriptBuilder.AddUserMessage(resumePrompt)
+	sess.TranscriptBuilder.AddAssistantMessage(recoveredResponse)
+	require.NoError(t, sess.TranscriptBuilder.WriteToFile(sess.TranscriptPath))
+	require.NoError(t, env.SimulateStopWithFinalResponse(sess.ID, sess.TranscriptPath, recoveredResponse))
+
+	finalized, found := env.ReadFileFromBranch(
+		paths.MetadataBranchName,
+		SessionFilePath(checkpointID, paths.TranscriptFileName),
+	)
+	require.True(t, found)
+	require.Contains(t, finalized, continuedResponse)
+	require.Contains(t, finalized, recoveredResponse)
+
+	state, err = env.GetSessionState(sess.ID)
+	require.NoError(t, err)
+	require.False(t, state.TurnEndRefreshRequired)
+	require.Equal(t, []string{checkpointID}, state.TurnCheckpointIDs)
+}
+
 func TestClaudeStop_UnmatchedFinalResponsePreservesProvisionalCheckpoint(t *testing.T) {
 	t.Parallel()
 

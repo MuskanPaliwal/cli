@@ -196,7 +196,9 @@ type TranscriptAnalyzer interface {
 	// GetTranscriptPosition returns the current position (length) of a transcript.
 	// For JSONL formats (Claude Code), this is the line count.
 	// For JSON formats (Gemini CLI), this is the message count.
-	// Returns 0 if the file doesn't exist or is empty.
+	// Returns 0 for an empty transcript. Implementations may return an error for
+	// a missing transcript when callers must distinguish an unmeasured position
+	// from a measured zero.
 	GetTranscriptPosition(path string) (int, error)
 
 	// ExtractModifiedFilesFromOffset extracts files modified since a given offset.

@@ -1385,8 +1385,8 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	// NOTE: This check runs AFTER TransitionAndLog updated the phase. It relies on
 	// ACTIVE + GitCommit → ACTIVE (phase stays ACTIVE). If that state machine
 	// transition ever changed, this guard would silently stop recording IDs.
-	if handler.condensed && shouldTrackTurnCheckpoint(state) {
-		state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID.String())
+	if handler.condensed {
+		recordTurnCheckpoint(state, checkpointID.String())
 	}
 
 	// Carry forward remaining uncommitted files so the next commit gets its
@@ -1467,6 +1467,16 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 
 func shouldTrackTurnCheckpoint(state *SessionState) bool {
 	return state.Phase.IsActive() || state.TurnEndPending
+}
+
+func recordTurnCheckpoint(state *SessionState, checkpointID string) {
+	if !shouldTrackTurnCheckpoint(state) {
+		return
+	}
+	state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID)
+	if state.TurnEndPending {
+		state.TurnEndRefreshRequired = true
+	}
 }
 
 // condenseAndUpdateState runs condensation for a session and updates state afterward.
@@ -2569,9 +2579,10 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 		}
 
 		state.LastCheckpointID = ""
-		state.TurnCheckpointIDs = nil
+		if !state.TurnEndRefreshRequired {
+			state.TurnCheckpointIDs = nil
+		}
 		state.TurnEndPending = false
-		state.TurnEndRefreshFailed = false
 		return nil
 	})
 	if turnStartErr == nil {
@@ -2915,7 +2926,7 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	// checkpoint isn't lost - it just won't have the complete transcript.
 	errCount := s.finalizeAllTurnCheckpoints(ctx, state, capturedTranscript)
 	if state.TurnEndPending {
-		state.TurnEndRefreshFailed = errCount > 0
+		state.TurnEndRefreshRequired = errCount > 0
 	}
 	if errCount > 0 {
 		logCtx := logging.WithComponent(ctx, "checkpoint")

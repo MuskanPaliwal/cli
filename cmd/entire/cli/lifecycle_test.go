@@ -1149,6 +1149,7 @@ func TestHandleLifecycleTurnEnd_RepeatableStopsReuseTurnBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, state.TurnEndPending)
 	require.Equal(t, session.PhaseIdle, state.Phase)
+	require.Equal(t, 1, state.SessionTurnCount)
 
 	ag.position = 2
 	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, &agent.Event{
@@ -1675,13 +1676,13 @@ func TestSealPendingTurnAtSessionEnd(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		refreshFailed bool
-		wantIDs       []string
+		refreshRequired bool
+		wantIDs         []string
 	}{
 		"successful refresh releases recovery IDs": {},
-		"failed refresh preserves recovery IDs": {
-			refreshFailed: true,
-			wantIDs:       []string{"checkpoint"},
+		"required refresh preserves recovery IDs": {
+			refreshRequired: true,
+			wantIDs:         []string{"checkpoint"},
 		},
 	}
 
@@ -1689,9 +1690,9 @@ func TestSealPendingTurnAtSessionEnd(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			state := &strategy.SessionState{
-				TurnEndPending:       true,
-				TurnEndRefreshFailed: tt.refreshFailed,
-				TurnCheckpointIDs:    []string{"checkpoint"},
+				TurnEndPending:         true,
+				TurnEndRefreshRequired: tt.refreshRequired,
+				TurnCheckpointIDs:      []string{"checkpoint"},
 			}
 			sealPendingTurnAtSessionEnd(state)
 			require.False(t, state.TurnEndPending)

@@ -203,18 +203,18 @@ type State struct {
 	//   - Consumed in HandleTurnEnd to finalize all checkpoints with the full transcript
 	//   - Retained across repeatable turn-end events so a continuation can refresh them
 	//   - Otherwise cleared in HandleTurnEnd after finalization completes
-	//   - Cleared in InitializeSession when a new prompt starts
+	//   - Cleared at a new prompt unless the prior refresh still needs a retry
 	//   - Cleared when session is reset (ResetSession deletes the state file entirely)
 	TurnCheckpointIDs []string `json:"turn_checkpoint_ids,omitempty"`
 
 	// TurnEndPending keeps the current turn's checkpoint IDs recoverable after
 	// a repeatable turn-end event. A later turn-end refreshes those checkpoints;
-	// the next user prompt or session end seals the turn and clears this flag.
+	// the next user prompt or session end seals the repeatable-stop window.
 	TurnEndPending bool `json:"turn_end_pending,omitempty"`
 
-	// TurnEndRefreshFailed preserves checkpoint IDs at session end when the most
-	// recent repeatable turn-end could not refresh them.
-	TurnEndRefreshFailed bool `json:"turn_end_refresh_failed,omitempty"`
+	// TurnEndRefreshRequired preserves checkpoint IDs until the latest
+	// repeatable-turn transcript has refreshed them, including across resume.
+	TurnEndRefreshRequired bool `json:"turn_end_refresh_required,omitempty"`
 
 	// LastInteractionTime is updated on agent-interaction events (TurnStart,
 	// TurnEnd, SessionStop, Compaction) but NOT on git commit hooks.

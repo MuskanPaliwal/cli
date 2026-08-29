@@ -1308,6 +1308,38 @@ func TestShouldTrackTurnCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRecordTurnCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		state           *SessionState
+		wantIDs         []string
+		refreshRequired bool
+	}{
+		"active turn records checkpoint": {
+			state:   &SessionState{Phase: session.PhaseActive},
+			wantIDs: []string{"checkpoint"},
+		},
+		"repeatable continuation requires refresh": {
+			state:           &SessionState{Phase: session.PhaseIdle, TurnEndPending: true},
+			wantIDs:         []string{"checkpoint"},
+			refreshRequired: true,
+		},
+		"ordinary idle session ignores checkpoint": {
+			state: &SessionState{Phase: session.PhaseIdle},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			recordTurnCheckpoint(tt.state, "checkpoint")
+			require.Equal(t, tt.wantIDs, tt.state.TurnCheckpointIDs)
+			require.Equal(t, tt.refreshRequired, tt.state.TurnEndRefreshRequired)
+		})
+	}
+}
+
 // TestHandleTurnEnd_PartialFailure verifies that HandleTurnEnd continues
 // processing remaining checkpoints when one UpdateCommitted call fails.
 // This locks the best-effort behavior: valid checkpoints get finalized even

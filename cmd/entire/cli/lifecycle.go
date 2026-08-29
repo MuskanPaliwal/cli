@@ -1212,6 +1212,7 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	// sets no budget, and for agents that do, bounding the final captures
 	// against the same deadline is a known follow-up.
 	completeLiveTaskRecords(ctx, ag, event.SessionID, event.SessionRef)
+	refreshPendingTurnAtSessionEnd(ctx, ag, event)
 
 	if _, err := endSessionNow(ctx, event, event.SessionID, nil, sessionEndCondenseDeadline(ag), endedNow); err != nil {
 		logging.Warn(logCtx, "failed to mark session ended",
@@ -1225,6 +1226,50 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	}
 
 	return nil
+}
+
+func refreshPendingTurnAtSessionEnd(ctx context.Context, ag agent.Agent, event *agent.Event) {
+	if repeatable, ok := agent.AsRepeatableTurnEnd(ag); !ok || !repeatable.TurnEndMayRepeat() {
+		return
+	}
+
+	transcriptRef := event.SessionRef
+	mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
+		if !state.TurnEndPending {
+			return strategy.ErrMutationSkip
+		}
+		state.TurnEndRefreshRequired = true
+		if transcriptRef == "" {
+			transcriptRef = state.TranscriptPath
+		}
+		return nil
+	})
+	if errors.Is(mutErr, strategy.ErrStateNotFound) || errors.Is(mutErr, strategy.ErrMutationSkip) {
+		return
+	}
+	logCtx := logging.WithAgent(logging.WithComponent(ctx, "lifecycle"), ag.Name())
+	if mutErr != nil {
+		logging.Warn(logCtx, "failed to mark pending turn for session-end refresh",
+			slog.String("session_id", event.SessionID),
+			slog.String("error", mutErr.Error()))
+		return
+	}
+	if transcriptRef == "" {
+		logging.Warn(logCtx, "cannot refresh pending turn at session end without a transcript",
+			slog.String("session_id", event.SessionID))
+		return
+	}
+
+	turnEnd := *event
+	turnEnd.Type = agent.TurnEnd
+	turnEnd.SessionRef = transcriptRef
+	turnEnd.FinalResponse = nil
+	turnEnd.FinalResponsePresent = false
+	if err := handleLifecycleTurnEnd(ctx, ag, &turnEnd); err != nil {
+		logging.Warn(logCtx, "failed to refresh pending turn at session end",
+			slog.String("session_id", event.SessionID),
+			slog.String("error", err.Error()))
+	}
 }
 
 // processStart approximates when this hook process began. Package
@@ -2138,7 +2183,7 @@ func markSessionEnded(ctx context.Context, event *agent.Event, sessionID string,
 }
 
 func sealPendingTurnAtSessionEnd(state *strategy.SessionState) {
-	if state.TurnEndPending && !state.TurnEndRefreshFailed {
+	if state.TurnEndPending && !state.TurnEndRefreshRequired {
 		state.TurnCheckpointIDs = nil
 	}
 	state.TurnEndPending = false
@@ -2175,7 +2220,7 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 		if event.TurnCount > state.SessionTurnCount {
 			state.SessionTurnCount = event.TurnCount
 		}
-	} else if event.Type == agent.TurnEnd {
+	} else if event.Type == agent.TurnEnd && !state.TurnEndPending {
 		state.SessionTurnCount++
 	}
 	// Deferred checkpoint-window reset: the first time the turn count actually
