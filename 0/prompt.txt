@@ -1,17 +1,1 @@
-run-playbook let's review this pr: https://github.com/entireio/cli/pull/2099
-
----
-
-continue
-
----
-
-yeah but the gola is it improve the performance here
-
----
-
-okay let's discuss the findings and fix those
-
----
-
-commit and push teh changes
+yes
