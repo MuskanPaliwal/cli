@@ -43,20 +43,21 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 		return managedScaffoldResult{Status: managedScaffoldUnsupported}, nil
 	}
 
+	// The worktree root is the anchor the scaffold is written through, so a
+	// failure to resolve it is not something to paper over with the current
+	// directory: relPath names a file under an agent's own directory, and
+	// writing that beside the process instead of in the repository is the
+	// mistake, not the fallback. paths.ErrNotARepository never reaches here,
+	// because enable has already refused.
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		repoRoot, err = os.Getwd() //nolint:forbidigo // Intentional fallback when WorktreeRoot() fails in tests
-		if err != nil {
-			return managedScaffoldResult{}, fmt.Errorf("failed to get current directory: %w", err)
-		}
+		return managedScaffoldResult{}, fmt.Errorf("resolve worktree root: %w", err)
 	}
 
 	root, err := openScaffoldRoot(repoRoot)
 	if err != nil {
 		return managedScaffoldResult{}, err
 	}
-	defer root.Close()
-
 	result, err := writeManagedScaffold(root, relPath, content, isManagedSearchSkill)
 	if err != nil {
 		return result, err

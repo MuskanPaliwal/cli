@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
+	"github.com/entireio/cli/cmd/entire/cli/worktreedir"
 )
 
 // managedScaffoldStatus is the outcome of writing an Entire-managed scaffold file
@@ -50,7 +53,21 @@ type managedScaffoldResult struct {
 // settings.readConfined exists for) is replaced rather than written through.
 // The relative path is fixed, but its resolution is not; that is why the
 // root, not the caller-joined absolute path, is the API.
+//
+// Confinement alone is not the whole property. relPath names a file under an
+// agent's own directory — .claude/skills/, .claude/agents/, .codex/agents/,
+// .gemini/agents/ — and those arrive with a checkout, so a repository can ship
+// a symlink at `.claude`. os.Root refuses a component that escapes the root
+// and silently follows one pointing elsewhere inside it, which is why
+// NoSymlinkedParent guards the read and MkdirAllNoSymlink the create: an
+// unmanaged file at the far end of a planted link must not be mistaken for one
+// of ours and rewritten.
 func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManaged func([]byte) bool) (managedScaffoldResult, error) {
+	name := filepath.ToSlash(relPath)
+	if err := osroot.NoSymlinkedParent(root, name); err != nil {
+		return managedScaffoldResult{}, fmt.Errorf("resolve managed scaffold path %s: %w", relPath, err)
+	}
+
 	existingData, err := root.ReadFile(relPath)
 	if err == nil {
 		if !isManaged(existingData) {
@@ -70,8 +87,10 @@ func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManag
 
 	// Scaffolds are ordinary project files meant to be committed, so they get
 	// standard shareable permissions, not config-file 0o600/0o750.
-	if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
-		return managedScaffoldResult{}, fmt.Errorf("create managed scaffold directory: %w", err)
+	if dir := path.Dir(name); dir != "." {
+		if err := osroot.MkdirAllNoSymlink(root, dir, 0o755); err != nil {
+			return managedScaffoldResult{}, fmt.Errorf("create managed scaffold directory: %w", err)
+		}
 	}
 	if err := writeScaffoldViaRename(root, relPath, content); err != nil {
 		return managedScaffoldResult{}, fmt.Errorf("write managed scaffold: %w", err)
@@ -115,9 +134,14 @@ func writeScaffoldViaRename(root *os.Root, relPath string, content []byte) error
 	return nil
 }
 
-// openScaffoldRoot opens the repository root for confined scaffold IO.
+// openScaffoldRoot returns the shared worktree anchor for confined scaffold IO.
+//
+// It goes through worktreedir rather than opening its own root because the
+// worktree already has exactly one anchor and repoRoot is what a resolver
+// answered. The returned root is owned by the registry and shared with every
+// other reader and writer of this tree, so callers must not close it.
 func openScaffoldRoot(repoRoot string) (*os.Root, error) {
-	root, err := os.OpenRoot(repoRoot)
+	root, err := worktreedir.OpenAt(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open repository root for scaffolding: %w", err)
 	}
