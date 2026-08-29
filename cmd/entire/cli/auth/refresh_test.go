@@ -489,8 +489,8 @@ func TestTokenManagerLockDir_NeverRealUserCache(t *testing.T) {
 	if err != nil {
 		t.Skipf("os.UserCacheDir unavailable: %v", err)
 	}
-	real := filepath.Join(cache, "auth-go")
-	if dir == real || strings.HasPrefix(dir, real+string(os.PathSeparator)) {
-		t.Fatalf("tokenManagerLockDir() = %q, which resolves under the real %q", dir, real)
+	realLockDir := filepath.Join(cache, "auth-go")
+	if dir == realLockDir || strings.HasPrefix(dir, realLockDir+string(os.PathSeparator)) {
+		t.Fatalf("tokenManagerLockDir() = %q, which resolves under the real %q", dir, realLockDir)
 	}
 }
