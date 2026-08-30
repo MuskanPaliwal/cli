@@ -989,11 +989,11 @@ this automatically; do not call `NewEntireAPICellClient` in a loop.
 
 ### Session Strategy (`cmd/entire/cli/strategy/`)
 
-The CLI uses a manual-commit strategy for managing session data and checkpoints. The strategy implements the `Strategy` interface defined in `strategy.go`.
+The CLI uses a manual-commit strategy for managing session data and checkpoints. There is no `Strategy` interface: `*ManualCommitStrategy` (`manual_commit.go`, constructed by `NewManualCommitStrategy()`) is the only implementation and callers hold it concretely. `strategy.go` holds the types its methods take and return.
 
-#### Strategy Interface
+#### Strategy Methods
 
-The `Strategy` interface provides:
+`*ManualCommitStrategy`'s main entry points:
 
 - `SaveStep()` - Save session step checkpoint (code + metadata)
 - `SaveTaskStep()` - Save subagent task step checkpoint
@@ -1049,7 +1049,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 
 #### Key Files
 
-- `strategy.go` - Interface definition and context structs (`StepContext`, `TaskStepContext`, `RewindPoint`, etc.)
+- `strategy.go` - Shared types only, no behaviour: the sentinel errors (`ErrNoMetadata`, `ErrNoSession`, `ErrNotTaskCheckpoint`, `ErrEmptyRepository`), the argument and result structs (`SessionInfo`, `RewindPoint`, `StepContext`, `TaskStepContext`, `TaskCheckpoint`, `SubagentCheckpoint`, `RestoredSession`), and `TaskMetadataDir()`. The strategy type itself and its constructor live in `manual_commit.go`.
 - `common.go` - Helpers for metadata extraction, tree building, `ListCheckpoints()`
 - `manual_commit*.go` - Manual-commit strategy: main impl, types, session state, condensation, checkpoint listing + log restore (`manual_commit_rewind.go`), git ops, logs, hook handlers (prepare-commit-msg, post-commit, post-rewrite, pre-push), reset
 - `manual_commit_opf_rewrite.go` - Pre-push OPF re-redaction: walks unpushed v1 commits, runs OPF over their blobs, rebuilds commits with `Entire-OPF-Applied: true` trailer, CAS-updates the local ref. Sentinel error types (use `errors.As`): `V1DivergedError`, `BootstrapTooLargeError`, `V1RefMovedError`, `OPFRuntimeFailedError`, `OPFBatchTooLargeError`, `OPFRawBytesTooLargeError`, `OPFNoCategoriesError` (OPF enabled with zero effective categories — the pre-push decision and the rewrite both fail closed instead of stamping the trailer without a scan).
@@ -1071,7 +1071,7 @@ The phase state machine, metadata directory layout, sharded checkpoint format, m
 
 #### When Modifying the Strategy
 
-- The strategy must implement the full `Strategy` interface
+- Adding a method to `*ManualCommitStrategy` is enough — there is no interface to satisfy, and no second implementation to keep in step
 - Test with `mise run test` - strategy tests are in `*_test.go` files
 - Keep this file and `docs/architecture/sessions-and-checkpoints.md` current when changing strategy behavior (`AGENTS.md` is a symlink to this file)
 
