@@ -12,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 )
@@ -104,18 +105,21 @@ func legacySearchSubagentPath(agentName types.AgentName) string {
 // file without an Entire-managed marker is user-owned and stays. Returns the
 // removed repo-relative path, or "" when nothing was removed.
 //
-// This is a delete primitive, so it is confined twice: the *os.Root refuses a
-// symlinked path component that resolves outside the repository, and the
-// Lstat gate skips anything that is not a regular file — Entire only ever
-// scaffolded regular files here, so a symlink or directory at this path is
-// not ours to delete. The marker check decides which file is eligible; the
-// confinement decides where the deletion may happen at all.
+// This is a delete primitive, so it is confined twice. Every parent component
+// is pinned and refused if it is a symlink. That matters because .claude/agents/
+// arrives with a checkout, and an os.Root on its own follows a link that stays
+// inside the repository. The Lstat gate then skips anything that is not a
+// regular file, because Entire only ever scaffolded regular files here, so a
+// symlink or directory at this path is not ours to delete. The marker check
+// decides which file is eligible. The confinement decides where the deletion
+// may happen at all.
 func removeLegacySearchSubagent(root *os.Root, agentName types.AgentName) (string, error) {
 	relPath := legacySearchSubagentPath(agentName)
 	if relPath == "" {
 		return "", nil
 	}
-	info, err := root.Lstat(relPath)
+	name := filepath.ToSlash(relPath)
+	info, err := osroot.LstatNoSymlinks(root, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -125,14 +129,14 @@ func removeLegacySearchSubagent(root *os.Root, agentName types.AgentName) (strin
 	if !info.Mode().IsRegular() {
 		return "", nil
 	}
-	data, err := root.ReadFile(relPath)
+	data, err := osroot.ReadFileNoFollow(root, name)
 	if err != nil {
 		return "", fmt.Errorf("read legacy search subagent: %w", err)
 	}
 	if !isManagedSearchSkill(data) {
 		return "", nil
 	}
-	if err := root.Remove(relPath); err != nil {
+	if err := osroot.RemoveNoSymlinks(root, name); err != nil {
 		return "", fmt.Errorf("remove legacy search subagent: %w", err)
 	}
 	return relPath, nil
