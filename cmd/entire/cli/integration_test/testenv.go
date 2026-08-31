@@ -706,8 +706,8 @@ func (env *TestEnv) GetCurrentBranch() string {
 	return head.Name().Short()
 }
 
-// RewindPoint mirrors strategy.RewindPoint for test assertions.
-type RewindPoint struct {
+// PendingCheckpoint mirrors strategy.PendingCheckpoint for test assertions.
+type PendingCheckpoint struct {
 	ID               string
 	Message          string
 	MetadataDir      string
@@ -718,8 +718,8 @@ type RewindPoint struct {
 	CondensationID   string
 }
 
-// GetRewindPoints returns available rewind points using the CLI.
-func (env *TestEnv) GetRewindPoints() []RewindPoint {
+// ListPendingCheckpoints returns available rewind points using the CLI.
+func (env *TestEnv) ListPendingCheckpoints() []PendingCheckpoint {
 	env.T.Helper()
 
 	// Run `checkpoint list --pending --json` using the shared binary. This is
@@ -752,13 +752,13 @@ func (env *TestEnv) GetRewindPoints() []RewindPoint {
 		env.T.Fatalf("failed to parse rewind points: %v\nOutput: %s", err, output)
 	}
 
-	points := make([]RewindPoint, len(jsonPoints))
+	points := make([]PendingCheckpoint, len(jsonPoints))
 	for i, jp := range jsonPoints {
 		date, err := time.Parse(time.RFC3339, jp.Date)
 		if err != nil {
 			env.T.Fatalf("failed to parse rewind point date %q: %v", jp.Date, err)
 		}
-		points[i] = RewindPoint{
+		points[i] = PendingCheckpoint{
 			ID:               jp.ID,
 			Message:          jp.Message,
 			MetadataDir:      jp.MetadataDir,

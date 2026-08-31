@@ -40,10 +40,10 @@ type SessionInfo struct {
 	CommitHash string
 }
 
-// RewindPoint represents a point to which the user can rewind.
+// PendingCheckpoint represents a point to which the user can rewind.
 // This abstraction allows different strategies to use different
 // identifiers (commit hashes, branch names, stash refs, etc.)
-type RewindPoint struct {
+type PendingCheckpoint struct {
 	// ID is the unique identifier for this rewind point
 	// (commit hash, branch name, stash ref, etc.)
 	ID string

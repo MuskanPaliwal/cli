@@ -112,7 +112,7 @@ func TestSubmoduleWorktree_SessionCreatesCheckpoint(t *testing.T) {
 	// created for the work done inside the submodule. Without the fix, session
 	// init failed on the submodule gitdir, so no checkpoint (and no rewind point)
 	// exists.
-	if points := env.GetRewindPoints(); len(points) == 0 {
+	if points := env.ListPendingCheckpoints(); len(points) == 0 {
 		t.Fatal("no rewind point after a session inside a submodule — session init failed on the submodule gitdir, so no checkpoint was created")
 	}
 }

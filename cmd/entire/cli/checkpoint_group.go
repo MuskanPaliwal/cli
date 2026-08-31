@@ -66,7 +66,7 @@ func newCheckpointSearchCmd() *cobra.Command {
 //	                     replacement for the deprecated `rewind --list` bridge
 //
 // The condensed dataset (entire/checkpoints/v1 for the branch) and the pending
-// dataset (strategy.GetRewindPoints; task checkpoints, logs-only points,
+// dataset (strategy.ListPendingCheckpoints; task checkpoints, logs-only points,
 // condensation IDs) are deliberately distinct — see issue #1767.
 func newCheckpointListCmd() *cobra.Command {
 	var sessionFlag string

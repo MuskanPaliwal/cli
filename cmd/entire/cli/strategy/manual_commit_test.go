@@ -427,7 +427,7 @@ func TestShadowStrategy_ClearSessionState(t *testing.T) {
 	}
 }
 
-func TestShadowStrategy_GetRewindPoints_NoShadowBranch(t *testing.T) {
+func TestShadowStrategy_ListPendingCheckpoints_NoShadowBranch(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	repo, err := git.PlainOpen(dir)
@@ -457,19 +457,19 @@ func TestShadowStrategy_GetRewindPoints_NoShadowBranch(t *testing.T) {
 	t.Chdir(dir)
 
 	s := NewManualCommitStrategy()
-	points, err := s.GetRewindPoints(context.Background(), 10)
+	points, err := s.ListPendingCheckpoints(context.Background(), 10)
 	if err != nil {
-		t.Errorf("GetRewindPoints() error = %v", err)
+		t.Errorf("ListPendingCheckpoints() error = %v", err)
 	}
 	if len(points) != 0 {
-		t.Errorf("GetRewindPoints() returned %d points, want 0", len(points))
+		t.Errorf("ListPendingCheckpoints() returned %d points, want 0", len(points))
 	}
 }
 
 // Pending subagent work lives on task records now, so `checkpoint list
 // --pending`'s [Task] rows must come from TaskRecords. The session is ENDED
 // with no shadow branch — the shape the orphan cleanup used to discard.
-func TestShadowStrategy_GetRewindPoints_TaskRecordRows(t *testing.T) {
+func TestShadowStrategy_ListPendingCheckpoints_TaskRecordRows(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	testutil.WriteFile(t, dir, "f.txt", "init")
@@ -492,7 +492,7 @@ func TestShadowStrategy_GetRewindPoints_TaskRecordRows(t *testing.T) {
 		},
 	}))
 
-	points, err := s.GetRewindPoints(context.Background(), 10)
+	points, err := s.ListPendingCheckpoints(context.Background(), 10)
 	require.NoError(t, err)
 	require.Len(t, points, 2, "both completed-unmaterialized and live records must produce pending [Task] rows")
 	assert.True(t, points[0].IsTaskCheckpoint && points[1].IsTaskCheckpoint)
@@ -505,7 +505,7 @@ func TestShadowStrategy_GetRewindPoints_TaskRecordRows(t *testing.T) {
 // When the most-recent session of a multi-session condensed checkpoint has no
 // prompt, the picker must fall back to the latest non-empty session prompt
 // rather than displaying nothing.
-func TestShadowStrategy_GetRewindPoints_MultiSessionFallsBackToEarlierPrompt(t *testing.T) {
+func TestShadowStrategy_ListPendingCheckpoints_MultiSessionFallsBackToEarlierPrompt(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	testutil.WriteFile(t, dir, "f.txt", "init")
@@ -547,7 +547,7 @@ func TestShadowStrategy_GetRewindPoints_MultiSessionFallsBackToEarlierPrompt(t *
 	testutil.GitCommit(t, dir, "feat\n\nEntire-Checkpoint: "+cpID.String())
 
 	strat := NewManualCommitStrategy()
-	points, err := strat.GetRewindPoints(t.Context(), 10)
+	points, err := strat.ListPendingCheckpoints(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
 	assert.Equal(t, earlierPrompt, points[0].SessionPrompt,
@@ -598,7 +598,7 @@ func TestShadowStrategy_GetTaskCheckpoint_NotTaskCheckpoint(t *testing.T) {
 
 	s := NewManualCommitStrategy()
 
-	point := RewindPoint{
+	point := PendingCheckpoint{
 		ID:               "abc123",
 		IsTaskCheckpoint: false,
 	}
@@ -617,7 +617,7 @@ func TestShadowStrategy_GetTaskCheckpointTranscript_NotTaskCheckpoint(t *testing
 
 	s := NewManualCommitStrategy()
 
-	point := RewindPoint{
+	point := PendingCheckpoint{
 		ID:               "abc123",
 		IsTaskCheckpoint: false,
 	}
