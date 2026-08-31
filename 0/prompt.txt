@@ -1,0 +1,9 @@
+#2188 — fix(strategy): bound turn checkpoint finalization review this pr
+
+---
+
+yupp but these doesn't seem to be wrong with logic, it's more of a test issue?
+
+---
+
+yupp let's fix this
