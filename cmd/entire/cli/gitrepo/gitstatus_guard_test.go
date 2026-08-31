@@ -44,7 +44,10 @@ func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 		t.Skipf("not in a git checkout: %v", err)
 	}
 
-	grep := exec.Command("git", "grep", "-n", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
+	// --no-color: a user gitconfig with color.ui=always wraps the path and
+	// separator in ANSI escapes even when piped, the ".go" suffix check then
+	// matches nothing, and the guard dies as "pattern gone stale".
+	grep := exec.Command("git", "grep", "-n", "--no-color", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
 	grep.Dir = strings.TrimSpace(string(root))
 	out, err := grep.Output()
 	if err != nil {
