@@ -157,7 +157,7 @@ func Run(t *testing.T, dir string, args ...string) string {
 	cmd.Env = Isolated()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+		t.Fatalf("git %v in %q: %v\n%s", args, dir, err, out)
 	}
 	return string(out)
 }
