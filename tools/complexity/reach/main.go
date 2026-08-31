@@ -27,7 +27,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -91,6 +90,7 @@ type analysis struct {
 	declOf  map[*ssa.Function]*decl
 	topDecl map[*ssa.Function]*ssa.Function // parents + generic origins, memoized
 	succs   map[*ssa.Function][]*ssa.Function
+	siteFan map[ssa.CallInstruction]int // call-site fan-out, shared by the cutoff and -who
 }
 
 func main() {
@@ -109,7 +109,7 @@ func main() {
 	cx.Check(err)
 	modPath, err := cx.ReadModulePath(absRoot)
 	cx.Check(err)
-	short := shortener(modPath, strings.Split(*trims, ","))
+	short := shortener(modPath, cx.SplitList(*trims))
 
 	t0 := time.Now()
 	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadAllSyntax, Dir: absRoot}, "./...")
@@ -150,8 +150,7 @@ func main() {
 			continue
 		}
 		pos := fset.Position(fd.Pos())
-		rel, _ := filepath.Rel(absRoot, pos.Filename)
-		rel = filepath.ToSlash(rel)
+		rel, _ := cx.RelSlash(absRoot, pos.Filename)
 		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
@@ -307,9 +306,7 @@ func main() {
 		"roots": len(roots), "cobra_roots": len(cobraRoot), "decls": len(a.declOf),
 		"commands": results, "owner_hist": hist, "owner_histloc": histLOC, "unreached": unreached,
 	}
-	b, err := json.MarshalIndent(out, "", " ")
-	cx.Check(err)
-	cx.Check(os.WriteFile(filepath.Join(*outDir, "reach.json"), b, 0o644))
+	cx.Check(cx.WriteJSON(filepath.Join(*outDir, "reach.json"), out))
 
 	writeMarkdown(filepath.Join(*outDir, "reach.md"), *algo, len(roots), len(cobraRoot), len(a.declOf), hist, histLOC, results, unreached)
 	fmt.Fprintf(os.Stderr, "wrote %s/{reach.md,reach.json,commands.csv}\n", *outDir)
@@ -338,11 +335,11 @@ func (a *analysis) top(fn *ssa.Function) *ssa.Function {
 // operands (function values stored into fields, slices, maps), and nested
 // closures. The traversal itself then only filters per root.
 func (a *analysis) buildSuccs(allFuncs map[*ssa.Function]bool, maxFan int) {
-	siteFan := map[ssa.CallInstruction]int{}
+	a.siteFan = map[ssa.CallInstruction]int{}
 	for _, n := range a.cg.Nodes {
 		for _, e := range n.Out {
 			if e.Site != nil {
-				siteFan[e.Site]++
+				a.siteFan[e.Site]++
 			}
 		}
 	}
@@ -351,7 +348,7 @@ func (a *analysis) buildSuccs(allFuncs map[*ssa.Function]bool, maxFan int) {
 		var out []*ssa.Function
 		if n := a.cg.Nodes[fn]; n != nil {
 			for _, e := range n.Out {
-				if e.Site != nil && siteFan[e.Site] > maxFan {
+				if e.Site != nil && a.siteFan[e.Site] > maxFan {
 					if cc := e.Site.Common(); cc != nil && cc.StaticCallee() == nil {
 						continue
 					}
@@ -380,17 +377,10 @@ func (a *analysis) buildSuccs(allFuncs map[*ssa.Function]bool, maxFan int) {
 }
 
 // explainWho prints, for every decl whose key contains substr, its owners and
-// its incoming call edges (with each site's fan-out from the same map the
-// cutoff uses, so the diagnostic can never describe a different filter).
+// its incoming call edges, reading each site's fan-out from a.siteFan — the
+// same map the cutoff uses, so the diagnostic cannot describe a different
+// filter than the one that ran.
 func (a *analysis) explainWho(substr string, owners map[*ssa.Function][]*root, fset *token.FileSet, absRoot string) {
-	siteFan := map[ssa.CallInstruction]int{}
-	for _, n := range a.cg.Nodes {
-		for _, e := range n.Out {
-			if e.Site != nil {
-				siteFan[e.Site]++
-			}
-		}
-	}
 	for fn, d := range a.declOf {
 		if !strings.Contains(d.Key, substr) {
 			continue
@@ -417,7 +407,7 @@ func (a *analysis) explainWho(substr string, owners map[*ssa.Function][]*root, f
 					}
 				}
 			}
-			fmt.Fprintf(os.Stderr, "    <- %s [%s, site fan-out %d] at %s\n", e.Caller.Func.String(), kind, siteFan[e.Site], site)
+			fmt.Fprintf(os.Stderr, "    <- %s [%s, site fan-out %d] at %s\n", e.Caller.Func.String(), kind, a.siteFan[e.Site], site)
 		}
 	}
 }
@@ -498,13 +488,16 @@ func topFeatures(m map[string]int, n int) string {
 
 // shortener trims the module path (and the given module-relative prefixes)
 // from displayed symbol keys. Presentation-only; applied where keys are
-// emitted, never to the analysis itself.
+// emitted, never to the analysis itself. trims arrives already cleaned, so the
+// returned closure does no per-call parsing — it runs once per emitted key.
 func shortener(mod string, trims []string) func(string) string {
+	full := make([]string, 0, len(trims))
+	for _, tp := range trims {
+		full = append(full, mod+"/"+tp)
+	}
 	return func(s string) string {
-		for _, tp := range trims {
-			if tp = strings.TrimSpace(tp); tp != "" {
-				s = strings.ReplaceAll(s, mod+"/"+tp, "")
-			}
+		for _, tp := range full {
+			s = strings.ReplaceAll(s, tp, "")
 		}
 		return strings.ReplaceAll(s, mod+"/", "")
 	}

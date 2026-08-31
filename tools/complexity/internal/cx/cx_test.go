@@ -77,8 +77,8 @@ func TestFor_GlobDoesNotCrossDirectories(t *testing.T) {
 	if got := c.For("cmd/deep/x.go").Name; got != "tree" {
 		t.Errorf("cmd/deep/x.go = %q, want tree", got)
 	}
-	if got := c.For("other/x.go").Name; got != unmapped.Name {
-		t.Errorf("other/x.go = %q, want %q", got, unmapped.Name)
+	if got := c.For("other/x.go").Name; got != Unmapped.Name {
+		t.Errorf("other/x.go = %q, want %q", got, Unmapped.Name)
 	}
 }
 
@@ -103,6 +103,49 @@ func TestLoadConfig_RejectsBadPattern(t *testing.T) {
 	for _, want := range []string{"broken", "cli/setup[.go"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+}
+
+// Two overlapping directory rules must resolve by specificity, not by list
+// order: the narrower prefix wins from either position. features.json has this
+// exact shape ("e2e/" and "e2e/vogon/"), where order alone used to decide.
+func TestFor_NarrowerDirectoryPrefixWins(t *testing.T) {
+	t.Parallel()
+	broad := FeatureRule{Name: "test-infra", Area: "t", Paths: []string{"e2e/"}}
+	narrow := FeatureRule{Name: "vogon", Area: "a", Paths: []string{"e2e/vogon/"}}
+
+	for _, order := range []struct {
+		name  string
+		rules []FeatureRule
+	}{
+		{"narrow first", []FeatureRule{narrow, broad}},
+		{"broad first", []FeatureRule{broad, narrow}},
+	} {
+		c := writeConfig(t, Config{Features: order.rules})
+		if got := c.For("e2e/vogon/main.go").Name; got != "vogon" {
+			t.Errorf("%s: e2e/vogon/main.go = %q, want vogon", order.name, got)
+		}
+		if got := c.For("e2e/other/main.go").Name; got != "test-infra" {
+			t.Errorf("%s: e2e/other/main.go = %q, want test-infra", order.name, got)
+		}
+	}
+}
+
+// A basename glob names one directory exactly, so it beats a prefix rule that
+// merely contains that directory — again from either position in the list.
+func TestFor_GlobBeatsContainingDirectoryPrefix(t *testing.T) {
+	t.Parallel()
+	prefix := FeatureRule{Name: "tree", Area: "t", Paths: []string{"cmd/"}}
+	glob := FeatureRule{Name: "leaf", Area: "a", Paths: []string{"cmd/deep/*.go"}}
+
+	for _, rules := range [][]FeatureRule{{prefix, glob}, {glob, prefix}} {
+		c := writeConfig(t, Config{Features: rules})
+		if got := c.For("cmd/deep/x.go").Name; got != "leaf" {
+			t.Errorf("cmd/deep/x.go = %q, want leaf", got)
+		}
+		if got := c.For("cmd/shallow.go").Name; got != "tree" {
+			t.Errorf("cmd/shallow.go = %q, want tree", got)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 name,area,ranked,files,test_files,prod_loc,test_loc,gen_loc,test_ratio,funcs,sum_cyclo,max_cyclo,sum_cognit,max_cognit,median_cognit,cognit_per_100loc,funcs_over_cyclo,funcs_over_cognit,stmts,covered,cov_pct,uncovered_cognit,commits_90d,lines_changed_90d,commits_180d,lines_changed_180d,fan_in,fan_out
-cmd/entire/cli,,true,149,159,63943,81907,0,1.28,2122,10684,56,11394,105,3.0,17.8,88,102,24905,17849,71.7,2140,3081,145791,4672,231355,1,66
+cmd/entire/cli,,true,149,159,63943,81907,0,1.28,2122,10684,56,11394,105,3.0,17.8,88,102,24905,17849,71.7,2140,3079,145721,4672,231355,1,66
 cmd/entire/cli/strategy,,true,40,59,19322,34012,0,1.76,502,2794,31,3022,62,3.0,15.6,34,34,6661,5149,77.3,227,813,32869,1698,68858,4,35
 cmd/entire/cli/checkpoint,,true,26,41,9167,14590,0,1.59,304,1368,28,1463,48,2.0,16.0,8,15,3197,2509,78.5,79,423,22236,537,26337,9,19
 cmd/entire/cli/review,,true,21,23,7872,10511,0,1.34,286,1412,31,1409,47,3.0,17.9,13,13,3118,2139,68.6,309,355,12317,565,34688,5,18

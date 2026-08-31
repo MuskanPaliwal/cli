@@ -14,7 +14,7 @@ and it in turn skips nested modules when walking the tree.
 | --- | --- |
 | `main.go` | parses every non-test Go file (in parallel); per function LOC, cyclomatic (`fzipp/gocyclo`), cognitive (`uudashr/gocognit`); folds `go test -coverprofile` files in a single streaming pass (merged per block, max count) and `git log --numstat` churn (one git run, bucketed per window); rolls up by `features.json` |
 | `reach/main.go` | builds SSA + a VTA call graph (`golang.org/x/tools/go/callgraph/vta`); every `*cobra.Command`-returning func is a root, plus `<init>` and one `<main:pkg>`; reports exclusive vs shared LOC per root and declarations no root reaches. Its precision policies (`-maxfanout` cutoff for unresolved dynamic calls, closures only via their creator, generic instantiations rolled up to their origin) are documented at the top of the file; `-who <substr>` explains why a symbol is or isn't reached |
-| `dupl/main.go` | rolls a golangci-lint `dupl` JSON report up by feature |
+| `dupl/main.go` | rolls a golangci-lint `dupl` JSON report up by feature. golangci reports `Pos.Filename` relative to its **config file's** directory while the path quoted in the issue text is repo-relative, so `-base` (default: the working directory) says what the former resolves against and each path is resolved against whichever base names a file that exists |
 | `internal/cx/` | the one home of the feature mapping (rule matching, rank policy), module-path reading, and CSV writing — shared by all three binaries |
 | `features.json` | path → feature rules, resolved in three ordered steps, first match winning: a rule naming the exact path (so an explicit `_test.go` rule always wins); then, for a test file, its source name (`foo_test.go` → `foo.go`) so tests follow their source; then globs and `dir/` prefixes. Exact paths beat globs regardless of list order — otherwise a broad rule like `setup*.go` silently absorbs a later one naming `setup_import.go`, and the file lands in a plausible wrong feature instead of in `_unmapped`, where nothing reports it. A pattern `path.Match` cannot parse is rejected at load rather than matching nothing. `norank: true` keeps a feature out of rankings and headline totals while still measuring it. Edit this when a command family moves; unmapped files are reported and counted in `report.json` meta |
 | `render.py` | renders the HTML report from `report.json` + `reach.json` + `dupl-by-feature.json`. Its "Reading the numbers" section is snapshot-bound interpretation and says so |
@@ -43,6 +43,8 @@ go run ./reach -root ../.. -out /tmp/cx/reach
 (cd ../.. && golangci-lint run -c tools/complexity/dupl-config.yaml --new=false \
   --max-issues-per-linter=0 --max-same-issues=0 \
   --output.json.path=/tmp/cx/dupl.json ./...)
+# -base defaults to the working directory, which is what the config-relative
+# paths above resolve against when this is run from tools/complexity
 go run ./dupl  -in /tmp/cx/dupl.json -root ../.. -out /tmp/cx/dupl-by-feature.json
 # 5. page
 python3 render.py /tmp/cx/all /tmp/cx/reach /tmp/cx/dupl-by-feature.json ../.. /tmp/cx/baseline.html

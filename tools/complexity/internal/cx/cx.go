@@ -61,7 +61,7 @@ func (c *Config) validate() error {
 	for i := range c.Features {
 		r := &c.Features[i]
 		for _, p := range r.Paths {
-			if strings.HasSuffix(p, "/") {
+			if _, ok := dirPrefix(p); ok {
 				continue
 			}
 			_, pbase := path.Split(p)
@@ -74,8 +74,8 @@ func (c *Config) validate() error {
 }
 
 func matchRule(pattern, rel string) bool {
-	if strings.HasSuffix(pattern, "/") {
-		return strings.HasPrefix(rel, pattern)
+	if dir, ok := dirPrefix(pattern); ok {
+		return strings.HasPrefix(rel, dir)
 	}
 	pdir, pbase := path.Split(pattern)
 	rdir, rbase := path.Split(rel)
@@ -93,7 +93,10 @@ type Feature struct {
 	Ranked bool
 }
 
-var unmapped = Feature{Name: "_unmapped", Area: "_unmapped", Ranked: false}
+// Unmapped is the feature a path falls into when no rule claims it. Exported
+// because callers report the gap (a count, and the paths on stderr) and must
+// not have to re-spell the name to recognise it.
+var Unmapped = Feature{Name: "_unmapped", Area: "_unmapped", Ranked: false}
 
 // For maps a repo-relative file path to its feature, in three ordered steps,
 // first match winning:
@@ -124,13 +127,14 @@ func (c *Config) For(rel string) Feature {
 	if f, ok := c.matchPass(rel, false); ok {
 		return f
 	}
-	return unmapped
+	return Unmapped
 }
 
 // literalPattern reports whether p names one exact path: no glob metacharacter
 // and not a directory prefix.
 func literalPattern(p string) bool {
-	return !strings.HasSuffix(p, "/") && !strings.ContainsAny(p, "*?[")
+	_, isDir := dirPrefix(p)
+	return !isDir && !strings.ContainsAny(p, "*?[")
 }
 
 // matchPass scans the rules in config order, considering only exact-path rules
@@ -146,18 +150,53 @@ func literalPattern(p string) bool {
 // order-independent for exact paths, so a one-file rule works wherever its
 // feature happens to sit in the list.
 func (c *Config) matchPass(rel string, literals bool) (Feature, bool) {
+	best, bestSpec, found := Feature{}, -1, false
 	for i := range c.Features {
 		r := &c.Features[i]
 		for _, p := range r.Paths {
 			if literalPattern(p) != literals {
 				continue
 			}
-			if matchRule(p, rel) {
-				return Feature{Name: r.Name, Area: r.Area, Ranked: !r.NoRank}, true
+			if !matchRule(p, rel) {
+				continue
+			}
+			if spec := specificity(p); !found || spec > bestSpec {
+				best, bestSpec, found = Feature{Name: r.Name, Area: r.Area, Ranked: !r.NoRank}, spec, true
 			}
 		}
 	}
-	return Feature{}, false
+	return best, found
+}
+
+// specificity ranks two matching non-literal patterns so the narrower one wins
+// regardless of list order. A basename glob names one directory exactly and so
+// beats any prefix rule containing it; between two prefix rules the longer one
+// wins.
+//
+// Without this, two overlapping directory rules are resolved by position alone:
+// features.json has "e2e/" (test-infra) and "e2e/vogon/" (agent:vogon), and
+// today the narrower one happens to sit earlier. Alphabetising the file, or
+// inserting a broad rule above a narrow one, would silently move a subtree's
+// LOC and coverage to the wrong feature with nothing reported — the same
+// invisible misattribution the literal/glob split exists to prevent, left open
+// for the one case that split does not cover.
+func specificity(pattern string) int {
+	if dir, ok := dirPrefix(pattern); ok {
+		return len(dir)
+	}
+	// A glob is scoped to its own directory, so it is narrower than every
+	// prefix rule that could match the same path; +1 outranks a prefix of the
+	// same length.
+	pdir, _ := path.Split(pattern)
+	return len(pdir) + 1
+}
+
+// dirPrefix reports whether pattern is a directory-prefix rule, and the prefix.
+func dirPrefix(pattern string) (string, bool) {
+	if strings.HasSuffix(pattern, "/") {
+		return pattern, true
+	}
+	return "", false
 }
 
 // ReadModulePath returns the module path of the Go module rooted at dir.
@@ -202,4 +241,34 @@ func WriteCSV(path string, header []string, rows [][]string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// WriteJSON writes one indented JSON file whole, the counterpart to WriteCSV.
+func WriteJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", " ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
+// RelSlash returns path relative to root with forward slashes: the form every
+// rule in the mapping is written in, and so the only form For accepts.
+func RelSlash(root, p string) (string, error) {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// SplitList parses a comma-separated flag value, trimming and dropping empties.
+func SplitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

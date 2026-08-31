@@ -33,7 +33,8 @@ if _rev.returncode != 0:
 commit = _rev.stdout.strip()
 today = datetime.date.today().isoformat()
 
-def cov(row):  # -1 = no statements known
+def cov(row):  # features, areas, packages, files and funcs all carry stmts/covered
+    # -1 = no statements known
     return -1 if row["stmts"] == 0 else 100 * row["covered"] / row["stmts"]
 
 def ratio(row):
@@ -91,9 +92,8 @@ un_files = sorted(un_by_file.items(), key=lambda kv: -kv[1]["loc"])[:22]
 un_total = sum(u["loc"] for u in unreached)
 
 prod_funcs = [fn for fn in funcs if ranked_feature[fn["feature"]]]
-def covp(fn): return -1 if fn["stmts"] == 0 else 100 * fn["covered"] / fn["stmts"]
 top_funcs = sorted(prod_funcs, key=lambda x: -x["cognit"])[:15]
-undercov_all = [fn for fn in prod_funcs if fn["cognit"] >= COGNIT_WARN and fn["stmts"] > 0 and covp(fn) < COV_WARN]
+undercov_all = [fn for fn in prod_funcs if fn["cognit"] >= COGNIT_WARN and fn["stmts"] > 0 and cov(fn) < COV_WARN]
 undercov = sorted(undercov_all, key=lambda x: -x["cognit"])[:22]
 hot_files = sorted(
     ((fl["churn"].get("90d", {}).get("commits", 0), fl) for fl in files
@@ -141,16 +141,29 @@ def bar(v, vmax, cls="bar"):
     w = 0 if vmax == 0 else max(1.5, 100 * v / vmax)
     return f'<span class="{cls}"><i style="width:{w:.1f}%"></i></span>'
 
+# The chip bands derive from COV_WARN so a non-default -cov-warn cannot leave
+# the colouring disagreeing with every other "under-covered" figure on the page.
+COV_CRIT, COV_SER = COV_WARN, COV_WARN + 15
+
 def cov_cell(c):
     if c < 0: return '<td class="n">n/a</td>'
     chip = ""
-    if c < 50: chip = ' <span class="chip crit">▲ low</span>'
-    elif c < 65: chip = ' <span class="chip ser">▲ low</span>'
+    if c < COV_CRIT: chip = ' <span class="chip crit">▲ low</span>'
+    elif c < COV_SER: chip = ' <span class="chip ser">▲ low</span>'
     return f'<td class="n" data-v="{c:.1f}">{bar(c,100,"bar cov")}<span>{c:.0f}%</span>{chip}</td>'
 
 # ---------- html ----------
+# The area filter buttons are derived from the features actually listed: a
+# hardcoded list goes stale when an area is added, and offers a button that
+# filters to nothing when every feature in an area is norank.
+_shown_areas = {f["area"] for f in features if f["ranked"]}
+area_buttons = "".join(
+    ['<button aria-pressed="true" data-f="all">all</button>']
+    + [f'<button aria-pressed="false" data-f="{esc(a["name"])}">{esc(a["name"])}</button>'
+       for a in sorted(areas, key=lambda a: -a["prod_loc"]) if a["name"] in _shown_areas])
+
 def feature_rows():
-    shown = [f for f in features if f["area"] != "generated"]
+    shown = [f for f in features if f["ranked"]]
     mx_loc = max(f["prod_loc"] for f in shown); mx_cog = max(f["sum_cognit"] for f in shown)
     rows = []
     for f in sorted(shown, key=lambda f: -f["sum_cognit"]):
@@ -182,17 +195,15 @@ def cmd_rows():
 
 def func_row(fn):
     return (f'<tr><td class="n">{fn["cognit"]}</td><td class="n">{fn["cyclo"]}</td><td class="n">{fn["loc"]}</td>'
-            f'{cov_cell(covp(fn))}<td><span class="fname">{esc(fn["feature"])}</span></td>'
+            f'{cov_cell(cov(fn))}<td><span class="fname">{esc(fn["feature"])}</span></td>'
             f'<td class="mono small">{esc(fn["file"])}:{fn["start"]} <b>{esc(fn["name"])}</b></td></tr>')
 
 def hot_rows():
     return "\n".join(
-        f'<tr><td class="n">{c}</td><td class="n">{fl["sum_cognit"]}</td><td class="n">{num(fl["loc"])}</td>{cov_cell(cov_file(fl))}'
+        f'<tr><td class="n">{c}</td><td class="n">{fl["sum_cognit"]}</td><td class="n">{num(fl["loc"])}</td>{cov_cell(cov(fl))}'
         f'<td><span class="fname">{esc(fl["feature"])}</span></td><td class="mono small">{esc(fl["rel"])}</td></tr>'
         for c, fl in hot_files)
 
-def cov_file(fl):
-    return -1 if fl["stmts"] == 0 else 100 * fl["covered"] / fl["stmts"]
 
 def unreached_rows():
     out = []
@@ -227,7 +238,7 @@ def covtxt(row):
 
 area_tiles = "".join(
     f'<div class="tile"><div class="tlabel">{esc(a["name"])}</div><div class="tval">{num(a["prod_loc"])}</div><div class="tsub">prod LOC · {covtxt(a)} · ratio {ratio(a):.2f}</div></div>'
-    for a in sorted(areas, key=lambda a: -a["prod_loc"]) if a["name"] != "generated")
+    for a in sorted(areas, key=lambda a: -a["prod_loc"]) if a["ranked"])
 
 # The dark palette is written once; the artifact host stamps data-theme on the
 # root for an explicit choice, while the un-stamped default follows the OS via
@@ -336,9 +347,9 @@ a{{color:var(--accent-ink)}}
 <p class="note">Caveats: VTA over-approximates dynamic dispatch, so "reached" sets are generous and "exclusive" sets conservative; reflection and template lookups are not modelled. Coverage is statement coverage — it says a line ran, not that it was asserted on.</p>
 
 <h2 id="features">Cost by feature</h2>
-<p class="note">Click a column to sort. <b>cog/100</b> is cognitive complexity per 100 production lines (density); <b>&gt;{COGNIT_WARN}</b> counts functions above gocognit's usual warning threshold; <b>uncov. cog</b> is the cognitive complexity sitting in functions with under {COV_WARN:.0f}% coverage — the single best "complex and untested" number. Coverage under 65% is flagged.</p>
+<p class="note">Click a column to sort. <b>cog/100</b> is cognitive complexity per 100 production lines (density); <b>&gt;{COGNIT_WARN}</b> counts functions above gocognit's usual warning threshold; <b>uncov. cog</b> is the cognitive complexity sitting in functions with under {COV_WARN:.0f}% coverage — the single best "complex and untested" number. Coverage under {COV_SER:.0f}% is flagged.</p>
 <div class="filters" role="group" aria-label="Filter by area">
- <button aria-pressed="true" data-f="all">all</button><button aria-pressed="false" data-f="command">command</button><button aria-pressed="false" data-f="capture">capture</button><button aria-pressed="false" data-f="agents">agents</button><button aria-pressed="false" data-f="infra">infra</button><button aria-pressed="false" data-f="platform">platform</button><button aria-pressed="false" data-f="test-infra">test-infra</button>
+ {area_buttons}
 </div>
 <div class="card"><table id="ft"><thead><tr>
 <th data-k="s">feature</th><th data-k="s">area</th><th class="n" data-k="n">prod LOC</th><th class="n" data-k="n">test ratio</th><th class="n" data-k="n" data-sorted="desc">Σ cognit</th><th class="n" data-k="n">cog/100</th><th class="n" data-k="n">&gt;{COGNIT_WARN}</th><th class="n" data-k="n">coverage</th><th class="n" data-k="n" title="cognitive complexity in functions under {COV_WARN:.0f}% coverage">uncov. cog</th><th class="n" data-k="n" title="commits touching the feature in the last 90 days">commits</th><th class="n" data-k="n" title="dupl findings in production code">dupl</th>

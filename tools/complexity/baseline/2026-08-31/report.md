@@ -2,17 +2,17 @@
 
 Ranking tables exclude features marked norank in the mapping (test infrastructure, generated code).
 
+Excluded (norank), still measured in the CSVs: agent:vogon (1121 prod LOC), test-infra (10210 prod LOC).
+
 ## By area
 
 | name | area | prod LOC | test LOC | ratio | funcs | Σcognit | cog/100loc | max cog | >20 cog | cov% | uncov cog | commits 90d |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| command |  | 84641 | 103839 | 1.23 | 2920 | 14538 | 17.2 | 105 | 121 | 72.7 | 2545 | 3743 |
+| command |  | 84641 | 103839 | 1.23 | 2920 | 14538 | 17.2 | 105 | 121 | 72.7 | 2545 | 3741 |
 | capture |  | 47572 | 73965 | 1.55 | 1402 | 7378 | 15.5 | 83 | 74 | 80.6 | 374 | 2066 |
 | agents |  | 22208 | 29957 | 1.35 | 882 | 3461 | 15.6 | 54 | 31 | 78.7 | 267 | 607 |
-| test-infra |  | 10210 | 31535 | 3.09 | 506 | 1319 | 12.9 | 48 | 5 | 38.2 | 807 | 413 |
 | infra |  | 9484 | 12051 | 1.27 | 395 | 1151 | 12.1 | 28 | 2 | 83.3 | 70 | 426 |
 | platform |  | 4431 | 6429 | 1.45 | 126 | 741 | 16.7 | 49 | 9 | 76.1 | 50 | 134 |
-| generated |  | 0 | 0 | 0.00 | 0 | 0 | 0.0 | 0 | 0 | n/a | 0 | 82 |
 
 ## By feature
 
@@ -21,8 +21,7 @@ Ranking tables exclude features marked norank in the mapping (test infrastructur
 | capture:strategy | capture | 19322 | 34012 | 1.76 | 502 | 3022 | 15.6 | 62 | 34 | 77.3 | 227 | 813 |
 | capture:checkpoint-store | capture | 12494 | 18028 | 1.44 | 420 | 1854 | 14.8 | 48 | 18 | 80.2 | 81 | 608 |
 | cmd:trail | command | 8221 | 7270 | 0.88 | 343 | 1697 | 20.6 | 52 | 11 | 64.8 | 468 | 339 |
-| cmd:review | command | 9452 | 11897 | 1.26 | 343 | 1663 | 17.6 | 47 | 14 | 69.7 | 340 | 430 |
-| test-infra | test-infra | 10210 | 31535 | 3.09 | 506 | 1319 | 12.9 | 48 | 5 | 38.2 | 807 | 413 |
+| cmd:review | command | 9452 | 11897 | 1.26 | 343 | 1663 | 17.6 | 47 | 14 | 69.7 | 340 | 428 |
 | cmd:control-plane | command | 5796 | 5331 | 0.92 | 205 | 1033 | 17.8 | 56 | 9 | 65.4 | 411 | 407 |
 | cmd:explain | command | 5694 | 10555 | 1.85 | 154 | 1028 | 18.1 | 45 | 12 | 80.5 | 75 | 202 |
 | cmd:session | command | 5506 | 10352 | 1.88 | 176 | 1018 | 18.5 | 44 | 8 | 76.5 | 98 | 324 |
@@ -58,7 +57,6 @@ Ranking tables exclude features marked norank in the mapping (test infrastructur
 | agent:cursor | agents | 1602 | 2863 | 1.79 | 59 | 235 | 14.7 | 27 | 2 | 84.5 | 0 | 29 |
 | cmd:runner | command | 1186 | 508 | 0.43 | 39 | 223 | 18.8 | 42 | 3 | 35.4 | 144 | 15 |
 | agent:opencode | agents | 1456 | 2236 | 1.54 | 61 | 220 | 15.1 | 19 | 0 | 76.2 | 14 | 33 |
-| agent:vogon | agents | 1121 | 136 | 0.12 | 55 | 185 | 16.5 | 44 | 2 | 13.9 | 158 | 12 |
 | capture:session-state | capture | 1683 | 1753 | 1.04 | 54 | 184 | 10.9 | 35 | 2 | 90.4 | 0 | 60 |
 | cmd:checkpoint-policy | command | 1052 | 1211 | 1.15 | 51 | 166 | 15.8 | 17 | 0 | 83.5 | 0 | 109 |
 | cmd:labs-version-shell | command | 1346 | 1631 | 1.21 | 45 | 151 | 11.2 | 24 | 2 | 66.1 | 43 | 104 |
@@ -70,13 +68,12 @@ Ranking tables exclude features marked norank in the mapping (test infrastructur
 | cmd:agent | command | 580 | 257 | 0.44 | 20 | 86 | 14.8 | 17 | 0 | 85.9 | 0 | 8 |
 | infra:ui-utils | infra | 853 | 1183 | 1.39 | 34 | 72 | 8.4 | 9 | 0 | 85.7 | 10 | 40 |
 | cmd:tokens | command | 404 | 324 | 0.80 | 15 | 67 | 16.6 | 13 | 0 | 85.5 | 0 | 23 |
-| generated:coreapi | generated | 0 | 0 | 0.00 | 0 | 0 | 0.0 | 0 | 0 | n/a | 0 | 82 |
 
 ## By package (top 40 by cognitive complexity)
 
 | name | area | prod LOC | test LOC | ratio | funcs | Σcognit | cog/100loc | max cog | >20 cog | cov% | uncov cog | commits 90d | in | out |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| cmd/entire/cli |  | 63943 | 81907 | 1.28 | 2122 | 11394 | 17.8 | 105 | 102 | 71.7 | 2140 | 3081 | 1 | 66 |
+| cmd/entire/cli |  | 63943 | 81907 | 1.28 | 2122 | 11394 | 17.8 | 105 | 102 | 71.7 | 2140 | 3079 | 1 | 66 |
 | cmd/entire/cli/strategy |  | 19322 | 34012 | 1.76 | 502 | 3022 | 15.6 | 62 | 34 | 77.3 | 227 | 813 | 4 | 35 |
 | cmd/entire/cli/checkpoint |  | 9167 | 14590 | 1.59 | 304 | 1463 | 16.0 | 48 | 15 | 78.5 | 79 | 423 | 9 | 19 |
 | cmd/entire/cli/review |  | 7872 | 10511 | 1.34 | 286 | 1409 | 17.9 | 47 | 13 | 68.6 | 309 | 355 | 5 | 18 |

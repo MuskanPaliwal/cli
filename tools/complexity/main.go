@@ -15,7 +15,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -62,6 +61,7 @@ type Func struct {
 	Covered int    `json:"covered"`
 	Feature string `json:"feature"`
 	Area    string `json:"area"`
+	Ranked  bool   `json:"ranked"`
 }
 
 func (f *Func) CovPct() float64 {
@@ -222,13 +222,27 @@ func main() {
 	cfg, err := cx.LoadConfig(*featuresPath)
 	cx.Check(err)
 
-	files := parseTree(absRoot, modPath, cfg, splitList(*skipDirs))
+	files := parseTree(absRoot, modPath, cfg, cx.SplitList(*skipDirs))
 
+	// Coverage and churn both only read the parsed file set and write disjoint
+	// fields on it, so they overlap; each takes seconds on this repo (a ~370MB
+	// profile to fold, a `git log --numstat` over 180 days) and a person is
+	// waiting on the total.
+	var stages sync.WaitGroup
 	if *coverList != "" {
-		mergeCoverage(strings.Split(*coverList, ","), modPath, files)
+		stages.Add(1)
+		go func() {
+			defer stages.Done()
+			mergeCoverage(cx.SplitList(*coverList), modPath, files)
+		}()
 	}
-
-	windows := applyChurn(absRoot, splitList(*churnDays), files)
+	var windows []string
+	stages.Add(1)
+	go func() {
+		defer stages.Done()
+		windows = applyChurn(absRoot, cx.SplitList(*churnDays), files)
+	}()
+	stages.Wait()
 
 	// Aggregate: features, areas, packages, fan-in/out.
 	features := map[string]*Agg{}
@@ -241,19 +255,21 @@ func main() {
 		fa.add(f, windows)
 		get(areas, f.Area).add(f, windows)
 		get(pkgs, f.PkgDir).add(f, windows)
-		if !f.IsTest {
-			if pkgImports[f.PkgDir] == nil {
-				pkgImports[f.PkgDir] = map[string]bool{}
+		if f.IsTest {
+			continue
+		}
+		if pkgImports[f.PkgDir] == nil {
+			pkgImports[f.PkgDir] = map[string]bool{}
+		}
+		for _, ip := range f.Imports {
+			dep := strings.TrimPrefix(ip, modPath+"/")
+			if dep == modPath {
+				dep = "."
 			}
-			for _, ip := range f.Imports {
-				dep := strings.TrimPrefix(ip, modPath+"/")
-				if dep == modPath {
-					dep = "."
-				}
-				if dep != f.PkgDir {
-					pkgImports[f.PkgDir][dep] = true
-				}
+			if dep == f.PkgDir {
+				continue
 			}
+			pkgImports[f.PkgDir][dep] = true
 		}
 	}
 	for p, deps := range pkgImports {
@@ -295,7 +311,7 @@ func main() {
 	// them on stderr so the mapping can be iterated.
 	unmappedFiles, unmappedLOC := 0, 0
 	for _, f := range fileList {
-		if f.Feature == "_unmapped" {
+		if f.Feature == cx.Unmapped.Name {
 			unmappedFiles++
 			unmappedLOC += f.LOC
 			fmt.Fprintf(os.Stderr, "unmapped: %s\n", f.Rel)
@@ -318,9 +334,7 @@ func main() {
 		"files":    fileList,
 		"funcs":    allFuncs,
 	}
-	b, err := json.MarshalIndent(out, "", " ")
-	cx.Check(err)
-	cx.Check(os.WriteFile(filepath.Join(*outDir, "report.json"), b, 0o644))
+	cx.Check(cx.WriteJSON(filepath.Join(*outDir, "report.json"), out))
 	fmt.Fprintf(os.Stderr, "wrote %s/{report.md,report.json,functions.csv,features.csv,areas.csv,packages.csv,files.csv}; %d unmapped files\n", *outDir, unmappedFiles)
 }
 
@@ -381,9 +395,8 @@ func parseTree(absRoot, modPath string, cfg *cx.Config, skip []string) map[strin
 }
 
 func parseFile(fset *token.FileSet, absRoot, modPath string, cfg *cx.Config, p string) *File {
-	rel, err := filepath.Rel(absRoot, p)
+	rel, err := cx.RelSlash(absRoot, p)
 	cx.Check(err)
-	rel = filepath.ToSlash(rel)
 	src, err := os.ReadFile(p)
 	cx.Check(err)
 	af, err := parser.ParseFile(fset, p, src, parser.ParseComments|parser.SkipObjectResolution)
@@ -430,6 +443,7 @@ func parseFile(fset *token.FileSet, absRoot, modPath string, cfg *cx.Config, p s
 			Cognit:  gocognit.Complexity(fn),
 			Feature: f.Feature,
 			Area:    f.Area,
+			Ranked:  f.Ranked,
 		})
 	}
 	sort.Slice(f.Funcs, func(i, j int) bool { return f.Funcs[i].Start < f.Funcs[j].Start })
@@ -654,16 +668,6 @@ func applyChurn(root string, days []string, files map[string]*File) []string {
 
 // ---------- helpers ----------
 
-func splitList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 func get(m map[string]*Agg, k string) *Agg {
 	a := m[k]
 	if a == nil {
@@ -706,19 +710,33 @@ func writeFuncsCSV(p string, fns []*Func) error {
 	return cx.WriteCSV(p, []string{"feature", "area", "file", "pkg", "func", "start", "loc", "cyclo", "cognit", "stmts", "covered", "cov_pct"}, rows)
 }
 
-func writeAggCSV(p string, aggs []*Agg, windows []string) error {
-	hdr := []string{"name", "area", "ranked", "files", "test_files", "prod_loc", "test_loc", "gen_loc", "test_ratio", "funcs", "sum_cyclo", "max_cyclo", "sum_cognit", "max_cognit", "median_cognit", "cognit_per_100loc", "funcs_over_cyclo", "funcs_over_cognit", "stmts", "covered", "cov_pct", "uncovered_cognit"}
+// churnHeader and churnCols keep the per-window column shape in one place; the
+// agg and file writers must agree on it or their CSVs drift apart.
+func churnHeader(windows []string) []string {
+	hdr := make([]string, 0, 2*len(windows))
 	for _, w := range windows {
 		hdr = append(hdr, "commits_"+w, "lines_changed_"+w)
 	}
+	return hdr
+}
+
+func churnCols(churn map[string]Churn, windows []string) []string {
+	cols := make([]string, 0, 2*len(windows))
+	for _, w := range windows {
+		c := churn[w]
+		cols = append(cols, itoa(c.Commits), itoa(c.Added+c.Deleted))
+	}
+	return cols
+}
+
+func writeAggCSV(p string, aggs []*Agg, windows []string) error {
+	hdr := []string{"name", "area", "ranked", "files", "test_files", "prod_loc", "test_loc", "gen_loc", "test_ratio", "funcs", "sum_cyclo", "max_cyclo", "sum_cognit", "max_cognit", "median_cognit", "cognit_per_100loc", "funcs_over_cyclo", "funcs_over_cognit", "stmts", "covered", "cov_pct", "uncovered_cognit"}
+	hdr = append(hdr, churnHeader(windows)...)
 	hdr = append(hdr, "fan_in", "fan_out")
 	rows := make([][]string, 0, len(aggs))
 	for _, a := range aggs {
 		row := []string{a.Name, a.Area, strconv.FormatBool(a.Ranked), itoa(a.Files), itoa(a.TestFiles), itoa(a.ProdLOC), itoa(a.TestLOC), itoa(a.GenLOC), fmt.Sprintf("%.2f", a.TestRatio()), itoa(a.Funcs), itoa(a.SumCyclo), itoa(a.MaxCyclo), itoa(a.SumCognit), itoa(a.MaxCognit), fmt.Sprintf("%.1f", a.MedianCognit()), fmt.Sprintf("%.1f", a.Density()), itoa(a.OverCyclo), itoa(a.OverCognit), itoa(a.Stmts), itoa(a.Covered), pct(a.CovPct()), itoa(a.UncovCognit)}
-		for _, w := range windows {
-			c := a.Churn[w]
-			row = append(row, itoa(c.Commits), itoa(c.Added+c.Deleted))
-		}
+		row = append(row, churnCols(a.Churn, windows)...)
 		row = append(row, itoa(a.FanIn), itoa(a.FanOut))
 		rows = append(rows, row)
 	}
@@ -727,16 +745,11 @@ func writeAggCSV(p string, aggs []*Agg, windows []string) error {
 
 func writeFilesCSV(p string, files []*File, windows []string) error {
 	hdr := []string{"feature", "area", "ranked", "file", "is_test", "generated", "loc", "funcs", "sum_cyclo", "sum_cognit", "max_cognit", "stmts", "covered", "cov_pct"}
-	for _, w := range windows {
-		hdr = append(hdr, "commits_"+w, "lines_changed_"+w)
-	}
+	hdr = append(hdr, churnHeader(windows)...)
 	rows := make([][]string, 0, len(files))
 	for _, fl := range files {
 		row := []string{fl.Feature, fl.Area, strconv.FormatBool(fl.Ranked), fl.Rel, strconv.FormatBool(fl.IsTest), strconv.FormatBool(fl.Generated), itoa(fl.LOC), itoa(len(fl.Funcs)), itoa(fl.SumCyclo), itoa(fl.SumCognit), itoa(fl.MaxCognit), itoa(fl.Stmts), itoa(fl.Covered), pct(fl.CovPct())}
-		for _, w := range windows {
-			c := fl.Churn[w]
-			row = append(row, itoa(c.Commits), itoa(c.Added+c.Deleted))
-		}
+		row = append(row, churnCols(fl.Churn, windows)...)
 		rows = append(rows, row)
 	}
 	return cx.WriteCSV(p, hdr, rows)
@@ -749,10 +762,17 @@ func writeMarkdown(p string, areas, features, pkgs []*Agg, fns []*Func, files []
 		w0 = windows[0]
 	}
 	fmt.Fprintf(&b, "# Complexity baseline\n\nRanking tables exclude features marked norank in the mapping (test infrastructure, generated code).\n\n")
+	// The caption above is the contract, so the tables have to honour it rather
+	// than filtering on a hardcoded area name and letting the rest through.
+	// Excluded features are still measured, so they are named with their size
+	// instead of vanishing from the report altogether.
+	if excl := excludedNote(features); excl != "" {
+		fmt.Fprintf(&b, "%s\n\n", excl)
+	}
 	fmt.Fprintf(&b, "## By area\n\n")
-	aggTable(&b, areas, w0, false)
+	aggTable(&b, rankedAggs(areas), w0, false)
 	fmt.Fprintf(&b, "\n## By feature\n\n")
-	aggTable(&b, features, w0, false)
+	aggTable(&b, rankedAggs(features), w0, false)
 	fmt.Fprintf(&b, "\n## By package (top 40 by cognitive complexity)\n\n")
 	if len(pkgs) > 40 {
 		pkgs = pkgs[:40]
@@ -761,7 +781,7 @@ func writeMarkdown(p string, areas, features, pkgs []*Agg, fns []*Func, files []
 
 	ranked := make([]*Func, 0, len(fns))
 	for _, fn := range fns {
-		if rankedFeature(features, fn.Feature) {
+		if fn.Ranked {
 			ranked = append(ranked, fn)
 		}
 	}
@@ -795,13 +815,31 @@ func writeMarkdown(p string, areas, features, pkgs []*Agg, fns []*Func, files []
 	cx.Check(os.WriteFile(p, []byte(b.String()), 0o644))
 }
 
-func rankedFeature(features []*Agg, name string) bool {
-	for _, a := range features {
-		if a.Name == name {
-			return a.Ranked
+// rankedAggs drops the norank rows from a ranking table.
+func rankedAggs(aggs []*Agg) []*Agg {
+	out := make([]*Agg, 0, len(aggs))
+	for _, a := range aggs {
+		if a.Ranked {
+			out = append(out, a)
 		}
 	}
-	return false
+	return out
+}
+
+// excludedNote names the norank features and their size, so excluding them from
+// the rankings does not also hide that they exist.
+func excludedNote(features []*Agg) string {
+	var parts []string
+	for _, a := range features {
+		if !a.Ranked && a.ProdLOC > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%d prod LOC)", a.Name, a.ProdLOC))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	return "Excluded (norank), still measured in the CSVs: " + strings.Join(parts, ", ") + "."
 }
 
 func funcTable(b *strings.Builder, title string, fns []*Func, keep func(*Func) bool, limit int) {
