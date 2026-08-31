@@ -796,6 +796,7 @@ func envToMap(env []string) map[string]string {
 // true value. Missing keys and read errors report false.
 func gitConfigBool(ctx context.Context, dir, key string) bool {
 	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--get", "--type=bool", key)
+	cmd.Env = testutil.GitIsolatedEnv()
 	if dir != "" {
 		cmd.Dir = dir
 	}

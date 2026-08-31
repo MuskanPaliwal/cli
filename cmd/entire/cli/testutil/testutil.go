@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 )
 
 // PendingCheckpoint mirrors the `checkpoint list --pending --json` JSON output.
@@ -133,13 +134,7 @@ func GitCommit(t *testing.T, repoDir, message string) {
 // Uses git CLI to work around go-git v5 bug with checkout deleting untracked files.
 func GitCheckoutNewBranch(t *testing.T, repoDir, branchName string) {
 	t.Helper()
-
-	//nolint:noctx // test code, no context needed for git checkout
-	cmd := exec.Command("git", "checkout", "-b", branchName)
-	cmd.Dir = repoDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("failed to checkout new branch %s: %v\nOutput: %s", branchName, err, output)
-	}
+	RunGit(t, repoDir, "checkout", "-b", branchName)
 }
 
 // GetHeadHash returns the current HEAD commit hash.
@@ -164,6 +159,8 @@ func GetHeadHash(t *testing.T, repoDir string) string {
 // test on error and returning combined output. Use it for operations go-git
 // cannot express (force-add past .gitignore, rm --cached, worktree add) or
 // where shelling out is simply clearer.
+//
+//nolint:unparam // the output is used by callers in other packages
 func RunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...) //nolint:noctx // test helper, no context needed
