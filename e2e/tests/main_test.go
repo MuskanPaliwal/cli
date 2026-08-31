@@ -89,6 +89,25 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// Preflight: at least one agent must be registered. Registration happens in
+	// each agent package's init, and is conditional on E2E_AGENT naming that
+	// agent AND its binary being on PATH at process start. When nothing
+	// registers, the missing-binaries loop above has nothing to iterate,
+	// ForEachAgent calls t.Skip in every test, and the run exits 0 — the suite
+	// reports success having exercised nothing. Measured on this suite: with
+	// E2E_AGENT=vogon and vogon absent from PATH, 54 of 56 tests skip and
+	// `go test -tags=e2e ./e2e/tests` passes in 1.5s.
+	//
+	// The e2e canary is the deterministic gate that guards checkpoint capture
+	// on every PR, so a green run that ran nothing is worse than a red one.
+	// Fail the same way a missing binary does.
+	if len(agents.All()) == 0 {
+		fmt.Fprintf(os.Stderr,
+			"preflight: no agents registered (E2E_AGENT=%q); every test would skip and the run would report success\n",
+			os.Getenv("E2E_AGENT"))
+		os.Exit(1)
+	}
+
 	version := "unknown"
 	if out, err := exec.Command(entireBin, "version").Output(); err == nil {
 		version = string(out)
