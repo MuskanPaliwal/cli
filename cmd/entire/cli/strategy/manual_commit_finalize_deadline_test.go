@@ -95,11 +95,11 @@ func TestFinalizeAllTurnCheckpointsStopsAtTotalBudget(t *testing.T) {
 	}
 
 	s := NewManualCommitStrategy()
-	s.turnCheckpointFinalizeBudget = 25 * time.Millisecond
+	s.turnCheckpointFinalizeBudget = time.Second
 	fetchCalls := 0
 	s.checkpointRefFetcher = func(ctx context.Context, refName plumbing.ReferenceName) error {
 		fetchCalls++
-		timer := time.NewTimer(15 * time.Millisecond)
+		timer := time.NewTimer(600 * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
@@ -109,9 +109,7 @@ func TestFinalizeAllTurnCheckpointsStopsAtTotalBudget(t *testing.T) {
 		}
 	}
 
-	started := time.Now()
 	errCount := s.finalizeAllTurnCheckpoints(context.Background(), state)
-	elapsed := time.Since(started)
 
 	finalized := 0
 	for _, checkpointID := range checkpointIDs {
@@ -122,10 +120,9 @@ func TestFinalizeAllTurnCheckpointsStopsAtTotalBudget(t *testing.T) {
 		}
 	}
 
-	require.Less(t, elapsed, 40*time.Millisecond)
-	require.Less(t, finalized, len(checkpointIDs), "the pass must stop before every slow fetch completes")
+	require.Equal(t, 1, finalized, "only the fetch completed within the shared budget may finalize")
 	require.Equal(t, len(checkpointIDs)-finalized, errCount, "every provisional checkpoint must count as an error")
-	require.LessOrEqual(t, fetchCalls, 2, "no checkpoint fetch may start after the total budget expires")
+	require.Equal(t, 2, fetchCalls, "no checkpoint fetch may start after the total budget expires")
 	require.Empty(t, state.TurnCheckpointIDs, "a best-effort pass has no durable retry path")
 	require.NotNil(t, state.CaptureDegradedAt, "the incomplete finalize must be visible through `entire status`")
 }
