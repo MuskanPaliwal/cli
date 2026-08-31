@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
-
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/settings"

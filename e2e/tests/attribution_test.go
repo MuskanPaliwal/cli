@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/entireio/cli/e2e/testutil"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestLineAttributionReasonable: agent creates a file, attribution metadata

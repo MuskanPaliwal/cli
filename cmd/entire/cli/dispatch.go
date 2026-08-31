@@ -8,11 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
-
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var runDispatch = dispatchpkg.Run

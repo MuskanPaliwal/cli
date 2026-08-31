@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/stretchr/testify/require"
 )
 
 // testSessionID is the UUID used in captured Copilot CLI hook payloads.

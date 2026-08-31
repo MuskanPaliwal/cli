@@ -10,10 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/entireio/cli/e2e/agents"
 	"github.com/entireio/cli/e2e/testutil"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestAgentContinuesAfterCommit: agent commits, then makes more changes in a

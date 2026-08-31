@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/entireio/cli/e2e/testutil"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestEndedSessionUserCommitsAfterExit tests that after an agent session ends

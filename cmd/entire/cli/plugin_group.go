@@ -11,9 +11,8 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/spf13/cobra"
 )
 
 // newPluginGroupCmd builds `entire plugin` and its subcommands. The kubectl

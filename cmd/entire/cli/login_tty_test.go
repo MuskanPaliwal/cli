@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/entireio/cli/internal/procsignal"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
-
-	"github.com/entireio/cli/internal/procsignal"
 )
 
 type loginURLActionTestResult struct {

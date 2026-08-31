@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/entireio/cli/e2e/testutil"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestHumanOnlyChangesAndCommits: human creates a file and commits without any

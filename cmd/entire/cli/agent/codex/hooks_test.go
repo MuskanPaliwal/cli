@@ -3,17 +3,15 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
-
-	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
-	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 )
 
 // setupTestEnv creates a temp dir, sets CWD and CODEX_HOME for test isolation.

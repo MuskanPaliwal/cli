@@ -9,9 +9,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckPRBinaries_AddThenDeleteStillFails(t *testing.T) {

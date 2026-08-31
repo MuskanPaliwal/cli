@@ -9,11 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/posthog/posthog-go"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-
-	"github.com/entireio/cli/cmd/entire/cli/execx"
 )
 
 // autoAgentName is the default value for the agent property when no agent

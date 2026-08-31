@@ -10,9 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCodexCommandHookHash_MatchesCanonicalShape verifies the canonical

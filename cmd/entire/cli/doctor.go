@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"

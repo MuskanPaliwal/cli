@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/perf"
+	"github.com/spf13/cobra"
 )
 
 // summaryDefaultLast is the window --summary uses when --last was not given.

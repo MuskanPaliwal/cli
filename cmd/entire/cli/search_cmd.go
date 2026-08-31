@@ -11,8 +11,6 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/codesearch"
@@ -23,6 +21,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/telemetry"
 	"github.com/entireio/cli/internal/coreapi"
+	"github.com/spf13/cobra"
 )
 
 func newSearchCmd() *cobra.Command { //nolint:maintidx // command wiring is inherently complex

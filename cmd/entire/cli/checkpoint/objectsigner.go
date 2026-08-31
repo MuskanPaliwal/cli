@@ -7,14 +7,13 @@ import (
 	"net"
 	"os"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/go-git/go-git/v6/config"
 	format "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/x/plugin"
 	"github.com/go-git/x/plugin/objectsigner/auto"
 	programsigner "github.com/go-git/x/plugin/objectsigner/program"
 	sshagent "golang.org/x/crypto/ssh/agent"
-
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 var (

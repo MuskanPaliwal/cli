@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
+	"github.com/spf13/cobra"
 )
 
 func newSessionCurrentCmd() *cobra.Command {

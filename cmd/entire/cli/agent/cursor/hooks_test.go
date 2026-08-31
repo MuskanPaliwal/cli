@@ -3,14 +3,13 @@ package cursor
 import (
 	"context"
 	"encoding/json"
+	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
-	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 )
 
 func TestInstallHooks_FreshInstall(t *testing.T) {

@@ -14,9 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/spf13/cobra"
 )
 
 func TestIsOutdated(t *testing.T) {

@@ -12,11 +12,10 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 // resolveOPFDecision is the pure-logic core: env > settings > prompt >

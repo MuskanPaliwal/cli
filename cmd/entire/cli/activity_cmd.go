@@ -11,11 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 const (

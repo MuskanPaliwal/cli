@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-git/go-git/v6"
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
+	"github.com/go-git/go-git/v6"
+	"github.com/stretchr/testify/require"
 )
 
 const (

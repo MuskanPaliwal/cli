@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/stretchr/testify/require"
 )
 
 const testModel = "gpt-4o"

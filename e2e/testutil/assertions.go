@@ -10,10 +10,9 @@ import (
 	"testing"
 	"time"
 
+	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 )
 
 // DeepCheckpointValidation contains expected values for comprehensive checkpoint validation.

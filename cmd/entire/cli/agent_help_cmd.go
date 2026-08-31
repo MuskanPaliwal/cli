@@ -8,10 +8,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/spf13/cobra"
 	flag "github.com/spf13/pflag"
-
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // agentHelpAnnotation marks an otherwise-hidden command as worth advertising to

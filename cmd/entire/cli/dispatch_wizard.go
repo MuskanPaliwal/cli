@@ -12,14 +12,13 @@ import (
 	"sync"
 
 	"charm.land/huh/v2"
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	searchpkg "github.com/entireio/cli/cmd/entire/cli/search"
+	"github.com/spf13/cobra"
 )
 
 var errDispatchCancelled = errors.New("dispatch cancelled")

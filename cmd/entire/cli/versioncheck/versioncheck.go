@@ -13,12 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/mod/module"
-	"golang.org/x/mod/semver"
-
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 const goosWindows = "windows"

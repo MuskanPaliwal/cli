@@ -14,11 +14,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitexec"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/storer"
-
-	"github.com/entireio/cli/cmd/entire/cli/gitexec"
 )
 
 // ScopeStats summarises the scope of a review for the banner.

@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/spf13/cobra"
 )
 
 // Thread subresource path builders (keyed by trail number).

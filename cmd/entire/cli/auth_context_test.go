@@ -11,11 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
+	"github.com/spf13/cobra"
 )
 
 // TestResolveStatusTarget_PrefersActiveContext pins the multi-core fix: status

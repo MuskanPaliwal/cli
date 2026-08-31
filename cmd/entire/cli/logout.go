@@ -6,11 +6,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/contexts"
+	"github.com/spf13/cobra"
 )
 
 // boundRevokeFunc revokes login session(s) server-side — either just the

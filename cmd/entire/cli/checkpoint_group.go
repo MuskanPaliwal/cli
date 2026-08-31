@@ -3,10 +3,9 @@ package cli
 import (
 	"errors"
 
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/experimental"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/spf13/cobra"
 )
 
 // newCheckpointGroupCmd builds the `entire checkpoint` parent command and

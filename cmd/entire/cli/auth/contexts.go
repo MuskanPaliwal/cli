@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/entireio/auth-go/tokens"
-
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
 	"github.com/entireio/cli/internal/entireclient/userdirs"

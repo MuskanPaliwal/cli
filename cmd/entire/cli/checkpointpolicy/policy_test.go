@@ -3,9 +3,8 @@ package checkpointpolicy_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultPolicy(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	"github.com/entireio/auth-go/authcode"
 	"github.com/entireio/auth-go/deviceflow"
 	"github.com/entireio/auth-go/tokens"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 

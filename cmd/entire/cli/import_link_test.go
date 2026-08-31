@@ -3,11 +3,10 @@ package cli
 import (
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
-
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // TestResolveImportLinkCommitSHA_LocalDefaultBranchNoOrigin proves that when

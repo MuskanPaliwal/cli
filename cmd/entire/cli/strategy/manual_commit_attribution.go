@@ -7,13 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/sergi/go-diff/diffmatchpatch"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/gitops"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // getAllChangedFiles returns all files that changed between the attribution base

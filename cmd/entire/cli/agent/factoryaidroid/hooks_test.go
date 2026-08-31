@@ -3,13 +3,12 @@ package factoryaidroid
 import (
 	"context"
 	"encoding/json"
+	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
-
-	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
 )
 
 func TestInstallHooks_FreshInstall(t *testing.T) {
