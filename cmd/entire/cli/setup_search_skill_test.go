@@ -248,6 +248,49 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagentOnSkillConflict(t *test
 	}
 }
 
+func TestScaffoldSearchSkill_LegacyCleanupFailureDoesNotFailInstall(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	// A directory at the legacy path makes the cleanup's os.ReadFile fail
+	// (EISDIR) while the skill write itself is unaffected.
+	legacyRelPath := filepath.Join(".claude", "agents", "entire-search.md")
+	if err := os.MkdirAll(filepath.Join(tmpDir, legacyRelPath), 0o755); err != nil {
+		t.Fatalf("failed to create legacy dir: %v", err)
+	}
+
+	ag := claudecode.NewClaudeCodeAgent()
+	result, err := scaffoldSearchSkill(context.Background(), ag)
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v, want nil: cleanup is best-effort", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+	if result.RemovedLegacyRelPath != "" {
+		t.Fatalf("RemovedLegacyRelPath = %q, want empty when cleanup failed", result.RemovedLegacyRelPath)
+	}
+	if result.LegacyCleanupWarning == "" {
+		t.Fatal("LegacyCleanupWarning should report the failed cleanup")
+	}
+	if !strings.Contains(result.LegacyCleanupWarning, legacyRelPath) {
+		t.Fatalf("warning %q should name the legacy path %q", result.LegacyCleanupWarning, legacyRelPath)
+	}
+
+	skillPath := filepath.Join(tmpDir, ".claude", "skills", "entire-search", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("skill should be installed despite cleanup failure: %v", err)
+	}
+
+	var out bytes.Buffer
+	reportSearchSkillScaffold(&out, ag, result)
+	if !strings.Contains(out.String(), "Warning:") {
+		t.Fatalf("report should surface the cleanup warning, got: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Installed Claude Code search skill") {
+		t.Fatalf("report should still announce the successful install, got: %s", out.String())
+	}
+}
+
 func TestScaffoldSearchSkill_PreservesUserOwnedLegacySubagent(t *testing.T) {
 	tmpDir := setupTestDir(t)
 

@@ -32,6 +32,10 @@ type managedScaffoldResult struct {
 	// RemovedLegacyRelPath is the repo-relative path of a superseded
 	// Entire-managed file deleted alongside this install ("" when none).
 	RemovedLegacyRelPath string
+	// LegacyCleanupWarning describes a failed best-effort deletion of a
+	// superseded Entire-managed file ("" when cleanup succeeded or there was
+	// nothing to clean). The install itself still succeeded.
+	LegacyCleanupWarning string
 }
 
 // writeManagedScaffold writes content to targetPath idempotently: it creates the

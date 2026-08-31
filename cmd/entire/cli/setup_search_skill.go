@@ -58,10 +58,15 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 	}
 	// Cleanup runs even on managedScaffoldSkippedConflict: a user-owned skill
 	// at the new path still supersedes the managed legacy subagent, and
-	// leaving that behind would have the agent offer both.
-	removed, err := removeLegacySearchSubagent(repoRoot, ag.Name())
-	if err != nil {
-		return result, err
+	// leaving that behind would have the agent offer both. It is best-effort:
+	// the skill is already installed at this point, so a failed deletion is a
+	// warning on the result, never a failure of the install.
+	removed, cleanupErr := removeLegacySearchSubagent(repoRoot, ag.Name())
+	if cleanupErr != nil {
+		result.LegacyCleanupWarning = fmt.Sprintf(
+			"failed to remove superseded search subagent %s (%v) — remove it manually",
+			legacySearchSubagentPath(ag.Name()), cleanupErr)
+		return result, nil
 	}
 	result.RemovedLegacyRelPath = removed
 	return result, nil
@@ -134,6 +139,9 @@ func reportSearchSkillScaffold(w io.Writer, ag agent.Agent, result managedScaffo
 	if result.RemovedLegacyRelPath != "" {
 		fmt.Fprintf(w, "  ✓ Removed superseded %s search subagent\n", ag.Type())
 		fmt.Fprintf(w, "    %s\n", result.RemovedLegacyRelPath)
+	}
+	if result.LegacyCleanupWarning != "" {
+		fmt.Fprintf(w, "  Warning: %s\n", result.LegacyCleanupWarning)
 	}
 }
 
