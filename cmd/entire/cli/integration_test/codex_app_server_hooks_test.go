@@ -15,12 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -46,7 +43,7 @@ func TestCodexAppServerHooksList_LinkedWorktreeUsesPrimaryCheckout(t *testing.T)
 		linkedParent = resolved
 	}
 	linkedDir := filepath.Join(linkedParent, "linked")
-	gitenv.Run(t, env.RepoDir, "worktree", "add", "-b", "codex-hooks-test", linkedDir)
+	testutil.RunGit(t, env.RepoDir, "worktree", "add", "-b", "codex-hooks-test", linkedDir)
 	require.NoError(t, os.RemoveAll(filepath.Join(linkedDir, ".codex")))
 
 	withoutProjectLayer := listCodexHooks(t, codexPath, linkedDir)
@@ -99,10 +96,10 @@ func TestCodexAppServerHooksList_BareWorktreeUsesLayoutRoot(t *testing.T) {
 	testutil.GitAdd(t, seedRoot, "README.md")
 	testutil.GitCommit(t, seedRoot, "initial commit")
 	require.NoError(t, os.MkdirAll(layoutRoot, 0o750))
-	gitenv.Run(t, tmp, "clone", "--bare", seedRoot, bareRoot)
+	testutil.RunGit(t, tmp, "clone", "--bare", seedRoot, bareRoot)
 	require.NoError(t, os.WriteFile(filepath.Join(layoutRoot, ".git"), []byte("gitdir: ./.bare\n"), 0o600))
-	gitenv.Run(t, tmp, "--git-dir", bareRoot, "worktree", "add", mainRoot)
-	gitenv.Run(t, tmp, "--git-dir", bareRoot, "worktree", "add", "-b", "feature", linkedRoot)
+	testutil.RunGit(t, tmp, "--git-dir", bareRoot, "worktree", "add", mainRoot)
+	testutil.RunGit(t, tmp, "--git-dir", bareRoot, "worktree", "add", "-b", "feature", linkedRoot)
 
 	const layoutMarker = "bare-layout-root-hook-marker"
 	const linkedMarker = "bare-linked-worktree-hook-marker"
@@ -188,7 +185,7 @@ func listCodexHooks(t *testing.T, codexPath, cwd string) codexHooksListResponse 
 	testutil.WriteFile(t, codexHome, "config.toml", config)
 	cmd := exec.CommandContext(ctx, codexPath, "app-server")
 	cmd.Dir = cwd
-	cmd.Env = append(gitenv.Isolated(), "CODEX_HOME="+codexHome)
+	cmd.Env = append(testutil.GitIsolatedEnv(), "CODEX_HOME="+codexHome)
 
 	stdin, err := cmd.StdinPipe()
 	require.NoError(t, err)

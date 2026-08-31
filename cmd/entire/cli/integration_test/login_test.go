@@ -20,9 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/execx"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // fakeLoginJWT builds a JWT-shaped access token with a junk signature
@@ -300,7 +299,7 @@ func startLoginProcess(t *testing.T, apiBaseURL string, extraEnv []string, args 
 	args = append(args, "--server", apiBaseURL)
 	cmd := execx.NonInteractive(context.Background(), getTestBinary(), args...)
 	cmd.Dir = env.RepoDir
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+env.GeminiProjectDir,
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,

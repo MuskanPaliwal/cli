@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // TestHermeticityGuard_ExternalHostFailsFast proves the TestMain hermeticity
@@ -28,7 +28,7 @@ func TestHermeticityGuard_ExternalHostFailsFast(t *testing.T) {
 	// address (see testutil.hermeticGitConfig), not hang on DNS/network or
 	// block on a credential prompt.
 	cmd := exec.CommandContext(ctx, "git", "ls-remote", "https://github.com/example/example")
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 
 	start := time.Now()
 	out, err := cmd.CombinedOutput()

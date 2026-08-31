@@ -8,10 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // Checkpoint storage backends the integration suite can run against. Selected
@@ -112,7 +111,7 @@ func (env *TestEnv) RemoteCheckpointState(bareDir string) string {
 	}
 	cmd := exec.CommandContext(env.T.Context(), "git", "for-each-ref", "--format=%(refname) %(objectname)", prefix)
 	cmd.Dir = bareDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		// Fail rather than return "": two broken invocations comparing equal
@@ -129,7 +128,7 @@ func anyRefUnderPrefix(t *testing.T, dir, prefix string) bool {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "for-each-ref", "--format=%(refname)", prefix)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		// Fail rather than return false: a broken invocation reported as
@@ -146,7 +145,7 @@ func refExists(t *testing.T, dir, ref string) bool {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "show-ref", "--verify", "--quiet", ref)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
 }
 
@@ -156,6 +155,6 @@ func fileExistsOnRemoteBranch(t *testing.T, bareDir, filePath string) bool {
 
 	cmd := exec.CommandContext(t.Context(), "git", "cat-file", "-t", paths.MetadataBranchName+":"+filePath)
 	cmd.Dir = bareDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
 }

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -185,7 +183,7 @@ func runDoctorBundleGit(t *testing.T, dir string, args ...string) {
 
 	cmd := exec.Command("git", args...) //nolint:noctx // test helper, no context needed
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}

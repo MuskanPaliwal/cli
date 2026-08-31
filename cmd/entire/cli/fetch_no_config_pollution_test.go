@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -97,7 +95,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %v\nOutput: %s", strings.Join(args, " "), err, output)
 	}
@@ -107,7 +105,7 @@ func runGitAllow(t *testing.T, dir string, args ...string) error {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run()
 }
 
@@ -115,7 +113,7 @@ func gitConfigValue(t *testing.T, dir, key string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "config", "--local", "--get", key)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		// git config returns exit 1 when key is absent — treat as empty.

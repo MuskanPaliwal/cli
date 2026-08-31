@@ -15,10 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"charm.land/huh/v2"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
@@ -756,7 +753,7 @@ func setupCodexAgentWithUnresolvedDiscovery(t *testing.T) (agent.Agent, string) 
 		t.Helper()
 		cmd := exec.CommandContext(t.Context(), "git", args...)
 		cmd.Dir = dir
-		cmd.Env = gitenv.Isolated()
+		cmd.Env = testutil.GitIsolatedEnv()
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
@@ -3336,7 +3333,7 @@ func setupCodexOwnershipWorktrees(t *testing.T) (repoRoot, linkedRoot string) {
 	testutil.GitAdd(t, repoRoot, "README.md")
 	testutil.GitCommit(t, repoRoot, "initial")
 	cmd := exec.CommandContext(t.Context(), "git", "-C", repoRoot, "worktree", "add", "-b", "feature", linkedRoot)
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("create linked worktree: %v: %s", err, output)
@@ -3392,7 +3389,7 @@ func setupCodexRepositoryWithLinkedWorktree(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, "initial")
 
 	cmd := exec.CommandContext(t.Context(), "git", "-C", repoRoot, "worktree", "add", "-b", "feature", linkedRoot)
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("create linked worktree: %v: %s", err, output)

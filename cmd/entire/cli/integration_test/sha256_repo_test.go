@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestSHA256Repository_EnableAndFirstCheckpoint(t *testing.T) {
@@ -109,7 +108,7 @@ func requireGitSHA256Support(t *testing.T) {
 
 	dir := t.TempDir()
 	cmd := exec.Command("git", "init", "--object-format=sha256", dir) //nolint:noctx // test capability probe
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("git does not support SHA-256 repositories: %v\n%s", err, output)
 	}
@@ -128,7 +127,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)

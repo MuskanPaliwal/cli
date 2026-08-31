@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // =============================================================================
@@ -687,14 +686,14 @@ func TestResume_FetchesPrimaryBranchFullyWithFilteredFetches(t *testing.T) {
 	// Detach HEAD so we can delete the feature branch.
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--detach")
 	cmd.Dir = cloneEnv.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("detach HEAD: %v\n%s", err, output)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "branch", "-D", "feature/test-branch")
 	cmd.Dir = cloneEnv.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("delete feature branch: %v\n%s", err, output)
 	}
@@ -757,7 +756,7 @@ func listCheckpointsInDir(t *testing.T, repoDir string) []string {
 
 	cmd := exec.CommandContext(t.Context(), "git", "ls-tree", "-r", "--name-only", paths.MetadataBranchName)
 	cmd.Dir = repoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		t.Logf("ls-tree failed (branch may not exist): %v", err)

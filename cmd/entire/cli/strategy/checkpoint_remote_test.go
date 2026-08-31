@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -58,7 +56,7 @@ func TestFetchBranchIfMissing_CreatesLocalFromRemote(t *testing.T) {
 	// Get the default branch name before switching
 	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = remoteDir
-	branchCmd.Env = gitenv.Isolated()
+	branchCmd.Env = testutil.GitIsolatedEnv()
 	branchOut, err := branchCmd.Output()
 	require.NoError(t, err)
 	defaultBranch := strings.TrimSpace(string(branchOut))
@@ -66,12 +64,12 @@ func TestFetchBranchIfMissing_CreatesLocalFromRemote(t *testing.T) {
 	// Create an orphan branch in the remote repo (simulating entire/checkpoints/v1)
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, remoteDir, "metadata.json", `{"test": true}`)
@@ -79,13 +77,13 @@ func TestFetchBranchIfMissing_CreatesLocalFromRemote(t *testing.T) {
 
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "checkpoint data")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Go back to the default branch
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Set up local repo
@@ -121,7 +119,7 @@ func TestFetchBranchIfMissing_NoOpWhenBranchExistsLocally(t *testing.T) {
 	// Get the default branch name before switching
 	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = localDir
-	branchCmd.Env = gitenv.Isolated()
+	branchCmd.Env = testutil.GitIsolatedEnv()
 	branchOut, err := branchCmd.Output()
 	require.NoError(t, err)
 	defaultBranch := strings.TrimSpace(string(branchOut))
@@ -129,12 +127,12 @@ func TestFetchBranchIfMissing_NoOpWhenBranchExistsLocally(t *testing.T) {
 	// Create the branch locally
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, localDir, "data.json", `{"local": true}`)
@@ -142,13 +140,13 @@ func TestFetchBranchIfMissing_NoOpWhenBranchExistsLocally(t *testing.T) {
 
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "local checkpoint")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Switch back to the default branch
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	t.Chdir(localDir)
@@ -246,7 +244,7 @@ func TestResolvePushSettings_WithCheckpointRemote_HTTPS(t *testing.T) {
 	// Add origin with an HTTPS-style URL
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -284,7 +282,7 @@ func TestResolvePushSettings_WithCheckpointRemote_SSH(t *testing.T) {
 	// Add origin with SSH URL
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "git@github.com:org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -321,7 +319,7 @@ func TestResolvePushSettings_ForkDetection(t *testing.T) {
 	// Origin remote owner differs from the configured checkpoint remote owner.
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "git@github.com:alice/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -358,7 +356,7 @@ func TestResolvePushSettings_WithCheckpointRemote_EntireMirror(t *testing.T) {
 	// Origin is an entire:// mirror on cluster app.entire.io for forge gh.
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "entire://app.entire.io/gh/org/main-repo")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -399,7 +397,7 @@ func TestResolvePushSettings_EntireMirrorForgeMismatchFallsBackToProvider(t *tes
 
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "entire://app.entire.io/et/org/main-repo")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -436,7 +434,7 @@ func TestResolvePushSettings_CheckpointURLDoesNotAffectRemoteField(t *testing.T)
 	// Add origin with HTTPS URL
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -499,7 +497,7 @@ func TestFetchURL_ReturnsCheckpointRemoteURL(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "git@github.com:org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -559,7 +557,7 @@ func TestFetchURL_IgnoresOwnerMismatchCheck(t *testing.T) {
 	// Origin remote owner differs from checkpoint remote owner (alice != org).
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "git@github.com:alice/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	entireDir := filepath.Join(localDir, ".entire")
@@ -599,19 +597,19 @@ func TestFetchMetadataBranch_FetchesAndCreatesLocalBranch(t *testing.T) {
 
 	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = remoteDir
-	branchCmd.Env = gitenv.Isolated()
+	branchCmd.Env = testutil.GitIsolatedEnv()
 	branchOut, err := branchCmd.Output()
 	require.NoError(t, err)
 	defaultBranch := strings.TrimSpace(string(branchOut))
 
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, remoteDir, "metadata.json", `{"test": true}`)
@@ -619,12 +617,12 @@ func TestFetchMetadataBranch_FetchesAndCreatesLocalBranch(t *testing.T) {
 
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "checkpoint data")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Set up local repo
@@ -662,31 +660,31 @@ func TestFetchMetadataBranch_UpdatesExistingLocalBranch(t *testing.T) {
 
 	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = remoteDir
-	branchCmd.Env = gitenv.Isolated()
+	branchCmd.Env = testutil.GitIsolatedEnv()
 	branchOut, err := branchCmd.Output()
 	require.NoError(t, err)
 	defaultBranch := strings.TrimSpace(string(branchOut))
 
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, remoteDir, "metadata.json", `{"version": 1}`)
 	testutil.GitAdd(t, remoteDir, "metadata.json")
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Set up local repo and fetch once
@@ -703,7 +701,7 @@ func TestFetchMetadataBranch_UpdatesExistingLocalBranch(t *testing.T) {
 	// Record initial hash
 	hashCmd := exec.CommandContext(ctx, "git", "rev-parse", "entire/checkpoints/v1")
 	hashCmd.Dir = localDir
-	hashCmd.Env = gitenv.Isolated()
+	hashCmd.Env = testutil.GitIsolatedEnv()
 	hash1Out, err := hashCmd.Output()
 	require.NoError(t, err)
 	hash1 := strings.TrimSpace(string(hash1Out))
@@ -711,19 +709,19 @@ func TestFetchMetadataBranch_UpdatesExistingLocalBranch(t *testing.T) {
 	// Add a second commit on the remote
 	cmd = exec.CommandContext(ctx, "git", "checkout", "entire/checkpoints/v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, remoteDir, "metadata.json", `{"version": 2}`)
 	testutil.GitAdd(t, remoteDir, "metadata.json")
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "v2")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Fetch again — should update local branch
@@ -731,7 +729,7 @@ func TestFetchMetadataBranch_UpdatesExistingLocalBranch(t *testing.T) {
 
 	hashCmd = exec.CommandContext(ctx, "git", "rev-parse", "entire/checkpoints/v1")
 	hashCmd.Dir = localDir
-	hashCmd.Env = gitenv.Isolated()
+	hashCmd.Env = testutil.GitIsolatedEnv()
 	hash2Out, err := hashCmd.Output()
 	require.NoError(t, err)
 	hash2 := strings.TrimSpace(string(hash2Out))
@@ -758,31 +756,31 @@ func TestFetchMetadataBranch_DoesNotRewindLocalAhead(t *testing.T) {
 
 	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Dir = remoteDir
-	branchCmd.Env = gitenv.Isolated()
+	branchCmd.Env = testutil.GitIsolatedEnv()
 	branchOut, err := branchCmd.Output()
 	require.NoError(t, err)
 	defaultBranch := strings.TrimSpace(string(branchOut))
 
 	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, remoteDir, "metadata.json", `{"checkpoint": "A"}`)
 	testutil.GitAdd(t, remoteDir, "metadata.json")
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "checkpoint A")
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = remoteDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Set up local repo and fetch once so local metadata branch is at A.
@@ -797,7 +795,7 @@ func TestFetchMetadataBranch_DoesNotRewindLocalAhead(t *testing.T) {
 
 	hashCmd := exec.CommandContext(ctx, "git", "rev-parse", "entire/checkpoints/v1")
 	hashCmd.Dir = localDir
-	hashCmd.Env = gitenv.Isolated()
+	hashCmd.Env = testutil.GitIsolatedEnv()
 	aOut, err := hashCmd.Output()
 	require.NoError(t, err)
 	aHash := strings.TrimSpace(string(aOut))
@@ -805,19 +803,19 @@ func TestFetchMetadataBranch_DoesNotRewindLocalAhead(t *testing.T) {
 	// Advance local metadata branch to B (ahead of remote), without pushing.
 	cmd = exec.CommandContext(ctx, "git", "checkout", "entire/checkpoints/v1")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	testutil.WriteFile(t, localDir, "metadata.json", `{"checkpoint": "B"}`)
 	testutil.GitAdd(t, localDir, "metadata.json")
 	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "checkpoint B")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	hashCmd = exec.CommandContext(ctx, "git", "rev-parse", "entire/checkpoints/v1")
 	hashCmd.Dir = localDir
-	hashCmd.Env = gitenv.Isolated()
+	hashCmd.Env = testutil.GitIsolatedEnv()
 	bOut, err := hashCmd.Output()
 	require.NoError(t, err)
 	bHash := strings.TrimSpace(string(bOut))
@@ -826,7 +824,7 @@ func TestFetchMetadataBranch_DoesNotRewindLocalAhead(t *testing.T) {
 	// Go back to default branch — matches how the CLI runs this codepath.
 	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Fetch again — must NOT rewind local from B to A.
@@ -834,7 +832,7 @@ func TestFetchMetadataBranch_DoesNotRewindLocalAhead(t *testing.T) {
 
 	hashCmd = exec.CommandContext(ctx, "git", "rev-parse", "entire/checkpoints/v1")
 	hashCmd.Dir = localDir
-	hashCmd.Env = gitenv.Isolated()
+	hashCmd.Env = testutil.GitIsolatedEnv()
 	afterOut, err := hashCmd.Output()
 	require.NoError(t, err)
 	afterHash := strings.TrimSpace(string(afterOut))
@@ -1408,7 +1406,7 @@ func runCheckpointRemoteGit(ctx context.Context, t *testing.T, dir string, args 
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v in %s failed: %s", args, dir, out)
 }
@@ -1440,7 +1438,7 @@ func checkpointRemoteMetadataFiles(ctx context.Context, t *testing.T, dir string
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "git", "ls-tree", "-r", "--name-only", "refs/heads/"+paths.MetadataBranchName)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return string(out)
@@ -1565,7 +1563,7 @@ func checkpointRemoteGitOutput(ctx context.Context, t *testing.T, dir string, ar
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(out))

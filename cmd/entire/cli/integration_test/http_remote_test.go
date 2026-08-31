@@ -12,13 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/go-git/go-billy/v6/osfs"
 	"github.com/go-git/go-git/v6/backend"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // httpGitServer is an in-process HTTPS git server backed by bare repos on disk.
@@ -68,7 +67,7 @@ func startGitHTTPSServer(t *testing.T, repoNames ...string) *httpGitServer {
 		}
 		cmd := exec.CommandContext(t.Context(), "git", "init", "--bare")
 		cmd.Dir = bareDir
-		cmd.Env = gitenv.Isolated()
+		cmd.Env = testutil.GitIsolatedEnv()
 		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git init --bare %s: %v\n%s", bareDir, err, output)
 		}
@@ -113,14 +112,14 @@ func seedBareRepo(t *testing.T, env *TestEnv, bareDir, httpsOriginURL string) {
 	// Add origin pointing to the bare repo on disk (no auth needed).
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", bareDir)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("remote add origin: %v\n%s", err, output)
 	}
 
 	cmd = exec.CommandContext(ctx, "git", "push", "--no-verify", "-u", "origin", "HEAD")
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("push to bare: %v\n%s", err, output)
 	}
@@ -128,7 +127,7 @@ func seedBareRepo(t *testing.T, env *TestEnv, bareDir, httpsOriginURL string) {
 	// Switch origin to the HTTPS URL for subsequent operations.
 	cmd = exec.CommandContext(ctx, "git", "remote", "set-url", "origin", httpsOriginURL)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("set-url to https: %v\n%s", err, output)
 	}
@@ -145,7 +144,7 @@ func cloneFromBareWithHTTPS(t *testing.T, env *TestEnv, bareDir, httpsOriginURL 
 
 	cmd := exec.CommandContext(t.Context(), "git", "remote", "set-url", "origin", httpsOriginURL)
 	cmd.Dir = clone.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("set-url to https in clone: %v\n%s", err, output)
 	}
@@ -162,7 +161,7 @@ func listRemoteMetadataCommits(t *testing.T, bareDir string) []string {
 
 	cmd := exec.CommandContext(t.Context(), "git", "log", "--format=%s", "refs/heads/"+paths.MetadataBranchName)
 	cmd.Dir = bareDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("git log on bare remote failed: %v", err)

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -24,7 +22,7 @@ func currentBranchName(t *testing.T, repoDir string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "symbolic-ref", "--short", "HEAD")
 	cmd.Dir = repoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(out))
@@ -35,13 +33,13 @@ func setGitConfig(t *testing.T, repoDir, key, value string) {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "config", key, value)
 	cmd.Dir = repoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 }
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_ConfigSetting(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -62,7 +60,7 @@ func TestResolveCheckpointSyncRemote_ConfigSetting(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_ConfigSettingMissingRemote_FailsClosed(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -83,7 +81,7 @@ func TestResolveCheckpointSyncRemote_ConfigSettingMissingRemote_FailsClosed(t *t
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_DefaultsToOrigin(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -103,7 +101,7 @@ func TestResolveCheckpointSyncRemote_DefaultsToOrigin(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_SoleRemote(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -122,7 +120,7 @@ func TestResolveCheckpointSyncRemote_SoleRemote(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_FirstInConfigOrder(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -144,7 +142,7 @@ func TestResolveCheckpointSyncRemote_FirstInConfigOrder(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_SettingsLoadErrorFailsClosed(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -171,7 +169,7 @@ func TestResolveCheckpointSyncRemote_SettingsLoadErrorFailsClosed(t *testing.T) 
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_NoRemotes(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -188,7 +186,7 @@ func TestResolveCheckpointSyncRemote_NoRemotes(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_PushurlOnlyRemoteIsInvisible(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -200,7 +198,7 @@ func TestResolveCheckpointSyncRemote_PushurlOnlyRemoteIsInvisible(t *testing.T) 
 	// were counted, it would sort first in .git/config order and get elected.
 	cmd := exec.CommandContext(ctx, "git", "config", "remote.pushonly.pushurl", "https://example.com/pushonly.git")
 	cmd.Dir = tmpDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Two real remotes added after it, no "origin" — this keeps the visible
@@ -231,7 +229,7 @@ func TestResolveCheckpointSyncRemote_PushurlOnlyRemoteIsInvisible(t *testing.T) 
 // The fork setup this tier was meant to serve (origin unpushable, push to your
 // own fork) is served explicitly by checkpoint_push_remote, covered above.
 func TestResolveCheckpointSyncRemote_TrackingConfigDoesNotDecide(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	for _, tt := range []struct {
@@ -272,7 +270,7 @@ func TestResolveCheckpointSyncRemote_TrackingConfigDoesNotDecide(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_ConfigSettingBeatsTracking(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -297,7 +295,7 @@ func TestResolveCheckpointSyncRemote_ConfigSettingBeatsTracking(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestCheckpointSyncAllowedForRemote(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	t.Run("no setting: allowed only for the elected default remote", func(t *testing.T) {
@@ -392,7 +390,7 @@ func gitInRepo(t *testing.T, repoDir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = repoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
@@ -430,7 +428,7 @@ func captureStderrWriter(t *testing.T) *bytes.Buffer {
 //
 // Not parallel: uses t.Chdir()
 func TestHintGatedCheckpointSync(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	// initHintRepo builds a repo with unpushed v1 checkpoint commits and an
@@ -551,7 +549,7 @@ func TestHintGatedCheckpointSync(t *testing.T) {
 //
 // Not parallel: uses t.Chdir()
 func TestResolveCheckpointSyncRemote_CapturedTier(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	t.Run("captured remote beats origin", func(t *testing.T) {
@@ -612,7 +610,7 @@ func captureOnSuccessfulPush(ctx context.Context, pushRemote string) {
 
 // Not parallel: uses t.Chdir()
 func TestCaptureCheckpointSyncRemote(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	t.Run("push agreeing with the branch's declared destination captures and announces", func(t *testing.T) {
@@ -753,7 +751,7 @@ func TestCaptureCheckpointSyncRemote(t *testing.T) {
 //
 // Not parallel: uses t.Chdir()
 func TestCaptureCheckpointSyncRemote_OnlyOnDelivery(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 
 	t.Run("a push that never delivers leaves the election alone", func(t *testing.T) {

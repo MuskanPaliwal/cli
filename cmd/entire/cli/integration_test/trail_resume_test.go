@@ -17,9 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/internal/coreapi"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/discovery"
@@ -289,7 +288,7 @@ func addTrailResumeIntegrationOrigin(t *testing.T, env *TestEnv, remoteURL strin
 
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", remoteURL)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git remote add origin: %v\n%s", err, output)
 	}

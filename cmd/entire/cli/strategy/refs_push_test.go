@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/assert"
@@ -57,7 +55,7 @@ func setupRepoWithCheckpointRefs(t *testing.T) (string, string, []plumbing.Refer
 	bareDir := t.TempDir()
 	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
 	initCmd.Dir = bareDir
-	initCmd.Env = gitenv.Isolated()
+	initCmd.Env = testutil.GitIsolatedEnv()
 	out, err := initCmd.CombinedOutput()
 	require.NoError(t, err, "git init --bare failed: %s", out)
 
@@ -85,7 +83,7 @@ func TestBatchPushRefs(t *testing.T) {
 
 	// All refs now exist on the bare remote.
 	lsCmd := exec.CommandContext(context.Background(), "git", "ls-remote", bareDir)
-	lsCmd.Env = gitenv.Isolated()
+	lsCmd.Env = testutil.GitIsolatedEnv()
 	out, err := lsCmd.CombinedOutput()
 	require.NoError(t, err, "ls-remote failed: %s", out)
 	remoteRefs := string(out)
@@ -140,7 +138,7 @@ func TestBatchPushRefs_RejectsNonFastForward(t *testing.T) {
 	runGit := func(args ...string) string {
 		c := exec.CommandContext(ctx, "git", args...)
 		c.Dir = workDir
-		c.Env = gitenv.Isolated()
+		c.Env = testutil.GitIsolatedEnv()
 		out, gitErr := c.CombinedOutput()
 		require.NoError(t, gitErr, "git %v failed: %s", args, out)
 		return strings.TrimSpace(string(out))
@@ -286,7 +284,7 @@ func TestPushQueuedCheckpointRefs_PolicyBlocked(t *testing.T) {
 	assert.ElementsMatch(t, refs, remaining, "blocked push leaves refs queued")
 
 	lsCmd := exec.CommandContext(context.Background(), "git", "ls-remote", bareDir)
-	lsCmd.Env = gitenv.Isolated()
+	lsCmd.Env = testutil.GitIsolatedEnv()
 	out, err := lsCmd.CombinedOutput()
 	require.NoError(t, err, "ls-remote failed: %s", out)
 	for _, ref := range refs {
@@ -317,7 +315,7 @@ func TestPushQueuedCheckpointRefs_FailureLeavesRefsQueued(t *testing.T) {
 func remoteRefFiles(t *testing.T, bareDir string, ref plumbing.ReferenceName) string {
 	t.Helper()
 	c := exec.CommandContext(context.Background(), "git", "-C", bareDir, "ls-tree", "-r", "--name-only", ref.String())
-	c.Env = gitenv.Isolated()
+	c.Env = testutil.GitIsolatedEnv()
 	out, err := c.CombinedOutput()
 	require.NoError(t, err, "ls-tree failed: %s", out)
 	return string(out)
@@ -327,7 +325,7 @@ func remoteRefFiles(t *testing.T, bareDir string, ref plumbing.ReferenceName) st
 func remoteRefHash(t *testing.T, bareDir string, ref plumbing.ReferenceName) string {
 	t.Helper()
 	lsCmd := exec.CommandContext(context.Background(), "git", "ls-remote", bareDir, ref.String())
-	lsCmd.Env = gitenv.Isolated()
+	lsCmd.Env = testutil.GitIsolatedEnv()
 	out, err := lsCmd.CombinedOutput()
 	require.NoError(t, err, "ls-remote failed: %s", out)
 	fields := strings.Fields(strings.TrimSpace(string(out)))

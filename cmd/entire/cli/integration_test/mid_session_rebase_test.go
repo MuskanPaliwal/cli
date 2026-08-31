@@ -6,9 +6,8 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // TestShadow_MidSessionRebaseMigration tests that when Claude performs a rebase
@@ -105,7 +104,7 @@ func TestShadow_MidSessionRebaseMigration(t *testing.T) {
 	// happens mid-session as part of Claude's tool execution
 	cmd := exec.CommandContext(t.Context(), "git", "rebase", "master")
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git rebase failed: %v\nOutput: %s", err, output)
 	}
@@ -208,7 +207,7 @@ func (env *TestEnv) gitCheckout(ref string) {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "checkout", ref)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("git checkout %s failed: %v\nOutput: %s", ref, err, output)
 	}
@@ -313,7 +312,7 @@ func TestShadow_CommitThenRebaseMidSession(t *testing.T) {
 
 	cmd := exec.CommandContext(t.Context(), "git", "rebase", "master")
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git rebase failed: %v\nOutput: %s", err, output)
 	}

@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -219,7 +218,7 @@ func TestCheckpointReadRemotes_ElectedUnreachableLegacyStillServes(t *testing.T)
 		// The elected remote goes dark: point it at a path that doesn't exist.
 		cmd := exec.CommandContext(t.Context(), "git", "remote", "set-url", "upstream", env.RepoDir+"/nonexistent-remote")
 		cmd.Dir = env.RepoDir
-		cmd.Env = gitenv.Isolated()
+		cmd.Env = testutil.GitIsolatedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git remote set-url: %v\n%s", err, out)
 		}

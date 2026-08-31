@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -86,7 +84,7 @@ func healTestGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v in %s failed: %s", args, dir, out)
 }
@@ -95,7 +93,7 @@ func healTestCurrentBranch(t *testing.T, dir string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(out))
@@ -105,7 +103,7 @@ func healTestRevParse(t *testing.T, dir, rev string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", rev)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(out))
@@ -128,7 +126,7 @@ func healTestMetadataFiles(t *testing.T, dir string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", "ls-tree", "-r", "--name-only", "refs/heads/"+paths.MetadataBranchName)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return string(out)

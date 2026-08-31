@@ -5,9 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
 
 	"github.com/stretchr/testify/require"
@@ -202,7 +201,7 @@ func TestRedactTranscriptCached_PrefixSurvivesGC(t *testing.T) {
 	_, err := RedactTranscriptCached(ctx, repo, session, []byte(content), jsonlRedactor)
 	require.NoError(t, err)
 
-	gitenv.Run(t, dir, "gc", "--prune=all", "--quiet")
+	testutil.RunGit(t, dir, "gc", "--prune=all", "--quiet")
 
 	// Reopen: gc rewrote the object store underneath the cached handle.
 	reopened, err := gitrepo.OpenPath(dir)

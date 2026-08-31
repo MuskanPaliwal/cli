@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +14,7 @@ import (
 
 // Not parallel: uses t.Chdir()
 func TestCheckpointReadRemotes_OriginOnly_NoSetting(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -33,7 +31,7 @@ func TestCheckpointReadRemotes_OriginOnly_NoSetting(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestCheckpointReadRemotes_ConfigSettingElectsNonOrigin_OriginAppendsAsLegacyTier(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -81,7 +79,7 @@ func TestCheckpointReadRemotes_ElectionError_FailsOpenToOrigin(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gitenv.IsolateProcess(t)
+			testutil.IsolateGitConfigEnv(t)
 			ctx := context.Background()
 			tmpDir := t.TempDir()
 			testutil.InitRepo(t, tmpDir)
@@ -101,7 +99,7 @@ func TestCheckpointReadRemotes_ElectionError_FailsOpenToOrigin(t *testing.T) {
 
 // Not parallel: uses t.Chdir()
 func TestCheckpointReadRemotes_NoRemotes_Empty(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -120,7 +118,7 @@ func TestCheckpointReadRemotes_NoRemotes_Empty(t *testing.T) {
 // tracking tier there). Tracking set to "upstream" here must not push
 // "upstream" ahead of (or in place of) "origin".
 func TestCheckpointReadRemotes_TrackingConfigDoesNotDecide(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -145,7 +143,7 @@ func TestCheckpointReadRemotes_TrackingConfigDoesNotDecide(t *testing.T) {
 // NO origin configured yields an EMPTY chain — the fail-open tier only ever
 // substitutes origin, never a non-origin remote such as the sole "upstream".
 func TestCheckpointReadRemotes_FailClosedElectionNoOrigin_EmptyChain(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")

@@ -11,10 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // HookRunner executes CLI hooks in the test environment.
@@ -248,7 +247,7 @@ func (r *HookRunner) runHookInRepoDirWithExtraEnv(hookName string, inputJSON []b
 	cmd := exec.CommandContext(context.Background(), getTestBinary(), "hooks", agentClaudeCode, hookName)
 	cmd.Dir = r.RepoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+r.ClaudeProjectDir,
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
@@ -515,7 +514,7 @@ func (r *HookRunner) runAgentHookWithOutput(agentName, hookName string, inputJSO
 	cmd := exec.CommandContext(context.Background(), getTestBinary(), "hooks", agentName, hookName)
 	cmd.Dir = r.RepoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+r.ClaudeProjectDir,
 		"GOCACHE=/tmp/go-build",
 	)
@@ -538,7 +537,7 @@ func (r *HookRunner) runShellHookCommandWithOutput(command string, inputJSON []b
 	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", command)
 	cmd.Dir = r.RepoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+r.ClaudeProjectDir,
 		"GOCACHE=/tmp/go-build",
 	)
@@ -662,7 +661,7 @@ func (r *CodexHookRunner) runCodexHook(hookName string, inputJSON []byte) error 
 	cmd := exec.CommandContext(context.Background(), getTestBinary(), "hooks", "codex", hookName)
 	cmd.Dir = r.RepoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -978,7 +977,7 @@ func (r *OpenCodeHookRunner) runOpenCodeHookInRepoDir(hookName string, inputJSON
 	cmd := exec.CommandContext(context.Background(), getTestBinary(), "hooks", "opencode", hookName)
 	cmd.Dir = r.RepoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+r.OpenCodeProjectDir,
 		"ENTIRE_TEST_OPENCODE_MOCK_EXPORT=1", // Use pre-written mock transcript instead of calling opencode export
 	)

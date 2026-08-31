@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -237,7 +235,7 @@ func TestResolveRemoteRepo(t *testing.T) {
 
 			cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", tt.originURL)
 			cmd.Dir = repoDir
-			cmd.Env = gitenv.Isolated()
+			cmd.Env = testutil.GitIsolatedEnv()
 			require.NoError(t, cmd.Run())
 
 			t.Chdir(repoDir)

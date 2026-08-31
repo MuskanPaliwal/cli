@@ -7,17 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
-	"github.com/go-git/go-git/v6"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/redact"
+	"github.com/go-git/go-git/v6"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestGetBranchCheckpoints_HydratesRemoteDiscoveredStub is the trail-871 /
@@ -86,7 +83,7 @@ func TestGetBranchCheckpoints_HydratesRemoteDiscoveredStub(t *testing.T) {
 	// Clone must not have brought the checkpoint ref — that is the second-device gap.
 	verify := exec.CommandContext(context.Background(), "git", "show-ref", "--verify", "--quiet", refName.String())
 	verify.Dir = deviceB
-	verify.Env = gitenv.Isolated()
+	verify.Env = testutil.GitIsolatedEnv()
 	require.Error(t, verify.Run(), "device B must lack the checkpoint ref locally before discovery")
 
 	logMsg := gitOutput(t, deviceB, "log", "-1", "--format=%B")

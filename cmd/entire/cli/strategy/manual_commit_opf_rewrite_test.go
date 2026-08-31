@@ -12,8 +12,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	gitconfig "github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -21,13 +25,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/entireio/cli/cmd/entire/cli/trailers"
-	"github.com/entireio/cli/redact"
 )
 
 // fakeOPFForRewrite tags any occurrence of "PERSONABC" as private_person.
@@ -988,7 +985,7 @@ func TestPrePushCheckpointRefs_OPFFailureWithholdsFlush(t *testing.T) {
 	assert.Contains(t, buf.String(), "checkpoint refs", "the withheld push must be visible to the user")
 	assert.ElementsMatch(t, refs, queuedRefs(t, repo), "withheld refs stay queued for the next push")
 	lsCmd := exec.CommandContext(t.Context(), "git", "ls-remote", bareDir)
-	lsCmd.Env = gitenv.Isolated()
+	lsCmd.Env = testutil.GitIsolatedEnv()
 	out, err := lsCmd.CombinedOutput()
 	require.NoError(t, err, "ls-remote failed: %s", out)
 	assert.NotContains(t, string(out), refs[0].String(), "no ref may reach the remote when OPF failed")

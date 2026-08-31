@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -105,7 +103,7 @@ func TestOPFCommandTrust_StagedLocalFileIsIgnored(t *testing.T) {
 	writeSettingsFile(t, project, opfSettings(""))
 	writeSettingsFile(t, local, localOPFSettings(attackerCommand))
 
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
 
 	assert.Empty(t, loadedOPF(t, project, local).Command,
 		"a local file tracked in the index must not be trusted")
@@ -118,8 +116,8 @@ func TestOPFCommandTrust_CommittedLocalFileIsIgnored(t *testing.T) {
 	writeSettingsFile(t, project, opfSettings(""))
 	writeSettingsFile(t, local, localOPFSettings(attackerCommand))
 
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
-	gitenv.Run(t, root, "commit", "-m", "carry local settings")
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "commit", "-m", "carry local settings")
 
 	assert.Empty(t, loadedOPF(t, project, local).Command,
 		"a local file present in HEAD must not be trusted")
@@ -133,9 +131,9 @@ func TestOPFCommandTrust_CommittedThenUnstagedIsIgnored(t *testing.T) {
 	writeSettingsFile(t, project, opfSettings(""))
 	writeSettingsFile(t, local, localOPFSettings(attackerCommand))
 
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
-	gitenv.Run(t, root, "commit", "-m", "carry local settings")
-	gitenv.Run(t, root, "rm", "--cached", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "commit", "-m", "carry local settings")
+	testutil.RunGit(t, root, "rm", "--cached", EntireSettingsLocalFile)
 
 	assert.Empty(t, loadedOPF(t, project, local).Command,
 		"content still reachable from HEAD must not be trusted")
@@ -241,7 +239,7 @@ func TestPathIsVersioned_MemoizesWithinProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, first, "file is untracked to begin with")
 
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
 
 	second, err := localSettingsIsVersioned(t.Context(), local, true)
 	require.NoError(t, err)
@@ -261,8 +259,8 @@ func TestPathIsVersioned_MemoizesWithinProcess(t *testing.T) {
 func TestPathIsVersioned_NoGitBinaryRequired(t *testing.T) {
 	root, _, local := newOPFRepo(t)
 	writeSettingsFile(t, local, localOPFSettings(trustedCommand))
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
-	gitenv.Run(t, root, "commit", "-m", "carry local settings")
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "commit", "-m", "carry local settings")
 
 	t.Setenv("PATH", "")
 
@@ -278,11 +276,11 @@ func TestPathIsVersioned_LinkedWorktreeUsesOwnIndex(t *testing.T) {
 	main := t.TempDir()
 	testutil.InitRepo(t, main)
 	require.NoError(t, os.WriteFile(filepath.Join(main, "f.txt"), []byte("x"), 0o644))
-	gitenv.Run(t, main, "add", "f.txt")
-	gitenv.Run(t, main, "commit", "-m", "init")
+	testutil.RunGit(t, main, "add", "f.txt")
+	testutil.RunGit(t, main, "commit", "-m", "init")
 
 	wt := filepath.Join(t.TempDir(), "linked")
-	gitenv.Run(t, main, "worktree", "add", "-b", "feature", wt)
+	testutil.RunGit(t, main, "worktree", "add", "-b", "feature", wt)
 	require.NoError(t, os.MkdirAll(filepath.Join(wt, ".entire"), 0o755))
 	local := filepath.Join(wt, EntireSettingsLocalFile)
 	require.NoError(t, os.WriteFile(local, []byte(localOPFSettings(trustedCommand)), 0o644))
@@ -291,7 +289,7 @@ func TestPathIsVersioned_LinkedWorktreeUsesOwnIndex(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, versioned, "untracked in the linked worktree")
 
-	gitenv.Run(t, wt, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, wt, "add", "-f", EntireSettingsLocalFile)
 	versioned, err = probeLocalSettingsIsVersioned(t.Context(), local, true)
 	require.NoError(t, err)
 	assert.True(t, versioned, "must read the linked worktree's own index")
@@ -304,24 +302,24 @@ func TestPathIsVersioned_ReftableRepo(t *testing.T) {
 	root := t.TempDir()
 	init := exec.CommandContext(t.Context(), "git", "init", "-q", "--ref-format=reftable", ".")
 	init.Dir = root
-	init.Env = gitenv.Isolated()
+	init.Env = testutil.GitIsolatedEnv()
 	out, err := init.CombinedOutput()
 	require.NoError(t, err, "reftable init: %s", out)
 	for _, kv := range [][]string{{"user.email", "t@t.io"}, {"user.name", "T"}, {"commit.gpgsign", "false"}} {
-		gitenv.Run(t, root, "config", kv[0], kv[1])
+		testutil.RunGit(t, root, "config", kv[0], kv[1])
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".entire"), 0o755))
 	local := filepath.Join(root, EntireSettingsLocalFile)
 	require.NoError(t, os.WriteFile(local, []byte(localOPFSettings(trustedCommand)), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("x"), 0o644))
-	gitenv.Run(t, root, "add", "f.txt")
-	gitenv.Run(t, root, "commit", "-m", "init")
+	testutil.RunGit(t, root, "add", "f.txt")
+	testutil.RunGit(t, root, "commit", "-m", "init")
 
 	// Committed then unstaged: answerable only from HEAD, which is the part
 	// that needs the reftable storer.
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
-	gitenv.Run(t, root, "commit", "-m", "carry")
-	gitenv.Run(t, root, "rm", "--cached", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "commit", "-m", "carry")
+	testutil.RunGit(t, root, "rm", "--cached", EntireSettingsLocalFile)
 
 	versioned, err := probeLocalSettingsIsVersioned(t.Context(), local, true)
 	require.NoError(t, err, "reftable repo must be verifiable")
@@ -336,7 +334,7 @@ func TestLocalLayer_TrackedFileIsIgnoredEntirely(t *testing.T) {
 	root, project, local := newOPFRepo(t)
 	writeSettingsFile(t, project, `{"enabled":true,"commit_linking":"prompt"}`)
 	writeSettingsFile(t, local, `{"commit_linking":"always","external_agents":true}`)
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
 
 	s, err := loadMergedSettings(t.Context(), project, "", local)
 	require.NoError(t, err)
@@ -368,8 +366,8 @@ func TestOPFCommandTrust_BornHeadHonorsUntrackedLocal(t *testing.T) {
 	t.Parallel()
 	root, project, local := newOPFRepo(t)
 	writeSettingsFile(t, project, opfSettings(""))
-	gitenv.Run(t, root, "add", EntireSettingsFile)
-	gitenv.Run(t, root, "commit", "-m", "project settings")
+	testutil.RunGit(t, root, "add", EntireSettingsFile)
+	testutil.RunGit(t, root, "commit", "-m", "project settings")
 	writeSettingsFile(t, local, localOPFSettings(trustedCommand))
 
 	assert.Equal(t, trustedCommand, loadedOPF(t, project, local).Command,
@@ -387,9 +385,9 @@ func TestLocalLayer_CommittedThenUnstagedKeepsLayerDropsCommand(t *testing.T) {
 	writeSettingsFile(t, local,
 		`{"redaction":{"openai_privacy_filter":{"command":"`+attackerCommand+`"}},`+
 			`"commit_linking":"always"}`)
-	gitenv.Run(t, root, "add", "-f", EntireSettingsLocalFile)
-	gitenv.Run(t, root, "commit", "-m", "carry local settings")
-	gitenv.Run(t, root, "rm", "--cached", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "add", "-f", EntireSettingsLocalFile)
+	testutil.RunGit(t, root, "commit", "-m", "carry local settings")
+	testutil.RunGit(t, root, "rm", "--cached", EntireSettingsLocalFile)
 
 	s, err := loadMergedSettings(t.Context(), project, "", local)
 	require.NoError(t, err)
@@ -420,8 +418,8 @@ func TestLocalLayer_CaseVariantIsStillTracked(t *testing.T) {
 		t.Skip("case-sensitive volume: the variant is a different file here")
 	}
 
-	gitenv.Run(t, root, "add", "-f", variant)
-	gitenv.Run(t, root, "commit", "-m", "innocuous config change")
+	testutil.RunGit(t, root, "add", "-f", variant)
+	testutil.RunGit(t, root, "commit", "-m", "innocuous config change")
 
 	s, err := loadMergedSettings(t.Context(), project, "", canonical)
 	require.NoError(t, err)
@@ -496,20 +494,20 @@ func stageBlobAt(t *testing.T, root, repoPath string) {
 	t.Helper()
 	scratch := filepath.Join(root, "scratch.tmp")
 	require.NoError(t, os.WriteFile(scratch, []byte("{}"), 0o644))
-	blob := strings.TrimSpace(gitenv.Run(t, root, "hash-object", "-w", scratch))
+	blob := strings.TrimSpace(testutil.RunGit(t, root, "hash-object", "-w", scratch))
 	require.NoError(t, os.Remove(scratch))
-	gitenv.Run(t, root, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+repoPath)
+	testutil.RunGit(t, root, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+repoPath)
 }
 
 // commitIndexAndClear commits whatever is staged, then empties the index, so a
 // probe must consult HEAD rather than the index.
 func commitIndexAndClear(t *testing.T, root string, stagedPaths ...string) {
 	t.Helper()
-	tree := strings.TrimSpace(gitenv.Run(t, root, "write-tree"))
-	commit := strings.TrimSpace(gitenv.Run(t, root, "commit-tree", tree, "-m", "decoy"))
-	gitenv.Run(t, root, "update-ref", "HEAD", commit)
+	tree := strings.TrimSpace(testutil.RunGit(t, root, "write-tree"))
+	commit := strings.TrimSpace(testutil.RunGit(t, root, "commit-tree", tree, "-m", "decoy"))
+	testutil.RunGit(t, root, "update-ref", "HEAD", commit)
 	for _, p := range stagedPaths {
-		gitenv.Run(t, root, "update-index", "--force-remove", p)
+		testutil.RunGit(t, root, "update-index", "--force-remove", p)
 	}
 }
 

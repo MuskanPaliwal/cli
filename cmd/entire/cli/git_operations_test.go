@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -27,7 +25,7 @@ import (
 const testCheckpointRefZN = "refs/entire/checkpoints/ZN/01KVBJCWYA4YW6J5M9GP655HZN"
 
 func TestFetchCheckpointRef_ElectionFailureCannotCertifyAbsence(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	originBare := t.TempDir()
 	gitRun(t, originBare, "init", "--bare", "-q", originBare)
 
@@ -475,7 +473,7 @@ func TestResolveCheckpointFetchTarget_NoCheckpointRemote(t *testing.T) {
 	// Add origin remote
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@github.com:org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Settings with no checkpoint_remote
@@ -504,7 +502,7 @@ func TestResolveCheckpointFetchTarget_WithCheckpointRemote(t *testing.T) {
 	// Add SSH origin remote — checkpoint URL derives protocol from origin
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@github.com:org/main-repo.git")
 	cmd.Dir = localDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, cmd.Run())
 
 	// Settings with checkpoint_remote configured
@@ -669,7 +667,7 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %v\nOutput: %s", args[0], err, output)
 	}
@@ -680,7 +678,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	return strings.TrimSpace(string(out))
@@ -791,7 +789,7 @@ func TestListCheckpointRefsOnRemote_NotConfigured(t *testing.T) {
 // to pin that merging, not first-non-empty, is the semantics.
 // Not parallel: uses t.Chdir.
 func TestListCheckpointRefsOnRemote_MergesReadCandidateListings(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	originBare := t.TempDir()
 	upstreamBare := t.TempDir()
 	gitRun(t, originBare, "init", "--bare", "-q", originBare)
@@ -830,7 +828,7 @@ func TestListCheckpointRefsOnRemote_MergesReadCandidateListings(t *testing.T) {
 // an error restores the store's local-only warning.
 // Not parallel: uses t.Chdir.
 func TestListCheckpointRefsOnRemote_CandidateFailureDoesNotBlockOthers(t *testing.T) {
-	gitenv.IsolateProcess(t)
+	testutil.IsolateGitConfigEnv(t)
 	originBare := t.TempDir()
 	gitRun(t, originBare, "init", "--bare", "-q", originBare)
 

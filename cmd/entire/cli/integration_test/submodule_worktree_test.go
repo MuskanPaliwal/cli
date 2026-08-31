@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // TestSubmoduleWorktree_SessionCreatesCheckpoint is a full-flow regression test
@@ -38,7 +38,7 @@ func TestSubmoduleWorktree_SessionCreatesCheckpoint(t *testing.T) {
 		t.Helper()
 		cmd := exec.CommandContext(t.Context(), "git", args...)
 		cmd.Dir = dir
-		cmd.Env = gitenv.Isolated()
+		cmd.Env = testutil.GitIsolatedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git -C %s %v: %v\n%s", dir, args, err, out)
 		}

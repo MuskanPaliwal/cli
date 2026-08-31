@@ -11,12 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/entireio/cli/cmd/entire/cli/execx"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 const masterBranch = "master"
@@ -494,7 +493,7 @@ func (env *TestEnv) RunResume(branchName string) (string, error) {
 	// Detach from controlling terminal so huh can't open /dev/tty for prompts.
 	cmd := execx.NonInteractive(ctx, getTestBinary(), "session", "resume", branchName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 	)
 
@@ -509,7 +508,7 @@ func (env *TestEnv) RunResumeForce(branchName string) (string, error) {
 	ctx := env.T.Context()
 	cmd := exec.CommandContext(ctx, getTestBinary(), "session", "resume", "--force", branchName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = append(gitenv.Isolated(),
+	cmd.Env = append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 	)
 
@@ -524,7 +523,7 @@ func (env *TestEnv) GitMerge(branchName string) {
 	// Use --no-verify to skip hooks - git-triggered hooks are not exercised here
 	// from test temp directories. This is fine since we're testing merge behavior,
 	// not hook execution during merge.
-	gitenv.Run(env.T, env.RepoDir, "merge", branchName, "-m", "Merge branch '"+branchName+"'", "--no-verify")
+	testutil.RunGit(env.T, env.RepoDir, "merge", branchName, "-m", "Merge branch '"+branchName+"'", "--no-verify")
 }
 
 // GetHeadCommitMessage returns the message of the HEAD commit.

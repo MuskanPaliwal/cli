@@ -19,8 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -29,6 +27,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v6"
@@ -133,9 +132,9 @@ func (env *TestEnv) Cleanup() {
 
 // cliEnv returns the environment variables for CLI execution.
 // Includes Claude, Gemini, and OpenCode project dirs so tests work for any agent.
-// Delegates to gitenv.Isolated() for git config isolation.
+// Delegates to testutil.GitIsolatedEnv() for git config isolation.
 func (env *TestEnv) cliEnv() []string {
-	base := append(gitenv.Isolated(),
+	base := append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+env.GeminiProjectDir,
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,
@@ -679,7 +678,7 @@ func (env *TestEnv) GitCheckoutNewBranch(branchName string) {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "checkout", "-b", branchName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to checkout new branch %s: %v\nOutput: %s", branchName, err, output)
 	}
@@ -1056,7 +1055,7 @@ func (env *TestEnv) gitCommitWithShadowHooks(message string, simulateTTY bool, f
 }
 
 func (env *TestEnv) gitHookEnv(extra ...string) []string {
-	envVars := append(gitenv.Isolated(),
+	envVars := append(testutil.GitIsolatedEnv(),
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,
 		"ENTIRE_TEST_OPENCODE_MOCK_EXPORT=1",
 	)
@@ -1244,7 +1243,7 @@ func (env *TestEnv) GitRm(paths ...string) {
 	args := append([]string{"rm", "--"}, paths...)
 	cmd := exec.CommandContext(env.T.Context(), "git", args...)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("git rm failed: %v\nOutput: %s", err, output)
 	}
@@ -1767,7 +1766,7 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 	// Push HEAD to the remote.
 	cmd := exec.CommandContext(env.T.Context(), "git", "push", "--no-verify", "-u", remoteName, "HEAD")
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to push to %s: %v\n%s", remoteName, err, output)
 	}
@@ -1792,7 +1791,7 @@ func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 	// Initialize bare repo
 	cmd := exec.CommandContext(ctx, "git", "init", "--bare")
 	cmd.Dir = bareDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to init bare repo: %v\n%s", err, output)
 	}
@@ -1800,7 +1799,7 @@ func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 	// Add as remote
 	cmd = exec.CommandContext(ctx, "git", "remote", "add", remoteName, bareDir)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to add remote %s: %v\n%s", remoteName, err, output)
 	}
@@ -1835,7 +1834,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 	}
 	cloneArgs = append(cloneArgs, bareDir, cloneDir)
 	cmd := exec.CommandContext(ctx, "git", cloneArgs...)
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to clone from %s: %v\n%s", bareDir, err, output)
 	}
@@ -1848,7 +1847,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 	} {
 		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
 		cmd.Dir = cloneDir
-		cmd.Env = gitenv.Isolated()
+		cmd.Env = testutil.GitIsolatedEnv()
 		if output, err := cmd.CombinedOutput(); err != nil {
 			env.T.Fatalf("failed to set git config %s: %v\n%s", kv[0], err, output)
 		}
@@ -1889,7 +1888,7 @@ func (env *TestEnv) BranchExistsOnRemote(bareDir, branchName string) bool {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 	cmd.Dir = bareDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
 }
 
@@ -1932,7 +1931,7 @@ func (env *TestEnv) GitPush(remote, refSpec string) {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "push", "--no-verify", remote, refSpec)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("git push %s %s failed: %v\n%s", remote, refSpec, err, output)
 	}
@@ -2053,7 +2052,7 @@ func (env *TestEnv) FetchMetadataBranch(remoteURL string) {
 	refSpec := "+refs/heads/" + branchName + ":refs/heads/" + branchName
 	cmd := exec.CommandContext(env.T.Context(), "git", "fetch", "--no-tags", remoteURL, refSpec)
 	cmd.Dir = env.RepoDir
-	cmd.Env = gitenv.Isolated()
+	cmd.Env = testutil.GitIsolatedEnv()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
