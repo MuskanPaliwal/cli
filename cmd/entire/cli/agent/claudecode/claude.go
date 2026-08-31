@@ -182,15 +182,6 @@ func (c *ClaudeCodeAgent) FormatResumeCommand(sessionID string) string {
 	return "claude -r " + sessionID
 }
 
-// ReadSessionFromPath is a convenience method that reads a session directly from a file path.
-// This is useful when you have the path but not a HookInput.
-func (c *ClaudeCodeAgent) ReadSessionFromPath(transcriptPath, sessionID string) (*agent.AgentSession, error) {
-	return c.ReadSession(&agent.HookInput{
-		SessionID:  sessionID,
-		SessionRef: transcriptPath,
-	})
-}
-
 // SanitizePathForClaude converts a path to Claude's project directory format.
 // Claude replaces any non-alphanumeric character with a dash.
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]`)
