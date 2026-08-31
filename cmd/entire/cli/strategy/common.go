@@ -358,7 +358,7 @@ const (
 )
 
 // isProtectedPath returns true if relPath is inside a directory that should
-// never be modified or deleted during rewind or other destructive operations.
+// never be recorded as session changes or captured into a checkpoint.
 // Protected directories include git internals, entire metadata, and all
 // registered agent config directories.
 func isProtectedPath(relPath string) bool {
@@ -1466,7 +1466,7 @@ func fileExists(path string) bool {
 
 // getTaskCheckpointFromTree retrieves a task checkpoint from a commit tree.
 // Shared implementation for shadow and linear-shadow strategies.
-func getTaskCheckpointFromTree(ctx context.Context, point RewindPoint) (*TaskCheckpoint, error) {
+func getTaskCheckpointFromTree(ctx context.Context, point PendingCheckpoint) (*TaskCheckpoint, error) {
 	if !point.IsTaskCheckpoint {
 		return nil, ErrNotTaskCheckpoint
 	}
@@ -1510,7 +1510,7 @@ func getTaskCheckpointFromTree(ctx context.Context, point RewindPoint) (*TaskChe
 
 // getTaskTranscriptFromTree retrieves a task transcript from a commit tree.
 // Shared implementation for shadow and linear-shadow strategies.
-func getTaskTranscriptFromTree(ctx context.Context, point RewindPoint) ([]byte, error) {
+func getTaskTranscriptFromTree(ctx context.Context, point PendingCheckpoint) ([]byte, error) {
 	if !point.IsTaskCheckpoint {
 		return nil, ErrNotTaskCheckpoint
 	}
@@ -1562,7 +1562,8 @@ var ErrBranchNotFound = errors.New("branch not found")
 // Uses `git branch -D` instead of go-git's RemoveReference because go-git v5
 // doesn't properly persist deletions when refs are packed (.git/packed-refs)
 // or in a worktree context. This is the same class of go-git v5 bug that
-// affects checkout and reset --hard (see HardResetWithProtection).
+// affects checkout and reset --hard (see CheckoutBranch in git_operations.go,
+// which shells out to the git CLI for the same reason).
 //
 // Returns ErrBranchNotFound if the branch does not exist, allowing callers
 // to use errors.Is for idempotent deletion patterns.
@@ -1600,7 +1601,7 @@ func branchExistsCLI(ctx context.Context, branchName string) error {
 
 // collectUntrackedFiles collects untracked files in the working directory that are
 // NOT ignored by .gitignore. This is used to capture the initial state when starting
-// a session, ensuring untracked files present at session start are preserved during rewind.
+// a session, distinguishing files present at session start from ones it created.
 // Uses "git ls-files --others --exclude-standard -z" to respect .gitignore rules,
 // avoiding bloated session state from large ignored directories like node_modules/.
 // Returns paths relative to the repository root.

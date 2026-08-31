@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode" // Register agent for ResolveAgentForRewind tests
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"  // Register agent for ResolveAgentForRewind tests
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode" // Register agent for ResolveAgentForResume tests
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"  // Register agent for ResolveAgentForResume tests
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -47,14 +47,14 @@ func TestRestoreLogsOnly_KeepsExistingLocalLog(t *testing.T) {
 	sessionID := "keep-existing-session"
 
 	checkpointTranscript := []byte(`{"type":"user","timestamp":"2025-01-02T10:00:00Z","message":{"content":[{"type":"text","text":"from checkpoint"}]}}` + "\n")
-	writeCommittedRewindCheckpoint(t, repo, cpID, sessionID, agentType, checkpointTranscript, time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
+	writeCommittedCheckpoint(t, repo, cpID, sessionID, agentType, checkpointTranscript, time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC))
 
 	// Pre-existing local log with a (different) timestamped entry.
 	localPath := filepath.Join(sessionDir, sessionID+".jsonl")
 	existingLocal := []byte(`{"type":"user","timestamp":"2025-06-01T10:00:00Z","message":{"content":[{"type":"text","text":"live local"}]}}` + "\n")
 	require.NoError(t, os.WriteFile(localPath, existingLocal, 0o600))
 
-	point := RewindPoint{IsLogsOnly: true, CheckpointID: cpID}
+	point := PendingCheckpoint{IsLogsOnly: true, CheckpointID: cpID}
 
 	// Non-force: keep the existing local log, but still report the session.
 	var stdout, stderr bytes.Buffer
@@ -151,12 +151,12 @@ func TestFirstDisplayPrompt(t *testing.T) {
 	}
 }
 
-func TestResolveAgentForRewind(t *testing.T) {
+func TestResolveAgentForResume(t *testing.T) {
 	t.Parallel()
 
 	t.Run("empty type returns error", func(t *testing.T) {
 		t.Parallel()
-		_, err := ResolveAgentForRewind("")
+		_, err := ResolveAgentForResume("")
 		if err == nil {
 			t.Error("expected error for empty agent type")
 		}
@@ -164,7 +164,7 @@ func TestResolveAgentForRewind(t *testing.T) {
 
 	t.Run("Claude Code type resolves correctly", func(t *testing.T) {
 		t.Parallel()
-		ag, err := ResolveAgentForRewind("Claude Code")
+		ag, err := ResolveAgentForResume("Claude Code")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestResolveAgentForRewind(t *testing.T) {
 
 	t.Run("Gemini CLI type resolves correctly", func(t *testing.T) {
 		t.Parallel()
-		ag, err := ResolveAgentForRewind("Gemini CLI")
+		ag, err := ResolveAgentForResume("Gemini CLI")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -186,7 +186,7 @@ func TestResolveAgentForRewind(t *testing.T) {
 
 	t.Run("unknown type returns error", func(t *testing.T) {
 		t.Parallel()
-		_, err := ResolveAgentForRewind("Nonexistent Agent")
+		_, err := ResolveAgentForResume("Nonexistent Agent")
 		if err == nil {
 			t.Error("expected error for unknown agent type")
 		}
@@ -196,13 +196,13 @@ func TestResolveAgentForRewind(t *testing.T) {
 		t.Parallel()
 
 		// Simulate what external.DiscoverAndRegister does: register an agent at runtime.
-		testName := types.AgentName("test-external-rewind-agent")
-		testType := types.AgentType("Entire Test External Rewind Agent")
+		testName := types.AgentName("test-external-resume-agent")
+		testType := types.AgentType("Entire Test External Resume Agent")
 		agent.Register(testName, func() agent.Agent {
 			return &fakeExternalAgent{name: testName, agentType: testType}
 		})
 
-		ag, err := ResolveAgentForRewind(testType)
+		ag, err := ResolveAgentForResume(testType)
 		if err != nil {
 			t.Fatalf("expected dynamically registered agent to resolve, got error: %v", err)
 		}
@@ -215,7 +215,7 @@ func TestResolveAgentForRewind(t *testing.T) {
 	})
 }
 
-func writeCommittedRewindCheckpoint(
+func writeCommittedCheckpoint(
 	t *testing.T,
 	repo *git.Repository,
 	checkpointID id.CheckpointID,

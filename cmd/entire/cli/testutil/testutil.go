@@ -18,8 +18,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-// RewindPoint mirrors the `checkpoint list --pending --json` JSON output.
-type RewindPoint struct {
+// PendingCheckpoint mirrors the `checkpoint list --pending --json` JSON output.
+type PendingCheckpoint struct {
 	ID               string    `json:"id"`
 	Message          string    `json:"message"`
 	MetadataDir      string    `json:"metadata_dir"`

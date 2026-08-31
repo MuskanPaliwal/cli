@@ -140,8 +140,8 @@ type userMessageWithToolResults struct {
 }
 
 // FindCheckpointUUID finds the UUID of the message containing the tool_result
-// for the given tool_use_id. This is used to find the checkpoint point for
-// transcript truncation when rewinding to a task.
+// for the given tool_use_id. That UUID marks where the task checkpoint's
+// transcript slice starts.
 // Returns the UUID and true if found, empty string and false otherwise.
 func FindCheckpointUUID(lines []transcriptLine, toolUseID string) (string, bool) {
 	for _, line := range lines {

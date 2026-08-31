@@ -84,7 +84,7 @@ Execute these steps in order:
 .claude/skills/test-repo/test-harness.sh verify-session-state
 .claude/skills/test-repo/test-harness.sh verify-shadow-branch
 .claude/skills/test-repo/test-harness.sh verify-metadata-branch
-.claude/skills/test-repo/test-harness.sh list-rewind-points
+.claude/skills/test-repo/test-harness.sh list-pending-checkpoints
 ```
 
 Expected results:
@@ -95,13 +95,13 @@ Expected results:
 | Session state | ✓ Exists |
 | Shadow branch | ✓ entire/{hash} |
 | Metadata branch | ✓ entire/checkpoints/v1 |
-| Rewind points | ✓ At least 1 |
+| Pending checkpoints | ✓ At least 1 |
 
 #### 4. Check Listing After Further Changes
 
 ```bash
 .claude/skills/test-repo/test-harness.sh create-changes
-.claude/skills/test-repo/test-harness.sh list-rewind-points
+.claude/skills/test-repo/test-harness.sh list-pending-checkpoints
 ```
 
 **Expected Behavior:**
@@ -132,7 +132,7 @@ go build -o /tmp/entire-bin ./cmd/entire && \
 .claude/skills/test-repo/test-harness.sh create-transcript && \
 .claude/skills/test-repo/test-harness.sh stop-session && \
 .claude/skills/test-repo/test-harness.sh verify-metadata-branch && \
-.claude/skills/test-repo/test-harness.sh list-rewind-points
+.claude/skills/test-repo/test-harness.sh list-pending-checkpoints
 ```
 
 ## Expected Results by Strategy
@@ -212,7 +212,7 @@ After running the test, report:
 | Session hooks | PASS/FAIL |
 | Clean commits | PASS/FAIL |
 | Metadata branch | PASS/FAIL |
-| Rewind points | PASS/FAIL |
+| Pending checkpoints | PASS/FAIL |
 
 **Overall: PASS/FAIL**
 
