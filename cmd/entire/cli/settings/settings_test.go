@@ -664,6 +664,33 @@ func TestLoad_MergesLocalOverrides(t *testing.T) {
 	}
 }
 
+func TestLoad_AsyncMirrorRequestsIsLocalOnly(t *testing.T) {
+	tests := []struct {
+		name  string
+		base  string
+		local string
+		want  bool
+	}{
+		{name: "unset", base: `{"enabled": true}`},
+		{name: "project setting ignored", base: `{"async_mirror_requests": true}`},
+		{name: "local setting enabled", base: `{"enabled": true}`, local: `{"async_mirror_requests": true}`, want: true},
+		{name: "local false", base: `{"async_mirror_requests": true}`, local: `{"async_mirror_requests": false}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupSettingsDir(t, tt.base, tt.local)
+
+			got, err := Load(context.Background())
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.AsyncMirrorRequests != tt.want {
+				t.Fatalf("AsyncMirrorRequests = %v, want %v", got.AsyncMirrorRequests, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeJSON_ExternalAgents(t *testing.T) {
 	tmpDir := t.TempDir()
 
