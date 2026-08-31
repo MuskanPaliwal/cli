@@ -3,3 +3,7 @@ https://github.com/entireio/cli/pull/2131 we have got some conflicts here. let's
 ---
 
 they merged pr number 1926 which caused conflicts
+
+---
+
+yupp
