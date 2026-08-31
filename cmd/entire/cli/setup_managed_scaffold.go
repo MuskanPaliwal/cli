@@ -29,6 +29,9 @@ const (
 type managedScaffoldResult struct {
 	Status  managedScaffoldStatus
 	RelPath string
+	// RemovedLegacyRelPath is the repo-relative path of a superseded
+	// Entire-managed file deleted alongside this install ("" when none).
+	RemovedLegacyRelPath string
 }
 
 // writeManagedScaffold writes content to targetPath idempotently: it creates the

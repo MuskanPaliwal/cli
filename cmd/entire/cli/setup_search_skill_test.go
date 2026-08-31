@@ -12,7 +12,12 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
+	"github.com/entireio/cli/cmd/entire/cli/agent/copilotcli"
+	"github.com/entireio/cli/cmd/entire/cli/agent/cursor"
+	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
+	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/pi"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -20,42 +25,25 @@ import (
 
 func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
 	testCases := []struct {
-		name        string
-		scaffoldFn  func() (managedScaffoldResult, error)
-		relPath     string
-		wantSnippet string
+		name    string
+		agent   agent.Agent
+		relPath string
 	}{
-		{
-			name: "claude",
-			scaffoldFn: func() (managedScaffoldResult, error) {
-				return scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
-			},
-			relPath:     filepath.Join(".claude", "agents", "entire-search.md"),
-			wantSnippet: "tools: Bash",
-		},
-		{
-			name: "codex",
-			scaffoldFn: func() (managedScaffoldResult, error) {
-				return scaffoldSearchSkill(context.Background(), codex.NewCodexAgent())
-			},
-			relPath:     filepath.Join(".codex", "agents", "entire-search.toml"),
-			wantSnippet: `sandbox_mode = "read-only"`,
-		},
-		{
-			name: "gemini",
-			scaffoldFn: func() (managedScaffoldResult, error) {
-				return scaffoldSearchSkill(context.Background(), geminicli.NewGeminiCLIAgent())
-			},
-			relPath:     filepath.Join(".gemini", "agents", "entire-search.md"),
-			wantSnippet: "- run_shell_command",
-		},
+		{"claude", claudecode.NewClaudeCodeAgent(), filepath.Join(".claude", "skills", "entire-search", "SKILL.md")},
+		{"codex", codex.NewCodexAgent(), filepath.Join(".agents", "skills", "entire-search", "SKILL.md")},
+		{"gemini", geminicli.NewGeminiCLIAgent(), filepath.Join(".gemini", "skills", "entire-search", "SKILL.md")},
+		{"opencode", opencode.NewOpenCodeAgent(), filepath.Join(".opencode", "skills", "entire-search", "SKILL.md")},
+		{"copilot", copilotcli.NewCopilotCLIAgent(), filepath.Join(".github", "skills", "entire-search", "SKILL.md")},
+		{"cursor", cursor.NewCursorAgent(), filepath.Join(".cursor", "skills", "entire-search", "SKILL.md")},
+		{"factory", factoryaidroid.NewFactoryAIDroidAgent(), filepath.Join(".factory", "skills", "entire-search", "SKILL.md")},
+		{"pi", pi.NewPiAgent(), filepath.Join(".pi", "skills", "entire-search", "SKILL.md")},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := setupTestDir(t)
 
-			result, err := tc.scaffoldFn()
+			result, err := scaffoldSearchSkill(context.Background(), tc.agent)
 			if err != nil {
 				t.Fatalf("scaffoldSearchSkill() error = %v", err)
 			}
@@ -74,10 +62,10 @@ func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
 			if !strings.Contains(content, entireManagedSearchSkillMarker) {
 				t.Fatal("scaffolded file should contain Entire-managed marker")
 			}
-			assertStrictJSONSearchInstructions(t, content)
-			if !strings.Contains(content, tc.wantSnippet) {
-				t.Fatalf("scaffolded file missing expected snippet %q", tc.wantSnippet)
+			if !strings.Contains(content, "name: entire-search\n") {
+				t.Fatal("scaffolded skill should declare name: entire-search")
 			}
+			assertStrictJSONSearchInstructions(t, content)
 		})
 	}
 }
@@ -129,7 +117,7 @@ func TestScaffoldSearchSkill_UpdatesManagedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read updated content: %v", err)
 	}
-	if !strings.Contains(string(data), "tools: Bash") {
+	if !strings.Contains(string(data), "name: entire-search\n") {
 		t.Fatal("updated managed file should contain the current template")
 	}
 	assertStrictJSONSearchInstructions(t, string(data))
@@ -148,7 +136,7 @@ func TestScaffoldSearchSkill_PreservesUserOwnedFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		t.Fatalf("failed to create target dir: %v", err)
 	}
-	userContent := "user-owned search agent\n"
+	userContent := "user-owned search skill\n"
 	if err := os.WriteFile(targetPath, []byte(userContent), 0o644); err != nil {
 		t.Fatalf("failed to write user-owned file: %v", err)
 	}
@@ -170,6 +158,80 @@ func TestScaffoldSearchSkill_PreservesUserOwnedFile(t *testing.T) {
 	}
 }
 
+func TestScaffoldSearchSkill_RemovesManagedLegacySubagent(t *testing.T) {
+	testCases := []struct {
+		name          string
+		agent         agent.Agent
+		legacyRelPath string
+	}{
+		{"claude", claudecode.NewClaudeCodeAgent(), filepath.Join(".claude", "agents", "entire-search.md")},
+		{"codex", codex.NewCodexAgent(), filepath.Join(".codex", "agents", "entire-search.toml")},
+		{"gemini", geminicli.NewGeminiCLIAgent(), filepath.Join(".gemini", "agents", "entire-search.md")},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := setupTestDir(t)
+
+			legacyPath := filepath.Join(tmpDir, tc.legacyRelPath)
+			if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+				t.Fatalf("failed to create legacy dir: %v", err)
+			}
+			legacyContent := "<!-- " + legacyEntireManagedSearchSubagentMarker + " -->\nold subagent\n"
+			if err := os.WriteFile(legacyPath, []byte(legacyContent), 0o644); err != nil {
+				t.Fatalf("failed to write legacy subagent: %v", err)
+			}
+
+			result, err := scaffoldSearchSkill(context.Background(), tc.agent)
+			if err != nil {
+				t.Fatalf("scaffoldSearchSkill() error = %v", err)
+			}
+			if result.Status != managedScaffoldCreated {
+				t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+			}
+			if result.RemovedLegacyRelPath != tc.legacyRelPath {
+				t.Fatalf("RemovedLegacyRelPath = %q, want %q", result.RemovedLegacyRelPath, tc.legacyRelPath)
+			}
+			if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+				t.Fatalf("managed legacy subagent should be removed, stat err = %v", err)
+			}
+		})
+	}
+}
+
+func TestScaffoldSearchSkill_PreservesUserOwnedLegacySubagent(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	legacyRelPath := filepath.Join(".claude", "agents", "entire-search.md")
+	legacyPath := filepath.Join(tmpDir, legacyRelPath)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("failed to create legacy dir: %v", err)
+	}
+	userContent := "user-owned search agent\n"
+	if err := os.WriteFile(legacyPath, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("failed to write user-owned subagent: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+	if result.RemovedLegacyRelPath != "" {
+		t.Fatalf("RemovedLegacyRelPath = %q, want empty for user-owned file", result.RemovedLegacyRelPath)
+	}
+
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("failed to read preserved file: %v", err)
+	}
+	if string(data) != userContent {
+		t.Fatal("user-owned legacy subagent should not be removed")
+	}
+}
+
 func TestSetupAgentHooksNonInteractive_SearchSkillOptInOnly(t *testing.T) {
 	tmpDir := setupTestDir(t)
 	testutil.InitRepo(t, tmpDir)
@@ -179,7 +241,7 @@ func TestSetupAgentHooksNonInteractive_SearchSkillOptInOnly(t *testing.T) {
 	if err := setupAgentHooksNonInteractive(context.Background(), &out, ag, EnableOptions{}); err != nil {
 		t.Fatalf("setupAgentHooksNonInteractive(default) error = %v", err)
 	}
-	searchPath := filepath.Join(tmpDir, ".claude", "agents", "entire-search.md")
+	searchPath := filepath.Join(tmpDir, ".claude", "skills", "entire-search", "SKILL.md")
 	if _, err := os.Stat(searchPath); !os.IsNotExist(err) {
 		t.Fatalf("default setup should not install search skill, stat err = %v", err)
 	}
@@ -257,42 +319,39 @@ func assertStrictJSONSearchInstructions(t *testing.T, content string) {
 	}
 }
 
-// TestSearchSkillTemplates_NameMatchesTelemetryProbe pins the scaffolded
-// subagent name to strategy.EntireSearchSubagentName, the value the
-// commit-condensed telemetry probe matches Task/Agent dispatches against.
-// Without this pin, renaming the subagent in the templates compiles and passes
-// every template test while silently zeroing used_search_source="subagent" —
-// the probe's primary path.
+// TestSearchSkillTemplates_NameMatchesTelemetryProbe pins the scaffolded skill
+// name to strategy.EntireSearchSubagentName, the value the commit-condensed
+// telemetry probe matches legacy subagent dispatches against and the skill
+// directory every agent's scaffold path is built from. Without this pin,
+// renaming the skill in the template compiles and passes every template test
+// while silently splitting the scaffolded artifact from the probe's identity.
 func TestSearchSkillTemplates_NameMatchesTelemetryProbe(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name     string
-		template string
-		// nameDecl is how the template's frontmatter/config declares the
-		// subagent name for its agent's format.
-		nameDecl string
-	}{
-		{"claude", claudeSearchSkillTemplate, "name: " + strategy.EntireSearchSubagentName + "\n"},
-		{"gemini", geminiSearchSkillTemplate, "name: " + strategy.EntireSearchSubagentName + "\n"},
-		{"codex", codexSearchSkillTemplate, "name = \"" + strategy.EntireSearchSubagentName + "\"\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if !strings.Contains(tc.template, tc.nameDecl) {
-				t.Errorf("template does not declare the subagent name the telemetry probe matches: want %q", tc.nameDecl)
-			}
-		})
+	nameDecl := "name: " + strategy.EntireSearchSubagentName + "\n"
+	if !strings.Contains(searchSkillTemplateContent, nameDecl) {
+		t.Errorf("template does not declare the skill name the telemetry probe matches: want %q", nameDecl)
 	}
 
-	for _, agentName := range []types.AgentName{agent.AgentNameClaudeCode, agent.AgentNameCodex, agent.AgentNameGemini} {
+	for _, agentName := range []types.AgentName{
+		agent.AgentNameClaudeCode,
+		agent.AgentNameCodex,
+		agent.AgentNameCopilotCLI,
+		agent.AgentNameCursor,
+		agent.AgentNameFactoryAIDroid,
+		agent.AgentNameGemini,
+		agent.AgentNameOpenCode,
+		agent.AgentNamePi,
+	} {
 		relPath, _, ok := searchSkillTemplate(agentName)
 		if !ok {
 			t.Fatalf("searchSkillTemplate(%s) unexpectedly unsupported", agentName)
 		}
-		base := filepath.Base(relPath)
-		if got := strings.TrimSuffix(base, filepath.Ext(base)); got != strategy.EntireSearchSubagentName {
-			t.Errorf("scaffold path for %s names %q, probe matches %q", agentName, got, strategy.EntireSearchSubagentName)
+		if base := filepath.Base(relPath); base != "SKILL.md" {
+			t.Errorf("scaffold path for %s ends in %q, want SKILL.md", agentName, base)
+		}
+		if got := filepath.Base(filepath.Dir(relPath)); got != strategy.EntireSearchSubagentName {
+			t.Errorf("scaffold skill dir for %s is %q, probe matches %q", agentName, got, strategy.EntireSearchSubagentName)
 		}
 	}
 }

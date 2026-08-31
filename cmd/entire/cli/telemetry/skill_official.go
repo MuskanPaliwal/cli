@@ -30,6 +30,12 @@ const entireSkillNamespace = "entire:"
 // It is installed unnamespaced, under Entire's own name.
 const scaffoldedAgentHelpSkill = "entire"
 
+// scaffoldedSearchSkill is the skill `entire enable --search-skill` writes
+// (<agent>/skills/entire-search/SKILL.md). Installed unnamespaced, under
+// Entire's own name; mirrors strategy.EntireSearchSubagentName, which this
+// package cannot import.
+const scaffoldedSearchSkill = "entire-search"
+
 // entireSkillNames are the leaf names shipped by the "entire" plugin.
 //
 // Upstream is entireio/skills (marketplace plugin "entire"); entireio/
@@ -73,7 +79,7 @@ const (
 // Entire's numbers — an overcount that is invisible in the data, where this
 // undercount at least has a known cause.
 func skillNameForTelemetry(name string) string {
-	if name == scaffoldedAgentHelpSkill {
+	if name == scaffoldedAgentHelpSkill || name == scaffoldedSearchSkill {
 		return name
 	}
 	leaf, namespaced := strings.CutPrefix(name, entireSkillNamespace)
