@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1BPH5AYW3XFKN7R858PA7BD",
+  "session_id": "01a05745-89ee-73d0-9d48-ca3b7531a2ff",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T10:41:07.747088Z",
+  "branch": "remove-stale-agent-rewind-code",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/agent/claudecode/claude.go",
+    "cmd/entire/cli/agent/codex/codex.go",
+    "cmd/entire/cli/agent/codex/security_contract_test.go",
+    "cmd/entire/cli/agent/copilotcli/security_contract_test.go",
+    "cmd/entire/cli/agent/opencode/opencode.go",
+    "cmd/entire/cli/integration_test/agent_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "90fff1960cf0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 132090,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4070400,
+    "output_tokens": 16866,
+    "api_call_count": 53
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T10:41:07.701164Z",
+    "agent_lines": 10,
+    "agent_removed": 71,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "total_lines_changed": 81,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 71
+    }
+  ]
+}
