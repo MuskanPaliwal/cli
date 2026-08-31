@@ -25,6 +25,14 @@ func ReadTranscriptFile(filePath string) ([]byte, error) {
 	}
 	root, name, err := entiredir.OpenPathForRead(abs)
 	if err != nil {
+		// Unwrapped when the directory is simply absent. OpenPathForRead
+		// already returns an *fs.PathError there, and os.IsNotExist — unlike
+		// errors.Is — does not unwrap a %w, so adding context here would tell
+		// every caller that tests it (opencode PrepareTranscript,
+		// pi GetTranscriptPosition) that a missing .entire is a hard failure.
+		if os.IsNotExist(err) {
+			return nil, err //nolint:wrapcheck // see comment: os.IsNotExist does not unwrap
+		}
 		return nil, fmt.Errorf("open %s for transcript %s: %w", paths.EntireDir, filePath, err)
 	}
 	return entiredir.ReadFile(root, name) //nolint:wrapcheck // preserve os.IsNotExist classification at call sites
@@ -44,6 +52,14 @@ func StatTranscriptFile(filePath string) (os.FileInfo, error) {
 	}
 	root, name, err := entiredir.OpenPathForRead(abs)
 	if err != nil {
+		// Unwrapped when the directory is simply absent. OpenPathForRead
+		// already returns an *fs.PathError there, and os.IsNotExist — unlike
+		// errors.Is — does not unwrap a %w, so adding context here would tell
+		// every caller that tests it (opencode PrepareTranscript,
+		// pi GetTranscriptPosition) that a missing .entire is a hard failure.
+		if os.IsNotExist(err) {
+			return nil, err //nolint:wrapcheck // see comment: os.IsNotExist does not unwrap
+		}
 		return nil, fmt.Errorf("open %s for transcript %s: %w", paths.EntireDir, filePath, err)
 	}
 	info, err := osroot.LstatNoSymlinks(root, name)
