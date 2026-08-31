@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CNZ77673NNRFWM43E4EH3T",
+  "strategy": "manual-commit",
+  "branch": "fix-declared-caps-builtins",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "cmd/entire/cli/agent/architecture_test.go",
+    "cmd/entire/cli/agent/capabilities.go",
+    "cmd/entire/cli/agent/capabilities_test.go",
+    "cmd/entire/cli/agent/inject.go",
+    "cmd/entire/cli/agent/inject_test.go",
+    "cmd/entire/cli/agent/model_lister.go",
+    "cmd/entire/cli/agent/model_lister_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 231419,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13009920,
+    "output_tokens": 48314,
+    "api_call_count": 120
+  }
+}

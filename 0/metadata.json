@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CNZ77673NNRFWM43E4EH3T",
+  "session_id": "01a058b2-9abe-7ad1-8398-7f9f9d67e660",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T19:50:39.727708Z",
+  "branch": "fix-declared-caps-builtins",
+  "checkpoints_count": 9,
+  "save_step_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/agent/architecture_test.go",
+    "cmd/entire/cli/agent/capabilities.go",
+    "cmd/entire/cli/agent/capabilities_test.go",
+    "cmd/entire/cli/agent/inject.go",
+    "cmd/entire/cli/agent/inject_test.go",
+    "cmd/entire/cli/agent/model_lister.go",
+    "cmd/entire/cli/agent/model_lister_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "3dc69aa30be6",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 231419,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13009920,
+    "output_tokens": 48314,
+    "api_call_count": 120
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T19:50:39.312399Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 37,
+    "total_committed": 8,
+    "total_lines_changed": 37,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 319,
+      "user_lines_removed": 37,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/agent/architecture_test.go": 185,
+        "cmd/entire/cli/agent/capabilities.go": 36,
+        "cmd/entire/cli/agent/capabilities_test.go": 36,
+        "cmd/entire/cli/agent/inject.go": 2,
+        "cmd/entire/cli/agent/inject_test.go": 9,
+        "cmd/entire/cli/agent/model_lister.go": 2,
+        "cmd/entire/cli/agent/model_lister_test.go": 49
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/agent/capabilities.go": 22,
+        "cmd/entire/cli/agent/capabilities_test.go": 3,
+        "cmd/entire/cli/agent/inject.go": 6,
+        "cmd/entire/cli/agent/model_lister.go": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 308,
+      "agent_lines_removed": 34
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 308,
+      "agent_lines_removed": 34
+    }
+  ]
+}
