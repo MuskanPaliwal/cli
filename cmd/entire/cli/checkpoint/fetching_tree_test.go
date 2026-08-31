@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -30,7 +32,7 @@ func TestFetchingTreeReadFileViaGitDisablesLazyFetch(t *testing.T) {
 	testutil.WriteFile(t, repoDir, "fixture.txt", "checkpoint content")
 	testutil.GitAdd(t, repoDir, "fixture.txt")
 	testutil.GitCommit(t, repoDir, "add fixture")
-	blobHash := strings.TrimSpace(testutil.RunGit(t, repoDir, "rev-parse", "HEAD:fixture.txt"))
+	blobHash := strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", "HEAD:fixture.txt"))
 
 	tracePath := traceGitCatFile(t)
 	t.Chdir(repoDir)
@@ -63,7 +65,7 @@ func TestFetchingTreeCollectMissingBlobsProbesOnce(t *testing.T) {
 	}
 	testutil.GitCommit(t, repoDir, "add fixtures")
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		hash := plumbing.NewHash(strings.TrimSpace(testutil.RunGit(t, repoDir, "rev-parse", "HEAD:"+name)))
+		hash := plumbing.NewHash(strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", "HEAD:"+name)))
 		hashes = append(hashes, hash)
 		entries = append(entries, object.TreeEntry{Name: name, Mode: filemode.Regular, Hash: hash})
 	}

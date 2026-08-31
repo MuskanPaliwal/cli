@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
+
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // truncateStringSlice returns the first n elements of a slice, for concise logging.

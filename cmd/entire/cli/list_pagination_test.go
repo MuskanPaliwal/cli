@@ -7,8 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/entireio/cli/internal/coreapi"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/internal/coreapi"
 )
 
 // TestOrgList_FollowsCursor drives `org list` against a two-page fake control

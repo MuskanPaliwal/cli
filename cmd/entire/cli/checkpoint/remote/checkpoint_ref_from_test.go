@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
 
@@ -19,7 +21,7 @@ import (
 // can identify which candidate served the fetch.
 func candidatesFixture(t *testing.T, refOnUpstream, refOnOrigin bool) (workDir string, ref plumbing.ReferenceName, upstreamHash, originHash string) {
 	t.Helper()
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	upstreamBare := t.TempDir()
 	originBare := t.TempDir()

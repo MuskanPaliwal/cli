@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -17,7 +19,7 @@ import (
 // can identify which candidate served the fetch.
 func metadataCandidatesFixture(t *testing.T, onOrigin, onUpstream bool) (localDir, originHash, upstreamHash string) {
 	t.Helper()
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	tmpDir := t.TempDir()
 	originBare := filepath.Join(tmpDir, "origin.git")
@@ -64,7 +66,7 @@ func metadataCandidatesFixture(t *testing.T, onOrigin, onUpstream bool) (localDi
 		"refs/remotes/upstream/" + paths.MetadataBranchName,
 	} {
 		cmd := exec.CommandContext(t.Context(), "git", "-C", localDir, "update-ref", "-d", ref)
-		cmd.Env = testutil.GitIsolatedEnv()
+		cmd.Env = gitenv.Isolated()
 		_ = cmd.Run() //nolint:errcheck // best-effort cleanup of maybe-missing tracking refs
 	}
 
@@ -76,7 +78,7 @@ func metadataCandidatesFixture(t *testing.T, onOrigin, onUpstream bool) (localDi
 func refExists(t *testing.T, dir, ref string) bool {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "-C", dir, "rev-parse", "--verify", "--quiet", ref)
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	return cmd.Run() == nil
 }
 
@@ -107,7 +109,7 @@ func TestFetchMetadataTreeOnly_ElectedCandidateWinsAndAdvancesLocal(t *testing.T
 
 // The legacy read tier must never become a policy push or local-update target.
 func TestResolveCheckpointPolicyTargets_SplitsReadAndPush(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	testutil.WriteFile(t, dir, "f.txt", "init")

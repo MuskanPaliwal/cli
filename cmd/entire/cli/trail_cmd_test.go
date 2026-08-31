@@ -20,7 +20,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"charm.land/huh/v2"
+	"github.com/go-git/go-git/v6"
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -29,9 +35,6 @@ import (
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
-	"github.com/go-git/go-git/v6"
-	"github.com/spf13/cobra"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -345,7 +348,7 @@ func TestCleanupCreatedTrailBranch(t *testing.T) {
 func initTrailCleanupRepo(t *testing.T) (localDir, originDir string, repo *git.Repository) {
 	t.Helper()
 
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	tmp := t.TempDir()
 	localDir = filepath.Join(tmp, "local")
 	originDir = filepath.Join(tmp, "origin.git")
@@ -868,7 +871,7 @@ func TestResolveTrailRemote_RejectsUnsupportedForge(t *testing.T) {
 	testutil.InitRepo(t, repoDir)
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@gitlab.com:acme/my-app.git")
 	cmd.Dir = repoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git remote add: %v", err)
 	}
@@ -903,7 +906,7 @@ func TestTrailEnablementCache_ReadsClonePreference(t *testing.T) {
 	testutil.InitRepo(t, repoDir)
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@github.com:acme/repo.git")
 	cmd.Dir = repoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git remote add: %v", err)
 	}
@@ -2753,7 +2756,7 @@ func TestResolveTrailPushRemote(t *testing.T) {
 			// Without this, a developer or CI machine carrying a global
 			// remote.pushDefault resolves that instead of the repo-local config
 			// under test — and the "falls back to origin" case fails.
-			testutil.IsolateGitConfigEnv(t)
+			gitenv.IsolateProcess(t)
 			dir := t.TempDir()
 			testutil.InitRepo(t, dir)
 			for _, kv := range tc.config {

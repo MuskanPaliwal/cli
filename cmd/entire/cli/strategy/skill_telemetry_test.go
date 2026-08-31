@@ -7,10 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 // writeTelemetrySettings puts a repo with a known telemetry opt-in state on

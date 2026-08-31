@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -55,7 +57,7 @@ func TestParseExplainRepoFlag(t *testing.T) {
 // TestExplainRepoIsCurrent checks same-repo detection against the origin URL.
 // Not parallel: uses t.Chdir.
 func TestExplainRepoIsCurrent(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)

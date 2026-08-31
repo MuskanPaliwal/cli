@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
 // TestShouldSkipForwardedHook_TranscriptBelongsToOtherAgent verifies the

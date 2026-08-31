@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
 )
 

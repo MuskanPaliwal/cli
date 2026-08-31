@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -1793,7 +1795,7 @@ func runAdoptGit(t *testing.T, dir string, args ...string) {
 
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}

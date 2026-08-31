@@ -11,6 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
+	"github.com/go-git/go-git/v6"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
@@ -18,9 +23,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/go-git/go-git/v6"
-	"github.com/stretchr/testify/require"
 
 	"github.com/spf13/cobra"
 )
@@ -55,7 +57,7 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 		t.Fatalf("failed to git add: %v", err)
 	}
 	gitCommit := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	gitCommit.Env = testutil.GitIsolatedEnv()
+	gitCommit.Env = gitenv.Isolated()
 	if err := gitCommit.Run(); err != nil {
 		t.Fatalf("failed to git commit: %v", err)
 	}
@@ -643,7 +645,7 @@ func TestHookCommand_SetsCurrentHookAgentName(t *testing.T) {
 		t.Fatalf("failed to git add: %v", err)
 	}
 	gitCommit := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
-	gitCommit.Env = testutil.GitIsolatedEnv()
+	gitCommit.Env = gitenv.Isolated()
 	if err := gitCommit.Run(); err != nil {
 		t.Fatalf("failed to git commit: %v", err)
 	}

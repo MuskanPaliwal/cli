@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"runtime"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/experimental"
 	"github.com/entireio/cli/cmd/entire/cli/investigate"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -14,7 +16,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/telemetry"
 	"github.com/entireio/cli/cmd/entire/cli/versioncheck"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
-	"github.com/spf13/cobra"
 )
 
 const gettingStarted = `

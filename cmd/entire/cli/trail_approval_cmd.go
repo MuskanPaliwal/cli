@@ -8,8 +8,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/spf13/cobra"
+
+	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 
 // trailApprovalsPath builds the approvals collection path for a trail number.

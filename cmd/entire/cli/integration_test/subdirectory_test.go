@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 )
 
 // TestSubdirectory_EntireDirCreatedAtRepoRoot verifies that when the CLI is run
@@ -43,7 +43,7 @@ func TestSubdirectory_EntireDirCreatedAtRepoRoot(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", agentClaudeCode, "user-prompt-submit")
 	cmd.Dir = subdirPath // Run from subdirectory!
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(testutil.GitIsolatedEnv(),
+	cmd.Env = append(gitenv.Isolated(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 	)
 
@@ -113,7 +113,7 @@ func TestSubdirectory_SaveStepFromSubdir(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", agentClaudeCode, "user-prompt-submit")
 	cmd.Dir = subdirPath // Run from subdirectory
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(testutil.GitIsolatedEnv(),
+	cmd.Env = append(gitenv.Isolated(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -133,7 +133,7 @@ func TestSubdirectory_SaveStepFromSubdir(t *testing.T) {
 	stopCmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", agentClaudeCode, "stop")
 	stopCmd.Dir = subdirPath // Run from subdirectory
 	stopCmd.Stdin = bytes.NewReader(stopInputJSON)
-	stopCmd.Env = append(testutil.GitIsolatedEnv(),
+	stopCmd.Env = append(gitenv.Isolated(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 	)
 	if output, err := stopCmd.CombinedOutput(); err != nil {

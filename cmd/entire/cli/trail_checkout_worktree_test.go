@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -128,7 +130,7 @@ func TestAppendIgnoreRule_MissingFileNoop(t *testing.T) {
 }
 
 func TestEnsureTrailWorktreeIgnoreRule_AppendsGitignore(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -152,7 +154,7 @@ func TestEnsureTrailWorktreeIgnoreRule_AppendsGitignore(t *testing.T) {
 }
 
 func TestEnsureTrailWorktreeIgnoreRule_MissingGitignoreNoop(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -171,7 +173,7 @@ func TestEnsureTrailWorktreeIgnoreRule_MissingGitignoreNoop(t *testing.T) {
 }
 
 func TestEnsureTrailWorktreeIgnoreRule_AlreadyIgnoredIsSilentNoop(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -212,7 +214,7 @@ func TestMatchIncludePatterns(t *testing.T) {
 }
 
 func TestListIgnoredFiles_ExcludesManagedWorktreePaths(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -261,7 +263,7 @@ func TestLoadWorktreeIncludePatterns_MissingFile(t *testing.T) {
 }
 
 func TestCopyWorktreeIncludeFiles(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -285,7 +287,7 @@ func TestCopyWorktreeIncludeFiles(t *testing.T) {
 }
 
 func TestCopyWorktreeIncludeFiles_NoIncludeFileCopiesNothing(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -303,7 +305,7 @@ func TestCopyWorktreeIncludeFiles_NoIncludeFileCopiesNothing(t *testing.T) {
 }
 
 func TestCopyWorktreeIncludeFiles_SkipsSymlinkWithWarning(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	const symlinkPath = "link.env"
 	repoDir := t.TempDir()
@@ -329,7 +331,7 @@ func TestCopyWorktreeIncludeFiles_SkipsSymlinkWithWarning(t *testing.T) {
 }
 
 func TestCopyWorktreeIncludeFiles_RefusesSymlinkedDirEscape(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -357,7 +359,7 @@ func TestCopyWorktreeIncludeFiles_RefusesSymlinkedDirEscape(t *testing.T) {
 
 func newTrailWorktreeTestRepo(t *testing.T) string {
 	t.Helper()
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	paths.ClearWorktreeRootCache()
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
@@ -557,7 +559,7 @@ func TestCheckoutTrailWorktree_ReusesExistingWorktree(t *testing.T) {
 }
 
 func TestCheckoutTrailWorktree_FetchesRemoteOnlyBranch(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	paths.ClearWorktreeRootCache()
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
@@ -701,7 +703,7 @@ func TestCheckoutTrailWorktree_RegisteredPathNotADirectory(t *testing.T) {
 }
 
 func TestFindWorktreeForBranch_SurfacesGitError(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 
 	_, _, err := findWorktreeForBranch(context.Background(), "any", t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
@@ -710,7 +712,7 @@ func TestFindWorktreeForBranch_SurfacesGitError(t *testing.T) {
 }
 
 func TestGitCommonDirForTrailWorktree_SurfacesGitError(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	t.Chdir(t.TempDir())
 
 	_, err := gitCommonDirForTrailWorktree(context.Background())

@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestResolveHookDiscovery_NormalCheckout(t *testing.T) {
@@ -201,7 +204,7 @@ func runGitWithDir(t *testing.T, commandDir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = commandDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }

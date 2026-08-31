@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestImportClaudeCode_DryRunReportsCounts(t *testing.T) {

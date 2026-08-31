@@ -4,7 +4,6 @@ package testutil
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -133,7 +132,7 @@ func GitCommit(t *testing.T, repoDir, message string) {
 // Uses git CLI to work around go-git v5 bug with checkout deleting untracked files.
 func GitCheckoutNewBranch(t *testing.T, repoDir, branchName string) {
 	t.Helper()
-	RunGit(t, repoDir, "checkout", "-b", branchName)
+	gitenv.Run(t, repoDir, "checkout", "-b", branchName)
 }
 
 // GetHeadHash returns the current HEAD commit hash.
@@ -154,44 +153,23 @@ func GetHeadHash(t *testing.T, repoDir string) string {
 	return head.Hash().String()
 }
 
-// RunGit runs one git command in dir with an isolated git config, failing the
-// test on error and returning combined output. Use it for operations go-git
-// cannot express (force-add past .gitignore, rm --cached, worktree add) or
-// where shelling out is simply clearer. See gitenv.Run.
-//
-//nolint:unparam // the output is used by callers in other packages
-func RunGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	return gitenv.Run(t, dir, args...)
-}
-
 // GitAddForce stages paths past .gitignore. GitAdd goes through go-git's
 // worktree.Add, which has no force option.
 func GitAddForce(t *testing.T, repoDir string, paths ...string) {
 	t.Helper()
-	RunGit(t, repoDir, append([]string{"add", "-f"}, paths...)...)
+	gitenv.Run(t, repoDir, append([]string{"add", "-f"}, paths...)...)
 }
 
 // CreateBranch creates a local branch at the current HEAD.
 func CreateBranch(t *testing.T, dir string, name string) {
 	t.Helper()
-	cmd := exec.Command("git", "branch", name) //nolint:noctx // test helper, no context needed
-	cmd.Dir = dir
-	cmd.Env = GitIsolatedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git branch %s: %v\n%s", name, err, out)
-	}
+	gitenv.Run(t, dir, "branch", name)
 }
 
 // AddRemote adds a git remote named name pointing at url in repoDir.
 func AddRemote(t *testing.T, repoDir, name, url string) {
 	t.Helper()
-	cmd := exec.Command("git", "remote", "add", name, url) //nolint:noctx // test helper, no context needed
-	cmd.Dir = repoDir
-	cmd.Env = GitIsolatedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git remote add %s: %v\n%s", name, err, out)
-	}
+	gitenv.Run(t, repoDir, "remote", "add", name, url)
 }
 
 // WriteCheckpointPushRemoteSetting writes .entire/settings.json configuring
@@ -205,23 +183,13 @@ func WriteCheckpointPushRemoteSetting(t *testing.T, repoDir, remoteName string) 
 // GitUpdateRef points ref at hash in repoDir via git update-ref.
 func GitUpdateRef(t *testing.T, repoDir, ref, hash string) {
 	t.Helper()
-	cmd := exec.Command("git", "update-ref", ref, hash) //nolint:noctx // test helper, no context needed
-	cmd.Dir = repoDir
-	cmd.Env = GitIsolatedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git update-ref %s %s: %v\n%s", ref, hash, err, out)
-	}
+	gitenv.Run(t, repoDir, "update-ref", ref, hash)
 }
 
 // GitReset runs git reset --hard to the given ref.
 func GitReset(t *testing.T, dir string, ref string) {
 	t.Helper()
-	cmd := exec.Command("git", "reset", "--hard", ref) //nolint:noctx // test helper, no context needed
-	cmd.Dir = dir
-	cmd.Env = GitIsolatedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git reset --hard %s: %v\n%s", ref, err, out)
-	}
+	gitenv.Run(t, dir, "reset", "--hard", ref)
 }
 
 // BranchExists checks if a branch exists in the repository.
@@ -249,23 +217,4 @@ func BranchExists(t *testing.T, repoDir, branchName string) bool {
 	})
 
 	return found
-}
-
-// EnvGitHermetic opts a test process into gitenv's hermetic transport config;
-// see gitenv.EnvHermetic.
-const EnvGitHermetic = gitenv.EnvHermetic
-
-// GitIsolatedEnv returns os.Environ() with git isolation variables set; see
-// gitenv.Isolated. The implementation lives in the dependency-free gitenv
-// subpackage so internal tests of packages testutil imports (e.g. gitrepo)
-// can use it without an import cycle.
-func GitIsolatedEnv() []string {
-	return gitenv.Isolated()
-}
-
-// IsolateGitConfigEnv applies git config isolation to the current process;
-// see gitenv.IsolateProcess.
-func IsolateGitConfigEnv(t *testing.T) {
-	t.Helper()
-	gitenv.IsolateProcess(t)
 }

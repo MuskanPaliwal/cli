@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -38,7 +40,7 @@ func TestPromoteRemoteTrackingPrimary_NonElectedOriginNeverPromotes(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testutil.IsolateGitConfigEnv(t)
+			gitenv.IsolateProcess(t)
 			dir := t.TempDir()
 			testutil.InitRepo(t, dir)
 			testutil.WriteFile(t, dir, "f.txt", "init")

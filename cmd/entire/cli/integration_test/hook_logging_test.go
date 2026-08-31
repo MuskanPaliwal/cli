@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestHookLogging_WritesToSessionLogFile(t *testing.T) {
@@ -37,7 +38,7 @@ func TestHookLogging_WritesToSessionLogFile(t *testing.T) {
 	// Use post-commit since it takes no arguments
 	cmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", "git", "post-commit")
 	cmd.Dir = env.RepoDir
-	cmd.Env = append(testutil.GitIsolatedEnv(),
+	cmd.Env = append(gitenv.Isolated(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 		"ENTIRE_LOG_LEVEL=debug",
 	)
@@ -97,7 +98,7 @@ func TestHookLogging_WritesWithoutSession(t *testing.T) {
 	// Run a hook with ENTIRE_LOG_LEVEL=debug
 	cmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", "git", "post-commit")
 	cmd.Dir = env.RepoDir
-	cmd.Env = append(testutil.GitIsolatedEnv(),
+	cmd.Env = append(gitenv.Isolated(),
 		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+env.ClaudeProjectDir,
 		"ENTIRE_LOG_LEVEL=debug",
 	)

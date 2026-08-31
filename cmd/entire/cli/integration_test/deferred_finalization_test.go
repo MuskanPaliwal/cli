@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
+
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 )
 
 // TestShadow_DeferredTranscriptFinalization tests that HandleTurnEnd updates
@@ -1358,7 +1360,7 @@ func commitDrivingGitHooksVerbosely(t *testing.T, env *TestEnv, path, msg string
 
 	prepCmd := exec.CommandContext(t.Context(), getTestBinary(), "hooks", "git", "prepare-commit-msg", msgFile, "message")
 	prepCmd.Dir = env.RepoDir
-	prepCmd.Env = append(testutil.GitIsolatedEnv(), "ENTIRE_TEST_TTY=1")
+	prepCmd.Env = append(gitenv.Isolated(), "ENTIRE_TEST_TTY=1")
 	prepOutput, prepErr := prepCmd.CombinedOutput()
 	t.Logf("prepare-commit-msg output: %s (err: %v)", prepOutput, prepErr)
 

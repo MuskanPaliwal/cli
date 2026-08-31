@@ -1,8 +1,9 @@
 package cli
 
 import (
-	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/spf13/cobra"
+
+	"github.com/entireio/cli/internal/entireclient/contexts"
 )
 
 // contextFlagValue applies --context to the process-wide selection as pflag

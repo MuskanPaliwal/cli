@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/palette"
 	"github.com/entireio/cli/internal/coreapi"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
-	"github.com/spf13/cobra"
 )
 
 // coreAuthSessionsPath is entire-core's login-session endpoint family

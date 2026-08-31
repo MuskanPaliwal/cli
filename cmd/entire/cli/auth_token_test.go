@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
-	"github.com/stretchr/testify/require"
 )
 
 // stubExchangeRT intercepts any /oauth/token POST and returns a canned identity

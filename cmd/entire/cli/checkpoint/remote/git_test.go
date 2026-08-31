@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -98,7 +100,7 @@ func TestResolveTargetForTokenAuth_RemoteName_HTTPS(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/repo.git")
 	cmd.Dir = tmpDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	require.NoError(t, cmd.Run())
 
 	t.Chdir(tmpDir)
@@ -120,7 +122,7 @@ func TestResolveTargetForTokenAuth_RemoteName_SSH_RewritesToHTTPS(t *testing.T) 
 
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "git@github.com:org/repo.git")
 	cmd.Dir = tmpDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	require.NoError(t, cmd.Run())
 
 	t.Chdir(tmpDir)
@@ -190,7 +192,7 @@ func TestResolvePushCommandTarget(t *testing.T) {
 			if tt.originURL != "" {
 				cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", tt.originURL)
 				cmd.Dir = tmpDir
-				cmd.Env = testutil.GitIsolatedEnv()
+				cmd.Env = gitenv.Isolated()
 				require.NoError(t, cmd.Run())
 			}
 			if tt.settingsJSON != "" {
@@ -220,7 +222,7 @@ func TestResolveFetchTarget(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/repo.git")
 	cmd.Dir = tmpDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	require.NoError(t, cmd.Run())
 
 	t.Chdir(tmpDir)
@@ -382,7 +384,7 @@ func revListCount(ctx context.Context, t *testing.T, dir, ref string) int {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", ref)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	out, err := cmd.Output()
 	require.NoError(t, err)
 	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
@@ -425,7 +427,7 @@ func runIsolatedGit(ctx context.Context, t *testing.T, dir string, args ...strin
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	require.NoError(t, cmd.Run(), "git %v", args)
 }
 
@@ -796,7 +798,7 @@ func envToMap(env []string) map[string]string {
 // true value. Missing keys and read errors report false.
 func gitConfigBool(ctx context.Context, dir, key string) bool {
 	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--get", "--type=bool", key)
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if dir != "" {
 		cmd.Dir = dir
 	}

@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 )
 
 // TestMain builds the CLI binary once before running all tests.
@@ -50,7 +50,7 @@ func TestMain(m *testing.M) {
 		"ENTIRE_TOKEN_STORE_PATH":     filepath.Join(tmpDir, "entire-tokens.json"),
 		"ENTIRE_TEST_AUTH_STORE_FILE": filepath.Join(tmpDir, "entire-auth-tokens.json"),
 		"GIT_TERMINAL_PROMPT":         "0",
-		testutil.EnvGitHermetic:       "1",
+		gitenv.EnvHermetic:            "1",
 		// Plugin fixtures are file:// repos, which the shipped allowlist
 		// refuses — nothing in production needs a local git remote, and a
 		// security allowlist should not be widened for test convenience.

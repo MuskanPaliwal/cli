@@ -3,9 +3,10 @@ package checkpointpolicy_test
 import (
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 )
 
 func TestUpdateRejectsDowngradeFromRemoteWithoutForce(t *testing.T) {

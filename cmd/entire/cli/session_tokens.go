@@ -8,9 +8,10 @@ import (
 	"math/bits"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/spf13/cobra"
 )
 
 type sessionTokensReport struct {

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
@@ -422,9 +424,9 @@ func TestRunSessionsFix_MetadataCheckFailure_PropagatesError(t *testing.T) {
 
 // Even forced doctor repairs must not advance local state from a legacy tier.
 func TestCheckDisconnectedMetadata_NonElectedRemote_ReportOnly(t *testing.T) {
-	// Cannot use t.Parallel(): t.Chdir and IsolateGitConfigEnv (t.Setenv)
+	// Cannot use t.Parallel(): t.Chdir and gitenv.IsolateProcess (t.Setenv)
 	// modify process-global state.
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
 
@@ -1144,7 +1146,7 @@ func runGitForDoctorTest(t *testing.T, repoRoot string, args ...string) {
 	commandArgs := append([]string{"-C", repoRoot}, args...)
 	gitCmd := exec.CommandContext(t.Context(), "git", commandArgs...)
 	gitCmd.Dir = repoRoot
-	gitCmd.Env = testutil.GitIsolatedEnv()
+	gitCmd.Env = gitenv.Isolated()
 	output, err := gitCmd.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }
@@ -1309,8 +1311,8 @@ func runCheckDisconnectedMetadata(t *testing.T) string {
 // next fetch rewrites the local ref by replaying local commits. Nothing else
 // surfaces that, since the replay itself only logs.
 func TestCheckDisconnectedMetadata_Diverged_ReportedAsSelfHealing(t *testing.T) {
-	// Cannot use t.Parallel(): t.Chdir and IsolateGitConfigEnv modify globals.
-	testutil.IsolateGitConfigEnv(t)
+	// Cannot use t.Parallel(): t.Chdir and gitenv.IsolateProcess modify globals.
+	gitenv.IsolateProcess(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
 
@@ -1339,7 +1341,7 @@ func TestCheckDisconnectedMetadata_Diverged_ReportedAsSelfHealing(t *testing.T) 
 // half: the confinement rule means a diverged legacy-tier ref never advances the
 // local ref, so promising self-healing there would be a lie.
 func TestCheckDisconnectedMetadata_Diverged_LegacyTierWontReconcile(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
 
@@ -1364,7 +1366,7 @@ func TestCheckDisconnectedMetadata_Diverged_LegacyTierWontReconcile(t *testing.T
 // TestCheckDisconnectedMetadata_Aligned_StaysQuiet pins that the common case is
 // unchanged — the divergence check must not add noise to a healthy repo.
 func TestCheckDisconnectedMetadata_Aligned_StaysQuiet(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
 

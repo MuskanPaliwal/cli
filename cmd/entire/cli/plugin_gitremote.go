@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"golang.org/x/mod/semver"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 )
 
 // Host-agnostic remote inspection over the git protocol. Version listing

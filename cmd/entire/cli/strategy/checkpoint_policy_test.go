@@ -9,18 +9,20 @@ import (
 	"strings"
 	"testing"
 
-	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
-	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
-	"github.com/entireio/cli/cmd/entire/cli/interactive"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/entireio/cli/redact"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/redact"
 )
 
 func TestCondenseSessionRejectsUnsupportedPolicy(t *testing.T) {
@@ -300,7 +302,7 @@ func runCheckpointPolicyGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	return string(output)

@@ -6,9 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/experimental"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
-	"github.com/spf13/cobra"
 )
 
 func TestVersionFlag_OutputMatchesVersionCmd(t *testing.T) {

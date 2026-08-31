@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/versioncheck"
-	"github.com/spf13/cobra"
 )
 
 func ShouldCheckCheckpointPolicyWarning(cmd *cobra.Command) bool {

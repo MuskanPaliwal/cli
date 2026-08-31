@@ -11,8 +11,9 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/entireio/cli/cmd/entire/cli/palette"
 	"golang.org/x/term"
+
+	"github.com/entireio/cli/cmd/entire/cli/palette"
 )
 
 type activityStyles struct {

@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-git/go-git/v6"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 	"github.com/entireio/cli/cmd/entire/cli/versioncheck"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
-	"github.com/go-git/go-git/v6"
 )
 
 var errUnsupportedCheckpointPolicy = errors.New("checkpoint policy cannot be satisfied by this Entire CLI")

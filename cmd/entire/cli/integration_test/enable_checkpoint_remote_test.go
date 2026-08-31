@@ -7,11 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -165,7 +168,7 @@ func requireNoMetadataBranch(t *testing.T, dir, msg string) {
 // rule: the child gets no controlling terminal, so it never blocks on a prompt).
 func runEntireInDir(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	stdout, stderr, err := runEntire(t, testutil.GitIsolatedEnv(), dir, args...)
+	stdout, stderr, err := runEntire(t, gitenv.Isolated(), dir, args...)
 	if err != nil {
 		t.Fatalf("entire %v failed: %v\n%s%s", args, err, stdout, stderr)
 	}

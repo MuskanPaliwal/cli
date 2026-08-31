@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/proclive"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -230,7 +232,7 @@ func addSiblingWorktree(t *testing.T, dir, name string) string {
 	t.Helper()
 	path := filepath.Join(filepath.Dir(dir), filepath.Base(dir)+"-"+name)
 	cmd := exec.CommandContext(context.Background(), "git", "-C", dir, "worktree", "add", "-b", name, path)
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add: %v\n%s", err, out)
 	}

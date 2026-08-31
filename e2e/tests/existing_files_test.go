@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/e2e/testutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/entireio/cli/e2e/testutil"
 )
 
 // TestModifyExistingTrackedFile: agent modifies an existing tracked file

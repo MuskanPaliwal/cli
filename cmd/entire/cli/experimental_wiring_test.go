@@ -3,8 +3,9 @@ package cli
 import (
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/experimental"
 	"github.com/spf13/cobra"
+
+	"github.com/entireio/cli/cmd/entire/cli/experimental"
 )
 
 // experimentalRootCommands are the top-level commands gated behind the

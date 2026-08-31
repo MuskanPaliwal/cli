@@ -11,12 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v6"
@@ -286,7 +287,7 @@ func cloneSourceRepo(t *testing.T) string {
 	t.Logf("Cloning %s (full history, single branch) ...", hookPerfRepoURL)
 	start := time.Now()
 
-	testutil.RunGit(t, "", "clone", "--single-branch", hookPerfRepoURL, dir)
+	gitenv.Run(t, "", "clone", "--single-branch", hookPerfRepoURL, dir)
 	t.Logf("Source clone completed in %s", time.Since(start).Round(time.Millisecond))
 
 	return dir
@@ -301,7 +302,7 @@ func localClone(t *testing.T, sourceDir string) string {
 		dir = resolved
 	}
 
-	testutil.RunGit(t, "", "clone", "--local", sourceDir, dir)
+	gitenv.Run(t, "", "clone", "--local", sourceDir, dir)
 
 	return dir
 }
@@ -309,7 +310,7 @@ func localClone(t *testing.T, sourceDir string) string {
 // gitRun executes a git command in the given directory and fails the test on error.
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	testutil.RunGit(t, dir, args...)
+	gitenv.Run(t, dir, args...)
 }
 
 // createHookPerfSettings writes .entire/settings.json with commit_linking=always

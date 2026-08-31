@@ -10,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // refFormatReftable is git's rev-parse --show-ref-format value for a repository
@@ -334,7 +335,7 @@ func requireGitReftableSupport(t *testing.T) {
 
 	dir := t.TempDir()
 	cmd := exec.Command("git", "init", "--ref-format=reftable", dir) //nolint:noctx // test capability probe
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("git does not support reftable repositories: %v\n%s", err, output)
 	}

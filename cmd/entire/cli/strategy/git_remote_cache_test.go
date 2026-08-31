@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -237,7 +239,7 @@ func TestGitRemoteCache_Invalidate(t *testing.T) {
 //
 // Not parallel: t.Chdir and IsolateGitConfigEnv touch process-global state.
 func TestGitRemoteCache_ElectionSeesRemoteAddedAfterInvalidate(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	testutil.WriteFile(t, dir, "f.txt", "x")

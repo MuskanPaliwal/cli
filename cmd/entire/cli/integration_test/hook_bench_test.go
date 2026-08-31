@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/benchutil"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // BenchmarkHookSessionStart measures the end-to-end latency of the
@@ -164,7 +165,7 @@ func benchSubprocessOverhead(b *testing.B) {
 			start := time.Now()
 			cmd := exec.CommandContext(b.Context(), "git", "rev-parse", "--show-toplevel")
 			cmd.Dir = repo.Dir
-			cmd.Env = testutil.GitIsolatedEnv()
+			cmd.Env = gitenv.Isolated()
 			if output, err := cmd.CombinedOutput(); err != nil {
 				b.Fatalf("git rev-parse failed: %v\n%s", err, output)
 			}
@@ -180,7 +181,7 @@ func benchSubprocessOverhead(b *testing.B) {
 			for range 7 {
 				cmd := exec.CommandContext(b.Context(), "git", "rev-parse", "--show-toplevel")
 				cmd.Dir = repo.Dir
-				cmd.Env = testutil.GitIsolatedEnv()
+				cmd.Env = gitenv.Isolated()
 				if output, err := cmd.CombinedOutput(); err != nil {
 					b.Fatalf("git rev-parse failed: %v\n%s", err, output)
 				}
@@ -239,7 +240,7 @@ func runSessionStartHook(b *testing.B, repo *benchutil.BenchRepo) {
 		cmd := exec.CommandContext(b.Context(), binary, "hooks", agentClaudeCode, "session-start")
 		cmd.Dir = repo.Dir
 		cmd.Stdin = bytes.NewReader(stdinPayload)
-		cmd.Env = append(testutil.GitIsolatedEnv(),
+		cmd.Env = append(gitenv.Isolated(),
 			"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+claudeProjectDir,
 		)
 

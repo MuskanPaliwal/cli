@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 const goosWindows = "windows"
@@ -22,7 +23,7 @@ const goosWindows = "windows"
 // takes precedence over the global one.
 func clearGlobalHooksPath(t *testing.T, repoDir string) {
 	t.Helper()
-	testutil.RunGit(t, repoDir, "config", "--local", "core.hooksPath", filepath.Join(repoDir, ".git", "hooks"))
+	gitenv.Run(t, repoDir, "config", "--local", "core.hooksPath", filepath.Join(repoDir, ".git", "hooks"))
 }
 
 // initHooksTestRepo creates a temporary git repository, changes to it, and clears
@@ -32,7 +33,7 @@ func initHooksTestRepo(t *testing.T) (string, string) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 	clearGlobalHooksPath(t, tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -44,7 +45,7 @@ func TestGetGitDirInPath_RegularRepo(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 
 	result, err := getGitDirInPath(context.Background(), tmpDir)
 	if err != nil {
@@ -80,16 +81,16 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 		t.Fatalf("failed to create main repo dir: %v", err)
 	}
 
-	testutil.RunGit(t, mainRepo, "init")
+	gitenv.Run(t, mainRepo, "init")
 	clearGlobalHooksPath(t, mainRepo)
 
 	// Configure git user for the commit
-	testutil.RunGit(t, mainRepo, "config", "user.email", "test@test.com")
+	gitenv.Run(t, mainRepo, "config", "user.email", "test@test.com")
 
-	testutil.RunGit(t, mainRepo, "config", "user.name", "Test User")
+	gitenv.Run(t, mainRepo, "config", "user.name", "Test User")
 
 	// Disable GPG signing for test commits
-	testutil.RunGit(t, mainRepo, "config", "commit.gpgsign", "false")
+	gitenv.Run(t, mainRepo, "config", "commit.gpgsign", "false")
 
 	// Create an initial commit (required for worktree)
 	testFile := filepath.Join(mainRepo, "test.txt")
@@ -97,12 +98,12 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	testutil.RunGit(t, mainRepo, "add", ".")
+	gitenv.Run(t, mainRepo, "add", ".")
 
-	testutil.RunGit(t, mainRepo, "commit", "-m", "initial")
+	gitenv.Run(t, mainRepo, "commit", "-m", "initial")
 
 	// Create a worktree
-	testutil.RunGit(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
+	gitenv.Run(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
 
 	// Test that getGitDirInPath works in the worktree
 	result, err := getGitDirInPath(context.Background(), worktreeDir)
@@ -147,7 +148,7 @@ func TestGetHooksDirInPath_RegularRepo(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 	clearGlobalHooksPath(t, tmpDir)
 
 	result, err := getHooksDirInPath(context.Background(), tmpDir)
@@ -203,10 +204,10 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 
 	// Relative core.hooksPath should resolve relative to repo root.
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", ".githooks")
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", ".githooks")
 	relativeResult, err := getHooksDirInPath(context.Background(), tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error for relative hooks path: %v", err)
@@ -218,7 +219,7 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 
 	// Absolute core.hooksPath should be returned unchanged.
 	absHooksPath := filepath.Join(tmpDir, "abs-hooks")
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", absHooksPath)
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", absHooksPath)
 	absoluteResult, err := getHooksDirInPath(context.Background(), tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error for absolute hooks path: %v", err)
@@ -235,7 +236,7 @@ func TestInstallGitHook_HooksPathNotADirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	ctx := context.Background()
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 
 	hooksPath := "/dev/null"
 	if runtime.GOOS == goosWindows {
@@ -244,7 +245,7 @@ func TestInstallGitHook_HooksPathNotADirectory(t *testing.T) {
 			t.Fatalf("failed to create non-directory hooks path: %v", err)
 		}
 	}
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", hooksPath)
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", hooksPath)
 
 	t.Chdir(tmpDir)
 	ClearHooksDirCache()
@@ -283,8 +284,8 @@ func TestInstallGitHook_HooksPathUnderNonDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	ctx := context.Background()
 
-	testutil.RunGit(t, tmpDir, "init")
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", "/dev/null/hooks")
+	gitenv.Run(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", "/dev/null/hooks")
 
 	t.Chdir(tmpDir)
 	ClearHooksDirCache()
@@ -305,9 +306,9 @@ func TestInstallGitHook_HooksPathNonexistentIsCreated(t *testing.T) {
 	tmpDir := t.TempDir()
 	ctx := context.Background()
 
-	testutil.RunGit(t, tmpDir, "init")
+	gitenv.Run(t, tmpDir, "init")
 	hooksPath := filepath.Join(tmpDir, "githooks-not-yet-created")
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", hooksPath)
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", hooksPath)
 
 	t.Chdir(tmpDir)
 	ClearHooksDirCache()
@@ -356,7 +357,7 @@ func TestInstallGitHook_WorktreeInstallsInCommonHooks(t *testing.T) {
 		}
 	}
 
-	output := testutil.RunGit(t, worktreeDir, "rev-parse", "--git-dir")
+	output := gitenv.Run(t, worktreeDir, "rev-parse", "--git-dir")
 	worktreeGitDir := strings.TrimSpace(output)
 	if !filepath.IsAbs(worktreeGitDir) {
 		worktreeGitDir = filepath.Join(worktreeDir, worktreeGitDir)
@@ -384,25 +385,25 @@ func initHooksWorktreeRepo(t *testing.T) (string, string) {
 		t.Fatalf("failed to create main repo dir: %v", err)
 	}
 
-	testutil.RunGit(t, mainRepo, "init")
+	gitenv.Run(t, mainRepo, "init")
 	clearGlobalHooksPath(t, mainRepo)
 
-	testutil.RunGit(t, mainRepo, "config", "user.email", "test@test.com")
+	gitenv.Run(t, mainRepo, "config", "user.email", "test@test.com")
 
-	testutil.RunGit(t, mainRepo, "config", "user.name", "Test User")
+	gitenv.Run(t, mainRepo, "config", "user.name", "Test User")
 
-	testutil.RunGit(t, mainRepo, "config", "commit.gpgsign", "false")
+	gitenv.Run(t, mainRepo, "config", "commit.gpgsign", "false")
 
 	testFile := filepath.Join(mainRepo, "test.txt")
 	if err := os.WriteFile(testFile, []byte("test"), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	testutil.RunGit(t, mainRepo, "add", ".")
+	gitenv.Run(t, mainRepo, "add", ".")
 
-	testutil.RunGit(t, mainRepo, "commit", "-m", "initial")
+	gitenv.Run(t, mainRepo, "commit", "-m", "initial")
 
-	testutil.RunGit(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
+	gitenv.Run(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
 
 	return mainRepo, worktreeDir
 }
@@ -476,26 +477,26 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	}
 
 	// Initialize main repo with a commit
-	testutil.RunGit(t, mainRepo, "init")
+	gitenv.Run(t, mainRepo, "init")
 
-	testutil.RunGit(t, mainRepo, "config", "user.email", "test@test.com")
+	gitenv.Run(t, mainRepo, "config", "user.email", "test@test.com")
 
-	testutil.RunGit(t, mainRepo, "config", "user.name", "Test User")
+	gitenv.Run(t, mainRepo, "config", "user.name", "Test User")
 
 	// Disable GPG signing for test commits
-	testutil.RunGit(t, mainRepo, "config", "commit.gpgsign", "false")
+	gitenv.Run(t, mainRepo, "config", "commit.gpgsign", "false")
 
 	testFile := filepath.Join(mainRepo, "test.txt")
 	if err := os.WriteFile(testFile, []byte("test"), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	testutil.RunGit(t, mainRepo, "add", ".")
+	gitenv.Run(t, mainRepo, "add", ".")
 
-	testutil.RunGit(t, mainRepo, "commit", "-m", "initial")
+	gitenv.Run(t, mainRepo, "commit", "-m", "initial")
 
 	// Create a worktree
-	testutil.RunGit(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
+	gitenv.Run(t, mainRepo, "worktree", "add", worktreeDir, "-b", "feature")
 
 	// Change to worktree
 	t.Chdir(worktreeDir)
@@ -506,7 +507,7 @@ func TestIsGitSequenceOperation_Worktree(t *testing.T) {
 	}
 
 	// Get the worktree's git dir and simulate rebase state there
-	output := testutil.RunGit(t, worktreeDir, "rev-parse", "--git-dir")
+	output := gitenv.Run(t, worktreeDir, "rev-parse", "--git-dir")
 	gitDir := strings.TrimSpace(output)
 
 	rebaseMergeDir := filepath.Join(gitDir, "rebase-merge")
@@ -943,7 +944,7 @@ func TestInstallGitHook_CoreHooksPathRelative(t *testing.T) {
 	tmpDir, _ := initHooksTestRepo(t)
 
 	// Simulate Husky-style override: hooks live outside .git/hooks.
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", ".husky/_")
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", ".husky/_")
 
 	count, err := InstallGitHook(context.Background(), true, false)
 	if err != nil {
@@ -982,7 +983,7 @@ func TestInstallGitHook_CoreHooksPathRelative(t *testing.T) {
 func TestRemoveGitHook_CoreHooksPathRelative(t *testing.T) {
 	tmpDir, _ := initHooksTestRepo(t)
 
-	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", ".husky/_")
+	gitenv.Run(t, tmpDir, "config", "core.hooksPath", ".husky/_")
 
 	installCount, err := InstallGitHook(context.Background(), true, false)
 	if err != nil {

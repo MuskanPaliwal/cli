@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode" // register agent
 	codexagent "github.com/entireio/cli/cmd/entire/cli/agent/codex"
@@ -2027,7 +2029,7 @@ func setupAttachTestRepo(t *testing.T) {
 	// process's env. Pin git config (gc.auto=0, gc.autoDetach=false) so git
 	// doesn't fork a detached `git gc` that keeps writing into the temp repo's
 	// .git/objects and races t.TempDir cleanup ("directory not empty", COR-394).
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")

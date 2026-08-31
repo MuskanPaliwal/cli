@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 
@@ -373,7 +375,7 @@ func TestPriorAICommitFiles_AnchorsOnExplicitCommit(t *testing.T) {
 	testutil.WriteFile(t, tmpDir, "reported.txt", "reported")
 	testutil.GitAdd(t, tmpDir, "reported.txt")
 	testutil.GitCommit(t, tmpDir, trailers.FormatCheckpoint("reported change", cpID))
-	reported := strings.TrimSpace(testutil.RunGit(t, tmpDir, "rev-parse", "HEAD"))
+	reported := strings.TrimSpace(gitenv.Run(t, tmpDir, "rev-parse", "HEAD"))
 
 	// HEAD moves on before the probe runs (it fires after the session gate
 	// releases): a later checkpoint commit that must count neither itself nor
@@ -501,19 +503,19 @@ func TestPriorAICommitFiles_MergeCommitContributesNothing(t *testing.T) {
 	testutil.GitAdd(t, tmpDir, "base.txt")
 	testutil.GitCommit(t, tmpDir, "base")
 
-	branch := testutil.RunGit(t, tmpDir, "rev-parse", "--abbrev-ref", "HEAD")
+	branch := gitenv.Run(t, tmpDir, "rev-parse", "--abbrev-ref", "HEAD")
 	branch = strings.TrimSpace(branch)
 
-	testutil.RunGit(t, tmpDir, "checkout", "-b", "side")
+	gitenv.Run(t, tmpDir, "checkout", "-b", "side")
 	testutil.WriteFile(t, tmpDir, "side.txt", "side")
 	testutil.GitAdd(t, tmpDir, "side.txt")
 	testutil.GitCommit(t, tmpDir, "side change")
 
-	testutil.RunGit(t, tmpDir, "checkout", branch)
+	gitenv.Run(t, tmpDir, "checkout", branch)
 	cpID := id.MustCheckpointID("abcdef123456")
 	// A merge commit carrying a checkpoint trailer — the shape 51 of the last
 	// 300 merges on main have.
-	testutil.RunGit(t, tmpDir, "merge", "--no-ff", "-m",
+	gitenv.Run(t, tmpDir, "merge", "--no-ff", "-m",
 		trailers.FormatCheckpoint("merge side", cpID), "side")
 
 	testutil.WriteFile(t, tmpDir, "head.txt", "head")

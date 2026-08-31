@@ -17,11 +17,12 @@ import (
 	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/codesearch"
 	"github.com/entireio/cli/cmd/entire/cli/palette"
 	"github.com/entireio/cli/cmd/entire/cli/search"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
-	"github.com/muesli/termenv"
 )
 
 // searchMode tracks whether the user is browsing results or editing the search bar.

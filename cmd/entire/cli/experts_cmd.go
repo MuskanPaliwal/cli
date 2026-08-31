@@ -14,12 +14,13 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/palette"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/spf13/cobra"
 )
 
 type expertsAPIClient interface {

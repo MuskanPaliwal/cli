@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -81,7 +83,7 @@ func TestResolveTrailReviewTargetRejectsUnsupportedForge(t *testing.T) {
 	testutil.InitRepo(t, repoDir)
 	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@gitlab.com:acme/my-app.git")
 	cmd.Dir = repoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git remote add: %v", err)
 	}

@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/e2e/entire"
 	"github.com/entireio/cli/e2e/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestResumeFromFeatureBranch: agent creates a file on a feature branch and

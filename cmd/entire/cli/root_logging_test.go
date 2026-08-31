@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/spf13/cobra"
 )
 
 // probeMarker proves a line reached the log file, not just that a logger existed.

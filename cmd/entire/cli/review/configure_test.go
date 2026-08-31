@@ -6,11 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/spf13/cobra"
 )
 
 const (

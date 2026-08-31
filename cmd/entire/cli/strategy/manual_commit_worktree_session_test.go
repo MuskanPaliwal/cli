@@ -8,17 +8,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/stretchr/testify/require"
 )
 
 func TestManualCommitStrategy_FindSessionsForWorktree_MatchesParentSessionFromNestedWorktree(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	worktreeDir := filepath.Join(mainDir, ".worktrees", "feature")
@@ -42,7 +45,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_MatchesParentSessionFromNe
 }
 
 func TestManualCommitStrategy_PrepareCommitMsg_AddsTrailerForParentSessionFromNestedWorktree(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	worktreeDir := filepath.Join(mainDir, ".worktrees", "feature")
@@ -74,7 +77,7 @@ func TestManualCommitStrategy_PrepareCommitMsg_AddsTrailerForParentSessionFromNe
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_MatchesUniqueSiblingByCommonDir(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	recordedWorktree := resolvedRemovedTempDir(t)
@@ -101,7 +104,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_MatchesUniqueSiblingByComm
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_ExactMatchWinsOverSiblingFallback(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	worktreeDir := filepath.Join(mainDir, ".worktrees", "feature")
@@ -129,7 +132,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_ExactMatchWinsOverSiblingF
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_DoesNotMatchUnrelatedRepo(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	otherDir := setupSessionMatchRepo(t)
@@ -150,7 +153,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_DoesNotMatchUnrelatedRepo(
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_DoesNotGuessAmbiguousSiblingSessions(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	firstWorktree := resolvedRemovedTempDir(t)
@@ -183,7 +186,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_DoesNotGuessAmbiguousSibli
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_ReturnsConcurrentSessionsFromParent(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	worktreeDir := filepath.Join(mainDir, ".worktrees", "feature")
@@ -210,7 +213,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_ReturnsConcurrentSessionsF
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_ReturnsConcurrentSessionsFromSameSibling(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	recordedWorktree := resolvedRemovedTempDir(t)
@@ -240,7 +243,7 @@ func TestManualCommitStrategy_FindSessionsForWorktree_ReturnsConcurrentSessionsF
 }
 
 func TestManualCommitStrategy_PostCommitBaseUpdate_DoesNotRewriteSiblingSessionBase(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	recordedWorktree := resolvedRemovedTempDir(t)
@@ -279,7 +282,7 @@ func TestManualCommitStrategy_PostCommitBaseUpdate_DoesNotRewriteSiblingSessionB
 }
 
 func TestManualCommitStrategy_PostCommitBaseUpdate_StillAdvancesExactMatchSessionBase(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 
@@ -309,7 +312,7 @@ func TestManualCommitStrategy_PostCommitBaseUpdate_StillAdvancesExactMatchSessio
 }
 
 func TestGitCommonDirForWorktree_IgnoresHookGitDirEnv(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	otherDir := setupSessionMatchRepo(t)
@@ -325,7 +328,7 @@ func TestGitCommonDirForWorktree_IgnoresHookGitDirEnv(t *testing.T) {
 }
 
 func TestManualCommitStrategy_FindSessionsForWorktree_WarnsOnAmbiguousSiblingSessions(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 	mainDir := setupSessionMatchRepo(t)
 	firstWorktree := resolvedRemovedTempDir(t)
@@ -419,7 +422,7 @@ func createSessionMatchWorktree(t *testing.T, repoDir, worktreeDir, branch strin
 	require.NoError(t, os.MkdirAll(filepath.Dir(worktreeDir), 0o755))
 	cmd := exec.CommandContext(context.Background(), "git", "worktree", "add", worktreeDir, "-b", branch)
 	cmd.Dir = repoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git worktree add output:\n%s", output)
 }
@@ -427,7 +430,7 @@ func createSessionMatchWorktree(t *testing.T, repoDir, worktreeDir, branch strin
 func removeSessionMatchWorktree(repoDir, worktreeDir string) {
 	cmd := exec.CommandContext(context.Background(), "git", "worktree", "remove", worktreeDir, "--force")
 	cmd.Dir = repoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	_ = cmd.Run() //nolint:errcheck // best-effort test cleanup
 }
 

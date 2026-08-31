@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -839,7 +841,7 @@ func initBareWithMetadataBranch(t *testing.T) string {
 	run := func(dir string, args ...string) {
 		cmd := exec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = dir
-		cmd.Env = testutil.GitIsolatedEnv()
+		cmd.Env = gitenv.Isolated()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v failed: %v\n%s", args, err, out)
 		}
@@ -1108,14 +1110,14 @@ func cloneWithConfig(t *testing.T, bareDir string) (string, func(args ...string)
 	// .git/objects after the test returns and race t.TempDir() cleanup. Per-command
 	// env rather than t.Setenv, so callers can still use t.Parallel().
 	cmd := exec.CommandContext(context.Background(), "git", "clone", bareDir, cloneDir)
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clone failed: %v\n%s", err, out)
 	}
 	run := func(args ...string) {
 		cmd := exec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = cloneDir
-		cmd.Env = testutil.GitIsolatedEnv()
+		cmd.Env = gitenv.Isolated()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v failed: %v\n%s", args, err, out)
 		}
@@ -1283,7 +1285,7 @@ func TestSafelyAdvanceLocalRef_DoesNotReplayDisconnectedChainWhenTargetIsShallow
 		t.Helper()
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
-		cmd.Env = testutil.GitIsolatedEnv()
+		cmd.Env = gitenv.Isolated()
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git %v in %s failed: %s", args, dir, out)
 	}

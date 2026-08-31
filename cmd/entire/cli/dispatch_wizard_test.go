@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/spf13/cobra"
 )
 
 func TestNewDispatchWizardState_Defaults(t *testing.T) {

@@ -11,9 +11,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
+
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 )
 
 // Managed-install manifests. A plugin installed from a remote repository

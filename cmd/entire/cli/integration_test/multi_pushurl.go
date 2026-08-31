@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/execx"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // Helpers for the multi-push-URL scenario: ONE git remote that carries several
@@ -53,7 +54,7 @@ func (env *TestEnv) AddSecondPushURL(remoteName string) string {
 
 	cmd := exec.CommandContext(ctx, "git", "init", "--bare")
 	cmd.Dir = secondBare
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to init second bare repo: %v\n%s", err, output)
 	}
@@ -123,7 +124,7 @@ func (env *TestEnv) setPushURLs(remoteName string, urls ...string) {
 	for _, url := range urls {
 		cmd := exec.CommandContext(env.T.Context(), "git", "remote", "set-url", "--add", "--push", remoteName, url)
 		cmd.Dir = env.RepoDir
-		cmd.Env = testutil.GitIsolatedEnv()
+		cmd.Env = gitenv.Isolated()
 		if output, err := cmd.CombinedOutput(); err != nil {
 			env.T.Fatalf("failed to add push URL %s to remote %s: %v\n%s", url, remoteName, err, output)
 		}
@@ -138,7 +139,7 @@ func (env *TestEnv) RemoteURL(remoteName string) string {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "remote", "get-url", remoteName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	out, err := cmd.Output()
 	if err != nil {
 		env.T.Fatalf("failed to read URL of remote %s: %v", remoteName, err)
@@ -152,7 +153,7 @@ func (env *TestEnv) PushURLs(remoteName string) []string {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "remote", "get-url", "--push", "--all", remoteName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	out, err := cmd.Output()
 	if err != nil {
 		env.T.Fatalf("failed to read push URLs of remote %s: %v", remoteName, err)
@@ -238,7 +239,7 @@ func (env *TestEnv) refHash(dir, ref string) string {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", "rev-parse", "--verify", "--quiet", ref)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -261,7 +262,7 @@ func (env *TestEnv) gitSucceeds(dir string, args ...string) bool {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	return cmd.Run() == nil
 }
 
@@ -271,7 +272,7 @@ func (env *TestEnv) gitOutput(dir string, args ...string) string {
 
 	cmd := exec.CommandContext(env.T.Context(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(testutil.GitIsolatedEnv(),
+	cmd.Env = append(gitenv.Isolated(),
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com",
 		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com",
 	)

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -16,7 +18,7 @@ import (
 
 func initRemoteElectionRepo(t *testing.T) string {
 	t.Helper()
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")
@@ -29,7 +31,7 @@ func electionHeadHash(t *testing.T, dir string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "rev-parse", "HEAD")
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	out, err := cmd.Output()
 	require.NoError(t, err, "git rev-parse HEAD")
 	return strings.TrimSpace(string(out))

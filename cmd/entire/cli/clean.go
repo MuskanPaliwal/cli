@@ -10,13 +10,14 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/spf13/cobra"
 )
 
 func cleanLongDescription() string {

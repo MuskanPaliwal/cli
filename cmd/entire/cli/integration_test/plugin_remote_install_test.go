@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -120,9 +122,9 @@ func newIndexRepo(t *testing.T, indexJSON string) string {
 // pluginTestEnv builds the child env and the directory to run it from:
 // isolated plugin dir + cache + index URL.
 //
-// The base MUST be testutil.GitIsolatedEnv(), not os.Environ(). The
+// The base MUST be gitenv.Isolated(), not os.Environ(). The
 // process-wide ENTIRE_TEST_GIT_HERMETIC=1 set by TestMain is inert on its own —
-// it bites through the per-host http.<url>.proxy entries GitIsolatedEnv writes
+// it bites through the per-host http.<url>.proxy entries gitenv.Isolated writes
 // into an isolated GIT_CONFIG_GLOBAL, which point github.com/gitlab.com at a
 // dead loopback address so a stray network dial fails fast instead of
 // succeeding quietly. Building from os.Environ() sets the flag with no config
@@ -132,7 +134,7 @@ func newIndexRepo(t *testing.T, indexJSON string) string {
 // default — precisely the regression they exist to catch.
 func pluginTestEnv(t *testing.T, indexURL string) (env []string, workDir string) {
 	t.Helper()
-	env = append(testutil.GitIsolatedEnv(),
+	env = append(gitenv.Isolated(),
 		"ENTIRE_PLUGIN_DIR="+t.TempDir(),
 		"XDG_CACHE_HOME="+t.TempDir(),
 	)

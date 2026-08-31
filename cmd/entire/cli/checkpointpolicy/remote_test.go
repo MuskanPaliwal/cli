@@ -7,12 +7,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestSyncRemotePolicyDefaultsWhenRemoteMissing(t *testing.T) {
@@ -194,7 +197,7 @@ func initPolicyRemoteFixture(t *testing.T) (string, *git.Repository, string) {
 
 func initPolicyRepoWithDir(t *testing.T) (string, *git.Repository) {
 	t.Helper()
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	repo, err := git.PlainOpen(dir)
@@ -212,7 +215,7 @@ func runPolicyGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 }

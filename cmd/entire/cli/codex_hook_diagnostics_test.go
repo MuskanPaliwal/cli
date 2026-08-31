@@ -5,8 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 )
 
 func TestDoctorCodexWarningsNamePathOwnershipAndUserRemedies(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 )
 
 // gitInvocationMarkers identify a line that shells out to git, as opposed to
@@ -42,14 +42,14 @@ func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	t.Parallel()
 
 	revParse := exec.Command("git", "rev-parse", "--show-toplevel") //nolint:noctx // guard test, no cancellation needed
-	revParse.Env = testutil.GitIsolatedEnv()
+	revParse.Env = gitenv.Isolated()
 	root, err := revParse.Output()
 	if err != nil {
 		t.Skipf("not in a git checkout: %v", err)
 	}
 
 	grep := exec.Command("git", "grep", "-n", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
-	grep.Env = testutil.GitIsolatedEnv()
+	grep.Env = gitenv.Isolated()
 	grep.Dir = strings.TrimSpace(string(root))
 	out, err := grep.Output()
 	if err != nil {

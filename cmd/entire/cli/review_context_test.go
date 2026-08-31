@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	git "github.com/go-git/go-git/v6"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -315,7 +317,7 @@ func TestReviewCommandSmoke_BaseFlagThreadsThroughToPromptAndBanner(t *testing.T
 
 	// Create feat/parent at the current HEAD (which is feat/review's branch
 	// point). --base feat/parent will then be a valid override.
-	testutil.RunGit(t, repoRoot, "branch", "feat/parent")
+	gitenv.Run(t, repoRoot, "branch", "feat/parent")
 
 	// Add a commit on feat/review so the scope is non-empty.
 	commitReviewContextChange(t, repoRoot, "feature.go", "feat\n", "add feature", "")

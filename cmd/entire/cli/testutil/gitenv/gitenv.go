@@ -129,6 +129,25 @@ func IsolateProcess(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 }
 
+// IsolateMain is IsolateProcess for a TestMain, which has no *testing.T to
+// restore through: the isolation is set process-wide for the whole run via
+// os.Setenv and inherited by every spawned binary and git hook. Inherited
+// GIT_CONFIG_* overrides are neutralized (GIT_CONFIG_COUNT=0 disables the
+// indexed KEY_/VALUE_ pairs) rather than unset.
+func IsolateMain() {
+	for k, v := range map[string]string{
+		"GIT_CONFIG_GLOBAL":     emptyConfigPath(),
+		"GIT_CONFIG_SYSTEM":     emptyConfigPath(),
+		"GIT_CONFIG_NOSYSTEM":   "1",
+		"GIT_CONFIG_COUNT":      "0",
+		"GIT_CONFIG_PARAMETERS": "",
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			panic("set " + k + ": " + err.Error())
+		}
+	}
+}
+
 // Run runs one git command in dir with an isolated git config, failing the
 // test on error and returning combined output.
 func Run(t *testing.T, dir string, args ...string) string {

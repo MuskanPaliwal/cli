@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -118,7 +120,7 @@ func setBranchTrackingRemote(t *testing.T, env *TestEnv, remoteName string) {
 	}
 	cmd := exec.CommandContext(t.Context(), "git", "config", "branch."+branch+".remote", remoteName)
 	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to set branch tracking remote: %v\n%s", err, output)
 	}
@@ -138,7 +140,7 @@ func setRemoteURL(t *testing.T, env *TestEnv, remote, url string) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", "remote", "set-url", remote, url)
 	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git remote set-url %s: %v\n%s", remote, err, out)
 	}
@@ -766,7 +768,7 @@ func initUnregisteredBareRepo(t *testing.T) string {
 	}
 	cmd := exec.CommandContext(t.Context(), "git", "init", "--bare")
 	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
+	cmd.Env = gitenv.Isolated()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare: %v\n%s", err, output)
 	}

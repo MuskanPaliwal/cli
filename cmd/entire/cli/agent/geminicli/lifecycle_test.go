@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
 func TestParseHookEvent_SessionStart(t *testing.T) {

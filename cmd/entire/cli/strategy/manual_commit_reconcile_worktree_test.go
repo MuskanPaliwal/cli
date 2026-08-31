@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 // TestReconcileWorktreePathForResumedTurn_RepointsAfterRelocation covers the
@@ -15,7 +17,7 @@ import (
 // was renamed/moved), so a resumed turn must repoint WorktreePath at the current
 // worktree, which shares the same git common dir as the session store.
 func TestReconcileWorktreePathForResumedTurn_RepointsAfterRelocation(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 
 	mainDir := setupSessionMatchRepo(t)
@@ -37,7 +39,7 @@ func TestReconcileWorktreePathForResumedTurn_RepointsAfterRelocation(t *testing.
 // concurrent sibling), reconciliation must not steal it, even though the current
 // worktree differs.
 func TestReconcileWorktreePathForResumedTurn_LeavesValidSiblingUntouched(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 
 	mainDir := setupSessionMatchRepo(t)
@@ -64,7 +66,7 @@ func TestReconcileWorktreePathForResumedTurn_LeavesValidSiblingUntouched(t *test
 // in `entire clean`/`entire explain` and the post-commit base/attribution
 // updates. Linked-worktree relocation is a documented non-goal.
 func TestReconcileWorktreePathForResumedTurn_LeavesLinkedWorktreeSessionUntouched(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 
 	mainDir := setupSessionMatchRepo(t)
@@ -101,7 +103,7 @@ func TestReconcileWorktreePathForResumedTurn_LeavesLinkedWorktreeSessionUntouche
 // resumed from a LINKED worktree must NOT be reconciled, otherwise WorktreePath
 // would point at the linked worktree while WorktreeID stayed "".
 func TestReconcileWorktreePathForResumedTurn_LeavesSessionResumedFromLinkedWorktree(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 
 	mainDir := setupSessionMatchRepo(t)
@@ -125,7 +127,7 @@ func TestReconcileWorktreePathForResumedTurn_LeavesSessionResumedFromLinkedWorkt
 // TestReconcileWorktreePathForResumedTurn_NoopWhenPathUnchanged covers the common
 // path: a normal turn from the recorded worktree leaves the state alone.
 func TestReconcileWorktreePathForResumedTurn_NoopWhenPathUnchanged(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	ctx := context.Background()
 
 	mainDir := setupSessionMatchRepo(t)

@@ -11,10 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -372,7 +374,7 @@ exec %q "$@"
 `, tracePath, realGit)
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755))
 
-	return append(testutil.GitIsolatedEnv(),
+	return append(gitenv.Isolated(),
 		"GIT_NO_LAZY_FETCH=0",
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	), tracePath
@@ -407,7 +409,7 @@ func createAndPushCheckpoint(t *testing.T, env *TestEnv, fileName, prompt string
 // protocol.file.allow=always to force the smart path.
 func setupTreelessClone(t *testing.T, barePath, refspec string) string {
 	t.Helper()
-	gitEnv := testutil.GitIsolatedEnv()
+	gitEnv := gitenv.Isolated()
 	enableFilterOnBare(t, barePath, gitEnv)
 
 	cloneDir := t.TempDir()

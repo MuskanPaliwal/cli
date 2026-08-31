@@ -27,8 +27,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/google/uuid"
+
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 )
 
 func main() {

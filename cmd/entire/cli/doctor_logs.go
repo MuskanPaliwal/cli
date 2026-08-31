@@ -10,9 +10,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/spf13/cobra"
 )
 
 func newDoctorLogsCmd() *cobra.Command {

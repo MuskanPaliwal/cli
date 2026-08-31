@@ -11,8 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/go-git/go-git/v6"
+
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // Status is the single entry point for reading go-git worktree status; the

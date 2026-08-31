@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/e2e/testutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/entireio/cli/e2e/testutil"
 )
 
 // TestSubagentCommitFlow: agent creates a file via subagent, user commits.

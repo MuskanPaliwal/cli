@@ -5,11 +5,12 @@ import (
 	"errors"
 	"testing"
 
+	git "github.com/go-git/go-git/v6"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
-	git "github.com/go-git/go-git/v6"
-	"github.com/stretchr/testify/require"
 )
 
 func TestReadCheckpointNormalizesNilSummary(t *testing.T) {

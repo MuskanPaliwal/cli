@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 // TestCheckpointTranscriptStart_IncludesUncondensedTurns verifies that

@@ -10,10 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
+
+	"github.com/spf13/cobra"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
-	"github.com/spf13/cobra"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
@@ -219,7 +222,7 @@ func TestCheckpointResumeFlag_AmbiguousCheckpointPrefix(t *testing.T) {
 // When the checkpoint's branch is checked out in another worktree, resume must
 // point there instead of switching branches or restoring logs.
 func TestCheckpointResume_WorktreeClash(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	repo, w, baseHead := setupCheckpointResumeRepo(t)
 	cpID := id.MustCheckpointID("abc123def456")
 	writeCommittedResumeCheckpoint(t, repo, cpID, "session-clash", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -273,7 +276,7 @@ func TestCheckpointResume_WorktreeClash(t *testing.T) {
 // back to remote branches: resuming another machine's work usually means the
 // branch only exists on origin. --force skips the fetch confirmation.
 func TestCheckpointResumeAuto_RemoteBranchFallback(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
+	gitenv.IsolateProcess(t)
 	repo, _, _ := setupCheckpointResumeRepo(t)
 
 	originDir := t.TempDir()
