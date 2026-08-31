@@ -1,0 +1,84 @@
+I want to discuss and possibly work on: implement the reviewed consolidation of Git metadata traversal in entireio/cli
+
+Context:
+- Work in the entireio/cli repository on branch refactor-git-metadata-traversal.
+- This follows merged PR #2052, fix(codex): use repository hook root in linked worktrees: https://github.com/entireio/cli/pull/2052
+- The triggering review is Soph’s “Fourth implementation of worktree traversal” finding: https://github.com/entireio/cli/pull/2052#issuecomment-5400538888
+- A later comment committed to broader consolidation: https://github.com/entireio/cli/pull/2052#issuecomment-5429341093
+- Local coordination documents titled “Thermo-Nuclear Review: Consolidating Git Metadata Traversal” and “Git Metadata Traversal Consolidation — Implementation Plan” contain the completed walkthrough and proposed execution sequence. Find and read both, but independently verify them rather than treating them as authoritative.
+- All material design findings in the walkthrough were discussed and accepted, and the user explicitly approved implementation. No production implementation has been made.
+- The latest upstream/main was fetched immediately before this handoff. The branch is 0 commits ahead and 26 commits behind upstream/main. It has only the two untracked coordination Markdown files above. The fast-forward itself has not been performed.
+- Earlier inspection found fragmented ownership: gitrepo, paths, session, checkpoint, strategy, settings, status, review, investigate, trail, setup/cleanup, and Codex-related code independently interpret .git, commondir, or worktree identity.
+- Session owns a single-entry CWD-keyed common-directory cache; checkpoint owns a separate worktree-root-keyed cache. The accepted direction is to remove both after their Git subprocess traversal is replaced. Retain the existing worktree-root discovery cache.
+- The reviewed structural direction is a focused resolver inside the existing gitrepo ownership boundary. It should expose physical Git facts for one explicit worktree root: the per-worktree Git directory, common Git directory, and optional linked-worktree identity. It should not expose a layout taxonomy or Codex policy.
+- Worktree identity should come from the relationship between the resolved per-worktree Git directory and common-dir/worktrees/<id>, using physical identity only for equality checks while preserving cleaned absolute lexical paths in returned values.
+- Codex backlink, ownership, bare-container, submodule, trust, warning, diagnostic, and installation behavior remains caller-owned Codex policy.
+- The accepted API is fixed and explicit-root: no CWD lookup, Git subprocess, cache, context parameter, resolver options, environment interpretation, symlink-canonicalized public output, or compatibility flags.
+- Resolver failures are all-or-error. Callers retain their existing fail-open, warning, fallback, or fail-closed policy; do not silently turn validation failures into a different repository-open path.
+- Worktree metadata resolution and opening a bare repository are distinct operations. A bare container is not a worktree, although gitrepo.OpenPath may still support deliberately opening a validated bare repository.
+- Genuine Git queries must remain Git queries. Consolidate filesystem metadata traversal, not branch/ref/object/config semantics.
+
+Before doing any implementation:
+- First perform an extensive independent review and discuss/assess the current state. You own that review; this handoff only supplies starting context and accepted constraints.
+- Find the right repository from the current directory, a parent directory, or the usual workspace.
+- Read the local agent and repository instructions completely.
+- Use the thermo-nuclear-code-quality-review skill. Use Entire checkpoint/history tooling where available to distinguish checkpoint-backed intent, commit-message evidence, and inference from code.
+- Recheck the branch, worktree, current upstream/main, linked PR/comments, relevant CI state, recent commits, and current consumers. Safely account for the branch being 26 commits behind before editing.
+- Verify that a fast-forward will preserve the two untracked coordination documents and that upstream has not already implemented or materially changed this design. Stop if the branch has gained commits, has overlapping tracked changes, or the task has become stale or conflicting.
+- Decide independently whether consolidation remains necessary, whether the relationship-based and deletion-oriented direction is correct, and whether a smaller or cleaner structural move now exists.
+- Call out stale assumptions, import-cycle risks, hot-hook-path subprocess changes, error-semantic changes, symlink and moved-registration behavior, giant-file growth, and anything that should stop the work.
+- The repository instructions mention a go:discover-related workflow before Go implementation. If that facility is unavailable, state that and use code search plus history as the fallback rather than inventing or installing a tool.
+
+Task:
+- If the independent review still supports the work, safely fast-forward the branch and implement the accepted consolidation in small, reviewable stages.
+- Add one focused canonical metadata module within gitrepo. Prefer a small facts value such as GitDir, CommonDir, and WorktreeID over a GitLayout enum or taxonomy.
+- Resolve directory-form and gitfile-form .git metadata, relative gitdir pointers, missing and relative commondir files, separate Git directories, linked worktrees, and linked submodules. Validate required metadata directories and return contextual errors.
+- Derive WorktreeID from the physical relationship between GitDir’s parent and CommonDir/worktrees. Do not use .git, .bare, or /modules/ string-marker branches.
+- Preserve lexical absolute output paths. Use physical canonicalization only at comparison, containment, deduplication, or locking boundaries that require identity.
+- Migrate every former filesystem-metadata consumer to the canonical resolver while preserving its existing user-facing policy and diagnostics.
+- Delete the session and checkpoint common-directory caches, their mutexes, clearing logic and cache-behavior tests, duplicate traversal functions, old worktree-ID path parsing, and temporary migration wrappers. Do not leave thin pass-through compatibility abstractions.
+- Make session state, checkpoint, strategy common, settings, and status modules smaller. The result should show net structural simplification and preferably net production-code deletion.
+- Add a source guard that prevents new independent parsing of .git, gitdir:, or commondir outside the canonical owner, with narrowly documented exceptions only where unavoidable.
+- Prove at the operation level that hot hook paths gain no Git subprocesses and preferably lose the common-dir subprocesses removed with the caches.
+
+Non-goals and constraints:
+- Do not broaden this into hook-writer hardening, settings reserialization, unrelated cleanup, or changes to Codex diagnostics, warnings, trust, backlink, ownership, or installation semantics.
+- Do not reintroduce automatic writes from one worktree into another checkout.
+- Do not add resolver option flags for validation, symlink handling, environment handling, or backlink policy.
+- Do not create a new generic facade package.
+- Do not call git.Open, git.PlainOpen, or git.PlainOpenWithOptions outside the established gitrepo opening boundary.
+- Preserve upstream security and error-classification changes, especially recent path and symlink confinement and WorktreeRoot behavior.
+- Do not run paid real-agent E2E tests unless the user explicitly asks. The deterministic Vogon canary is allowed if relevant.
+- Do not push, merge, create or close issues or PRs, label, or post public comments unless explicitly told.
+
+Validation:
+- Use real Git-created fixtures for valid layouts and small handmade fixtures only for malformed metadata.
+- Cover normal checkouts, conventional linked worktrees, .bare/worktrees layouts, standard bare repositories with linked worktrees, separate Git directories, ordinary submodules, linked submodules, relative gitdir and commondir, symlink aliases, moved registrations, and broken registrations.
+- Prove former consumers agree on common directory and worktree identity.
+- Prove errors remain caller-owned and that failed metadata resolution cannot silently downgrade to an unsafe repository-open fallback.
+- Prove physical aliases deduplicate lock and state identity where required without changing displayed or persisted lexical paths.
+- Run focused package tests during development, then repository formatting, lint, unit and integration checks required by local instructions. Do not run paid E2E.
+- Report exact commands and results, production line-count or deletion evidence, subprocess-count evidence, and any unverified edge case.
+
+Output:
+- Start with the independent review verdict and any changed assumptions from current upstream/main.
+- If the design still holds, implement it rather than returning only another plan.
+- Keep changes scoped and explain any deviation from the accepted implementation document.
+- Update the local implementation document with exact status and proof so a later session can resume.
+- Do not push, merge, create or close issues or PRs, label, or post public comments unless explicitly told.
+
+---
+
+what's happening here?
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+commit then changes
