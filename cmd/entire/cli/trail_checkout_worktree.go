@@ -397,7 +397,14 @@ func checkoutManagedBranchWorktree(
 		return "", nil
 	}
 	if err := ensureTrailWorktreeIgnoreRule(ctx, errW, root); err != nil {
-		return "", err
+		// Warn, don't abort. This rule is a convenience — the function already
+		// no-ops when the repo has no .gitignore at all, on the grounds that
+		// the CLI doesn't impose ignore policy — so failing to append it must
+		// not be worse than never trying. It became fatal when the read
+		// started refusing a symlinked .gitignore, which meant a repo with a
+		// symlinked one could no longer create a trail worktree at all, while
+		// a repo with none worked fine.
+		fmt.Fprintf(errW, "Warning: could not add %s/ to .gitignore: %v\n", trailWorktreesRelDir, err)
 	}
 
 	worktreePath := worktreePathForRoot(root)
