@@ -1,0 +1,350 @@
+The mission is clear from our discussion: learn how to design bounded lifecycle hooks so we can judge #2148, not build a general course in this repository. I won’t add teaching artifacts to the
+  codebase. I’m grounding the answer in Go’s context contract and production guidance on timeouts/retries.
+
+• Searching the web
+
+• Searched the web for site:go.dev context cancellation deadlines Go blog official ...
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The best practice is to keep the lifecycle hook short and treat remote completion as deferred work. Agent-specific budgets should be a later optimization, not the foundation of correctness.
+
+  ### 1. Distinguish hard and soft deadlines
+
+  The host has a hard deadline:
+
+  Pi:     kills the process after 10s
+  Codex:  kills the process after 30s
+
+  Entire needs an earlier soft deadline:
+
+  Host hard deadline
+  ├── startup
+  ├── transcript preparation
+  ├── optional remote work
+  ├── state persistence
+  └── safety margin
+
+  A principled budget is:
+
+  remote-work budget
+      ≤ host deadline
+      - startup p99
+      - cleanup p99
+      - safety margin
+
+  Example:
+
+  Pi hard deadline:       10s
+  Startup p99:            -1s
+  Cleanup p99:            -2s
+  Safety margin:          -1s
+                          ---
+  Remote-work budget:      6s maximum
+
+  The numbers should come from measurements. Five seconds is a conservative starting point, not a mathematically proven value.
+
+  ### 2. Put one deadline around the complete operation
+
+  Use one context for the whole batch:
+
+  finalizeCtx, cancel := context.WithTimeout(ctx, finalizeBudget)
+  defer cancel()
+
+  for _, checkpoint := range checkpoints {
+      if err := finalizeCheckpoint(finalizeCtx, checkpoint); err != nil {
+          // classify and handle
+      }
+  }
+
+  Pass that context through every blocking layer:
+
+  finalization
+      → checkpoint store
+          → ref fetch
+              → git command / network request
+
+  A timeout is only effective if downstream operations honor cancellation. Go’s CancelFunc signals that work should stop; it does not wait for or forcibly terminate work that ignores the context.
+  Commands should use exec.CommandContext, HTTP requests should carry the context, and loops should check ctx.Err(). Go context documentation
+
+  Contexts should remain per-operation arguments, not be stored as long-lived struct state; that keeps their lifetime visible and prevents unrelated calls from sharing the wrong deadline. Go’s context
+  guidance
+
+  ### 3. Never make correctness depend on completing remote work inside a hook
+
+  A lifecycle hook is latency-sensitive and externally killable. Network work is slow and unpredictable.
+
+  The stronger architecture is:
+
+  Stop hook
+      │
+      ├── persist the full transcript locally
+      ├── persist “checkpoints B and C still need finalization”
+      ├── optionally try a short fast-path finalization
+      ├── save session state
+      └── return before the host deadline
+
+  Later worker / sweep / pre-push
+      ├── read pending IDs
+      ├── batch remote fetches
+      ├── finalize checkpoints idempotently
+      └── remove IDs after success
+
+  This separates two responsibilities:
+
+  Hook:
+  durably record what needs to happen
+
+  Worker:
+  eventually make it happen
+
+  If full finalization is only best-effort, the durable retry queue is unnecessary. But then the product must explicitly accept permanently provisional checkpoints.
+
+  ### 4. Decide the guarantee before designing retries
+
+  There are two valid contracts.
+
+  #### Best-effort contract
+
+  Checkpoint is always readable.
+  Full-turn transcript is attempted but not guaranteed.
+
+  Then the implementation can:
+
+  - stop at the deadline;
+  - preserve provisional checkpoints;
+  - clear pending IDs;
+  - mark capture as degraded;
+  - return.
+
+  This matches the direction suggested by #2148.
+
+  #### Eventual-completion contract
+
+  Checkpoint is initially provisional.
+  Every checkpoint should eventually receive the full transcript.
+
+  Then the implementation must:
+
+  - persist unfinished IDs durably;
+  - retry outside the Stop hook;
+  - remove an ID only after success;
+  - expose pending versus permanently failed work.
+
+  A timeout by itself cannot provide eventual completion.
+
+  ### 5. Make every retry idempotent
+
+  A timeout is ambiguous:
+
+  Client timed out
+
+  does not necessarily mean:
+
+  Server performed no work
+
+  The operation may have succeeded just before the response was lost.
+
+  Therefore, retrying:
+
+  Finalize checkpoint B
+
+  must safely produce the same result more than once.
+
+  Checkpoint IDs are useful idempotency keys:
+
+  finalize(B, transcriptHash=abc)
+  finalize(B, transcriptHash=abc)
+
+  should converge on the same state.
+
+  Retries should use bounded exponential backoff and jitter so multiple hooks do not hammer a recovering remote simultaneously. AWS’s production guidance pairs timeouts with controlled retries and
+  emphasizes idempotent operations. AWS Builders’ Library, AWS backoff guidance
+
+  ### 6. Update checkpoints atomically
+
+  The safe write shape is:
+
+  Read existing provisional checkpoint
+      ↓
+  Build finalized tree separately
+      ↓
+  Create new objects
+      ↓
+  Atomically move checkpoint ref
+
+  Until the last step succeeds, the old provisional checkpoint remains authoritative.
+
+  This is already the shape of the git-refs backend:
+
+  commitHash, err := CreateCommit(...)
+  if err != nil {
+      return err
+  }
+  return s.setRef(..., commitHash)
+
+  The ref changes only after the replacement commit exists.
+
+  Tests should explicitly prove:
+
+  - a canceled write leaves the old transcript readable;
+  - retrying the same write is safe;
+  - a successful earlier checkpoint remains finalized;
+  - no new fetch starts after the batch deadline.
+
+  ### 7. Batch for efficiency, but retain the deadline
+
+  Batching changes:
+
+  fetch blob A
+  fetch blob B
+  fetch blob C
+
+  into:
+
+  fetch [A, B, C]
+
+  That reduces round-trips, but it does not protect against:
+
+  - a hung remote;
+  - slow authentication;
+  - a large transfer;
+  - many separate checkpoint refs.
+
+  Therefore:
+
+  batching = performance improvement
+  deadline = safety boundary
+
+  They solve different problems.
+
+  ### 8. Centralize budget policy
+
+  Avoid this:
+
+  Codex package: 20s
+  Claude package: 45s
+  Pi package: 5s
+  Strategy package: another fallback
+
+  That makes it difficult to know which value governs an operation.
+
+  Start with one conservative global budget based on the tightest supported host. Only introduce agent-specific budgets if measurements show that the conservative budget causes unacceptable
+  degradation.
+
+  If agent-specific behavior becomes necessary, put it at the lifecycle boundary:
+
+  type HookDeadlineProvider interface {
+      HookDeadline(event EventType) time.Duration
+  }
+
+  The lifecycle layer should derive the context once. Lower-level checkpoint code should only receive a context; it should not know which agent launched it.
+
+  An even better subprocess protocol would pass an absolute deadline from the launcher to Entire. That accounts for shell startup and binary-loading time, unlike starting a fresh timer deep inside the
+  process.
+
+  ### 9. Make degradation precise and visible
+
+  A single CaptureDegradedAt timestamp answers only:
+
+  “Something degraded.”
+
+  A stronger state model would record:
+
+  type CaptureDegradation struct {
+      Operation         string
+      OccurredAt        time.Time
+      PendingCheckpoint int
+      LastError         string
+  }
+
+  Then entire status can distinguish:
+
+  Checkpoint finalization pending: 2
+  Last attempt timed out: 3 minutes ago
+
+  from an unrelated status-scan timeout.
+
+  ### 10. Test the adversarial cases
+
+  A good timeout test suite covers:
+
+  - dead remote: waits until timeout and fails;
+  - slow-success remote: succeeds just before each per-call timeout;
+  - partial success: A succeeds, B times out, C never starts;
+  - cancellation during write: provisional state remains readable;
+  - retry after ambiguity: no duplicate or corrupt state;
+  - outer deadline shorter than inner deadline: outer wins;
+  - state cleanup still executes after finalization stops;
+  - tightest supported host—not only Codex and Claude.
+
+  The slow-success case is especially important because ordinary “network failed” tests do not reproduce #2148.
+
+  ### Recommendation for #2148
+
+  I would use this progression:
+
+  1. Do not ship the current 20-second constant; Pi’s TurnEnd process is killed after 10 seconds in cmd/entire/cli/agent/pi/entire_extension.ts:37.
+  2. Decide explicitly whether full transcript finalization is best-effort or eventual.
+  3. If best-effort: use a conservative global budget around five seconds, preserve provisional checkpoints, improve the preservation assertion, and report degradation.
+  4. If eventual: use the same short hook budget, but persist unfinished IDs for an out-of-band retry owner.
+  5. Consider batching afterward.
+  6. Add agent-specific budgeting only if real measurements justify the complexity.
+
+  The key principle is:
+
+  > The deadline protects the hook; durable state protects the work.
+
+  Exercise: with a 10-second host limit, 1.5-second startup, 2-second cleanup p99, and a 1-second safety margin, what is the largest remote-work budget you would allow? let's do the exercise
+
+---
+
+i did not understand this
+
+---
+
+okya so what should be the tightes deadline?
+
+---
+
+but then waht happens to the codex and claude agents who have 30 s limit
+
+---
+
+okay but whagt about other leftout sessions in codex or claude setup?
+
+---
+
+no but what happens now?
+
+---
+
+so should we have agent specific timeouts? but the whole issue is to have a overall timeout
+
+---
+
+and with this 5s uper budget what happens to leftout codex sessions?
+
+---
+
+what is the issue here? like the issue asks for what?
+
+---
+
+can we go on with 20s for now and for pi we add 5 s? or we skip pi as a known limitation?
+
+---
+
+how much of work is this?
+
+---
+
+yeah maybe that would be better?
+
+---
+
+okay implement the fix
+
+---
+
+what changes we made here?
