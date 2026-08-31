@@ -195,7 +195,7 @@ for the implementation.
 
 ## Protected Directories
 
-- `.github` — contains hook configs (committed to repo, unlikely to be affected by rewind)
+- `.github` — contains hook configs (committed to repo, so not something Entire would record as a session's own change)
 - No agent-specific repo directory to protect
 
 ## Subagent Lifecycle
