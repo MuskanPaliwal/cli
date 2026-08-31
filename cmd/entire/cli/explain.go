@@ -3180,7 +3180,7 @@ type commitEntry struct {
 	message string
 }
 
-// groupByCheckpointID groups rewind points by their checkpoint ID.
+// groupByCheckpointID groups pending checkpoints by their checkpoint ID.
 // Returns groups sorted by latest commit timestamp (most recent first).
 func groupByCheckpointID(points []strategy.PendingCheckpoint) []checkpointGroup {
 	if len(points) == 0 {

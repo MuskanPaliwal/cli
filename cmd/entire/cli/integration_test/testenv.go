@@ -204,7 +204,7 @@ func NewRepoWithCommit(t *testing.T) *TestEnv {
 // NewFeatureBranchEnv creates a TestEnv ready for session testing.
 // It initializes the repo, creates an initial commit on main,
 // and checks out a feature branch. This is the most common setup
-// for session and rewind tests since Entire tracking skips main/master.
+// for session and checkpoint tests since Entire tracking skips main/master.
 func NewFeatureBranchEnv(t *testing.T) *TestEnv {
 	t.Helper()
 	env := NewRepoWithCommit(t)
@@ -718,7 +718,7 @@ type PendingCheckpoint struct {
 	CondensationID   string
 }
 
-// ListPendingCheckpoints returns available rewind points using the CLI.
+// ListPendingCheckpoints returns the session's pending checkpoints using the CLI.
 func (env *TestEnv) ListPendingCheckpoints() []PendingCheckpoint {
 	env.T.Helper()
 
@@ -749,14 +749,14 @@ func (env *TestEnv) ListPendingCheckpoints() []PendingCheckpoint {
 	}
 
 	if err := json.Unmarshal(output, &jsonPoints); err != nil {
-		env.T.Fatalf("failed to parse rewind points: %v\nOutput: %s", err, output)
+		env.T.Fatalf("failed to parse pending checkpoints: %v\nOutput: %s", err, output)
 	}
 
 	points := make([]PendingCheckpoint, len(jsonPoints))
 	for i, jp := range jsonPoints {
 		date, err := time.Parse(time.RFC3339, jp.Date)
 		if err != nil {
-			env.T.Fatalf("failed to parse rewind point date %q: %v", jp.Date, err)
+			env.T.Fatalf("failed to parse pending checkpoint date %q: %v", jp.Date, err)
 		}
 		points[i] = PendingCheckpoint{
 			ID:               jp.ID,

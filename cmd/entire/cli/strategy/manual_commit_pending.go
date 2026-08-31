@@ -25,7 +25,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-// ListPendingCheckpoints returns available rewind points.
+// ListPendingCheckpoints returns the session's pending (not yet condensed) checkpoints.
 // Uses checkpoint.EphemeralStore for reading from shadow branches.
 func (s *ManualCommitStrategy) ListPendingCheckpoints(ctx context.Context, limit int) ([]PendingCheckpoint, error) {
 	repo, err := OpenRepository(ctx)
@@ -230,7 +230,7 @@ func (s *ManualCommitStrategy) ListLogsOnlyPendingCheckpoints(ctx context.Contex
 			return nil
 		}
 
-		// Create logs-only rewind point
+		// Create logs-only pending checkpoint
 		message := strings.Split(c.Message, "\n")[0]
 
 		// Read session prompts from metadata tree
@@ -307,7 +307,7 @@ func ResolveLatestCheckpointFromMap(cpIDs []id.CheckpointID, infoMap map[id.Chec
 	return latest, found
 }
 
-// RestoreLogsOnly restores session logs from a logs-only rewind point.
+// RestoreLogsOnly restores session logs from a logs-only pending checkpoint.
 // This fetches the transcript from entire/checkpoints/v1 and writes it to the agent's session directory.
 // Does not modify the working directory.
 // When multiple sessions were condensed to the same checkpoint, ALL sessions are restored.
@@ -315,7 +315,7 @@ func ResolveLatestCheckpointFromMap(cpIDs []id.CheckpointID, infoMap map[id.Chec
 // Returns info about each restored session so callers can print correct per-session resume commands.
 func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.Writer, point PendingCheckpoint, force bool) ([]RestoredSession, error) {
 	if !point.IsLogsOnly {
-		return nil, errors.New("not a logs-only rewind point")
+		return nil, errors.New("not a logs-only pending checkpoint")
 	}
 
 	if point.CheckpointID.IsEmpty() {

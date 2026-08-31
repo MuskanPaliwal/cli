@@ -832,12 +832,14 @@ Strategies determine checkpoint timing and type:
 | On Task Complete | Task record on session state → materialized at condensation |
 | On User Commit | Condense → Committed |
 
-## Rewind
+## Pending Checkpoints
 
-Each `RewindPoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
+Each `PendingCheckpoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
 
-A rewind point is something you can list and resume from, not something the CLI
-restores working files to: the file-restoring path (`Rewind`, `PreviewRewind`,
+A pending checkpoint is one that has not yet been condensed onto
+`entire/checkpoints/v1` — live shadow-branch state, or a logs-only point. You
+can list it (`checkpoint list --pending`) and resume from it, but the CLI cannot
+restore working files to it: the file-restoring path (`Rewind`, `PreviewRewind`,
 `CanRewind`) was removed along with the `rewind` commands. `RestoreLogsOnly`
 still writes a checkpoint's session logs into the agent's session directory for
 `entire resume`, and leaves the worktree alone.

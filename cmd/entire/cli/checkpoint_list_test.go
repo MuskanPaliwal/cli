@@ -91,7 +91,7 @@ func keysOf(m map[string]any) []string {
 }
 
 // TestRunCheckpointPendingList_EmptyReturnsEmptyArray verifies the pending JSON
-// view emits `[]` (not `null`) when there are no rewind points — the drop-in
+// view emits `[]` (not `null`) when there are no pending checkpoints — the drop-in
 // contract downstream JSON parsers rely on.
 func TestRunCheckpointPendingList_EmptyReturnsEmptyArray(t *testing.T) {
 	setupCheckpointListRepo(t)
@@ -107,13 +107,13 @@ func TestRunCheckpointPendingList_EmptyReturnsEmptyArray(t *testing.T) {
 }
 
 // TestRunCheckpointPendingListHuman_Empty pins the human-view message shown when
-// no pending rewind points exist.
+// no pending checkpoints exist.
 func TestRunCheckpointPendingListHuman_Empty(t *testing.T) {
 	setupCheckpointListRepo(t)
 
 	var stdout bytes.Buffer
 	require.NoError(t, runCheckpointPendingListHuman(context.Background(), &stdout))
-	require.Contains(t, stdout.String(), "No pending rewind points found.")
+	require.Contains(t, stdout.String(), "No pending checkpoints found.")
 }
 
 // TestCheckpointListCmd_Routing drives the real `checkpoint list` command
@@ -134,7 +134,7 @@ func TestCheckpointListCmd_Routing(t *testing.T) {
 
 	// --pending (human) → pending renderer, empty here.
 	pendingHuman := runListCmd(t, "--pending")
-	require.Contains(t, pendingHuman, "No pending rewind points found.",
+	require.Contains(t, pendingHuman, "No pending checkpoints found.",
 		"--pending (human) must route to the pending human renderer")
 
 	// --pending --json → pending JSON renderer, empty array (distinct from the

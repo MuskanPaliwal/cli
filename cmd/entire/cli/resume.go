@@ -899,7 +899,7 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	checkpointID := metadata.CheckpointID
 	sessionID := metadata.SessionID
 
-	// Resolve agent from checkpoint metadata (same as rewind)
+	// Resolve agent from checkpoint metadata
 	ag, err := strategy.ResolveAgentForResume(metadata.Agent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve agent: %w", err)
@@ -933,7 +933,7 @@ func restoreResumeSessions(ctx context.Context, w, errW io.Writer, metadata *str
 	strat := GetStrategy(ctx)
 
 	// Use RestoreLogsOnly via LogsOnlyRestorer interface for multi-session support
-	// Create a logs-only rewind point with Agent populated (same as rewind)
+	// Create a logs-only pending checkpoint with Agent populated
 	point := strategy.PendingCheckpoint{
 		IsLogsOnly:   true,
 		CheckpointID: checkpointID,

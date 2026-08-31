@@ -37,12 +37,12 @@ type pendingCheckpointJSON struct {
 	SessionPrompt    string `json:"session_prompt,omitempty"`
 }
 
-// pendingCheckpointsLimit caps how many live shadow-branch rewind points the
+// pendingCheckpointsLimit caps how many live shadow-branch pending checkpoints the
 // pending views request. Matches the historical `rewind --list` cap of 20 so
 // the migrated output is identical.
 const pendingCheckpointsLimit = 20
 
-// runCheckpointPendingListJSON emits the live shadow-branch rewind points as
+// runCheckpointPendingListJSON emits the live shadow-branch pending checkpoints as
 // JSON. This is the drop-in replacement for (and the implementation behind)
 // the deprecated `rewind --list` bridge: same dataset (strategy.ListPendingCheckpoints),
 // same cap, same JSON shape.
@@ -51,7 +51,7 @@ func runCheckpointPendingListJSON(ctx context.Context, w io.Writer) error {
 
 	points, err := start.ListPendingCheckpoints(ctx, pendingCheckpointsLimit)
 	if err != nil {
-		return fmt.Errorf("failed to find rewind points: %w", err)
+		return fmt.Errorf("failed to list pending checkpoints: %w", err)
 	}
 
 	output := make([]pendingCheckpointJSON, len(points))
@@ -78,7 +78,7 @@ func runCheckpointPendingListJSON(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// runCheckpointPendingListHuman prints the live shadow-branch rewind points in
+// runCheckpointPendingListHuman prints the live shadow-branch pending checkpoints in
 // a human-readable list. `rewind --list` was JSON-only, so there is no legacy
 // human output to mirror; this renders each point with the same label format
 // the former interactive rewind picker used (see pendingCheckpointLabel).
@@ -87,12 +87,12 @@ func runCheckpointPendingListHuman(ctx context.Context, w io.Writer) error {
 
 	points, err := start.ListPendingCheckpoints(ctx, pendingCheckpointsLimit)
 	if err != nil {
-		return fmt.Errorf("failed to find rewind points: %w", err)
+		return fmt.Errorf("failed to list pending checkpoints: %w", err)
 	}
 
 	if len(points) == 0 {
-		fmt.Fprintln(w, "No pending rewind points found.")
-		fmt.Fprintln(w, "Pending rewind points are created automatically during active agent sessions.")
+		fmt.Fprintln(w, "No pending checkpoints found.")
+		fmt.Fprintln(w, "Pending checkpoints are created automatically during active agent sessions.")
 		return nil
 	}
 
@@ -115,7 +115,7 @@ func hasMultipleSessions(points []strategy.PendingCheckpoint) bool {
 	return len(sessionIDs) > 1
 }
 
-// pendingCheckpointLabel renders a single rewind point as a display label for the
+// pendingCheckpointLabel renders a single pending checkpoint as a display label for the
 // `checkpoint list --pending` human view. When hasMultipleSessions is true, a
 // sanitized session prompt is appended to help disambiguate concurrent
 // sessions.

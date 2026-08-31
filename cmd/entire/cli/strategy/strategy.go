@@ -18,7 +18,7 @@ var ErrNoMetadata = errors.New("commit has no entire metadata")
 // ErrNoSession is returned when no session info is available.
 var ErrNoSession = errors.New("no session info available")
 
-// ErrNotTaskCheckpoint is returned when a rewind point is not a task checkpoint.
+// ErrNotTaskCheckpoint is returned when a pending checkpoint is not a task checkpoint.
 var ErrNotTaskCheckpoint = errors.New("not a task checkpoint")
 
 // ErrEmptyRepository is returned when the repository has no commits yet.
@@ -40,11 +40,12 @@ type SessionInfo struct {
 	CommitHash string
 }
 
-// PendingCheckpoint represents a point to which the user can rewind.
+// PendingCheckpoint is a checkpoint that has not yet been condensed onto
+// entire/checkpoints/v1: either live shadow-branch state or a logs-only point.
 // This abstraction allows different strategies to use different
 // identifiers (commit hashes, branch names, stash refs, etc.)
 type PendingCheckpoint struct {
-	// ID is the unique identifier for this rewind point
+	// ID is the unique identifier for this pending checkpoint
 	// (commit hash, branch name, stash ref, etc.)
 	ID string
 
@@ -54,7 +55,7 @@ type PendingCheckpoint struct {
 	// MetadataDir is the path to the metadata directory
 	MetadataDir string
 
-	// Date is when this rewind point was created
+	// Date is when this pending checkpoint was created
 	Date time.Time
 
 	// IsTaskCheckpoint indicates if this is a task checkpoint (vs a session checkpoint)
@@ -98,7 +99,7 @@ type PendingCheckpoint struct {
 	SessionPrompts []string
 
 	// Imported indicates this point is a read-only imported (commit-less)
-	// checkpoint on the v1 metadata branch. Imported points are not rewindable.
+	// checkpoint on the v1 metadata branch. Imported points are read-only.
 	Imported bool
 }
 
@@ -180,7 +181,7 @@ type TaskStepContext struct {
 	// SubagentTranscriptPath is the path to the subagent's transcript (if available)
 	SubagentTranscriptPath string
 
-	// CheckpointUUID is the UUID for transcript truncation when rewinding
+	// CheckpointUUID is the UUID marking where this checkpoint's transcript slice starts
 	CheckpointUUID string
 
 	// AuthorName is the name to use for commits

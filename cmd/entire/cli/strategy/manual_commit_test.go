@@ -1050,7 +1050,7 @@ func TestShadowStrategy_FilesTouched_OnlyModifiedFiles(t *testing.T) {
 	}
 
 	// First checkpoint using SaveStep - captures ALL working directory files
-	// (for rewind purposes), but tracks only modified files in FilesTouched
+	// (the checkpoint tree is a full snapshot), but tracks only modified files in FilesTouched
 	err = s.SaveStep(context.Background(), StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{}, // No files modified yet
