@@ -145,24 +145,40 @@ func withShadowBranchFlocks(commonDir string, branchNames []string, fn func() er
 	return fn()
 }
 
-// MoveShadowBranchIfUnchanged locks both shadow branches before moving their
-// refs atomically.
-func MoveShadowBranchIfUnchanged(
+// MoveShadowBranch locks both shadow branches before observing and moving the
+// source ref. A missing source is an idempotent no-op.
+func MoveShadowBranch(
 	ctx context.Context,
 	repo *git.Repository,
 	sourceBranch, destinationBranch string,
-	expectedSource plumbing.Hash,
-) error {
+) (bool, error) {
 	commonDir, err := resolveGitCommonDir(ctx, repo)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return withShadowBranchFlocks(commonDir, []string{sourceBranch, destinationBranch}, func() error {
-		return MoveRefIfUnchanged(ctx, repo,
-			plumbing.NewBranchReferenceName(sourceBranch),
+	moved := false
+	err = withShadowBranchFlocks(commonDir, []string{sourceBranch, destinationBranch}, func() error {
+		sourceRef := plumbing.NewBranchReferenceName(sourceBranch)
+		expectedSource, err := ReadRefHash(repo, sourceRef)
+		if err != nil {
+			return err
+		}
+		if expectedSource.IsZero() {
+			return nil
+		}
+		if err := MoveRefIfUnchanged(ctx, repo,
+			sourceRef,
 			plumbing.NewBranchReferenceName(destinationBranch),
-			expectedSource)
+			expectedSource); err != nil {
+			return err
+		}
+		moved = true
+		return nil
 	})
+	if err != nil {
+		return false, err
+	}
+	return moved, nil
 }
 
 // tryDeleteLooseObject best-effort removes a loose object file. Used to

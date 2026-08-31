@@ -2,7 +2,6 @@ package strategy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
 )
 
 // migrateShadowBranchIfNeeded checks if HEAD has changed since the session started
@@ -116,30 +114,20 @@ func (s *ManualCommitStrategy) migrateShadowBranchToBaseCommit(ctx context.Conte
 		return true, nil
 	}
 
-	oldRefName := plumbing.NewBranchReferenceName(oldShadowBranch)
-	oldRef, err := repo.Reference(oldRefName, true)
+	moved, err := checkpoint.MoveShadowBranch(ctx, repo, oldShadowBranch, newShadowBranch)
 	if err != nil {
-		if !errors.Is(err, plumbing.ErrReferenceNotFound) {
-			return false, fmt.Errorf("failed to read shadow branch %s: %w", oldShadowBranch, err)
-		}
-		// Old shadow branch doesn't exist - just update state.BaseCommit
-		// This can happen if this is the first checkpoint after HEAD changed
-		state.BaseCommit = newBaseCommit
-		logging.Info(logging.WithComponent(ctx, "migration"), "updated session base commit",
-			slog.String("new_base", newBaseCommit[:7]))
-		return true, nil
-	}
-
-	// Old shadow branch exists - move it to the new base commit atomically.
-	if err := checkpoint.MoveShadowBranchIfUnchanged(ctx, repo, oldShadowBranch, newShadowBranch, oldRef.Hash()); err != nil {
 		return false, fmt.Errorf("failed to move shadow branch %s to %s: %w", oldShadowBranch, newShadowBranch, err)
 	}
 
 	logCtx := logging.WithComponent(ctx, "migration")
-
-	logging.Info(logCtx, "moved shadow branch (HEAD changed during session)",
-		slog.String("from", oldShadowBranch),
-		slog.String("to", newShadowBranch))
+	if moved {
+		logging.Info(logCtx, "moved shadow branch (HEAD changed during session)",
+			slog.String("from", oldShadowBranch),
+			slog.String("to", newShadowBranch))
+	} else {
+		logging.Info(logCtx, "updated session base commit",
+			slog.String("new_base", newBaseCommit[:7]))
+	}
 
 	// Update state with new base commit.
 	// NOTE: AttributionBaseCommit is intentionally NOT updated here. Migration

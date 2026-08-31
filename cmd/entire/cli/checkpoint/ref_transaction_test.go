@@ -3,7 +3,9 @@ package checkpoint
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -279,6 +281,115 @@ func TestMoveRefIfUnchanged_MissingSourceWithMatchingDestinationIsIdempotent(t *
 	}
 	assertRefHash(t, repo, source, plumbing.ZeroHash)
 	assertRefHash(t, repo, destination, hash)
+}
+
+func TestMoveShadowBranch_WaitsForQueuedWriterBeforeCheckingSource(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "initial.txt", "initial")
+	testutil.GitAdd(t, dir, "initial.txt")
+	testutil.GitCommit(t, dir, "initial")
+	oldBase := testutil.GetHeadHash(t, dir)
+
+	repo, err := gitrepo.OpenPath(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer repo.Close()
+	store := newEphemeralStore(repo, DefaultV1Refs())
+	oldBranch := ShadowBranchNameForCommit(oldBase, "")
+
+	writerAtCAS := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	var releaseWriterOnce sync.Once
+	releaseQueuedWriter := func() {
+		releaseWriterOnce.Do(func() { close(releaseWriter) })
+	}
+	defer releaseQueuedWriter()
+	writerDone := make(chan struct {
+		result WriteEphemeralResult
+		err    error
+	}, 1)
+	writerCtx := withBeforeRefCAS(t.Context(), func() {
+		close(writerAtCAS)
+		<-releaseWriter
+	})
+	go func() {
+		result, writeErr := store.Write(writerCtx, Step{
+			SessionID:     "queued-writer",
+			BaseCommit:    oldBase,
+			CommitMessage: "queued checkpoint",
+			AuthorName:    "Test",
+			AuthorEmail:   "test@example.com",
+		})
+		writerDone <- struct {
+			result WriteEphemeralResult
+			err    error
+		}{result: result, err: writeErr}
+	}()
+
+	select {
+	case <-writerAtCAS:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued writer did not reach ref publication")
+	}
+
+	testutil.WriteFile(t, dir, "advanced.txt", "advanced")
+	testutil.GitAdd(t, dir, "advanced.txt")
+	testutil.GitCommit(t, dir, "advance HEAD")
+	newBase := testutil.GetHeadHash(t, dir)
+	newBranch := ShadowBranchNameForCommit(newBase, "")
+
+	moveDone := make(chan struct {
+		moved bool
+		err   error
+	}, 1)
+	go func() {
+		moved, moveErr := MoveShadowBranch(t.Context(), repo, oldBranch, newBranch)
+		moveDone <- struct {
+			moved bool
+			err   error
+		}{moved: moved, err: moveErr}
+	}()
+
+	select {
+	case result := <-moveDone:
+		t.Fatalf("migration completed before queued writer published: moved=%v err=%v", result.moved, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseQueuedWriter()
+	var writeResult struct {
+		result WriteEphemeralResult
+		err    error
+	}
+	select {
+	case writeResult = <-writerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued writer did not finish")
+	}
+	if writeResult.err != nil {
+		t.Fatalf("queued writer: %v", writeResult.err)
+	}
+	var moveResult struct {
+		moved bool
+		err   error
+	}
+	select {
+	case moveResult = <-moveDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shadow branch migration did not finish")
+	}
+	if moveResult.err != nil {
+		t.Fatalf("move shadow branch: %v", moveResult.err)
+	}
+	if !moveResult.moved {
+		t.Fatal("move shadow branch reported no source after waiting for queued writer")
+	}
+
+	assertRefHash(t, repo, plumbing.NewBranchReferenceName(oldBranch), plumbing.ZeroHash)
+	assertRefHash(t, repo, plumbing.NewBranchReferenceName(newBranch), writeResult.result.CommitHash)
 }
 
 func setupMoveRefRepo(t *testing.T) (*git.Repository, plumbing.Hash) {
