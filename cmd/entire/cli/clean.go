@@ -557,7 +557,7 @@ func deleteTempFiles(ctx context.Context, files []string) (deleted []string, fai
 	}
 
 	for _, file := range files {
-		err := root.Remove(entireTmpName + "/" + file)
+		err := removeTempFileNoSymlinks(root, file)
 		switch {
 		case err == nil:
 			deleted = append(deleted, file)
@@ -572,6 +572,26 @@ func deleteTempFiles(ctx context.Context, files []string) (deleted []string, fai
 		}
 	}
 	return deleted, failed
+}
+
+// removeTempFileNoSymlinks removes .entire/tmp/<file>, refusing a symlink in
+// any parent component the way deleteOrphanAgentTemps and state.go's
+// cleanupTmpStateFile already do for this same shape — os.Root refuses a link
+// that escapes the root but follows one that stays inside it, so a swapped
+// .entire/tmp would otherwise be deleted through rather than refused.
+//
+// It is deliberately not osroot.RemoveNoSymlinks: that reports a missing file
+// as success, and the caller distinguishes "already gone" (a transient export
+// staged and renamed away mid-walk) from "deleted", so the ENOENT has to
+// survive. Removing the leaf unlinks a symlink rather than following it, so
+// only the parents need the no-symlink walk.
+func removeTempFileNoSymlinks(root *os.Root, file string) error {
+	parent, leaf, closeParent, err := osroot.OpenParentNoSymlinks(root, entireTmpName+"/"+file)
+	if err != nil {
+		return err //nolint:wrapcheck // caller classifies with os.IsNotExist
+	}
+	defer closeParent()
+	return parent.Remove(leaf) //nolint:wrapcheck // caller classifies with os.IsNotExist
 }
 
 // activeSessionsOnCurrentHead returns sessions on the current HEAD
