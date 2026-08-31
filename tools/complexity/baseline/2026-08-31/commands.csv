@@ -6,21 +6,21 @@ cmd/entire/cli/investigate.NewCommand,cobra,cmd/entire/cli/investigate/cmd.go,cm
 newHooksGitPrePushCmd,cobra,cmd/entire/cli/hooks_git_cmd.go,capture:hooks-lifecycle,1113,20027,4909,76,1832,440,capture:strategy=1562 capture:redaction=152 capture:hooks-lifecycle=44
 newRepoMirrorCreateCmd,cobra,cmd/entire/cli/repo_mirror.go,cmd:control-plane,836,16355,4403,47,1714,540,generated:coreapi=898 cmd:control-plane=816
 newSearchCmd,cobra,cmd/entire/cli/search_cmd.go,cmd:search,783,14267,3495,48,1492,366,cmd:search=1482 cmd:recap=10
-newEnableCmd,cobra,cmd/entire/cli/setup.go,cmd:enable-disable-configure,1891,34751,8602,45,1264,336,cmd:enable-disable-configure=1241 capture:cell-routing=17 infra:git-layer=6
+newEnableCmd,cobra,cmd/entire/cli/setup.go,cmd:enable-disable-configure,1891,34760,8603,45,1264,336,cmd:enable-disable-configure=1241 capture:cell-routing=17 infra:git-layer=6
 newHooksGitPostCommitCmd,cobra,cmd/entire/cli/hooks_git_cmd.go,capture:hooks-lifecycle,1347,25573,6274,28,1079,200,capture:strategy=1026 capture:hooks-lifecycle=24 infra:observability=17
-newAttachCmd,cobra,cmd/entire/cli/attach.go,cmd:session,1506,26959,6703,48,1075,301,cmd:session=844 agent:geminicli=93 cmd:review=50
+newAttachCmd,cobra,cmd/entire/cli/attach.go,cmd:session,1506,26968,6704,48,1075,301,cmd:session=844 agent:geminicli=93 cmd:review=50
 newLoginCmd,cobra,cmd/entire/cli/login.go,cmd:auth-login,728,13118,3210,47,934,195,cmd:auth-login=934
 newCleanCmd,cobra,cmd/entire/cli/clean.go,cmd:clean,892,16190,3922,24,910,206,cmd:clean=474 capture:strategy=436
 newRunnerSetupCmd,cobra,cmd/entire/cli/runner_setup.go,cmd:runner,1031,17855,4384,39,901,225,cmd:runner=881 capture:strategy=20
-newDoctorCmd,cobra,cmd/entire/cli/doctor.go,cmd:doctor,1971,36932,9213,25,841,174,cmd:doctor=724 capture:hooks-lifecycle=57 capture:strategy=44
-newTrailResumeCmd,cobra,cmd/entire/cli/trail_resume_cmd.go,cmd:trail,1295,22035,5348,39,801,184,cmd:trail=777 cmd:session=24
+newDoctorCmd,cobra,cmd/entire/cli/doctor.go,cmd:doctor,1971,36933,9213,25,841,174,cmd:doctor=724 capture:hooks-lifecycle=57 capture:strategy=44
+newTrailResumeCmd,cobra,cmd/entire/cli/trail_resume_cmd.go,cmd:trail,1295,22044,5349,39,801,184,cmd:trail=777 cmd:session=24
 newHooksGitPrepareCommitMsgCmd,cobra,cmd/entire/cli/hooks_git_cmd.go,capture:hooks-lifecycle,654,10891,2648,17,727,141,capture:strategy=691 capture:hooks-lifecycle=30 infra:settings=6
-<init>,init,,,1814,32652,8107,53,644,163,capture:cell-routing=195 capture:transcript=190 test-infra=103
-newAdoptCmd,cobra,cmd/entire/cli/session_adopt.go,cmd:session,290,3694,720,29,598,126,cmd:session=551 capture:strategy=41 capture:hooks-lifecycle=3
-newStatusCmd,cobra,cmd/entire/cli/status.go,cmd:status,1495,27143,6741,15,595,140,cmd:status=566 cmd:doctor=29
+<init>,init,,,1814,32661,8108,53,644,163,capture:cell-routing=195 capture:transcript=190 test-infra=103
+newAdoptCmd,cobra,cmd/entire/cli/session_adopt.go,cmd:session,290,3703,721,29,598,126,cmd:session=551 capture:strategy=41 capture:hooks-lifecycle=3
+newStatusCmd,cobra,cmd/entire/cli/status.go,cmd:status,1495,27144,6741,15,595,140,cmd:status=566 cmd:doctor=29
 newDisableCmd,cobra,cmd/entire/cli/setup.go,cmd:enable-disable-configure,932,15869,3872,40,591,101,cmd:enable-disable-configure=531 capture:strategy=47 infra:settings=7
 <main:cmd/entire>,main,,,803,13970,3359,32,570,111,cmd:plugin=272 cmd:labs-version-shell=166 infra:observability=64
-newCheckpointListCmd,cobra,cmd/entire/cli/checkpoint_group.go,cmd:checkpoint,552,9102,2055,16,557,142,capture:strategy=389 cmd:checkpoint=164 capture:checkpoint-store=4
+newCheckpointListCmd,cobra,cmd/entire/cli/checkpoint_group.go,cmd:checkpoint,552,9104,2055,16,559,142,capture:strategy=389 cmd:checkpoint=166 capture:checkpoint-store=4
 <main:e2e/vogon>,main,,,118,1580,302,28,549,139,agent:vogon=544 infra:process-layer=5
 newExpertsCmd,cobra,cmd/entire/cli/experts_cmd.go,cmd:experts,707,12677,3167,24,522,153,cmd:experts=522
 newCheckpointTokensCmd,cobra,cmd/entire/cli/checkpoint_tokens.go,cmd:checkpoint,512,8021,1827,27,508,127,cmd:checkpoint=508
@@ -45,7 +45,7 @@ newGrantProjectAddCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,190,3216,8
 newAPICmd,cobra,cmd/entire/cli/api_cmd.go,cmd:api-passthrough,298,4325,1062,15,360,103,cmd:api-passthrough=360
 newCheckpointPolicyCmd,cobra,cmd/entire/cli/checkpoint_policy.go,cmd:checkpoint-policy,342,5165,1148,18,347,71,cmd:checkpoint-policy=347
 newRepoVisibilityGetCmd,cobra,cmd/entire/cli/repo.go,cmd:control-plane,215,3565,1007,8,343,115,generated:coreapi=319 cmd:control-plane=24
-NewRootCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,1996,36387,9075,11,339,45,cmd:labs-version-shell=164 capture:hooks-lifecycle=68 infra:observability=65
+NewRootCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,1996,36396,9076,11,339,45,cmd:labs-version-shell=164 capture:hooks-lifecycle=68 infra:observability=65
 newTokensProfileCmd,cobra,cmd/entire/cli/tokens_profile.go,cmd:tokens,462,6960,1541,14,318,67,cmd:tokens=318
 newRepoCreateCmd,cobra,cmd/entire/cli/repo.go,cmd:control-plane,190,3077,856,11,316,95,generated:coreapi=225 cmd:control-plane=91
 newProjectCreateCmd,cobra,cmd/entire/cli/project.go,cmd:control-plane,190,3337,958,10,314,86,generated:coreapi=223 cmd:control-plane=91
@@ -54,7 +54,7 @@ newBlameCmd,cobra,cmd/entire/cli/attribution.go,cmd:blame-why,510,7906,1750,19,2
 newLogoutCmd,cobra,cmd/entire/cli/logout.go,cmd:auth-login,180,2299,466,15,282,84,cmd:auth-login=250 capture:cell-routing=32
 <main:e2e/cmd/testreport>,main,,,99,1309,257,9,277,94,test-infra=277
 newRecapCmd,cobra,cmd/entire/cli/recap.go,cmd:recap,776,13823,3475,18,275,48,cmd:recap=230 capture:cell-routing=45
-newCheckpointResumeCmd,cobra,cmd/entire/cli/checkpoint_resume.go,cmd:checkpoint,1234,21327,5180,12,264,56,cmd:checkpoint=261 capture:checkpoint-store=3
+newCheckpointResumeCmd,cobra,cmd/entire/cli/checkpoint_resume.go,cmd:checkpoint,1234,21336,5181,12,264,56,cmd:checkpoint=261 capture:checkpoint-store=3
 newWhyCmd,cobra,cmd/entire/cli/attribution.go,cmd:blame-why,499,7887,1790,7,263,94,cmd:blame-why=263
 newDoctorBundleCmd,cobra,cmd/entire/cli/doctor_bundle.go,cmd:doctor,152,2109,490,10,253,58,cmd:doctor=253
 newStopCmd,cobra,cmd/entire/cli/sessions.go,cmd:session,1728,31907,8046,9,245,51,cmd:session=245
@@ -64,12 +64,12 @@ newSetupCmd,cobra,cmd/entire/cli/setup.go,cmd:enable-disable-configure,265,3819,
 newAuthTokenCmd,cobra,cmd/entire/cli/auth.go,cmd:auth-login,172,2121,398,12,217,43,cmd:auth-login=217
 newRepoMirrorGetCmd,cobra,cmd/entire/cli/repo_mirror.go,cmd:control-plane,325,5676,1638,10,211,48,cmd:control-plane=211
 newGrantOrgRemoveCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,175,3032,838,4,210,48,generated:coreapi=181 cmd:control-plane=29
-newResumeCmd,cobra,cmd/entire/cli/resume.go,cmd:session,1204,20606,4991,7,203,35,cmd:session=203
+newResumeCmd,cobra,cmd/entire/cli/resume.go,cmd:session,1204,20615,4992,7,203,35,cmd:session=203
 newProjectGetCmd,cobra,cmd/entire/cli/project.go,cmd:control-plane,198,2821,702,4,202,66,generated:coreapi=184 cmd:control-plane=18
 newOrgGetCmd,cobra,cmd/entire/cli/org.go,cmd:control-plane,195,2819,747,4,193,59,generated:coreapi=175 cmd:control-plane=18
 newTokensCmd,cobra,cmd/entire/cli/session_tokens.go,cmd:session,155,2202,440,7,190,34,cmd:session=183 capture:strategy=7
 newAuthStatusCmd,cobra,cmd/entire/cli/auth.go,cmd:auth-login,247,3852,1053,11,188,43,cmd:auth-login=188
-newMCPCmd,cobra,cmd/entire/cli/mcp.go,cmd:agent-help-mcp,1516,27315,6783,8,187,44,cmd:agent-help-mcp=187
+newMCPCmd,cobra,cmd/entire/cli/mcp.go,cmd:agent-help-mcp,1516,27316,6783,8,187,44,cmd:agent-help-mcp=187
 cmd/entire/cli/investigate.newFixSubcommand,cobra,cmd/entire/cli/investigate/cmd.go,cmd:investigate,135,1551,266,6,186,52,cmd:investigate=186
 newTrailShowCmd,cobra,cmd/entire/cli/trail_cmd.go,cmd:trail,230,3067,626,6,183,43,cmd:trail=183
 newRepoDeleteCmd,cobra,cmd/entire/cli/repo.go,cmd:control-plane,715,13565,3537,4,163,38,generated:coreapi=143 cmd:control-plane=20
@@ -92,9 +92,9 @@ newAgentHooksCmd,cobra,cmd/entire/cli/hook_registry.go,capture:hooks-lifecycle,2
 newCurlBashPostInstallCmd,cobra,cmd/entire/cli/setup.go,cmd:enable-disable-configure,670,12123,2985,5,116,17,cmd:enable-disable-configure=116
 newTrailCheckoutCmd,cobra,cmd/entire/cli/trail_cmd.go,cmd:trail,797,13987,3447,4,108,22,cmd:trail=108
 newTrailFindingCmd,cobra,cmd/entire/cli/trail_review_cmd.go,cmd:trail,279,3795,818,3,101,14,cmd:trail=101
-newImportAgentCmd,cobra,cmd/entire/cli/import_cmd.go,cmd:import,947,16369,3985,2,99,24,cmd:import=99
+newImportAgentCmd,cobra,cmd/entire/cli/import_cmd.go,cmd:import,947,16378,3986,2,99,24,cmd:import=99
 newPluginUpgradeCmd,cobra,cmd/entire/cli/plugin_group.go,cmd:plugin,160,2526,520,2,99,31,cmd:plugin=99
-newSweepSessionsCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,1345,24685,6089,2,99,21,cmd:session=72 cmd:labs-version-shell=27
+newSweepSessionsCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,1345,24686,6089,2,99,21,cmd:session=72 cmd:labs-version-shell=27
 newTrailCommentListCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,216,2870,602,3,94,37,cmd:trail=94
 newSendAnalyticsCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,95,1100,175,9,89,14,infra:observability=79 cmd:labs-version-shell=10
 newPluginInstallCmd,cobra,cmd/entire/cli/plugin_group.go,cmd:plugin,767,14157,3468,2,88,15,cmd:plugin=88
@@ -115,17 +115,17 @@ newTrailCommentShowCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,216,2
 newAuthContextsCmd,cobra,cmd/entire/cli/auth_context.go,cmd:auth-login,111,1297,224,3,50,5,cmd:auth-login=50
 newTrailReviewStatusCmd,cobra,cmd/entire/cli/trail_review_cmd.go,cmd:trail,227,3054,633,3,49,7,cmd:trail=49
 newAgentRemoveCmd,cobra,cmd/entire/cli/agent_group.go,cmd:agent,261,3501,771,2,48,5,cmd:enable-disable-configure=34 cmd:agent=14
-newHooksCmd,cobra,cmd/entire/cli/hooks_cmd.go,capture:hooks-lifecycle,1804,34287,8080,1,48,9,capture:hooks-lifecycle=48
+newHooksCmd,cobra,cmd/entire/cli/hooks_cmd.go,capture:hooks-lifecycle,1804,34297,8081,1,48,9,capture:hooks-lifecycle=48
 newTrailFindingListCmd,cobra,cmd/entire/cli/trail_review_cmd.go,cmd:trail,233,3104,629,3,48,8,cmd:trail=48
 newSessionsCmd,cobra,cmd/entire/cli/sessions.go,cmd:session,91,1145,178,1,46,2,cmd:session=46
 newTrailCommentDeleteCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,732,12854,3173,1,45,22,cmd:trail=45
 newPluginListCmd,cobra,cmd/entire/cli/plugin_group.go,cmd:plugin,100,1264,234,2,44,13,cmd:plugin=44
 newTrailCommentAddCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,216,2830,582,1,40,14,cmd:trail=40
-newAgentGroupCmd,cobra,cmd/entire/cli/agent_group.go,cmd:agent,1739,32344,8045,2,39,3,cmd:agent=39
+newAgentGroupCmd,cobra,cmd/entire/cli/agent_group.go,cmd:agent,1739,32353,8046,2,39,3,cmd:agent=39
 newPluginGroupCmd,cobra,cmd/entire/cli/plugin_group.go,cmd:plugin,1,39,0,1,39,0,cmd:plugin=39
 newHooksGitCmd,cobra,cmd/entire/cli/hooks_git_cmd.go,capture:hooks-lifecycle,248,3776,816,1,37,2,capture:hooks-lifecycle=37
 newInfoCmd,cobra,cmd/entire/cli/sessions.go,cmd:session,173,2175,385,1,37,0,cmd:session=37
-newAgentAddCmd,cobra,cmd/entire/cli/agent_group.go,cmd:agent,1682,30311,7455,1,36,2,cmd:agent=36
+newAgentAddCmd,cobra,cmd/entire/cli/agent_group.go,cmd:agent,1682,30320,7456,1,36,2,cmd:agent=36
 newCheckpointGroupCmd,cobra,cmd/entire/cli/checkpoint_group.go,cmd:checkpoint,93,1148,182,1,35,2,cmd:checkpoint=35
 newTrailCommentEditCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,219,2833,580,1,34,12,cmd:trail=34
 newTrailCommentReplyCmd,cobra,cmd/entire/cli/trail_comment_cmd.go,cmd:trail,218,2829,580,1,33,12,cmd:trail=33
@@ -151,7 +151,7 @@ newOrgCmd,cobra,cmd/entire/cli/org.go,cmd:control-plane,89,1030,162,1,12,0,cmd:c
 newProjectCmd,cobra,cmd/entire/cli/project.go,cmd:control-plane,89,1030,162,1,12,0,cmd:control-plane=12
 newGrantCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,89,1029,162,1,11,0,cmd:control-plane=11
 newVersionCmd,cobra,cmd/entire/cli/root.go,cmd:labs-version-shell,88,1026,161,1,11,0,cmd:labs-version-shell=11
-newAgentHookVerbCmdWithLogging,cobra,cmd/entire/cli/hook_registry.go,capture:hooks-lifecycle,1803,34248,8071,1,10,0,capture:hooks-lifecycle=10
+newAgentHookVerbCmdWithLogging,cobra,cmd/entire/cli/hook_registry.go,capture:hooks-lifecycle,1803,34258,8072,1,10,0,capture:hooks-lifecycle=10
 newGrantOrgCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,1,10,0,1,10,0,cmd:control-plane=10
 newGrantProjectCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,1,10,0,1,10,0,cmd:control-plane=10
 newGrantRepoCmd,cobra,cmd/entire/cli/grant.go,cmd:control-plane,1,10,0,1,10,0,cmd:control-plane=10

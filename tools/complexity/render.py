@@ -25,7 +25,12 @@ meta = report["meta"]
 features, areas, files, funcs = report["features"], report["areas"], report["files"], report["funcs"]
 COGNIT_WARN, COV_WARN = meta["cognit_warn"], meta["cov_warn"]
 MAXFAN = reach["meta"]["maxfanout"]
-commit = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+_rev = subprocess.run(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+if _rev.returncode != 0:
+    # The commit is how a rendered page is tied back to a tree, so losing it
+    # silently would make the report undiffable while still looking finished.
+    sys.exit(f"git rev-parse in {REPO} failed: {_rev.stderr.strip() or _rev.returncode}")
+commit = _rev.stdout.strip()
 today = datetime.date.today().isoformat()
 
 def cov(row):  # -1 = no statements known
