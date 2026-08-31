@@ -307,7 +307,7 @@ func mirrorCreateResultRow(r mirrorResult) []string {
 // verify auth, pick repos, pick regions, then create the cross-product of
 // mirrors in parallel and report the clone URLs. noWait/waitTimeout carry the
 // same meaning as the positional-arg create path.
-func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Duration) error {
+func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Duration, asyncMirrorRequests bool) error {
 	cmd.SilenceUsage = true
 	ctx := cmd.Context()
 	outW := cmd.OutOrStdout()
@@ -374,7 +374,7 @@ func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Dur
 
 	// --- create + poll ------------------------------------------------------
 	targets := mirrorTargets(selectedRepos, selectedRegions)
-	results := createMirrors(ctx, errW, targets, noWait, waitTimeout)
+	results := createMirrors(ctx, errW, targets, noWait, waitTimeout, asyncMirrorRequests)
 
 	// A cancelled run (Ctrl+C) leaves in-flight mirrors looking like errors;
 	// exit quietly instead of reporting them as "N mirror(s) failed".
@@ -506,7 +506,7 @@ func pickRegions(ctx context.Context, w io.Writer, regions []regionChoice, juris
 // cluster client is built per region and shared across that region's repos; a
 // region the active login can't reach fails every pair in that region rather
 // than aborting the whole run.
-func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, noWait bool, waitTimeout time.Duration) []mirrorResult {
+func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, noWait bool, waitTimeout time.Duration, asyncMirrorRequests bool) []mirrorResult {
 	// One client per distinct region, built once.
 	clientByHost := make(map[string]*coreapi.Client)
 	clientErrByHost := make(map[string]error)
@@ -517,7 +517,7 @@ func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, 
 		if _, seen := clientErrByHost[t.region.host]; seen {
 			continue
 		}
-		c, err := coreapi.NewForCluster(ctx, t.region.host)
+		c, err := clusterCoreClient(ctx, t.region.host)
 		if err != nil {
 			clientErrByHost[t.region.host] = err
 		} else {
@@ -539,7 +539,7 @@ func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, 
 	g.SetLimit(mirrorCreateConcurrency)
 	for i, t := range targets {
 		g.Go(func() error {
-			results[i] = createOneMirror(ctx, t, clientByHost[t.region.host], clientErrByHost[t.region.host], noWait, waitTimeout,
+			results[i] = createOneMirror(ctx, t, clientByHost[t.region.host], clientErrByHost[t.region.host], noWait, waitTimeout, asyncMirrorRequests,
 				func(status string, final, ok bool) { prog.set(i, status, final, ok) })
 			return nil
 		})
@@ -560,7 +560,7 @@ func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, 
 // can't sink the batch. report (may be nil) is called as the mirror moves
 // through its phases so the caller can render live progress; the final call has
 // final=true and ok set to whether it succeeded.
-func createOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, clientErr error, noWait bool, waitTimeout time.Duration, report func(status string, final, ok bool)) mirrorResult {
+func createOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, clientErr error, noWait bool, waitTimeout time.Duration, asyncMirrorRequests bool, report func(status string, final, ok bool)) mirrorResult {
 	if report == nil {
 		report = func(string, bool, bool) {}
 	}
@@ -570,12 +570,10 @@ func createOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, cli
 		report(mirrorStatusError, true, false)
 		return res
 	}
-	report("creating", false, false)
-	// Same create-then-wait path as the one-shot `repo mirror create <url>`
-	// (createAndAwaitMirror), so both report identical lifecycle states. The
-	// per-poll status drives this mirror's progress line.
-	outcome, err := createAndAwaitMirror(ctx, c, t.owner, t.repo, t.region.host, noWait, waitTimeout, nil,
-		func(s coreapi.MirrorStatus) { report(string(s), false, false) })
+	outcome, err := createAndAwaitMirror(ctx, c, t.owner, t.repo, t.region.host, mirrorCreateOptions{
+		async: asyncMirrorRequests, noWait: noWait, timeout: waitTimeout,
+		onPhase: func(phase mirrorCreatePhase) { report(string(phase), false, false) },
+	})
 	if outcome.created == nil {
 		res.status, res.err = mirrorStatusError, renderCoreError(err)
 		report(mirrorStatusError, true, false)
