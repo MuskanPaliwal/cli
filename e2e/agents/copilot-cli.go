@@ -23,7 +23,12 @@ func init() {
 
 type CopilotCLI struct{}
 
-const copilotPromptPattern = `(?m:^\s*❯\s*$)|← open sidebar`
+// copilotPromptPattern matches Copilot's idle input area. v1.0.81 removed the
+// bare "❯" marker in favour of a bordered box, leaving the footer as the only
+// stable text — and, like the old "❯", it is drawn while Copilot is working.
+// A match therefore proves nothing on its own: WaitFor's settle window is what
+// establishes that a turn ended, and copilotPromptReady is what rejects a modal.
+const copilotPromptPattern = `(?m:^[^\S\n]*❯[^\S\n]*$)|← open sidebar`
 
 var copilotPromptRegexp = regexp.MustCompile(copilotPromptPattern)
 
@@ -83,6 +88,9 @@ func (c *CopilotCLI) RunPrompt(ctx context.Context, dir string, prompt string, o
 	cmd.Stdin = nil
 	// GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS opts in to .github/hooks/*.json loading
 	// in -p mode; gated since Copilot 1.0.40 (2026-05-01).
+	// Unlike StartSession, this keeps the caller's HOME. The session collisions
+	// that forced interactive mode onto an isolated home come from the restore
+	// picker, which -p mode never shows; isolating here would only cost auth.
 	cmd.Env = append(os.Environ(),
 		"ENTIRE_TEST_TTY=0",
 		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=true",
@@ -343,6 +351,11 @@ func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, err
 	// Give each interactive session its own Copilot state. Copilot stores all
 	// sessions under ~/.copilot, so sharing HOME lets parallel tests see and
 	// attempt to restore one another's still-running sessions.
+	//
+	// Note the coupling this creates: copilotcli.GetSessionDir resolves
+	// $HOME/.copilot/session-state, so only processes that inherit this HOME —
+	// the agent and the hooks it spawns — can resolve this session's
+	// transcript. The test process, on the caller's HOME, cannot.
 	sessionHome, err := os.MkdirTemp("", "copilot-e2e-home-*")
 	if err != nil {
 		return nil, fmt.Errorf("create isolated Copilot home: %w", err)
@@ -371,7 +384,16 @@ func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, err
 		_ = os.RemoveAll(sessionHome)
 		return nil, err
 	}
-	s.OnClose(func() { _ = os.RemoveAll(sessionHome) })
+	// Copilot's own logs live in this home, so keep it when a run is being
+	// debugged: Close() runs from artifact cleanup, which does not know
+	// whether the test failed.
+	s.OnClose(func() {
+		if os.Getenv("E2E_KEEP_AGENT_HOME") != "" {
+			fmt.Fprintf(os.Stderr, "copilot session home retained: %s\n", sessionHome)
+			return
+		}
+		_ = os.RemoveAll(sessionHome)
+	})
 
 	// Dismiss startup dialogs (folder trust, etc.) then wait for the input prompt.
 	// Copilot CLI shows a "Confirm folder trust" dialog in interactive mode for

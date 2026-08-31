@@ -83,6 +83,23 @@ func TestIsStartupDialog_IgnoresInteractivePrompt(t *testing.T) {
 	}
 }
 
+func TestCopilotPromptPattern_MatchesBareCursorPrompt(t *testing.T) {
+	t.Parallel()
+
+	if !copilotPromptReady(interactivePromptPane) {
+		t.Fatal("a bare cursor alone on its line is still an idle prompt")
+	}
+}
+
+func TestCopilotPromptPattern_IgnoresCursorWithTrailingText(t *testing.T) {
+	t.Parallel()
+
+	const listItem = `❯ 1. Yes, and remember this folder`
+	if copilotPromptReady(listItem) {
+		t.Fatal("a cursor followed by option text is a selection, not an idle prompt")
+	}
+}
+
 func TestCopilotPromptPattern_MatchesV1081InputArea(t *testing.T) {
 	t.Parallel()
 
