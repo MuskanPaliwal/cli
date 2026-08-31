@@ -1,7 +1,6 @@
 package gitrepo_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -41,23 +40,14 @@ var gitInvocationMarkers = []string{
 func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	t.Parallel()
 
-	revParse := exec.Command("git", "rev-parse", "--show-toplevel") //nolint:noctx // guard test, no cancellation needed
-	revParse.Env = testutil.GitIsolatedEnv()
-	root, err := revParse.Output()
-	if err != nil {
-		t.Skipf("not in a git checkout: %v", err)
-	}
+	root := strings.TrimSpace(testutil.RunGit(t, "", "rev-parse", "--show-toplevel"))
 
-	grep := exec.Command("git", "grep", "-n", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
-	grep.Env = testutil.GitIsolatedEnv()
-	grep.Dir = strings.TrimSpace(string(root))
-	out, err := grep.Output()
-	if err != nil {
-		t.Fatalf(`git grep for "status" found nothing, which cannot be right: %v`, err)
-	}
+	// git grep exits non-zero on zero matches, so RunGit failing here means
+	// "found nothing", which cannot be right — see the checked == 0 guard below.
+	out := testutil.RunGit(t, root, "grep", "-n", "--", `"status"`, "--", "cmd", "internal")
 
 	var checked int
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		path, rest, ok := strings.Cut(line, ":")
 		if !ok || !strings.HasSuffix(path, ".go") {
 			continue
