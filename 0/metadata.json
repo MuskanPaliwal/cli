@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CPG2V94SAWSJ1BB7Y3FSW3",
+  "session_id": "01a05846-c0fe-76c3-b45b-a0052e9777f9",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T20:00:32.543429Z",
+  "branch": "refactor-git-metadata-traversal",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "40ab479c07e6",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 179896,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7679488,
+    "output_tokens": 32957,
+    "api_call_count": 84
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2035,
+      "user_lines_removed": 21,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "GIT_METADATA_TRAVERSAL_IMPLEMENTATION_PLAN.md": 916,
+        "GIT_METADATA_TRAVERSAL_THERMO_NUCLEAR_REVIEW.md": 935,
+        "cmd/entire/cli/gitrepo/metadata.go": 15,
+        "cmd/entire/cli/gitrepo/metadata_test.go": 88,
+        "cmd/entire/cli/gitrepo/repository_test.go": 17,
+        "cmd/entire/cli/trail_cell_client_test.go": 2,
+        "cmd/entire/cli/trail_context_cache.go": 4,
+        "review.md": 58
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/metadata.go": 9,
+        "cmd/entire/cli/trail_cell_client_test.go": 5,
+        "cmd/entire/cli/trail_context_cache.go": 7
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2039,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2039,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2039,
+      "agent_lines_removed": 23
+    }
+  ]
+}

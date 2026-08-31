@@ -1,0 +1,17 @@
+let's review the findings in review.md and fix those issues
+
+---
+
+why this pr is 67 long? let's go through the diff one by one
+
+---
+
+can we add this broader picture in the pr description?
+
+---
+
+yupp add this
+
+---
+
+yupp
