@@ -552,7 +552,7 @@ func (s *treeWriter) writeTaskRecordEntry(task TaskPayload, basePath string, ent
 //	├── metadata.json         # CheckpointSummary (aggregated stats)
 //	├── 1/                    # First session
 //	│   ├── metadata.json     # Metadata (session-specific, includes initial_attribution)
-//	│   ├── full.jsonl        # Raw agent transcript (CLI rewind/resume/explain)
+//	│   ├── full.jsonl        # Raw agent transcript (CLI resume/explain)
 //	│   ├── transcript.jsonl  # Compact transcript scoped to this checkpoint (pushed; not yet referenced by metadata.json)
 //	│   ├── prompt.txt
 //	│   └── content_hash.txt
@@ -665,7 +665,7 @@ func (s *treeWriter) writeSessionToSubdirectory(ctx context.Context, opts WriteO
 	}
 
 	// Write transcript. Transcript points at full.jsonl (CLI
-	// rewind/resume/explain read it by filename); the compact transcript.jsonl,
+	// resume/explain read it by filename); the compact transcript.jsonl,
 	// when written, is also pushed and pointed at by CompactTranscript.
 	wroteTranscript, compactTranscriptStart, err := s.writeTranscript(ctx, opts, sessionDir, entries)
 	if err != nil {

@@ -25,9 +25,9 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-// GetRewindPoints returns available rewind points.
+// ListPendingCheckpoints returns the session's pending (not yet condensed) checkpoints.
 // Uses checkpoint.EphemeralStore for reading from shadow branches.
-func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) ([]RewindPoint, error) {
+func (s *ManualCommitStrategy) ListPendingCheckpoints(ctx context.Context, limit int) ([]PendingCheckpoint, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
@@ -52,7 +52,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 		sessions = nil
 	}
 
-	var allPoints []RewindPoint
+	var allPoints []PendingCheckpoint
 
 	// Collect checkpoint points from active sessions using temporary storage.
 	// Cache session prompts by session ID to avoid re-reading the same prompt file
@@ -72,7 +72,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 				sessionPrompts[cp.SessionID] = sessionPrompt
 			}
 
-			allPoints = append(allPoints, RewindPoint{
+			allPoints = append(allPoints, PendingCheckpoint{
 				ID:               cp.CommitHash.String(),
 				Message:          cp.Message,
 				MetadataDir:      cp.MetadataDir,
@@ -100,7 +100,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 			if rec.CompletedAt.IsZero() {
 				message = FormatSubagentRunningMessage(rec.SubagentType, rec.TaskDescription, shortToolUseID)
 			}
-			allPoints = append(allPoints, RewindPoint{
+			allPoints = append(allPoints, PendingCheckpoint{
 				Message:          message,
 				Date:             date,
 				IsTaskCheckpoint: true,
@@ -122,7 +122,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 	}
 
 	// Also include logs-only points from commit history
-	logsOnlyPoints, err := s.GetLogsOnlyRewindPoints(ctx, limit)
+	logsOnlyPoints, err := s.ListLogsOnlyPendingCheckpoints(ctx, limit)
 	if err == nil && len(logsOnlyPoints) > 0 {
 		// Build set of existing point IDs for deduplication
 		existingIDs := make(map[string]bool)
@@ -151,7 +151,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 	return allPoints, nil
 }
 
-// GetLogsOnlyRewindPoints finds commits in the current branch's history that have
+// ListLogsOnlyPendingCheckpoints finds commits in the current branch's history that have
 // condensed session logs in committed checkpoint storage. These are commits that
 // were created with session data but the shadow branch has been condensed.
 //
@@ -160,7 +160,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 // 2. Building a map of checkpoint ID -> checkpoint info
 // 3. Scanning the current branch history for commits with Entire-Checkpoint trailers
 // 4. Matching by checkpoint ID (stable across amend/rebase)
-func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limit int) ([]RewindPoint, error) {
+func (s *ManualCommitStrategy) ListLogsOnlyPendingCheckpoints(ctx context.Context, limit int) ([]PendingCheckpoint, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil, err
@@ -205,7 +205,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		return nil, fmt.Errorf("failed to get commit log: %w", err)
 	}
 
-	var points []RewindPoint
+	var points []PendingCheckpoint
 	count := 0
 
 	err = iter.ForEach(func(c *object.Commit) error {
@@ -230,7 +230,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 			return nil
 		}
 
-		// Create logs-only rewind point
+		// Create logs-only pending checkpoint
 		message := strings.Split(c.Message, "\n")[0]
 
 		// Read session prompts from metadata tree
@@ -260,7 +260,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 			}
 		}
 
-		points = append(points, RewindPoint{
+		points = append(points, PendingCheckpoint{
 			ID:             c.Hash.String(),
 			Message:        message,
 			Date:           c.Author.When,
@@ -307,15 +307,15 @@ func ResolveLatestCheckpointFromMap(cpIDs []id.CheckpointID, infoMap map[id.Chec
 	return latest, found
 }
 
-// RestoreLogsOnly restores session logs from a logs-only rewind point.
+// RestoreLogsOnly restores session logs from a logs-only pending checkpoint.
 // This fetches the transcript from entire/checkpoints/v1 and writes it to the agent's session directory.
 // Does not modify the working directory.
 // When multiple sessions were condensed to the same checkpoint, ALL sessions are restored.
 // If force is false, prompts for confirmation when local logs have newer timestamps.
 // Returns info about each restored session so callers can print correct per-session resume commands.
-func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.Writer, point RewindPoint, force bool) ([]RestoredSession, error) {
+func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.Writer, point PendingCheckpoint, force bool) ([]RestoredSession, error) {
 	if !point.IsLogsOnly {
-		return nil, errors.New("not a logs-only rewind point")
+		return nil, errors.New("not a logs-only pending checkpoint")
 	}
 
 	if point.CheckpointID.IsEmpty() {
@@ -397,7 +397,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			fmt.Fprintf(errW, "  Warning: session %d (%s) has no agent metadata, skipping (cannot determine target directory)\n", i, sessionID)
 			continue
 		}
-		sessionAgent, agErr := ResolveAgentForRewind(content.Metadata.Agent)
+		sessionAgent, agErr := ResolveAgentForResume(content.Metadata.Agent)
 		if agErr != nil {
 			fmt.Fprintf(errW, "  Warning: session %d (%s) has unknown agent %q, skipping\n", i, sessionID, content.Metadata.Agent)
 			continue
@@ -552,8 +552,8 @@ func extractPromptsFromTranscriptBytes(extractor agent.PromptExtractor, transcri
 	return prompts, nil
 }
 
-// ResolveAgentForRewind resolves the agent from checkpoint metadata.
-func ResolveAgentForRewind(agentType types.AgentType) (agent.Agent, error) {
+// ResolveAgentForResume resolves the agent from checkpoint metadata.
+func ResolveAgentForResume(agentType types.AgentType) (agent.Agent, error) {
 	ag, err := agent.GetByAgentType(agentType)
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent %q: %w", agentType, err)
@@ -634,7 +634,7 @@ func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, r
 			continue
 		}
 
-		sessionAgent, agErr := ResolveAgentForRewind(content.Metadata.Agent)
+		sessionAgent, agErr := ResolveAgentForResume(content.Metadata.Agent)
 		if agErr != nil {
 			continue
 		}

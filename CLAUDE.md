@@ -997,7 +997,7 @@ The CLI uses a manual-commit strategy for managing session data and checkpoints.
 
 - `SaveStep()` - Save session step checkpoint (code + metadata)
 - `SaveTaskStep()` - Save subagent task step checkpoint
-- `GetRewindPoints()` - List checkpoints (see the note below: there is no restore path)
+- `ListPendingCheckpoints()` - List pending checkpoints (see the note below: there is no restore path)
 - `GetSessionLog()` / `GetSessionInfo()` - Retrieve session data
 
 **There is no restore path.** `Rewind()`, `PreviewRewind()`, `CanRewind()` and
@@ -1006,13 +1006,18 @@ tests still called them. Nothing in the strategy writes checkpoint contents back
 over the worktree, and re-adding that is a product decision, not a refactor.
 
 What survives is everything that reads a checkpoint without touching working
-files. `GetRewindPoints()` / `GetLogsOnlyRewindPoints()` feed
+files. `ListPendingCheckpoints()` / `ListLogsOnlyPendingCheckpoints()` feed
 `checkpoint list --pending`. `RestoreLogsOnly()` writes a checkpoint's session
 logs into the agent's session directory — logs only, never worktree files — and
-feeds `entire resume` and `entire trail resume`. The `RewindPoint`,
-`RestoredSession` and `SessionRestoreStatus` types keep the "rewind point"
-vocabulary; it names a point you can list and resume from, not one the CLI can
-restore files to.
+feeds `entire resume` and `entire trail resume`. The type they return is
+`PendingCheckpoint`, and it covers both shapes that listing contains: a live
+checkpoint on the session's shadow branch, not yet condensed onto
+`entire/checkpoints/v1`, **or** a logs-only resume point — a commit on the
+current branch whose logs *are* already condensed there, listed so the
+transcript can be restored. "Pending" names the listing, not a promise that the
+work is un-condensed. Either way you can list it and resume from it, but the
+CLI cannot restore working files from it. The `--pending` flag, the command
+paths, and the `--json` shape are unchanged by that rename.
 
 #### How It Works
 
@@ -1049,9 +1054,9 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 
 #### Key Files
 
-- `strategy.go` - Shared types only, no behaviour: the sentinel errors (`ErrNoMetadata`, `ErrNoSession`, `ErrNotTaskCheckpoint`, `ErrEmptyRepository`), the argument and result structs (`SessionInfo`, `RewindPoint`, `StepContext`, `TaskStepContext`, `TaskCheckpoint`, `SubagentCheckpoint`, `RestoredSession`), and `TaskMetadataDir()`. The strategy type itself and its constructor live in `manual_commit.go`.
+- `strategy.go` - Shared types only, no behaviour: the sentinel errors (`ErrNoMetadata`, `ErrNoSession`, `ErrNotTaskCheckpoint`, `ErrEmptyRepository`), the argument and result structs (`SessionInfo`, `PendingCheckpoint`, `StepContext`, `TaskStepContext`, `TaskCheckpoint`, `SubagentCheckpoint`, `RestoredSession`), and `TaskMetadataDir()`. The strategy type itself and its constructor live in `manual_commit.go`.
 - `common.go` - Helpers for metadata extraction, tree building, `ListCheckpoints()`
-- `manual_commit*.go` - Manual-commit strategy: main impl, types, session state, condensation, checkpoint listing + log restore (`manual_commit_rewind.go`), git ops, logs, hook handlers (prepare-commit-msg, post-commit, post-rewrite, pre-push), reset
+- `manual_commit*.go` - Manual-commit strategy: main impl, types, session state, condensation, pending-checkpoint listing + log restore (`manual_commit_pending.go`), git ops, logs, hook handlers (prepare-commit-msg, post-commit, post-rewrite, pre-push), reset
 - `manual_commit_opf_rewrite.go` - Pre-push OPF re-redaction: walks unpushed v1 commits, runs OPF over their blobs, rebuilds commits with `Entire-OPF-Applied: true` trailer, CAS-updates the local ref. Sentinel error types (use `errors.As`): `V1DivergedError`, `BootstrapTooLargeError`, `V1RefMovedError`, `OPFRuntimeFailedError`, `OPFBatchTooLargeError`, `OPFRawBytesTooLargeError`, `OPFNoCategoriesError` (OPF enabled with zero effective categories — the pre-push decision and the rewrite both fail closed instead of stamping the trailer without a scan).
 - `manual_commit_opf_refs.go` - The git-refs half of pre-push OPF: `RewriteQueuedCheckpointRefsWithOPF` walks the push queue and rewrites every unpushed commit on each queued ref, reusing the v1 rewrite's blob walk, caps, and error types. See the OPF bullet above for why the two backends fail closed differently.
 - `settings/opf_command_trust.go` - Ownership gate for the executed OPF `command` (local-only + untracked); see the OPF trust-boundary bullet above

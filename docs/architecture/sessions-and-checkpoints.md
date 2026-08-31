@@ -832,14 +832,28 @@ Strategies determine checkpoint timing and type:
 | On Task Complete | Task record on session state → materialized at condensation |
 | On User Commit | Condense → Committed |
 
-## Rewind
+## Pending Checkpoints
 
-Each `RewindPoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
+Each `PendingCheckpoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
 
-A rewind point is something you can list and resume from, not something the CLI
-restores working files to: the file-restoring path (`Rewind`, `PreviewRewind`,
-`CanRewind`) was removed along with the `rewind` commands. `RestoreLogsOnly`
-still writes a checkpoint's session logs into the agent's session directory for
+`checkpoint list --pending` is the resume view of the current branch, and a
+`PendingCheckpoint` row is one of two things:
+
+- a **live checkpoint** on the session's shadow branch, not yet condensed onto
+  `entire/checkpoints/v1`; or
+- a **logs-only resume point** — a commit on the current branch whose
+  `Entire-Checkpoint` trailer resolves to a checkpoint that *is* already
+  condensed onto `entire/checkpoints/v1`, listed so its session transcript can
+  be restored from there (file state would need a git checkout).
+
+So "pending" describes the listing, not a guarantee that the work behind every
+row is un-condensed: `ListLogsOnlyPendingCheckpoints` builds the second kind by
+scanning branch history against committed checkpoint storage.
+
+Either shape can be listed and resumed from, but the CLI cannot restore working
+files to it: the file-restoring path (`Rewind`, `PreviewRewind`, `CanRewind`) was
+removed along with the `rewind` commands. `RestoreLogsOnly` still writes a
+checkpoint's session logs into the agent's session directory for
 `entire resume`, and leaves the worktree alone.
 
 ## Concurrent Sessions

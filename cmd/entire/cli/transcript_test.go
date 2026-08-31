@@ -11,7 +11,7 @@ import (
 // containing path-traversal primitives are rejected before being used to build a
 // filesystem write path.
 //
-// Session IDs reaching the resume/rewind restore paths originate from checkpoint
+// Session IDs reaching the resume/log-restore paths originate from checkpoint
 // metadata stored on the shared entire/checkpoints/v1 branch, which an attacker
 // with push access can craft. Without validation, an absolute or "../"-laden
 // session ID escapes the agent session directory (and for agents like Pi/Codex
