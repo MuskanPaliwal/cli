@@ -40,8 +40,21 @@ type SessionInfo struct {
 	CommitHash string
 }
 
-// PendingCheckpoint is a checkpoint that has not yet been condensed onto
-// entire/checkpoints/v1: either live shadow-branch state or a logs-only point.
+// PendingCheckpoint is one row of `checkpoint list --pending`, which is the
+// resume view of the current branch rather than a single kind of thing. A row is
+// one of two shapes:
+//
+//   - A live checkpoint on the session's shadow branch, not yet condensed onto
+//     entire/checkpoints/v1. ID is the shadow commit; CheckpointID is empty.
+//   - A logs-only resume point: a commit on the current branch whose
+//     Entire-Checkpoint trailer resolves to a checkpoint that IS already
+//     condensed onto entire/checkpoints/v1. ID is that commit, CheckpointID the
+//     condensed checkpoint, and IsLogsOnly is true. It is listed so the session
+//     transcript can be restored from v1 (RestoreLogsOnly); file state would
+//     need a git checkout.
+//
+// So "pending" describes the listing, not a guarantee that the underlying work
+// is un-condensed — half these rows are recovered from condensed history.
 // This abstraction allows different strategies to use different
 // identifiers (commit hashes, branch names, stash refs, etc.)
 type PendingCheckpoint struct {

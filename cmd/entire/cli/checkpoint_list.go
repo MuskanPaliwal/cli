@@ -37,12 +37,12 @@ type pendingCheckpointJSON struct {
 	SessionPrompt    string `json:"session_prompt,omitempty"`
 }
 
-// pendingCheckpointsLimit caps how many live shadow-branch pending checkpoints the
+// pendingCheckpointsLimit caps how many pending checkpoints (both shapes) the
 // pending views request. Matches the historical `rewind --list` cap of 20 so
 // the migrated output is identical.
 const pendingCheckpointsLimit = 20
 
-// runCheckpointPendingListJSON emits the live shadow-branch pending checkpoints as
+// runCheckpointPendingListJSON emits the pending checkpoints as
 // JSON. This is the drop-in replacement for (and the implementation behind)
 // the deprecated `rewind --list` bridge: same dataset (strategy.ListPendingCheckpoints),
 // same cap, same JSON shape.
@@ -78,7 +78,7 @@ func runCheckpointPendingListJSON(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// runCheckpointPendingListHuman prints the live shadow-branch pending checkpoints in
+// runCheckpointPendingListHuman prints the pending checkpoints in
 // a human-readable list. `rewind --list` was JSON-only, so there is no legacy
 // human output to mirror; this renders each point with the same label format
 // the former interactive rewind picker used (see pendingCheckpointLabel).

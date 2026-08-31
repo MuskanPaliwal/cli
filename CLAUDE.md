@@ -1010,10 +1010,14 @@ files. `ListPendingCheckpoints()` / `ListLogsOnlyPendingCheckpoints()` feed
 `checkpoint list --pending`. `RestoreLogsOnly()` writes a checkpoint's session
 logs into the agent's session directory — logs only, never worktree files — and
 feeds `entire resume` and `entire trail resume`. The type they return is
-`PendingCheckpoint`: a checkpoint not yet condensed onto
-`entire/checkpoints/v1`, which you can list and resume from but cannot restore
-files from. The `--pending` flag, the command paths, and the `--json` shape are
-unchanged by that rename.
+`PendingCheckpoint`, and it covers both shapes that listing contains: a live
+checkpoint on the session's shadow branch, not yet condensed onto
+`entire/checkpoints/v1`, **or** a logs-only resume point — a commit on the
+current branch whose logs *are* already condensed there, listed so the
+transcript can be restored. "Pending" names the listing, not a promise that the
+work is un-condensed. Either way you can list it and resume from it, but the
+CLI cannot restore working files from it. The `--pending` flag, the command
+paths, and the `--json` shape are unchanged by that rename.
 
 #### How It Works
 
