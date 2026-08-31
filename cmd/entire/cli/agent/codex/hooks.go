@@ -604,10 +604,31 @@ func readHooksDocument(path string) (*hooksDocument, error) {
 }
 
 func readHooksFileForMutation(cfg *agent.HookConfigFile) ([]byte, bool, error) {
-	data, err := cfg.Read()
+	// Bounded before the read rather than measured after it, matching
+	// readHooksDocument above. cfg.Read is an unbounded io.ReadAll, and
+	// .codex/hooks.json arrives with the checkout, so a large committed file
+	// was read into memory in full before the size was ever checked.
+	root, name := cfg.Root()
+	file, err := osroot.OpenNoFollow(root, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
+	if err != nil {
+		return nil, false, fmt.Errorf("open Codex hooks file %q: %w", cfg.Path(), err)
+	}
+	defer file.Close()
+
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect opened Codex hooks file %q: %w", cfg.Path(), err)
+	}
+	if !opened.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("codex hooks path %q is not a regular file", cfg.Path())
+	}
+	if opened.Size() > maxHooksFileBytes {
+		return nil, false, fmt.Errorf("codex hooks file %q exceeds %d bytes", cfg.Path(), maxHooksFileBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxHooksFileBytes+1))
 	if err != nil {
 		return nil, false, fmt.Errorf("read Codex hooks file %q: %w", cfg.Path(), err)
 	}
