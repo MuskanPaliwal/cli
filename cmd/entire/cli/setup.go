@@ -640,21 +640,15 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 	// Auto-enable external_agents setting if any new agent is external.
 	for _, ag := range append(successfullyAddedAgents, successfullyReinstalledAgents...) {
 		if external.IsExternal(ag) {
-			s, loadErr := LoadEntireSettings(ctx)
-			if loadErr != nil {
-				s = &EntireSettings{}
+			targetFile, _ := settingsTargetFile(ctx, opts.UseLocalSettings, opts.UseProjectSettings)
+			load := settings.LoadProjectRaw
+			save := settings.SaveProjectRaw
+			if targetFile == settings.EntireSettingsLocalFile {
+				load = settings.LoadLocalRaw
+				save = settings.SaveLocalRaw
 			}
-			if !s.ExternalAgents {
-				s.ExternalAgents = true
-				var saveErr error
-				if opts.UseLocalSettings {
-					saveErr = SaveEntireSettingsLocal(ctx, s)
-				} else {
-					saveErr = SaveEntireSettings(ctx, s)
-				}
-				if saveErr != nil {
-					errs = append(errs, fmt.Errorf("failed to save external_agents setting: %w", saveErr))
-				}
+			if saveErr := setSettingsBoolRaw(ctx, load, save, "external_agents", true); saveErr != nil {
+				errs = append(errs, fmt.Errorf("failed to save external_agents setting: %w", saveErr))
 			}
 			break
 		}
@@ -1500,46 +1494,47 @@ func runDisable(ctx context.Context, w io.Writer, useProjectSettings bool) error
 // (log_level, absolute_git_hook_path, personal strategy_options/checkpoint_remote, ...) on
 // top of settings.json. Writing that merged struct back into one file would
 // leak a developer's local-only overrides into the shared, committed project
-// file whenever a write resolves to settings.json. setEnabledRaw
+// file whenever a write resolves to settings.json. setSettingsBoolRaw
 // therefore edits only the "enabled" key in each file's own content; its
 // sibling saveEnabledState applies the same rule to a caller-provided,
 // already-target-scoped struct.
 func setEnabledFlag(ctx context.Context, enabled, useProjectSettings bool) error {
 	if useProjectSettings {
-		if err := setEnabledRaw(ctx, settings.LoadProjectRaw, settings.SaveProjectRaw, enabled); err != nil {
+		if err := setSettingsBoolRaw(ctx, settings.LoadProjectRaw, settings.SaveProjectRaw, "enabled", enabled); err != nil {
 			return fmt.Errorf("failed to save settings: %w", err)
 		}
 		// Also update local if it exists, so it doesn't override.
 		if localExists(ctx) {
-			if err := setEnabledRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, enabled); err != nil {
+			if err := setSettingsBoolRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, "enabled", enabled); err != nil {
 				return fmt.Errorf("failed to save local settings: %w", err)
 			}
 		}
 	} else {
-		if err := setEnabledRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, enabled); err != nil {
+		if err := setSettingsBoolRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, "enabled", enabled); err != nil {
 			return fmt.Errorf("failed to save local settings: %w", err)
 		}
 	}
 	return nil
 }
 
-// setEnabledRaw loads a settings file via load, sets its "enabled" key, and
-// writes it back via save, preserving every other key already in that file.
-func setEnabledRaw(
+// setSettingsBoolRaw changes one boolean in a settings file while preserving
+// every other key already stored in that scope.
+func setSettingsBoolRaw(
 	ctx context.Context,
 	load func(context.Context) (path string, raw map[string]json.RawMessage, exists bool, err error),
 	save func(path string, raw map[string]json.RawMessage) error,
-	enabled bool,
+	key string,
+	value bool,
 ) error {
 	path, raw, _, err := load(ctx)
 	if err != nil {
 		return err
 	}
-	value, err := json.Marshal(enabled)
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("marshal enabled flag: %w", err)
+		return fmt.Errorf("marshal %s setting: %w", key, err)
 	}
-	raw["enabled"] = value
+	raw[key] = encoded
 	return save(path, raw)
 }
 
@@ -1558,7 +1553,7 @@ func saveEnabledState(ctx context.Context, s *EntireSettings, useProjectSettings
 		}
 		// Also sync just the enabled key to local if it exists, so it doesn't override.
 		if localExists(ctx) {
-			if err := setEnabledRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, s.Enabled); err != nil {
+			if err := setSettingsBoolRaw(ctx, settings.LoadLocalRaw, settings.SaveLocalRaw, "enabled", s.Enabled); err != nil {
 				return fmt.Errorf("failed to save local settings: %w", err)
 			}
 		}
