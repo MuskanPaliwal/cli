@@ -185,7 +185,6 @@ func (c *ClaudeCodeAgent) FormatResumeCommand(sessionID string) string {
 // Session helper methods - work on AgentSession with Claude's native JSONL data
 
 // TruncateAtUUID returns a new session truncated at the given UUID (inclusive).
-// This is used for rewind operations to restore transcript state.
 // Requires NativeData to be populated.
 func (c *ClaudeCodeAgent) TruncateAtUUID(session *agent.AgentSession, uuid string) (*agent.AgentSession, error) {
 	if session == nil {
@@ -231,27 +230,6 @@ func (c *ClaudeCodeAgent) TruncateAtUUID(session *agent.AgentSession, uuid strin
 		NativeData:    newData,
 		ModifiedFiles: ExtractModifiedFiles(truncated),
 	}, nil
-}
-
-// FindCheckpointUUID finds the UUID of the message containing the tool_result
-// for the given tool use ID.
-// Returns the UUID and true if found, empty string and false otherwise.
-//
-// No production caller remains: this served task checkpoint rewind, which went
-// away with the rewind commands. Only a test exercises it now, so it should be
-// removed along with the rest of the strategy-level rewind machinery rather
-// than kept as exported-but-unreachable API.
-func (c *ClaudeCodeAgent) FindCheckpointUUID(session *agent.AgentSession, toolUseID string) (string, bool) {
-	if session == nil || len(session.NativeData) == 0 {
-		return "", false
-	}
-
-	lines, err := transcript.ParseFromBytes(session.NativeData)
-	if err != nil {
-		return "", false
-	}
-
-	return FindCheckpointUUID(lines, toolUseID)
 }
 
 // ReadSessionFromPath is a convenience method that reads a session directly from a file path.

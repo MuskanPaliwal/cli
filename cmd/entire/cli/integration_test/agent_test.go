@@ -341,44 +341,6 @@ func TestClaudeCodeHelperMethods(t *testing.T) {
 			t.Errorf("last line UUID = %q, want %q", lines[len(lines)-1].UUID, "a1")
 		}
 	})
-
-	t.Run("FindCheckpointUUID finds tool result", func(t *testing.T) {
-		t.Parallel()
-		env := NewTestEnv(t)
-
-		transcriptPath := filepath.Join(env.RepoDir, "transcript.jsonl")
-		content := `{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use","id":"tool-123"}]}}
-{"type":"user","uuid":"u1","message":{"content":[{"type":"tool_result","tool_use_id":"tool-123"}]}}
-`
-		if err := os.WriteFile(transcriptPath, []byte(content), 0o644); err != nil {
-			t.Fatalf("failed to write transcript: %v", err)
-		}
-
-		ag, err := agent.Get(agentClaudeCode)
-		if err != nil {
-			t.Fatalf("agent.Get(claude-code) error = %v", err)
-		}
-		ccAgent, ok := ag.(*claudecode.ClaudeCodeAgent)
-		if !ok {
-			t.Fatalf("ag is not *claudecode.ClaudeCodeAgent, got %T", ag)
-		}
-
-		session, err := ag.ReadSession(&agent.HookInput{
-			SessionID:  "test",
-			SessionRef: transcriptPath,
-		})
-		if err != nil {
-			t.Fatalf("ReadSession() error = %v", err)
-		}
-
-		uuid, found := ccAgent.FindCheckpointUUID(session, "tool-123")
-		if !found {
-			t.Error("FindCheckpointUUID() found = false, want true")
-		}
-		if uuid != "u1" {
-			t.Errorf("FindCheckpointUUID() uuid = %q, want %q", uuid, "u1")
-		}
-	})
 }
 
 // TestGeminiCLIAgentDetection verifies Gemini CLI agent detection.
