@@ -22,7 +22,11 @@ import (
 // No t.Parallel in this file: every test chdirs and sets environment variables.
 func hookLikeRepos(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
+	// Resolve the temp dir: on macOS t.TempDir() hands back /var/... while git
+	// reports the /private/var/... it resolves to, so the two disagree on a
+	// path that is the same directory.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	hookRepo := filepath.Join(base, "hook-repo")
 	cwdRepo := filepath.Join(base, "cwd-repo")
 	for _, dir := range []string{hookRepo, cwdRepo} {

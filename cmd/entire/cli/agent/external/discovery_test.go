@@ -14,6 +14,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
@@ -67,6 +68,11 @@ func makeInfoJSON(name string) string {
 func externalAgentsRepo(t *testing.T, enabled bool) context.Context {
 	t.Helper()
 	tmpDir := t.TempDir()
+	// Settings/discovery anchor process-wide os.Roots on this directory
+	// (osroot.Shared), which are never closed. Windows cannot remove a
+	// directory while a handle to it is open, so close the registry before
+	// t.TempDir's RemoveAll — t.Cleanup is LIFO and TempDir registered first.
+	t.Cleanup(osroot.ResetShared)
 	entireDir := filepath.Join(tmpDir, ".entire")
 	if err := os.MkdirAll(entireDir, 0o755); err != nil {
 		t.Fatalf("create .entire: %v", err)
