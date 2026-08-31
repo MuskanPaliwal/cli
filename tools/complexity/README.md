@@ -70,8 +70,14 @@ Outputs: `report.md` (human summary), `features.csv` / `areas.csv` /
 - **exclusive LOC** (reach) — code reachable from exactly one root; deleting
   that command frees this much. "reached LOC" is everything it can touch and
   is generous because of interface dispatch.
-- **reached by no root** — nothing in the shipped binaries references it
-  (tests excluded; reflection not modelled). Verify before deleting.
+- **reached by no root** — nothing in the shipped binaries *calls* it (tests
+  excluded; reflection not modelled). That is not the same as "safe to
+  delete": a method can be required by a Go interface and never called, and
+  this tool counts calls, not declarations. Before deleting a method, pair
+  `-who <name>` with a grep for the name in interface declarations — an
+  interface method with zero callers is structurally load-bearing, and removing
+  it breaks every implementation. `agent.Agent`'s `ReadSession` and
+  `GetSessionID` are exactly this shape: 0 owners, 11 implementations.
 
 ## Known limits
 
@@ -82,4 +88,8 @@ Outputs: `report.md` (human summary), `features.csv` / `areas.csv` /
 - VTA over-approximates dynamic dispatch; see the policy comment at the top of
   `reach/main.go` for how that is contained and what remains invisible
   (reflection, template lookups).
+- The graph records calls, not declarations, so an uncalled method that an
+  interface requires looks identical to a dead one. Interface satisfaction is
+  structural in Go and nothing in the callgraph represents it; the grep above
+  is the check, and there is no plan to infer it here.
 - Churn does not follow renames.
