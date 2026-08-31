@@ -510,7 +510,7 @@ Metadata only, sharded by checkpoint ID. Supports **multiple sessions per checkp
 ├── metadata.json        # CheckpointSummary (aggregated stats)
 ├── 0/                   # First session (0-based indexing)
 │   ├── metadata.json    # Session-specific Metadata
-│   ├── full.jsonl       # Agent transcript, sanitized + redacted (CLI rewind/resume/explain)
+│   ├── full.jsonl       # Agent transcript, sanitized + redacted (CLI resume/explain)
 │   ├── transcript.jsonl # Full compacted session (slice at compact_transcript_start)
 │   ├── prompt.txt       # Checkpoint-scoped user prompts
 │   └── content_hash.txt # sha256 of full.jsonl (dedup short-circuit)
@@ -548,7 +548,7 @@ root `metadata.json` `sessions[].transcript` pointer keeps targeting
 `full.jsonl`; when a compact transcript was generated the session entry also
 carries a `compact_transcript` path pointing at `transcript.jsonl` (omitted
 otherwise) so external readers can find it next to `full.jsonl`.
-CLI read paths (rewind/resume/explain) read `full.jsonl` by filename. Compact
+CLI read paths (resume/explain) read `full.jsonl` by filename. Compact
 generation is best-effort: failures are logged but never fail the checkpoint
 write. It is also **skipped when the compacted output exceeds the 50MB blob cap**
 — unlike `full.jsonl`, `transcript.jsonl` is not chunked, so a very long session
