@@ -586,8 +586,14 @@ func SharedChild(parent *os.Root, dir, name string) (*os.Root, error) {
 	if err != nil {
 		return nil, err //nolint:wrapcheck // preserve original error classification
 	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+	// Classified apart, matching OpenChild: ErrWalkRootNotDirectory's own doc
+	// comment says conflating "replace this link" with "this is a regular file"
+	// is how a user gets told to fix the wrong thing.
+	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%s: %w", name, ErrSymlinkedPath)
+	}
+	if !before.IsDir() {
+		return nil, fmt.Errorf("%s: %w", name, ErrWalkRootNotDirectory)
 	}
 
 	root, err := parent.OpenRoot(name)
