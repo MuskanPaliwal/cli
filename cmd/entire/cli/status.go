@@ -77,7 +77,7 @@ func runStatus(ctx context.Context, w io.Writer, detailed, jsonOutput bool) erro
 	// Check which settings files exist
 	projectExists, localExists, err := settings.FilesPresent(ctx)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return err //nolint:wrapcheck // already contextual; a bare %w only changes the concrete type
 	}
 
 	if !projectExists && !localExists {
