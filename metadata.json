@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1B830Z66W82FTMZ7BJ9CXP7",
+  "strategy": "manual-commit",
+  "branch": "improve-process-sessions-condensation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/ref_transaction_test.go",
+    "cmd/entire/cli/checkpoint/shadow_ref.go",
+    "cmd/entire/cli/strategy/manual_commit_migration.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 776010,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 17432832,
+    "output_tokens": 67211,
+    "api_call_count": 162
+  }
+}

@@ -1,0 +1,21 @@
+how about we review this pr https://github.com/entireio/cli/pull/2131
+
+---
+
+run-playbook how about we review this pr https://github.com/entireio/cli/pull/2131
+
+---
+
+no we can review the pr here itself. this is the worktree for this pr
+
+---
+
+conitnue
+
+---
+
+but pr has a scope, did you take that into account?
+
+---
+
+okay that makes sense. let's fix the issue here
