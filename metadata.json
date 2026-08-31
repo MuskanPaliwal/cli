@@ -3,8 +3,25 @@
   "checkpoint_id": "01M1CPG2V94SAWSJ1BB7Y3FSW3",
   "strategy": "manual-commit",
   "branch": "refactor-git-metadata-traversal",
-  "checkpoints_count": 4,
-  "files_touched": null,
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cmd/entire/cli/agent/claudecode/claude.go",
+    "cmd/entire/cli/agent/codex/codex.go",
+    "cmd/entire/cli/agent/codex/security_contract_test.go",
+    "cmd/entire/cli/agent/copilotcli/security_contract_test.go",
+    "cmd/entire/cli/agent/opencode/opencode.go",
+    "cmd/entire/cli/checkpoint/migrate.go",
+    "cmd/entire/cli/checkpoint/persistent.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update_test.go",
+    "cmd/entire/cli/checkpoint/refs_store.go",
+    "cmd/entire/cli/checkpoint/refs_store_test.go",
+    "cmd/entire/cli/checkpoint/shadow_ref.go",
+    "cmd/entire/cli/checkpoint/store.go",
+    "cmd/entire/cli/integration_test/agent_test.go",
+    "cmd/entire/cli/integration_test/concurrent_checkpoint_writers_test.go",
+    "cmd/entire/cli/integration_test/setup_test.go"
+  ],
   "sessions": [
     {
       "metadata": "/0/metadata.json",
@@ -12,13 +29,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 179896,
+    "input_tokens": 294314,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 7679488,
-    "output_tokens": 32957,
-    "api_call_count": 84
+    "cache_read_tokens": 11525632,
+    "output_tokens": 49046,
+    "api_call_count": 144
   }
 }

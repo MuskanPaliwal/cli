@@ -1,0 +1,9 @@
+lets fix conflicts here https://github.com/entireio/cli/pull/2190
+
+---
+
+no but take a look at what files are untracked?
+
+---
+
+yupp go on
