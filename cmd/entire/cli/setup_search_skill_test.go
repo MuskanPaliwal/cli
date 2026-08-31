@@ -248,11 +248,11 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagentOnSkillConflict(t *test
 	}
 }
 
-func TestScaffoldSearchSkill_LegacyCleanupFailureDoesNotFailInstall(t *testing.T) {
+func TestScaffoldSearchSkill_SkipsNonRegularLegacyPath(t *testing.T) {
 	tmpDir := setupTestDir(t)
 
-	// A directory at the legacy path makes the cleanup's os.ReadFile fail
-	// (EISDIR) while the skill write itself is unaffected.
+	// A directory at the legacy path is not the regular file Entire ever
+	// scaffolded, so cleanup skips it silently and the install succeeds.
 	legacyRelPath := filepath.Join(".claude", "agents", "entire-search.md")
 	if err := os.MkdirAll(filepath.Join(tmpDir, legacyRelPath), 0o755); err != nil {
 		t.Fatalf("failed to create legacy dir: %v", err)
@@ -266,28 +266,155 @@ func TestScaffoldSearchSkill_LegacyCleanupFailureDoesNotFailInstall(t *testing.T
 	if result.Status != managedScaffoldCreated {
 		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
 	}
-	if result.RemovedLegacyRelPath != "" {
-		t.Fatalf("RemovedLegacyRelPath = %q, want empty when cleanup failed", result.RemovedLegacyRelPath)
+	if result.RemovedLegacyRelPath != "" || result.LegacyCleanupWarning != "" {
+		t.Fatalf("non-regular legacy path should be skipped silently, got removed=%q warning=%q",
+			result.RemovedLegacyRelPath, result.LegacyCleanupWarning)
 	}
-	if result.LegacyCleanupWarning == "" {
-		t.Fatal("LegacyCleanupWarning should report the failed cleanup")
-	}
-	if !strings.Contains(result.LegacyCleanupWarning, legacyRelPath) {
-		t.Fatalf("warning %q should name the legacy path %q", result.LegacyCleanupWarning, legacyRelPath)
+	if _, err := os.Stat(filepath.Join(tmpDir, legacyRelPath)); err != nil {
+		t.Fatalf("directory at legacy path should be left in place: %v", err)
 	}
 
 	skillPath := filepath.Join(tmpDir, ".claude", "skills", "entire-search", "SKILL.md")
 	if _, err := os.Stat(skillPath); err != nil {
-		t.Fatalf("skill should be installed despite cleanup failure: %v", err)
+		t.Fatalf("skill should be installed despite the odd legacy path: %v", err)
 	}
+}
+
+func TestReportSearchSkillScaffold_SurfacesLegacyCleanupWarning(t *testing.T) {
+	t.Parallel()
 
 	var out bytes.Buffer
-	reportSearchSkillScaffold(&out, ag, result)
-	if !strings.Contains(out.String(), "Warning:") {
-		t.Fatalf("report should surface the cleanup warning, got: %s", out.String())
-	}
+	reportSearchSkillScaffold(&out, claudecode.NewClaudeCodeAgent(), managedScaffoldResult{
+		Status:               managedScaffoldCreated,
+		RelPath:              filepath.Join(".claude", "skills", "entire-search", "SKILL.md"),
+		LegacyCleanupWarning: "failed to remove superseded search subagent .claude/agents/entire-search.md (boom) — remove it manually",
+	})
 	if !strings.Contains(out.String(), "Installed Claude Code search skill") {
 		t.Fatalf("report should still announce the successful install, got: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Warning: failed to remove superseded search subagent") {
+		t.Fatalf("report should surface the cleanup warning, got: %s", out.String())
+	}
+}
+
+func TestScaffoldSearchSkill_LegacyCleanupNeverEscapesRepoViaSymlinkedParent(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "entire-search.md")
+	marked := "<!-- " + legacyEntireManagedSearchSubagentMarker + " -->\nold subagent\n"
+	if err := os.WriteFile(outsideFile, []byte(marked), 0o644); err != nil {
+		t.Fatalf("failed to write outside file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".claude"), 0o755); err != nil {
+		t.Fatalf("failed to create .claude: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(tmpDir, ".claude", "agents")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v, want nil: cleanup is best-effort", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+	if result.RemovedLegacyRelPath != "" {
+		t.Fatalf("RemovedLegacyRelPath = %q, want empty: nothing inside the repo was removed", result.RemovedLegacyRelPath)
+	}
+	if result.LegacyCleanupWarning == "" {
+		t.Fatal("LegacyCleanupWarning should report the refused out-of-repo path")
+	}
+	if _, err := os.Stat(outsideFile); err != nil {
+		t.Fatalf("file outside the repository must never be deleted: %v", err)
+	}
+}
+
+func TestScaffoldSearchSkill_SkipsSymlinkedLegacyFile(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	agentsDir := filepath.Join(tmpDir, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("failed to create agents dir: %v", err)
+	}
+	marked := "<!-- " + legacyEntireManagedSearchSubagentMarker + " -->\nold subagent\n"
+	realFile := filepath.Join(tmpDir, "linked-target.md")
+	if err := os.WriteFile(realFile, []byte(marked), 0o644); err != nil {
+		t.Fatalf("failed to write link target: %v", err)
+	}
+	if err := os.Symlink(realFile, filepath.Join(agentsDir, "entire-search.md")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.RemovedLegacyRelPath != "" || result.LegacyCleanupWarning != "" {
+		t.Fatalf("a symlinked legacy path is not Entire's artifact and is skipped silently, got removed=%q warning=%q",
+			result.RemovedLegacyRelPath, result.LegacyCleanupWarning)
+	}
+	if _, err := os.Lstat(filepath.Join(agentsDir, "entire-search.md")); err != nil {
+		t.Fatalf("symlink should be left in place: %v", err)
+	}
+	if _, err := os.Stat(realFile); err != nil {
+		t.Fatalf("link target should be left in place: %v", err)
+	}
+}
+
+func TestScaffoldSearchSkill_RefusesSymlinkedSkillTargetEscapingRepo(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	outsideTarget := filepath.Join(t.TempDir(), "planted.md")
+	if err := os.Symlink(outsideTarget, filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	_, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err == nil {
+		t.Fatal("scaffoldSearchSkill() should refuse a skill path that resolves outside the repository")
+	}
+	if _, statErr := os.Stat(outsideTarget); !os.IsNotExist(statErr) {
+		t.Fatalf("nothing must be written outside the repository, stat err = %v", statErr)
+	}
+}
+
+func TestScaffoldSearchSkill_ReplacesInRepoDanglingSymlinkTarget(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	// Relative dangling link inside the repo: reads as absent, and the write
+	// must replace the link itself, never create its target.
+	if err := os.Symlink("missing-target.md", filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	info, err := os.Lstat(skillPath)
+	if err != nil {
+		t.Fatalf("failed to lstat scaffolded skill: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("scaffold must replace the symlink with a regular file, got mode %v", info.Mode())
+	}
+	if _, err := os.Lstat(filepath.Join(skillDir, "missing-target.md")); !os.IsNotExist(err) {
+		t.Fatalf("the dangling link's target must not be created, lstat err = %v", err)
 	}
 }
 

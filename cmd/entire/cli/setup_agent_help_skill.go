@@ -53,8 +53,13 @@ func scaffoldAgentHelpSkill(ctx context.Context, ag agent.Agent) (managedScaffol
 		}
 	}
 
-	targetPath := filepath.Join(repoRoot, relPath)
-	return writeManagedScaffold(targetPath, relPath, content, isManagedAgentHelpSkill)
+	root, err := openScaffoldRoot(repoRoot)
+	if err != nil {
+		return managedScaffoldResult{}, err
+	}
+	defer root.Close()
+
+	return writeManagedScaffold(root, relPath, content, isManagedAgentHelpSkill)
 }
 
 func isManagedAgentHelpSkill(data []byte) bool {

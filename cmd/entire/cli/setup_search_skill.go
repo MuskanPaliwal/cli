@@ -51,8 +51,13 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 		}
 	}
 
-	targetPath := filepath.Join(repoRoot, relPath)
-	result, err := writeManagedScaffold(targetPath, relPath, content, isManagedSearchSkill)
+	root, err := openScaffoldRoot(repoRoot)
+	if err != nil {
+		return managedScaffoldResult{}, err
+	}
+	defer root.Close()
+
+	result, err := writeManagedScaffold(root, relPath, content, isManagedSearchSkill)
 	if err != nil {
 		return result, err
 	}
@@ -61,7 +66,7 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 	// leaving that behind would have the agent offer both. It is best-effort:
 	// the skill is already installed at this point, so a failed deletion is a
 	// warning on the result, never a failure of the install.
-	removed, cleanupErr := removeLegacySearchSubagent(repoRoot, ag.Name())
+	removed, cleanupErr := removeLegacySearchSubagent(root, ag.Name())
 	if cleanupErr != nil {
 		result.LegacyCleanupWarning = fmt.Sprintf(
 			"failed to remove superseded search subagent %s (%v) — remove it manually",
@@ -97,23 +102,36 @@ func legacySearchSubagentPath(agentName types.AgentName) string {
 // the agent doesn't offer both a subagent and a skill under the same name. A
 // file without an Entire-managed marker is user-owned and stays. Returns the
 // removed repo-relative path, or "" when nothing was removed.
-func removeLegacySearchSubagent(repoRoot string, agentName types.AgentName) (string, error) {
+//
+// This is a delete primitive, so it is confined twice: the *os.Root refuses a
+// symlinked path component that resolves outside the repository, and the
+// Lstat gate skips anything that is not a regular file — Entire only ever
+// scaffolded regular files here, so a symlink or directory at this path is
+// not ours to delete. The marker check decides which file is eligible; the
+// confinement decides where the deletion may happen at all.
+func removeLegacySearchSubagent(root *os.Root, agentName types.AgentName) (string, error) {
 	relPath := legacySearchSubagentPath(agentName)
 	if relPath == "" {
 		return "", nil
 	}
-	targetPath := filepath.Join(repoRoot, relPath)
-	data, err := os.ReadFile(targetPath) //nolint:gosec // target path is derived from repo root + fixed relative path
+	info, err := root.Lstat(relPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
+	if err != nil {
+		return "", fmt.Errorf("inspect legacy search subagent: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil
+	}
+	data, err := root.ReadFile(relPath)
 	if err != nil {
 		return "", fmt.Errorf("read legacy search subagent: %w", err)
 	}
 	if !isManagedSearchSkill(data) {
 		return "", nil
 	}
-	if err := os.Remove(targetPath); err != nil {
+	if err := root.Remove(relPath); err != nil {
 		return "", fmt.Errorf("remove legacy search subagent: %w", err)
 	}
 	return relPath, nil
