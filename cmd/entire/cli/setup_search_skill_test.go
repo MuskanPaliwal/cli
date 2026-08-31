@@ -384,6 +384,77 @@ func TestScaffoldSearchSkill_RefusesSymlinkedSkillTargetEscapingRepo(t *testing.
 	}
 }
 
+func TestScaffoldSearchSkill_PlantedTmpSymlinkCannotRedirectTheWrite(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	victimRelPath := "victim.md"
+	victimPath := filepath.Join(tmpDir, victimRelPath)
+	victimContent := "tracked content that must survive\n"
+	if err := os.WriteFile(victimPath, []byte(victimContent), 0o644); err != nil {
+		t.Fatalf("failed to write victim file: %v", err)
+	}
+
+	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	// A checkout can plant a symlink at the predictable <target>.tmp path,
+	// pointing at another in-repo file. The write must not go through it.
+	if err := os.Symlink(filepath.Join("..", "..", "..", victimRelPath), filepath.Join(skillDir, "SKILL.md.tmp")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+
+	data, err := os.ReadFile(victimPath)
+	if err != nil {
+		t.Fatalf("failed to read victim file: %v", err)
+	}
+	if string(data) != victimContent {
+		t.Fatal("planted tmp symlink redirected the scaffold write into another repo file")
+	}
+
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	info, err := os.Lstat(skillPath)
+	if err != nil {
+		t.Fatalf("failed to lstat scaffolded skill: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("scaffolded skill must be a regular file, got mode %v", info.Mode())
+	}
+}
+
+func TestScaffoldSearchSkill_StaleTmpFileDoesNotBlockInstall(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	// A crashed earlier run can leave the temp file behind; the next install
+	// must clear it rather than fail forever on the exclusive create.
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md.tmp"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("failed to write stale tmp: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.Status != managedScaffoldCreated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatalf("skill should be installed: %v", err)
+	}
+}
+
 func TestScaffoldSearchSkill_ReplacesInRepoDanglingSymlinkTarget(t *testing.T) {
 	tmpDir := setupTestDir(t)
 

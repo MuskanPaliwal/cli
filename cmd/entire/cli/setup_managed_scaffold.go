@@ -83,10 +83,30 @@ func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManag
 // relPath. Rename replaces a symlink at the target instead of writing through
 // it (jsonutil.WriteFileAtomic's property); a root-relative Root.WriteFile
 // alone would follow the link.
+//
+// The temp path is predictable, so a checkout can plant a symlink there
+// pointing at another in-repo file — Root confinement would not stop a write
+// through it. Two guards close that: any pre-existing entry at the temp path
+// is removed first (Remove unlinks a planted link itself, and clears a stale
+// temp a crashed run left behind), and the create is O_EXCL, so whatever
+// still exists at the path fails the write instead of receiving it.
 func writeScaffoldViaRename(root *os.Root, relPath string, content []byte) error {
 	tmpPath := relPath + ".tmp"
-	if err := root.WriteFile(tmpPath, content, 0o644); err != nil {
+	if err := root.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear scaffold temp path: %w", err)
+	}
+	tmp, err := root.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create scaffold temp file: %w", err)
+	}
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed write
 		return fmt.Errorf("write scaffold temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed close
+		return fmt.Errorf("close scaffold temp file: %w", err)
 	}
 	if err := root.Rename(tmpPath, relPath); err != nil {
 		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed rename
