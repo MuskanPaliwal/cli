@@ -279,7 +279,11 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 
 	orphanTemps, err := listOrphanAgentTemps(ctx)
 	if err != nil {
-		return err
+		// Warn and continue, like listAllTempFiles above. A permission or
+		// transient error scanning agent config dirs is not a reason to throw
+		// away the shadow branches, session states and checkpoints already
+		// computed for deletion.
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to list orphan agent temp files: %v\n", err)
 	}
 
 	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles, orphanTemps)
