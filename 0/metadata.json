@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CB9JCF02A25G0X3XDRKSBJ",
+  "session_id": "01a05865-2f91-7f30-8baf-9148e59d8006",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T16:43:59.365817Z",
+  "branch": "fix-settings-scope-leak",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    "cmd/entire/cli/setup.go",
+    "cmd/entire/cli/setup_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "aa8bd4e16677",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 264109,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5102336,
+    "output_tokens": 24518,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T16:43:59.284604Z",
+    "agent_lines": 95,
+    "agent_removed": 26,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 95,
+    "total_lines_changed": 121,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 315,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "BUG_FIX_CANDIDATES.md": 315
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 410,
+      "agent_lines_removed": 26
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 410,
+      "agent_lines_removed": 26
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 410,
+      "agent_lines_removed": 26
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 410,
+      "agent_lines_removed": 26
+    }
+  ]
+}

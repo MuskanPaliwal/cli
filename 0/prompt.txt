@@ -1,0 +1,17 @@
+let's fix this bug mentioned in the bug-fix-candidates file. run-playbook, but first we understand if that's actually a bug
+
+---
+
+yupp but what did we do? can you explain
+
+---
+
+wait i am asking you to explain the bug to me
+
+---
+
+no but how is this a bug?
+
+---
+
+so we have settings.json committed?
