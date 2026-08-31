@@ -281,7 +281,10 @@ func skipHeredocBody(cmd string, i int, delim string) int {
 // written to a SEPARATE transcript file that condensation never reads, so
 // dropping the dispatch match reports "did not search" for exactly the
 // sessions still on the old artifact. Skill-based sessions run the command in
-// the main transcript and surface through the command match instead.
+// the main transcript and surface through the command match instead — but
+// only where the command match runs at all: ScanToolInvocations requires
+// ToolInvocationScanner, which Claude Code alone implements, so the other
+// agents' sessions report searchSourceUnsupported regardless of skill use.
 const EntireSearchSubagentName = "entire-search"
 
 // detectSearchUsage reports whether the session consulted Entire's history

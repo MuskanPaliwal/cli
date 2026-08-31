@@ -71,13 +71,15 @@ const (
 
 // skillNameForTelemetry maps a raw skill name to the value safe to send.
 //
-// Only the namespaced form is matched. Entire's skills are advertised as
-// cross-agent and can be installed unnamespaced (Pi normalizes
-// "/skill:<name>" to a bare name, and a hand-copied SKILL.md has no
-// namespace), so those invocations report as custom. Matching bare leaf names
-// would fold Claude Code's built-in /review and any user's local /search into
-// Entire's numbers — an overcount that is invisible in the data, where this
-// undercount at least has a known cause.
+// Two exact unnamespaced names are matched — the scaffolded skills above,
+// which Entire itself writes under names distinctive enough not to collide
+// with a user's own. Beyond those, only the namespaced form is matched.
+// Entire's plugin skills are advertised as cross-agent and can be installed
+// unnamespaced (Pi normalizes "/skill:<name>" to a bare name, and a
+// hand-copied SKILL.md has no namespace), so those invocations report as
+// custom. Matching bare leaf names would fold Claude Code's built-in /review
+// and any user's local /search into Entire's numbers — an overcount that is
+// invisible in the data, where this undercount at least has a known cause.
 func skillNameForTelemetry(name string) string {
 	if name == scaffoldedAgentHelpSkill || name == scaffoldedSearchSkill {
 		return name

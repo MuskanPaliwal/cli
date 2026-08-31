@@ -199,6 +199,55 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagent(t *testing.T) {
 	}
 }
 
+func TestScaffoldSearchSkill_RemovesManagedLegacySubagentOnSkillConflict(t *testing.T) {
+	tmpDir := setupTestDir(t)
+
+	ag := claudecode.NewClaudeCodeAgent()
+	relPath, _, ok := searchSkillTemplate(ag.Name())
+	if !ok {
+		t.Fatal("searchSkillTemplate() unexpectedly unsupported for claude")
+	}
+	skillPath := filepath.Join(tmpDir, relPath)
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	userContent := "user-owned search skill\n"
+	if err := os.WriteFile(skillPath, []byte(userContent), 0o644); err != nil {
+		t.Fatalf("failed to write user-owned skill: %v", err)
+	}
+
+	legacyRelPath := filepath.Join(".claude", "agents", "entire-search.md")
+	legacyPath := filepath.Join(tmpDir, legacyRelPath)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("failed to create legacy dir: %v", err)
+	}
+	legacyContent := "<!-- " + legacyEntireManagedSearchSubagentMarker + " -->\nold subagent\n"
+	if err := os.WriteFile(legacyPath, []byte(legacyContent), 0o644); err != nil {
+		t.Fatalf("failed to write legacy subagent: %v", err)
+	}
+
+	result, err := scaffoldSearchSkill(context.Background(), ag)
+	if err != nil {
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
+	}
+	if result.Status != managedScaffoldSkippedConflict {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldSkippedConflict)
+	}
+	if result.RemovedLegacyRelPath != legacyRelPath {
+		t.Fatalf("RemovedLegacyRelPath = %q, want %q", result.RemovedLegacyRelPath, legacyRelPath)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("managed legacy subagent should be removed despite skill conflict, stat err = %v", err)
+	}
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("failed to read preserved skill file: %v", err)
+	}
+	if string(data) != userContent {
+		t.Fatal("user-owned skill file should not be overwritten")
+	}
+}
+
 func TestScaffoldSearchSkill_PreservesUserOwnedLegacySubagent(t *testing.T) {
 	tmpDir := setupTestDir(t)
 
