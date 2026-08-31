@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -36,20 +34,8 @@ const shadowRefMaxJitter = 8 * time.Millisecond
 // repository. Callers use the worktree root as cmd.Dir for git invocations
 // and the common dir to locate filesystem paths (lock files, loose objects)
 // — both without depending on the process cwd.
-func (s *ephemeralStore) repoDirs(_ context.Context) (worktreeRoot, commonDir string, err error) {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return "", "", fmt.Errorf("open worktree: %w", err)
-	}
-	worktreeRoot = wt.Filesystem().Root()
-	if worktreeRoot == "" {
-		return "", "", errors.New("repository worktree filesystem has no root path")
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve repository metadata: %w", err)
-	}
-	return worktreeRoot, metadata.CommonDir, nil
+func (s *ephemeralStore) repoDirs(ctx context.Context) (worktreeRoot, commonDir string, err error) {
+	return repositoryDirs(ctx, s.repo)
 }
 
 // casUpdateShadowBranchRef atomically updates a shadow branch ref via
@@ -68,35 +54,7 @@ func (s *ephemeralStore) repoDirs(_ context.Context) (worktreeRoot, commonDir st
 // .lock files, and shadow branches can be touched concurrently by separate
 // `entire` hook processes.
 func casUpdateShadowBranchRef(ctx context.Context, repoRoot, branchName string, newHash, expectedHash plumbing.Hash) error {
-	refName := "refs/heads/" + branchName
-
-	// All-zeros OID with the repo's object-format width means "must not
-	// exist". SHA-1 repos want 40 zeros, SHA-256 repos want 64; mirror
-	// newHash's hex width so we pick the right one without an extra git call.
-	newValue := newHash.String()
-	oldValue := strings.Repeat("0", newHash.HexSize())
-	if expectedHash != plumbing.ZeroHash {
-		oldValue = expectedHash.String()
-	}
-
-	cmd := exec.CommandContext(ctx, "git", "update-ref", refName, newValue, oldValue)
-	cmd.Dir = repoRoot
-	// Force English diagnostics so the CAS-conflict pattern match below
-	// isn't defeated by a translated stderr message in a non-C locale.
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-
-	out := string(output)
-	// Git's CAS-failure messages: "cannot lock ref ..." (covers both
-	// "is at X but expected Y" and "reference already exists" for the
-	// zero-OID case). Other failures propagate.
-	if strings.Contains(out, "cannot lock ref") || strings.Contains(out, "but expected") {
-		return ErrShadowRefBusy
-	}
-	return fmt.Errorf("git update-ref %s: %s: %w", refName, strings.TrimSpace(out), err)
+	return casUpdateRef(ctx, repoRoot, plumbing.NewBranchReferenceName(branchName), newHash, expectedHash)
 }
 
 // shadowRefBackoff sleeps for a small random jitter before the next CAS
