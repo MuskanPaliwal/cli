@@ -81,18 +81,18 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 			return fmt.Errorf("ref name for checkpoint %s: %w", cid, err)
 		}
 
-		if dryRun {
-			parent, _, err := refsStore.refBase(cid)
-			switch {
-			case err == nil:
-				// parent is the ref tip, or zero when the ref is absent.
-			case errors.Is(err, plumbing.ErrObjectNotFound):
-				parent = plumbing.ZeroHash
-			default:
-				return fmt.Errorf("resolve existing ref for checkpoint %s: %w", cid, err)
-			}
-			alreadyImported := treeInRefHistory(repo, parent, migratedTree)
+		parent, _, err := refsStore.refBase(cid)
+		switch {
+		case err == nil:
+			// parent is the ref tip, or zero when the ref is absent.
+		case errors.Is(err, plumbing.ErrObjectNotFound):
+			parent = plumbing.ZeroHash
+		default:
+			return fmt.Errorf("resolve existing ref for checkpoint %s: %w", cid, err)
+		}
+		alreadyImported := treeInRefHistory(repo, parent, migratedTree)
 
+		if dryRun {
 			// Report only what a real run would newly write; an already-imported
 			// checkpoint is a skip, not a would-migrate. No refs or objects are
 			// enqueued or written on this path.
@@ -101,6 +101,13 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 			} else {
 				result.Migrated = append(result.Migrated, cid)
 			}
+			return nil
+		}
+		if alreadyImported {
+			if err := queue.Enqueue(refName); err != nil {
+				return fmt.Errorf("enqueue checkpoint %s for push: %w", cid, err)
+			}
+			result.Skipped++
 			return nil
 		}
 
