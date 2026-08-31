@@ -138,7 +138,15 @@ func (s *SessionStore) Name(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("%w: empty path", ErrOutsideSessionStore)
 	}
-	if !filepath.IsAbs(p) {
+	// VolumeName alongside IsAbs, the pairing validation.ValidateSessionID and
+	// gitrepo's alternates checks already use. A Windows drive-relative path
+	// like "C:foo" contains no separator and IsAbs reports false, so it would
+	// otherwise be taken as a name inside the store — while filepath.Join drops
+	// the base directory when the appended element carries a volume. Sending it
+	// down the absolute branch makes filepath.Rel reject it across volumes,
+	// which is the answer this containment check exists to give. No-op on Unix,
+	// where VolumeName is always empty.
+	if !filepath.IsAbs(p) && filepath.VolumeName(p) == "" {
 		cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
 		if cleaned == "." || paths.IsRelativeTraversal(cleaned) {
 			return "", fmt.Errorf("%w: %s", ErrOutsideSessionStore, p)
