@@ -1,9 +1,13 @@
-package gitrepo
+// Package gitrepo_test (external, not gitrepo): the guard needs
+// testutil.GitIsolatedEnv, and testutil imports gitrepo.
+package gitrepo_test
 
 import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // gitInvocationMarkers identify a line that shells out to git, as opposed to
@@ -39,15 +43,19 @@ var gitInvocationMarkers = []string{
 func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	t.Parallel()
 
-	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output() //nolint:noctx // guard test, no cancellation needed
+	// GitIsolatedEnv: the parse below assumes plain output, and a user
+	// gitconfig with color.ui=always wraps the path and separator in ANSI
+	// escapes even when piped — the ".go" suffix check then matches nothing
+	// and the guard dies as "pattern gone stale".
+	revParse := exec.Command("git", "rev-parse", "--show-toplevel") //nolint:noctx // guard test, no cancellation needed
+	revParse.Env = testutil.GitIsolatedEnv()
+	root, err := revParse.Output()
 	if err != nil {
 		t.Skipf("not in a git checkout: %v", err)
 	}
 
-	// --no-color: a user gitconfig with color.ui=always wraps the path and
-	// separator in ANSI escapes even when piped, the ".go" suffix check then
-	// matches nothing, and the guard dies as "pattern gone stale".
-	grep := exec.Command("git", "grep", "-n", "--no-color", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
+	grep := exec.Command("git", "grep", "-n", "--", `"status"`, "--", "cmd", "internal") //nolint:noctx // guard test, no cancellation needed
+	grep.Env = testutil.GitIsolatedEnv()
 	grep.Dir = strings.TrimSpace(string(root))
 	out, err := grep.Output()
 	if err != nil {
