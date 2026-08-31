@@ -24,10 +24,19 @@ func init() {
 type CopilotCLI struct{}
 
 // copilotPromptPattern matches Copilot's idle input area. v1.0.81 removed the
-// bare "❯" marker in favour of a bordered box, leaving the footer as the only
-// stable text — and, like the old "❯", it is drawn while Copilot is working.
-// A match therefore proves nothing on its own: WaitFor's settle window is what
-// establishes that a turn ended, and copilotPromptReady is what rejects a modal.
+// bare "❯" marker in favour of a bordered box, leaving the footer hints row as
+// the only stable text to key on.
+//
+// That row is idle-only, which makes it a real readiness signal rather than
+// always-on chrome: in the v1.0.81 bundle the footer renders either the
+// activity indicator or the hints row and never both, so "← open sidebar"
+// disappears for the duration of a turn. (Read from the shipped bundle, not
+// observed live — and the indicator is suppressed under one condition that was
+// not traced, so treat it as strong evidence rather than a guarantee.)
+//
+// It says nothing about modals, though: a startup dialog or the session-restore
+// picker keeps the row while the agent is not accepting input, which is what
+// copilotPromptReady exists to reject.
 const copilotPromptPattern = `(?m:^[^\S\n]*❯[^\S\n]*$)|← open sidebar`
 
 var copilotPromptRegexp = regexp.MustCompile(copilotPromptPattern)
@@ -88,9 +97,9 @@ func (c *CopilotCLI) RunPrompt(ctx context.Context, dir string, prompt string, o
 	cmd.Stdin = nil
 	// GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS opts in to .github/hooks/*.json loading
 	// in -p mode; gated since Copilot 1.0.40 (2026-05-01).
-	// Unlike StartSession, this keeps the caller's HOME. The session collisions
-	// that forced interactive mode onto an isolated home come from the restore
-	// picker, which -p mode never shows; isolating here would only cost auth.
+	// Unlike StartSession, this leaves the caller's COPILOT_HOME alone: the
+	// session collisions that forced interactive mode onto an isolated home
+	// come from the restore picker, which -p mode never shows.
 	cmd.Env = append(os.Environ(),
 		"ENTIRE_TEST_TTY=0",
 		"GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=true",
@@ -349,26 +358,38 @@ func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, err
 	}
 
 	// Give each interactive session its own Copilot state. Copilot stores all
-	// sessions under ~/.copilot, so sharing HOME lets parallel tests see and
+	// sessions under its home, so sharing one lets parallel tests see and
 	// attempt to restore one another's still-running sessions.
 	//
-	// Note the coupling this creates: copilotcli.GetSessionDir resolves
-	// $HOME/.copilot/session-state, so only processes that inherit this HOME —
-	// the agent and the hooks it spawns — can resolve this session's
-	// transcript. The test process, on the caller's HOME, cannot.
+	// COPILOT_HOME is Copilot's own documented override for that directory
+	// ("copilot help environment"), which is why it is used here in preference
+	// to replacing HOME: HOME also resolves ~/.gitconfig, ~/.ssh, tool caches
+	// and Entire's own ~/.config/entire for every hook the agent spawns, none
+	// of which this isolation is about. Entire's copilotcli.GetSessionDir
+	// honours COPILOT_HOME too, so the agent and the hooks agree on where the
+	// transcript lives.
 	sessionHome, err := os.MkdirTemp("", "copilot-e2e-home-*")
 	if err != nil {
 		return nil, fmt.Errorf("create isolated Copilot home: %w", err)
 	}
 
-	// Forward auth-related env vars into the tmux session. Keep GitHub CLI auth
-	// pointed at the caller's real config while HOME points at isolated state.
-	envArgs := []string{"HOME=" + sessionHome}
-	for _, key := range []string{"COPILOT_GITHUB_TOKEN", "TERM", "XDG_CONFIG_HOME"} {
+	// Forward auth into the tmux session, which starts a new shell that does
+	// not inherit os.Environ(). Copilot accepts COPILOT_GITHUB_TOKEN, GH_TOKEN
+	// and GITHUB_TOKEN in that order of precedence, and an env token outranks
+	// any stored credential; CI sets the first, local runs may have any of them.
+	envArgs := []string{"COPILOT_HOME=" + sessionHome}
+	for _, key := range []string{
+		"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+		"HOME", "TERM", "XDG_CONFIG_HOME",
+	} {
 		if v := os.Getenv(key); v != "" {
 			envArgs = append(envArgs, key+"="+v)
 		}
 	}
+	// Not a Copilot variable — it is absent from "copilot help environment",
+	// and Copilot's own auth never consults gh's config. It is forwarded for
+	// the processes Copilot spawns: the GitHub MCP server and any `gh` the
+	// agent runs as a tool.
 	ghConfigDir := currentGHConfigDir()
 	if ghConfigDir != "" {
 		envArgs = append(envArgs, "GH_CONFIG_DIR="+ghConfigDir)
