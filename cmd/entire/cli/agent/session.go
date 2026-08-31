@@ -34,32 +34,4 @@ type AgentSession struct {
 	ModifiedFiles []string
 	NewFiles      []string
 	DeletedFiles  []string
-
-	// Optional normalized entries - agents may populate this if needed
-	// for operations that benefit from structured access
-	Entries []SessionEntry
 }
-
-// SessionEntry represents a single entry in the session
-type SessionEntry struct {
-	UUID      string
-	Type      EntryType
-	Timestamp time.Time
-	Content   string
-
-	// Tool-specific fields
-	ToolName      string
-	ToolInput     interface{}
-	ToolOutput    interface{}
-	FilesAffected []string
-}
-
-// EntryType categorizes session entries
-type EntryType string
-
-const (
-	EntryUser      EntryType = "user"
-	EntryAssistant EntryType = "assistant"
-	EntryTool      EntryType = "tool"
-	EntrySystem    EntryType = "system"
-)
