@@ -195,7 +195,7 @@ for the implementation.
 
 ## Protected Directories
 
-- `.github` — contains hook configs (committed to repo, so not something Entire would record as a session's own change)
+- `.github/hooks` — the hook config directory; listed in `ProtectedDirs()`, so Entire filters it out of change tracking and checkpoints
 - No agent-specific repo directory to protect
 
 ## Subagent Lifecycle
