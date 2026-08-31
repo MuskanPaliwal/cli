@@ -45,10 +45,10 @@ type ManualCommitStrategy struct {
 	checkpointRefFetcher checkpoint.RefFetchFunc
 }
 
-// Codex gives Stop hooks 30 seconds. Keep the network-heavy finalize pass
-// below that ceiling so state persistence and the rest of turn cleanup still
-// have time to finish before the host kills the process.
-const defaultTurnCheckpointFinalizeBudget = 20 * time.Second
+const (
+	standardTurnCheckpointFinalizeBudget    = 20 * time.Second
+	constrainedTurnCheckpointFinalizeBudget = 5 * time.Second
+)
 
 // getStateStore returns the session state store, initializing it lazily if needed.
 // Thread-safe via sync.Once.

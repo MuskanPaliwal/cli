@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -15,6 +17,29 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTurnCheckpointFinalizeBudgetForAgent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		agentType types.AgentType
+		want      time.Duration
+	}{
+		{name: "codex", agentType: agent.AgentTypeCodex, want: 20 * time.Second},
+		{name: "claude_code", agentType: agent.AgentTypeClaudeCode, want: 20 * time.Second},
+		{name: "pi", agentType: agent.AgentTypePi, want: 5 * time.Second},
+		{name: "other_supported_agent", agentType: agent.AgentTypeGemini, want: 5 * time.Second},
+		{name: "unknown_agent", agentType: types.AgentType("future-agent"), want: 5 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, turnCheckpointFinalizeBudgetForAgent(tt.agentType))
+		})
+	}
+}
 
 func TestFinalizeAllTurnCheckpointsStopsAtTotalBudget(t *testing.T) {
 	workDir := setupGitRepo(t)

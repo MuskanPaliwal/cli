@@ -3024,7 +3024,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	}
 	budget := s.turnCheckpointFinalizeBudget
 	if budget == 0 {
-		budget = defaultTurnCheckpointFinalizeBudget
+		budget = turnCheckpointFinalizeBudgetForAgent(state.AgentType)
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -3209,6 +3209,17 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	state.TurnCheckpointIDs = nil
 
 	return errCount
+}
+
+func turnCheckpointFinalizeBudgetForAgent(agentType types.AgentType) time.Duration {
+	// Only hosts with verified headroom get the longer budget; the fallback must
+	// fit Pi's 10-second subprocess limit so new agents fail safe.
+	switch agentType {
+	case agent.AgentTypeClaudeCode, agent.AgentTypeCodex:
+		return standardTurnCheckpointFinalizeBudget
+	default:
+		return constrainedTurnCheckpointFinalizeBudget
+	}
 }
 
 func finalizeTurnCheckpointWrites(
