@@ -182,56 +182,6 @@ func (c *ClaudeCodeAgent) FormatResumeCommand(sessionID string) string {
 	return "claude -r " + sessionID
 }
 
-// Session helper methods - work on AgentSession with Claude's native JSONL data
-
-// TruncateAtUUID returns a new session truncated at the given UUID (inclusive).
-// Requires NativeData to be populated.
-func (c *ClaudeCodeAgent) TruncateAtUUID(session *agent.AgentSession, uuid string) (*agent.AgentSession, error) {
-	if session == nil {
-		return nil, errors.New("session is nil")
-	}
-
-	if len(session.NativeData) == 0 {
-		return nil, errors.New("session has no native data")
-	}
-
-	if uuid == "" {
-		// No truncation needed, return copy
-		return &agent.AgentSession{
-			SessionID:     session.SessionID,
-			AgentName:     session.AgentName,
-			RepoPath:      session.RepoPath,
-			SessionRef:    session.SessionRef,
-			StartTime:     session.StartTime,
-			NativeData:    session.NativeData,
-			ModifiedFiles: session.ModifiedFiles,
-		}, nil
-	}
-
-	// Parse, truncate, re-serialize
-	lines, err := transcript.ParseFromBytes(session.NativeData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse transcript: %w", err)
-	}
-
-	truncated := TruncateAtUUID(lines, uuid)
-
-	newData, err := SerializeTranscript(truncated)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize truncated transcript: %w", err)
-	}
-
-	return &agent.AgentSession{
-		SessionID:     session.SessionID,
-		AgentName:     session.AgentName,
-		RepoPath:      session.RepoPath,
-		SessionRef:    session.SessionRef,
-		StartTime:     session.StartTime,
-		NativeData:    newData,
-		ModifiedFiles: ExtractModifiedFiles(truncated),
-	}, nil
-}
-
 // ReadSessionFromPath is a convenience method that reads a session directly from a file path.
 // This is useful when you have the path but not a HookInput.
 func (c *ClaudeCodeAgent) ReadSessionFromPath(transcriptPath, sessionID string) (*agent.AgentSession, error) {
