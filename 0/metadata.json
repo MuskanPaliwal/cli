@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CQD4YM2NXEQ4ZS9AM047NK",
+  "session_id": "01a0595a-9d82-7731-b521-ec1075898030",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T20:15:40.139949Z",
+  "branch": "fix-migration-idempotent-ref-update",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/migrate.go",
+    "cmd/entire/cli/checkpoint/migrate_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "9535b3acb6cb",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 165185,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5032192,
+    "output_tokens": 19734,
+    "api_call_count": 71
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T20:15:40.073403Z",
+    "agent_lines": 76,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 76,
+    "total_lines_changed": 87,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 76,
+      "agent_lines_removed": 11
+    }
+  ]
+}

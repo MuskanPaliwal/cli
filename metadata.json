@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1CQD4YM2NXEQ4ZS9AM047NK",
+  "strategy": "manual-commit",
+  "branch": "fix-migration-idempotent-ref-update",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/migrate.go",
+    "cmd/entire/cli/checkpoint/migrate_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 165185,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5032192,
+    "output_tokens": 19734,
+    "api_call_count": 71
+  }
+}
