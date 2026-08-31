@@ -1,5 +1,3 @@
-// Package gitrepo_test (external, not gitrepo): the guard needs
-// testutil.GitIsolatedEnv, and testutil imports gitrepo.
 package gitrepo_test
 
 import (
@@ -43,10 +41,6 @@ var gitInvocationMarkers = []string{
 func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	t.Parallel()
 
-	// GitIsolatedEnv: the parse below assumes plain output, and a user
-	// gitconfig with color.ui=always wraps the path and separator in ANSI
-	// escapes even when piped — the ".go" suffix check then matches nothing
-	// and the guard dies as "pattern gone stale".
 	revParse := exec.Command("git", "rev-parse", "--show-toplevel") //nolint:noctx // guard test, no cancellation needed
 	revParse.Env = testutil.GitIsolatedEnv()
 	root, err := revParse.Output()
