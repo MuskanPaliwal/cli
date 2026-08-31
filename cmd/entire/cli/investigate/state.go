@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/provenance"
-	"github.com/entireio/cli/cmd/entire/cli/session"
 )
 
 // InvestigationsDirName is the directory name (under git common dir) where
@@ -93,15 +94,18 @@ type StateStore struct {
 }
 
 // NewStateStore creates a StateStore rooted at
-// <git-common-dir>/entire-investigations. Resolves the common dir via
-// session.GetGitCommonDir, so this requires a git repository context.
+// <git-common-dir>/entire-investigations.
 func NewStateStore(ctx context.Context) (*StateStore, error) {
-	commonDir, err := session.GetGitCommonDir(ctx)
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get worktree root: %w", err)
+	}
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
 		return nil, fmt.Errorf("get git common dir: %w", err)
 	}
 	return &StateStore{
-		dir: filepath.Join(commonDir, InvestigationsDirName),
+		dir: filepath.Join(metadata.CommonDir, InvestigationsDirName),
 	}, nil
 }
 

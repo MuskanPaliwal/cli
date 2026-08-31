@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 )
 
@@ -44,12 +46,20 @@ func NewPushQueue(gitCommonDir string) *PushQueue {
 }
 
 // PushQueueForRepo resolves the git common dir for repo and returns its queue.
-func PushQueueForRepo(ctx context.Context, repo *git.Repository) (*PushQueue, error) {
-	dir, err := resolveGitCommonDir(ctx, repo)
+func PushQueueForRepo(_ context.Context, repo *git.Repository) (*PushQueue, error) {
+	worktree, err := repo.Worktree()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open worktree for push queue: %w", err)
 	}
-	return NewPushQueue(dir), nil
+	root := worktree.Filesystem().Root()
+	if root == "" {
+		return nil, errors.New("resolve worktree root for push queue")
+	}
+	metadata, err := gitrepo.ResolveWorktreeMetadata(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve git common dir for push queue: %w", err)
+	}
+	return NewPushQueue(metadata.CommonDir), nil
 }
 
 func (q *PushQueue) queuePath() string { return filepath.Join(q.dir, pushQueueFileName) }

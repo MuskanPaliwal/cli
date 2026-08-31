@@ -12,7 +12,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
@@ -125,7 +124,6 @@ func TestHooksGitCmd_DiscoverExternalAgents_WhenEnabled(t *testing.T) {
 
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 
 	// Reset global state before the test
 	gitHooksDisabled = false
@@ -207,7 +205,6 @@ func TestHooksGitCommitMsgSkipsWhenPolicyUnsupported(t *testing.T) {
 	testutil.GitCommit(t, repoDir, "init")
 	t.Chdir(repoDir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 	gitHooksDisabled = false
 
 	enableEntire(t, repoDir)
@@ -250,7 +247,6 @@ func TestHooksGitCommitMsgSkipsWhenPolicyUnreadable(t *testing.T) {
 	testutil.GitCommit(t, repoDir, "init")
 	t.Chdir(repoDir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 	gitHooksDisabled = false
 
 	enableEntire(t, repoDir)

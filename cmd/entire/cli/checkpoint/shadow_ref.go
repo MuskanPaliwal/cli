@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -35,7 +36,7 @@ const shadowRefMaxJitter = 8 * time.Millisecond
 // repository. Callers use the worktree root as cmd.Dir for git invocations
 // and the common dir to locate filesystem paths (lock files, loose objects)
 // — both without depending on the process cwd.
-func (s *ephemeralStore) repoDirs(ctx context.Context) (worktreeRoot, commonDir string, err error) {
+func (s *ephemeralStore) repoDirs(_ context.Context) (worktreeRoot, commonDir string, err error) {
 	wt, err := s.repo.Worktree()
 	if err != nil {
 		return "", "", fmt.Errorf("open worktree: %w", err)
@@ -44,11 +45,11 @@ func (s *ephemeralStore) repoDirs(ctx context.Context) (worktreeRoot, commonDir 
 	if worktreeRoot == "" {
 		return "", "", errors.New("repository worktree filesystem has no root path")
 	}
-	commonDir, err = resolveGitCommonDir(ctx, s.repo)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("resolve repository metadata: %w", err)
 	}
-	return worktreeRoot, commonDir, nil
+	return worktreeRoot, metadata.CommonDir, nil
 }
 
 // casUpdateShadowBranchRef atomically updates a shadow branch ref via

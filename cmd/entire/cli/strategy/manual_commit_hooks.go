@@ -848,11 +848,15 @@ func warnStaleEndedSessions(ctx context.Context, count int) {
 }
 
 func warnStaleEndedSessionsTo(ctx context.Context, count int, w io.Writer) {
-	commonDir, err := GetGitCommonDir(ctx)
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return // fail-open
 	}
-	warnDir := filepath.Join(commonDir, session.SessionStateDirName)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	if err != nil {
+		return // fail-open
+	}
+	warnDir := filepath.Join(metadata.CommonDir, session.SessionStateDirName)
 	warnFile := filepath.Join(warnDir, staleEndedSessionWarnFile)
 	if info, statErr := os.Lstat(warnFile); statErr == nil {
 		if time.Since(info.ModTime()) < staleEndedSessionWarnInterval {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -130,15 +131,20 @@ func newRedactCache(gitCommonDir string) *redactCache {
 // repoRedactCache resolves the prefix cache for repo, or nil when the git common
 // directory is unavailable (a bare repository, for instance). Nil disables
 // incremental reuse without failing the write.
-//
-// resolveGitCommonDir memoizes per worktree and the sibling shadow-branch and
-// push-queue writes already warm it, so this is cheap to call per checkpoint.
-func repoRedactCache(ctx context.Context, repo *git.Repository) *redactCache {
-	dir, err := resolveGitCommonDir(ctx, repo)
+func repoRedactCache(_ context.Context, repo *git.Repository) *redactCache {
+	worktree, err := repo.Worktree()
 	if err != nil {
 		return nil
 	}
-	return newRedactCache(dir)
+	root := worktree.Filesystem().Root()
+	if root == "" {
+		return nil
+	}
+	metadata, err := gitrepo.ResolveWorktreeMetadata(root)
+	if err != nil {
+		return nil
+	}
+	return newRedactCache(metadata.CommonDir)
 }
 
 // redactionFingerprint combines the redaction config with the CLI build. The

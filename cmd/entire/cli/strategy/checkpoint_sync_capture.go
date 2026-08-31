@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 // capturedSyncRemotesFileName is the per-clone captured-election state, stored
@@ -35,19 +37,23 @@ type capturedSyncRemotesFile struct {
 }
 
 func capturedSyncRemotesPath(ctx context.Context) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(commonDir, capturedSyncRemotesFileName), nil
+	return capturedSyncMetadataPath(ctx, capturedSyncRemotesFileName)
 }
 
 func capturedSyncRemotesLockPath(ctx context.Context) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
+	return capturedSyncMetadataPath(ctx, capturedSyncRemotesLockName)
+}
+
+func capturedSyncMetadataPath(ctx context.Context, name string) (string, error) {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve worktree root for captured sync metadata: %w", err)
 	}
-	return filepath.Join(commonDir, capturedSyncRemotesLockName), nil
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve captured sync metadata: %w", err)
+	}
+	return filepath.Join(metadata.CommonDir, name), nil
 }
 
 // loadCapturedSyncRemotes reads the captured election. Fail-soft: a missing,

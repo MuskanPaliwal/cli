@@ -18,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -2892,8 +2893,10 @@ func removeAllSessionStates(ctx context.Context) (int, error) {
 	// state directory rather than inside it (see strategy.stateLockPath) so
 	// session-listing code doesn't have to filter them out. Best-effort:
 	// failing here doesn't undo the state-file removal.
-	if commonDir, cdErr := strategy.GetGitCommonDir(ctx); cdErr == nil {
-		_ = os.RemoveAll(filepath.Join(commonDir, "entire-session-locks"))
+	if worktreeRoot, rootErr := paths.WorktreeRoot(ctx); rootErr == nil {
+		if metadata, metadataErr := gitrepo.ResolveWorktreeMetadata(worktreeRoot); metadataErr == nil {
+			_ = os.RemoveAll(filepath.Join(metadata.CommonDir, "entire-session-locks"))
+		}
 	}
 
 	return count, nil

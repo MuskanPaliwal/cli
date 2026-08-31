@@ -1612,7 +1612,6 @@ func TestHandleLifecycleTurnStart_ContextInjectionUnknownCacheDoesNotMarkDecided
 	addGitHubOriginForLifecycleTest(t, tmpDir)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 
 	ag := &mockContextInjectorAgent{mockLifecycleAgent: *newMockAgent()}
 	sessionID := "test-trail-inject-unknown"
@@ -1636,7 +1635,6 @@ func TestHandleLifecycleTurnStart_ContextInjectionFreshTrueMarksDecided(t *testi
 	addGitHubOriginForLifecycleTest(t, tmpDir)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 	require.NoError(t, saveTrailsEnabledForRepo(context.Background(), true))
 
 	ag := &mockContextInjectorAgent{mockLifecycleAgent: *newMockAgent()}
@@ -2886,7 +2884,6 @@ func TestRefreshTrailEnablementCmd_NoStrayLogsOutsideWorktree(t *testing.T) {
 	dir := t.TempDir() // a plain temp dir, not a git worktree
 	t.Chdir(dir)
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
 	t.Setenv("ENTIRE_LOG_LEVEL", "debug")
 
 	require.NoError(t, executeThroughRoot(t, "__refresh_trail_enablement"))

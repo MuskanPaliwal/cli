@@ -17,6 +17,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
@@ -66,11 +67,15 @@ func sessionLockDeadlineFromContext(ctx context.Context) (time.Time, bool) {
 // getSessionStateDir returns the path to the session state directory.
 // This is stored in the git common dir so it's shared across all worktrees.
 func getSessionStateDir(ctx context.Context) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve worktree root: %w", err)
 	}
-	return filepath.Join(commonDir, session.SessionStateDirName), nil
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree metadata: %w", err)
+	}
+	return filepath.Join(metadata.CommonDir, session.SessionStateDirName), nil
 }
 
 // openSessionStateRoot creates the session state directory if needed and returns
@@ -738,20 +743,10 @@ func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGat
 // dir, then runs fn. Lock paths are deduplicated and sorted so callers that
 // span repositories or worktrees can safely acquire more than one lock.
 func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []string, fn func() error) error {
-	lockPaths := make([]string, 0, len(commonDirs))
-	seen := make(map[string]struct{}, len(commonDirs))
-	for _, commonDir := range commonDirs {
-		lockPath, err := stateLockPathInCommonDir(commonDir, sessionID)
-		if err != nil {
-			return err
-		}
-		if _, ok := seen[lockPath]; ok {
-			continue
-		}
-		seen[lockPath] = struct{}{}
-		lockPaths = append(lockPaths, lockPath)
+	lockPaths, err := sessionStateLockPaths(sessionID, commonDirs)
+	if err != nil {
+		return err
 	}
-	slices.Sort(lockPaths)
 
 	releases := make([]func(), 0, len(lockPaths))
 	releaseAll := func() {
@@ -774,6 +769,35 @@ func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []s
 	defer releaseAll()
 
 	return fn()
+}
+
+func sessionStateLockPaths(sessionID string, commonDirs []string) ([]string, error) {
+	lockPaths := make([]string, 0, len(commonDirs))
+	seen := make(map[string]struct{}, len(commonDirs))
+	for _, commonDir := range commonDirs {
+		if strings.TrimSpace(commonDir) == "" {
+			return nil, errors.New("empty git common dir")
+		}
+		physicalDir, err := filepath.Abs(commonDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve git common dir %q for locking: %w", commonDir, err)
+		}
+		physicalDir, err = filepath.EvalSymlinks(physicalDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve physical git common dir %q for locking: %w", commonDir, err)
+		}
+		lockPath, err := stateLockPathInCommonDir(physicalDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[lockPath]; ok {
+			continue
+		}
+		seen[lockPath] = struct{}{}
+		lockPaths = append(lockPaths, lockPath)
+	}
+	slices.Sort(lockPaths)
+	return lockPaths, nil
 }
 
 // ErrMutationSkip signals MutateSessionState to skip the save without
@@ -818,11 +842,15 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 // holder distinct from the data — Save's atomic-rename pattern would
 // otherwise unlink the inode the flock is held on.
 func stateLockPath(ctx context.Context, sessionID string) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve worktree root: %w", err)
 	}
-	return stateLockPathInCommonDir(commonDir, sessionID)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree metadata: %w", err)
+	}
+	return stateLockPathInCommonDir(metadata.CommonDir, sessionID)
 }
 
 func stateLockPathInCommonDir(commonDir, sessionID string) (string, error) {

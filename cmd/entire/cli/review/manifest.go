@@ -14,6 +14,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
@@ -759,18 +760,11 @@ func localReviewManifestDir(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve worktree root: %w", err)
 	}
-	commonDir, err := runGit(ctx, worktreeRoot, "rev-parse", "--git-common-dir")
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve git common dir: %w", err)
 	}
-	commonDir = strings.TrimSpace(commonDir)
-	if commonDir == "" {
-		return "", errors.New("git common dir is empty")
-	}
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(worktreeRoot, commonDir)
-	}
-	return filepath.Join(commonDir, "entire-review", "manifests"), nil
+	return filepath.Join(metadata.CommonDir, "entire-review", "manifests"), nil
 }
 
 func localReviewManifestFilename(manifest LocalReviewManifest) string {

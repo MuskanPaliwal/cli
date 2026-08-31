@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -59,10 +60,11 @@ func TestGetGitDirInPath_RegularRepo(t *testing.T) {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
 
-	result, err := getGitDirInPath(context.Background(), tmpDir)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	result := metadata.GitDir
 
 	expected := filepath.Join(tmpDir, ".git")
 
@@ -148,10 +150,11 @@ func TestGetGitDirInPath_Worktree(t *testing.T) {
 	}
 
 	// Test that getGitDirInPath works in the worktree
-	result, err := getGitDirInPath(context.Background(), worktreeDir)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	result := metadata.GitDir
 
 	// Resolve symlinks for comparison (macOS /var -> /private/var)
 	resultResolved, err := filepath.EvalSymlinks(result)
@@ -174,14 +177,9 @@ func TestGetGitDirInPath_NotARepo(t *testing.T) {
 
 	tmpDir := t.TempDir()
 
-	_, err := getGitDirInPath(context.Background(), tmpDir)
+	_, err := gitrepo.ResolveWorktreeMetadata(tmpDir)
 	if err == nil {
 		t.Fatal("expected error for non-repo directory, got nil")
-	}
-
-	expectedMsg := "not a git repository"
-	if err.Error() != expectedMsg {
-		t.Errorf("expected error message %q, got %q", expectedMsg, err.Error())
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -166,10 +167,11 @@ func TestCleanCmd_DefaultMode_WithForce(t *testing.T) {
 		t.Fatalf("failed to get worktree: %v", err)
 	}
 	worktreePath := wt.Filesystem().Root()
-	worktreeID, err := paths.GetWorktreeID(worktreePath)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreePath)
 	if err != nil {
 		t.Fatalf("failed to get worktree ID: %v", err)
 	}
+	worktreeID := metadata.WorktreeID
 
 	// Create shadow branch
 	shadowBranch := checkpoint.ShadowBranchNameForCommit(commitHash.String(), worktreeID)
@@ -212,10 +214,11 @@ func TestCleanCmd_DefaultMode_DryRun(t *testing.T) {
 		t.Fatalf("failed to get worktree: %v", err)
 	}
 	worktreePath := wt.Filesystem().Root()
-	worktreeID, err := paths.GetWorktreeID(worktreePath)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreePath)
 	if err != nil {
 		t.Fatalf("failed to get worktree ID: %v", err)
 	}
+	worktreeID := metadata.WorktreeID
 
 	// Create shadow branch
 	shadowBranch := checkpoint.ShadowBranchNameForCommit(commitHash.String(), worktreeID)
@@ -316,10 +319,11 @@ func TestCleanCmd_DefaultMode_MultipleSessions(t *testing.T) {
 		t.Fatalf("failed to get worktree: %v", err)
 	}
 	worktreePath := wt.Filesystem().Root()
-	worktreeID, err := paths.GetWorktreeID(worktreePath)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreePath)
 	if err != nil {
 		t.Fatalf("failed to get worktree ID: %v", err)
 	}
+	worktreeID := metadata.WorktreeID
 
 	// Create shadow branch
 	shadowBranch := checkpoint.ShadowBranchNameForCommit(commitHash.String(), worktreeID)
@@ -656,10 +660,11 @@ func TestCleanCmd_All_FindsSessionWithShadowBranch(t *testing.T) {
 		t.Fatalf("failed to get worktree: %v", err)
 	}
 	worktreePath := wt.Filesystem().Root()
-	worktreeID, err := paths.GetWorktreeID(worktreePath)
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreePath)
 	if err != nil {
 		t.Fatalf("failed to get worktree ID: %v", err)
 	}
+	worktreeID := metadata.WorktreeID
 
 	// Create shadow branch for the session's base commit
 	shadowBranch := checkpoint.ShadowBranchNameForCommit(commitHash.String(), worktreeID)

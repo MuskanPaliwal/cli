@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 
 	"github.com/go-git/go-git/v6"
@@ -357,19 +358,12 @@ func collectCommitChain(repo *git.Repository, tip plumbing.Hash, shallow map[plu
 
 // loadShallowHashes returns the commit hashes listed in the repository's
 // shallow file, or an empty map if the repository is not shallow.
-func loadShallowHashes(ctx context.Context, repoPath string) (map[plumbing.Hash]bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
-	cmd.Dir = repoPath
-	out, err := cmd.Output()
+func loadShallowHashes(_ context.Context, repoPath string) (map[plumbing.Hash]bool, error) {
+	metadata, err := gitrepo.ResolveWorktreeMetadata(repoPath)
 	if err != nil {
-		return nil, fmt.Errorf("git rev-parse --git-common-dir: %w", err)
+		return nil, fmt.Errorf("resolve git common dir: %w", err)
 	}
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(repoPath, gitDir)
-	}
-	// Path is constructed from git's own --git-common-dir output, not user input.
-	data, err := os.ReadFile(filepath.Join(gitDir, "shallow")) //nolint:gosec // see comment above
+	data, err := os.ReadFile(filepath.Join(metadata.CommonDir, "shallow"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return map[plumbing.Hash]bool{}, nil

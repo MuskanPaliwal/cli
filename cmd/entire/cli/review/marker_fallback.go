@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 )
@@ -56,11 +58,15 @@ type PendingReviewMarker struct {
 }
 
 func pendingMarkerPath(ctx context.Context) (string, error) {
-	commonDir, err := session.GetGitCommonDir(ctx)
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return "", fmt.Errorf("locate worktree root: %w", err)
+	}
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
 		return "", fmt.Errorf("locate git common dir: %w", err)
 	}
-	return filepath.Join(commonDir, session.SessionStateDirName, pendingReviewMarkerFilename), nil
+	return filepath.Join(metadata.CommonDir, session.SessionStateDirName, pendingReviewMarkerFilename), nil
 }
 
 // WritePendingReviewMarker persists the marker. Overwrites any existing marker.
