@@ -537,7 +537,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for the initial clone to finish")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for mirror creation to finish")
 	return cmd
 }
 
