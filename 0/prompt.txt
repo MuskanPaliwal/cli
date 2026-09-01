@@ -1,0 +1,53 @@
+we get this review https://github.com/entireio/cli/pull/2211#issuecomment-5493155727
+
+---
+
+i would want to keep the 2131 change for persistent_ref.go because that;s the ultimate change where we are actually implementing the batching.
+
+---
+
+no but atleast continue your research and come up with facts
+
+---
+
+can we keep it more descriptive and ask the reviewer to review the design on 2131 pr as well based on my latest comment
+
+---
+
+no but based on this decision, what needs to be done this pr? 2211?
+
+---
+
+so the things this pr does is what?
+
+---
+
+so we move 2,3,4 to 2131?
+
+---
+
+nice so, let's write the message containing this information, we will keep it short
+
+---
+
+make it such that i missed the issue or should i even write it? both are my prs
+
+---
+
+or we can ask reviewer how we want it to be? since this issue is there? so do we want this pr to be merhed now?
+
+---
+
+use unslop
+
+---
+
+what should be shipped first?
+
+---
+
+https://github.com/entireio/cli/pull/2211#issuecomment-5494992508 let's fix the last thing and land it first
+
+---
+
+we have got two conflicts too
