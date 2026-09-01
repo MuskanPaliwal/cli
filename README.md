@@ -100,11 +100,17 @@ attempt leaves your existing install working.
 ```bash
 go install github.com/entireio/cli/cmd/entire@latest
 
+# The git remote helper that resolves entire:// URLs, needed for `entire clone`
+# and `git clone entire://…`. The packaged installs above bundle it.
+go install github.com/entireio/cli/cmd/git-remote-entire@latest
+
 # Add Go binaries to PATH (add to ~/.zshrc or ~/.bashrc if not already configured)
 export PATH="$HOME/go/bin:$PATH"
 ```
 
-This installs `entire` only. The packaged installs above also ship `git-remote-entire`, which is what resolves `entire://` and `entire clone` URLs — install with Homebrew, Scoop, or `install.sh` if you need those.
+Install both, or just `entire` if you never clone over `entire://`. Git finds the helper by name on `$PATH`, which is what `go install` produces, so nothing else needs configuring.
+
+One difference from a stable release: a `go install` build leaves [experimental commands](#experimental-commands) visible in `entire help`, the same as a nightly or a local build.
 
 ### Enable in your project
 
