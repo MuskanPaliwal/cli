@@ -490,12 +490,12 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 			"  entire repo mirror create github.com/octocat/hello-world aws-us-east-2.entire.io",
 		Args: cobra.RangeArgs(0, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			asyncMirrorRequests := false
+			opts := mirrorCreateOptions{noWait: noWait, timeout: waitTimeout}
 			if settings, err := LoadEntireSettings(cmd.Context()); err == nil {
-				asyncMirrorRequests = settings.AsyncMirrorRequests
+				opts.async = settings.AsyncMirrorRequests
 			}
 			if len(args) == 0 {
-				return runMirrorCreateWizard(cmd, noWait, waitTimeout, asyncMirrorRequests)
+				return runMirrorCreateWizard(cmd, opts)
 			}
 			owner, repo, err := parseGitHubURL(args[0])
 			if err != nil {
@@ -521,21 +521,14 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 			}
 			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				errW := cmd.ErrOrStderr()
-				var phase mirrorCreatePhase
 				var finishPhase func(bool)
-				onPhase := func(next mirrorCreatePhase) {
-					if next == phase {
-						return
-					}
+				opts.onPhase = func(next mirrorCreatePhase) {
 					if finishPhase != nil {
 						finishPhase(true)
 					}
-					phase = next
 					finishPhase = startSpinner(errW, fmt.Sprintf("%s mirror %s/%s into %s", next.label(), owner, repo, clusterHost))
 				}
-				outcome, err := createAndAwaitMirror(ctx, c, owner, repo, clusterHost, mirrorCreateOptions{
-					async: asyncMirrorRequests, noWait: noWait, timeout: waitTimeout, onPhase: onPhase,
-				})
+				outcome, err := createAndAwaitMirror(ctx, c, owner, repo, clusterHost, opts)
 				if finishPhase != nil {
 					finishPhase(err == nil)
 				}
@@ -567,7 +560,7 @@ const (
 )
 
 func (p mirrorCreatePhase) label() string {
-	return strings.ToUpper(string(p[:1])) + string(p[1:])
+	return upperFirst(string(p))
 }
 
 type mirrorCreateOptions struct {
@@ -606,10 +599,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 		})
 		if submitErr != nil {
 			if waitErr := waitCtx.Err(); waitErr != nil {
-				if errors.Is(waitErr, context.Canceled) {
-					return mirrorCreateOutcome{}, NewSilentError(waitErr)
-				}
-				return mirrorCreateOutcome{}, fmt.Errorf("timed out submitting mirror request: %w", waitErr)
+				return mirrorCreateOutcome{}, classifyWaitContextErr(waitErr, "submitting mirror request")
 			}
 			return mirrorCreateOutcome{}, submitErr
 		}

@@ -34,7 +34,7 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 		var paths []string
 		requestPolls := 0
 		mirrorPolls := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			paths = append(paths, r.URL.Path)
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == mirrorRequestsAPIPath:
@@ -42,7 +42,7 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 			case r.Method == http.MethodGet && r.URL.Path == mirrorRequestPath():
 				requestPolls++
 				if requestPolls == 1 {
-					writeMirrorRequest(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
+					writeJSONResponse(t, w, http.StatusOK, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
 					return
 				}
 				writeSuccessfulMirrorRequest(t, w)
@@ -52,16 +52,12 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 					writeCoreProblem(t, w, http.StatusNotFound, "mirror not found")
 					return
 				}
-				mirror := coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusReady)}
-				writeJSONResponse(t, w, http.StatusOK, mirror)
+				writeJSONResponse(t, w, http.StatusOK, &coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusReady)})
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				w.WriteHeader(http.StatusNotFound)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
 		var phases []mirrorCreatePhase
 		outcome, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
@@ -85,7 +81,7 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 
 	t.Run("no-wait stops after placement", func(t *testing.T) {
 		var paths []string
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			paths = append(paths, r.URL.Path)
 			switch r.URL.Path {
 			case mirrorRequestsAPIPath:
@@ -95,10 +91,7 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
 		outcome, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, noWait: true, timeout: time.Second,
@@ -139,13 +132,10 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 
 	t.Run("submission failure does not fall back", func(t *testing.T) {
 		var paths []string
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			paths = append(paths, r.URL.Path)
 			writeCoreProblem(t, w, http.StatusNotFound, "route unavailable")
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
 		outcome, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, timeout: time.Second,
@@ -169,7 +159,7 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 		{name: "unknown", code: "future_failure", message: "future detail", want: "unknown failure code", wantDetail: "future detail"},
 	} {
 		t.Run("terminal failure "+tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case mirrorRequestsAPIPath:
 					writeAcceptedMirrorRequest(t, w)
@@ -178,16 +168,13 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 					request.Failure = coreapi.NewOptMirrorRequestFailure(coreapi.MirrorRequestFailure{
 						Code: tt.code, Message: tt.message, Retryable: tt.retryable,
 					})
-					writeMirrorRequest(t, w, request)
+					writeJSONResponse(t, w, http.StatusOK, &request)
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
-			t.Cleanup(srv.Close)
-			client, err := coreapi.NewWithBearer(srv.URL, "token")
-			require.NoError(t, err)
+			})
 
-			_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+			_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 				async: true, timeout: time.Second,
 			})
 			require.ErrorContains(t, err, tt.want)
@@ -204,7 +191,7 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 
 	t.Run("transient request poll failures are retried", func(t *testing.T) {
 		polls := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case mirrorRequestsAPIPath:
 				writeAcceptedMirrorRequest(t, w)
@@ -218,12 +205,9 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, noWait: true, timeout: time.Second,
 		})
 		require.NoError(t, err)
@@ -232,19 +216,16 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 
 	t.Run("persistent request poll failures stop at the cap", func(t *testing.T) {
 		polls := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == mirrorRequestsAPIPath {
 				writeAcceptedMirrorRequest(t, w)
 				return
 			}
 			polls++
 			writeCoreProblem(t, w, http.StatusServiceUnavailable, "still unavailable")
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, noWait: true, timeout: time.Second,
 		})
 		require.ErrorContains(t, err, "poll mirror request")
@@ -257,19 +238,14 @@ func TestCreateAndAwaitMirror_AsyncLocationValidation(t *testing.T) {
 
 	for _, location := range []string{"", ":", "/api/v1/mirrors/not-a-request", "/api/v1/mirror-requests/not-a-uuid", mirrorRequestPath() + "?extra=true"} {
 		t.Run("invalid Location "+location, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
+			client := newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				if location != "" {
 					w.Header().Set("Location", location)
 				}
-				w.WriteHeader(http.StatusAccepted)
-				writeMirrorRequestBody(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
-			}))
-			t.Cleanup(srv.Close)
-			client, err := coreapi.NewWithBearer(srv.URL, "token")
-			require.NoError(t, err)
+				writeJSONResponse(t, w, http.StatusAccepted, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
+			})
 
-			_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+			_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 				async: true, timeout: time.Second,
 			})
 			require.ErrorContains(t, err, "Location")
@@ -281,15 +257,12 @@ func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 	useFastMirrorPolling(t)
 
 	t.Run("operation timeout covers submission", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			time.Sleep(100 * time.Millisecond)
 			w.WriteHeader(http.StatusAccepted)
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, timeout: 10 * time.Millisecond,
 		})
 		require.ErrorContains(t, err, "timed out submitting mirror request")
@@ -297,44 +270,37 @@ func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 	})
 
 	t.Run("operation timeout covers clone polling", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == mirrorRequestsAPIPath:
 				w.Header().Set("Location", mirrorRequestPath())
 				writeSuccessfulMirrorRequestWithStatus(t, w, http.StatusAccepted)
 			case strings.HasPrefix(r.URL.Path, "/api/v1/mirrors/"):
-				mirror := coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusProcessing)}
-				writeJSONResponse(t, w, http.StatusOK, mirror)
+				writeJSONResponse(t, w, http.StatusOK, &coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusProcessing)})
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, timeout: 10 * time.Millisecond,
 		})
 		require.ErrorContains(t, err, "timed out waiting for initial clone")
 	})
 
 	t.Run("operation timeout stops placement polling", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case mirrorRequestsAPIPath:
 				writeAcceptedMirrorRequest(t, w)
 			case mirrorRequestPath():
-				writeMirrorRequest(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
+				writeJSONResponse(t, w, http.StatusOK, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, timeout: 10 * time.Millisecond,
 		})
 		require.ErrorContains(t, err, "timed out waiting for mirror placement")
@@ -397,7 +363,7 @@ func TestCreateAndAwaitMirror_AsyncResubmission(t *testing.T) {
 	t.Run("resubmission after transport failure reuses the placement", func(t *testing.T) {
 		submissions := 0
 		placements := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case mirrorRequestsAPIPath:
 				submissions++
@@ -411,12 +377,9 @@ func TestCreateAndAwaitMirror_AsyncResubmission(t *testing.T) {
 			default:
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
-		}))
-		t.Cleanup(srv.Close)
-		client, err := coreapi.NewWithBearer(srv.URL, "token")
-		require.NoError(t, err)
+		})
 
-		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+		_, err := createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
 			async: true, noWait: true, timeout: time.Second,
 		})
 		require.Error(t, err)
@@ -431,24 +394,20 @@ func TestCreateAndAwaitMirror_AsyncResubmission(t *testing.T) {
 }
 
 func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
-	previousInterval := mirrorPollInterval
-	mirrorPollInterval = time.Millisecond
-	t.Cleanup(func() { mirrorPollInterval = previousInterval })
+	useFastMirrorPolling(t)
 
 	for _, phase := range []string{"placement", "clone"} {
 		t.Run(phase, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			pollStarted := make(chan struct{})
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.URL.Path == mirrorRequestsAPIPath:
 					w.Header().Set("Location", mirrorRequestPath())
 					if phase == "clone" {
 						writeSuccessfulMirrorRequestWithStatus(t, w, http.StatusAccepted)
 					} else {
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusAccepted)
-						writeMirrorRequestBody(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
+						writeJSONResponse(t, w, http.StatusAccepted, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
 					}
 				case phase == "placement" && r.URL.Path == mirrorRequestPath():
 					close(pollStarted)
@@ -459,10 +418,7 @@ func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
-			t.Cleanup(srv.Close)
-			client, err := coreapi.NewWithBearer(srv.URL, "token")
-			require.NoError(t, err)
+			})
 
 			result := make(chan error, 1)
 			go func() {
@@ -473,7 +429,7 @@ func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
 			}()
 			<-pollStarted
 			cancel()
-			err = <-result
+			err := <-result
 			var silent *SilentError
 			require.ErrorAs(t, err, &silent)
 		})
@@ -481,20 +437,14 @@ func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
 }
 
 func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
-	previousInterval := mirrorPollInterval
-	mirrorPollInterval = time.Millisecond
-	t.Cleanup(func() { mirrorPollInterval = previousInterval })
+	useFastMirrorPolling(t)
 
-	repoDir := t.TempDir()
-	testutil.InitRepo(t, repoDir)
-	entireDir := filepath.Join(repoDir, ".entire")
-	require.NoError(t, os.MkdirAll(entireDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"async_mirror_requests":true}`), 0o600))
-	t.Chdir(repoDir)
+	setupTestRepo(t)
+	writeSettings(t, `{"async_mirror_requests":true}`)
 
 	requestPolls := 0
 	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case mirrorRequestsAPIPath:
@@ -502,17 +452,14 @@ func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
 		case mirrorRequestPath():
 			requestPolls++
 			if requestPolls == 1 {
-				writeMirrorRequest(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
+				writeJSONResponse(t, w, http.StatusOK, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
 				return
 			}
 			writeSuccessfulMirrorRequest(t, w)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
-	t.Cleanup(srv.Close)
-	client, err := coreapi.NewWithBearer(srv.URL, "token")
-	require.NoError(t, err)
+	})
 	previousClient := clusterCoreClient
 	clusterCoreClient = func(context.Context, string) (*coreapi.Client, error) { return client, nil }
 	t.Cleanup(func() { clusterCoreClient = previousClient })
@@ -532,36 +479,30 @@ func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
 }
 
 func TestCreateOneMirror_AsyncProgress(t *testing.T) {
-	previousInterval := mirrorPollInterval
-	mirrorPollInterval = time.Millisecond
-	t.Cleanup(func() { mirrorPollInterval = previousInterval })
+	useFastMirrorPolling(t)
 
 	requestPolls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == mirrorRequestsAPIPath:
 			writeAcceptedMirrorRequest(t, w)
 		case r.URL.Path == mirrorRequestPath():
 			requestPolls++
 			if requestPolls == 1 {
-				writeMirrorRequest(t, w, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
+				writeJSONResponse(t, w, http.StatusOK, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusProcessing})
 				return
 			}
 			writeSuccessfulMirrorRequest(t, w)
 		case strings.HasPrefix(r.URL.Path, "/api/v1/mirrors/"):
-			mirror := coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusReady)}
-			writeJSONResponse(t, w, http.StatusOK, mirror)
+			writeJSONResponse(t, w, http.StatusOK, &coreapi.Mirror{Status: coreapi.NewOptMirrorStatus(coreapi.MirrorStatusReady)})
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
-	t.Cleanup(srv.Close)
-	client, err := coreapi.NewWithBearer(srv.URL, "token")
-	require.NoError(t, err)
+	})
 
 	var progress []string
 	target := mirrorTarget{owner: "owner", repo: "repo", region: regionChoice{host: "cluster"}}
-	result := createOneMirror(t.Context(), target, client, nil, false, time.Second, true,
+	result := createOneMirror(t.Context(), target, client, nil, mirrorCreateOptions{async: true, timeout: time.Second},
 		func(status string, _ bool, _ bool) { progress = append(progress, status) })
 	require.NoError(t, result.err)
 	require.Equal(t, mirrorStatusReady, result.status)
@@ -575,7 +516,7 @@ func TestCreateMirrors_AsyncKeepsConcurrencyAndFailuresIndependent(t *testing.T)
 	var started atomic.Int32
 	reachedLimit := make(chan struct{})
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Repo string `json:"repo"`
 		}
@@ -602,10 +543,7 @@ func TestCreateMirrors_AsyncKeepsConcurrencyAndFailuresIndependent(t *testing.T)
 		}
 		w.Header().Set("Location", mirrorRequestPath())
 		writeSuccessfulMirrorRequestWithStatus(t, w, http.StatusAccepted)
-	}))
-	t.Cleanup(srv.Close)
-	client, err := coreapi.NewWithBearer(srv.URL, "token")
-	require.NoError(t, err)
+	})
 	previousClient := clusterCoreClient
 	clusterCoreClient = func(_ context.Context, host string) (*coreapi.Client, error) {
 		if host == "bad-region" {
@@ -626,7 +564,7 @@ func TestCreateMirrors_AsyncKeepsConcurrencyAndFailuresIndependent(t *testing.T)
 
 	resultsCh := make(chan []mirrorResult, 1)
 	go func() {
-		resultsCh <- createMirrors(t.Context(), &bytes.Buffer{}, targets, true, time.Second, true)
+		resultsCh <- createMirrors(t.Context(), &bytes.Buffer{}, targets, mirrorCreateOptions{async: true, noWait: true, timeout: time.Second})
 	}()
 	<-reachedLimit
 	time.Sleep(20 * time.Millisecond)
@@ -661,10 +599,19 @@ func useFastMirrorPolling(t *testing.T) {
 	t.Cleanup(func() { mirrorPollInterval = previousInterval })
 }
 
+func newMirrorRequestClient(t *testing.T, handler http.HandlerFunc) *coreapi.Client {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	client, err := coreapi.NewWithBearer(srv.URL, "token")
+	require.NoError(t, err)
+	return client
+}
+
 func writeAcceptedMirrorRequest(t *testing.T, w http.ResponseWriter) {
 	t.Helper()
 	w.Header().Set("Location", mirrorRequestPath())
-	writeJSONResponse(t, w, http.StatusAccepted, coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
+	writeJSONResponse(t, w, http.StatusAccepted, &coreapi.MirrorRequest{RequestId: testMirrorRequestID, Status: coreapi.MirrorRequestStatusPending})
 }
 
 func writeSuccessfulMirrorRequest(t *testing.T, w http.ResponseWriter) {
@@ -678,61 +625,15 @@ func writeSuccessfulMirrorRequestWithStatus(t *testing.T, w http.ResponseWriter,
 	request.Result = coreapi.NewOptMirrorRequestResult(coreapi.MirrorRequestResult{
 		MirrorId: "mirror-1", MirrorUrl: "entire://cluster/gh/owner/repo", PublicUrl: "https://cluster/gh/owner/repo",
 	})
-	writeJSONResponse(t, w, status, request)
-}
-
-func writeMirrorRequest(t *testing.T, w http.ResponseWriter, request coreapi.MirrorRequest) {
-	t.Helper()
-	writeJSONResponse(t, w, http.StatusOK, request)
+	writeJSONResponse(t, w, status, &request)
 }
 
 func writeJSONResponse(t *testing.T, w http.ResponseWriter, status int, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	writeMirrorRequestBody(t, w, value)
-}
-
-func writeMirrorRequestBody(t *testing.T, w http.ResponseWriter, value any) {
-	t.Helper()
-	if err := printJSON(w, wireJSON(value)); err != nil {
+	if err := printJSON(w, value); err != nil {
 		t.Errorf("encode response: %v", err)
-	}
-}
-
-func wireJSON(value any) any {
-	switch value := value.(type) {
-	case coreapi.MirrorRequest:
-		body := map[string]any{
-			"requestId": value.RequestId.String(),
-			"status":    value.Status,
-		}
-		if result, ok := value.Result.Get(); ok {
-			body["result"] = map[string]any{
-				"mirrorId": result.MirrorId, "mirrorUrl": result.MirrorUrl, "publicUrl": result.PublicUrl,
-			}
-		}
-		if failure, ok := value.Failure.Get(); ok {
-			body["failure"] = map[string]any{
-				"code": failure.Code, "message": failure.Message, "retryable": failure.Retryable,
-			}
-		}
-		return body
-	case coreapi.Mirror:
-		body := map[string]any{
-			"clusterHost": "cluster",
-			"createdAt":   "2026-08-31T00:00:00Z",
-			"mirrorId":    "mirror-1",
-			"owner":       "owner",
-			"provider":    "github",
-			"repo":        "repo",
-		}
-		if status, ok := value.Status.Get(); ok {
-			body["status"] = status
-		}
-		return body
-	default:
-		return value
 	}
 }
 

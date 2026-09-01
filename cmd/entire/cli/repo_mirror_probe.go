@@ -93,9 +93,12 @@ type mirrorRequestGetter interface {
 }
 
 func awaitMirrorPlacement(ctx context.Context, c mirrorRequestGetter, initial coreapi.MirrorRequest, location string, onStatus func(coreapi.MirrorRequestStatus)) (*coreapi.CreatedMirror, error) {
-	ctx, requestID, err := mirrorRequestPollTarget(ctx, location)
+	serverURL, requestID, err := mirrorRequestPollTarget(location)
 	if err != nil {
 		return nil, err
+	}
+	if serverURL != nil {
+		ctx = coreapi.WithServerURL(ctx, serverURL)
 	}
 	if initial.RequestId != requestID {
 		return nil, fmt.Errorf("mirror request Location identifies %s but response identifies %s", requestID, initial.RequestId)
@@ -105,14 +108,10 @@ func awaitMirrorPlacement(ctx context.Context, c mirrorRequestGetter, initial co
 	defer ticker.Stop()
 
 	request := &initial
-	var lastStatus coreapi.MirrorRequestStatus
 	var consecutiveErrs int
 	for {
-		if request.Status != lastStatus {
-			lastStatus = request.Status
-			if onStatus != nil {
-				onStatus(request.Status)
-			}
+		if onStatus != nil {
+			onStatus(request.Status)
 		}
 		switch request.Status {
 		case coreapi.MirrorRequestStatusSucceeded:
@@ -134,14 +133,14 @@ func awaitMirrorPlacement(ctx context.Context, c mirrorRequestGetter, initial co
 
 		select {
 		case <-ctx.Done():
-			return nil, classifyPlacementWaitContextErr(ctx.Err())
+			return nil, classifyWaitContextErr(ctx.Err(), "waiting for mirror placement")
 		case <-ticker.C:
 		}
 
 		next, err := c.GetMirrorRequest(ctx, coreapi.GetMirrorRequestParams{RequestId: requestID})
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, classifyPlacementWaitContextErr(ctx.Err())
+				return nil, classifyWaitContextErr(ctx.Err(), "waiting for mirror placement")
 			}
 			consecutiveErrs++
 			if consecutiveErrs >= maxConsecutivePollErrors {
@@ -157,33 +156,33 @@ func awaitMirrorPlacement(ctx context.Context, c mirrorRequestGetter, initial co
 	}
 }
 
-func mirrorRequestPollTarget(ctx context.Context, location string) (context.Context, uuid.UUID, error) {
+func mirrorRequestPollTarget(location string) (*url.URL, uuid.UUID, error) {
 	if strings.TrimSpace(location) == "" {
-		return ctx, uuid.Nil, errors.New("mirror request response is missing Location")
+		return nil, uuid.Nil, errors.New("mirror request response is missing Location")
 	}
 	locationURL, err := url.Parse(location)
 	if err != nil || locationURL.User != nil || locationURL.RawQuery != "" || locationURL.Fragment != "" {
-		return ctx, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
+		return nil, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
 	}
 	const prefix = "/api/v1/mirror-requests/"
 	requestIDText, ok := strings.CutPrefix(locationURL.Path, prefix)
 	if !ok || requestIDText == "" || strings.Contains(requestIDText, "/") {
-		return ctx, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
+		return nil, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
 	}
 	requestID, err := uuid.Parse(requestIDText)
 	if err != nil {
-		return ctx, uuid.Nil, fmt.Errorf("invalid mirror request Location %q: %w", location, err)
+		return nil, uuid.Nil, fmt.Errorf("invalid mirror request Location %q: %w", location, err)
 	}
 	if locationURL.IsAbs() {
 		if locationURL.Scheme != "https" && locationURL.Scheme != "http" {
-			return ctx, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
+			return nil, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
 		}
-		serverURL := &url.URL{Scheme: locationURL.Scheme, Host: locationURL.Host, Path: "/api/v1"}
-		ctx = coreapi.WithServerURL(ctx, serverURL)
-	} else if locationURL.Host != "" || !strings.HasPrefix(locationURL.Path, "/") {
-		return ctx, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
+		return &url.URL{Scheme: locationURL.Scheme, Host: locationURL.Host, Path: "/api/v1"}, requestID, nil
 	}
-	return ctx, requestID, nil
+	if locationURL.Host != "" {
+		return nil, uuid.Nil, fmt.Errorf("invalid mirror request Location %q", location)
+	}
+	return nil, requestID, nil
 }
 
 func mirrorRequestFailureError(request coreapi.MirrorRequest) error {
@@ -241,7 +240,7 @@ func awaitMirrorReady(ctx context.Context, c mirrorStatusGetter, mirrorID string
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
-				return last, classifyWaitContextErr(ctx.Err())
+				return last, classifyWaitContextErr(ctx.Err(), "waiting for initial clone")
 			}
 			// Tolerate transient glitches: the clone may still be progressing,
 			// so retry on the next tick. Only give up once errors persist.
@@ -267,27 +266,17 @@ func awaitMirrorReady(ctx context.Context, c mirrorStatusGetter, mirrorID string
 		}
 		select {
 		case <-ctx.Done():
-			return last, classifyWaitContextErr(ctx.Err())
+			return last, classifyWaitContextErr(ctx.Err(), "waiting for initial clone")
 		case <-ticker.C:
 		}
 	}
 }
 
-func classifyPlacementWaitContextErr(err error) error {
+func classifyWaitContextErr(err error, what string) error {
 	if errors.Is(err, context.Canceled) {
 		return NewSilentError(err)
 	}
-	return fmt.Errorf("timed out waiting for mirror placement: %w", err)
-}
-
-// classifyWaitContextErr maps the clone wait's context error to a user-facing
-// error: a user Ctrl+C exits quietly (SilentError, so main.go doesn't reprint
-// it), while a real deadline reports the timeout.
-func classifyWaitContextErr(err error) error {
-	if errors.Is(err, context.Canceled) {
-		return NewSilentError(err)
-	}
-	return fmt.Errorf("timed out waiting for initial clone: %w", err)
+	return fmt.Errorf("timed out %s: %w", what, err)
 }
 
 // explainSuspendedMirror tells the user a suspended placement can't be served
