@@ -171,6 +171,8 @@ verified release archive because the Scoop bucket only publishes stable builds.
             [string] $Destination
         )
 
+        # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
+        # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
         Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing
     }
 
