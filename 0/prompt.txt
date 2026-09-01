@@ -1,9 +1,17 @@
-https://github.com/entireio/cli/issues/2201 lets fix this issue. run-playbbok
+wait why claude.md to be staged?
 
 ---
 
-so is this a reproducible bug?
+explain the issue to me and then the problme
 
 ---
 
-okay go on
+wait what is false and why? can we understadn this in simpler terms in depth?
+
+---
+
+i didn't understand the re-executable case? what is it? and what is it about child taking thing from their parents?
+
+---
+
+2 knoqs the go test and 3

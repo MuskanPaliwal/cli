@@ -3,13 +3,11 @@
   "checkpoint_id": "01M1E2G7Q0WAY0A5EQ1ZQ1R4NB",
   "strategy": "manual-commit",
   "branch": "fix-auth-lock-dir-isolation",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
+    "CLAUDE.md",
     "cmd/entire/cli/auth/refresh.go",
-    "cmd/entire/cli/auth/refresh_test.go",
-    "cmd/entire/cli/global_test.go",
-    "cmd/entire/cli/integration_test/setup_test.go",
-    "e2e/tests/main_test.go"
+    "cmd/entire/cli/auth/refresh_test.go"
   ],
   "sessions": [
     {
@@ -21,10 +19,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 108513,
+    "input_tokens": 51853,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2860032,
-    "output_tokens": 17373,
-    "api_call_count": 52
+    "cache_read_tokens": 3027456,
+    "output_tokens": 14034,
+    "api_call_count": 31
   }
 }

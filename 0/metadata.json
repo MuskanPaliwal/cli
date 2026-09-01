@@ -3,67 +3,95 @@
   "checkpoint_id": "01M1E2G7Q0WAY0A5EQ1ZQ1R4NB",
   "session_id": "01a05bee-8c3d-7d90-8149-16f1536d724a",
   "strategy": "manual-commit",
-  "created_at": "2026-09-01T08:48:57.645742Z",
+  "created_at": "2026-09-01T09:42:29.747322Z",
   "branch": "fix-auth-lock-dir-isolation",
-  "checkpoints_count": 2,
-  "save_step_count": 2,
+  "checkpoints_count": 5,
+  "save_step_count": 5,
   "files_touched": [
+    "CLAUDE.md",
     "cmd/entire/cli/auth/refresh.go",
-    "cmd/entire/cli/auth/refresh_test.go",
-    "cmd/entire/cli/global_test.go",
-    "cmd/entire/cli/integration_test/setup_test.go",
-    "e2e/tests/main_test.go"
+    "cmd/entire/cli/auth/refresh_test.go"
   ],
   "agent": "Codex",
   "model": "gpt-5.6-sol",
-  "turn_id": "d9c127d4ee27",
-  "compact_transcript_start": 0,
+  "turn_id": "f76079ce9e53",
+  "checkpoint_transcript_start": 365,
+  "transcript_lines_at_start": 365,
+  "compact_transcript_start": 55,
   "token_usage": {
-    "input_tokens": 108513,
+    "input_tokens": 51853,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2860032,
-    "output_tokens": 17373,
-    "api_call_count": 52
+    "cache_read_tokens": 3027456,
+    "output_tokens": 14034,
+    "api_call_count": 31
   },
   "session_metrics": {
-    "turn_count": 2
+    "turn_count": 7
   },
   "initial_attribution": {
-    "calculated_at": "2026-09-01T08:48:57.610834Z",
-    "agent_lines": 26,
-    "agent_removed": 14,
-    "human_added": 0,
-    "human_modified": 0,
+    "calculated_at": "2026-09-01T09:42:29.686808Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 9,
+    "human_modified": 7,
     "human_removed": 0,
-    "total_committed": 26,
-    "total_lines_changed": 40,
-    "agent_percentage": 100,
+    "total_committed": 9,
+    "total_lines_changed": 29,
+    "agent_percentage": 0,
     "metric_version": 2
   },
   "prompt_attributions": [
     {
       "checkpoint_number": 1,
-      "user_lines_added": 9,
-      "user_lines_removed": 0,
+      "user_lines_added": 7,
+      "user_lines_removed": 7,
       "agent_lines_added": 0,
       "agent_lines_removed": 0,
       "user_added_per_file": {
-        "cmd/entire/cli/auth/refresh_test.go": 9
+        "CLAUDE.md": 4,
+        "cmd/entire/cli/auth/refresh.go": 2,
+        "cmd/entire/cli/auth/refresh_test.go": 1
+      },
+      "user_removed_per_file": {
+        "CLAUDE.md": 4,
+        "cmd/entire/cli/auth/refresh.go": 2,
+        "cmd/entire/cli/auth/refresh_test.go": 1
       }
     },
     {
       "checkpoint_number": 2,
       "user_lines_added": 0,
       "user_lines_removed": 0,
-      "agent_lines_added": 9,
-      "agent_lines_removed": 0
+      "agent_lines_added": 7,
+      "agent_lines_removed": 7
     },
     {
       "checkpoint_number": 3,
       "user_lines_added": 0,
       "user_lines_removed": 0,
-      "agent_lines_added": 35,
-      "agent_lines_removed": 14
+      "agent_lines_added": 7,
+      "agent_lines_removed": 7
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 7,
+      "agent_lines_removed": 7
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 7,
+      "agent_lines_removed": 7
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 7,
+      "agent_lines_removed": 7
     }
   ]
 }
