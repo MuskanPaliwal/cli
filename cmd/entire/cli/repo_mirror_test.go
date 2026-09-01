@@ -270,13 +270,19 @@ func TestReportOneShotMirror(t *testing.T) {
 		require.Contains(t, out.String(), "git clone "+mirrorURL)
 	})
 
-	t.Run("async result does not guess whether the placement was created", func(t *testing.T) {
+	t.Run("async ready result prints neutral mirror id and URL", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
-		outcome := mirrorCreateOutcome{created: mk(true, false), createdStateUnknown: true}
+		outcome := mirrorCreateOutcome{
+			created:             mk(true, false),
+			status:              coreapi.MirrorStatusReady,
+			polled:              true,
+			createdStateUnknown: true,
+		}
 		err := reportOneShotMirror(&out, &errW, outcome, nil)
 		require.NoError(t, err)
 		require.Contains(t, out.String(), "Mirror placed at "+mirrorURL)
+		require.Contains(t, out.String(), "Mirror ID: "+id)
 		require.NotContains(t, out.String(), "Registered mirror")
 		require.NotContains(t, out.String(), "Mirror exists")
 	})

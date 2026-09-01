@@ -471,6 +471,7 @@ func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
 	cmd.SetArgs([]string{"mirror", "create", "--no-wait", "github.com/owner/repo", "aws-us-east-2.entire.io"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
 	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
+	require.Contains(t, stdout.String(), "Mirror ID: mirror-1")
 	require.NotContains(t, stdout.String(), "Registered mirror")
 	require.NotContains(t, stdout.String(), "Mirror exists")
 	require.Contains(t, stderr.String(), "Queued mirror owner/repo")

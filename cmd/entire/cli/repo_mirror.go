@@ -676,7 +676,7 @@ func reportOneShotMirror(out, errW io.Writer, outcome mirrorCreateOutcome, err e
 	}
 	switch {
 	case outcome.createdStateUnknown:
-		fmt.Fprintf(out, "\nMirror placed at %s\n", created.MirrorUrl)
+		fmt.Fprintf(out, "\nMirror placed at %s\n  Mirror ID: %s\n", created.MirrorUrl, created.MirrorId)
 	case created.Created:
 		fmt.Fprintf(out, "\n✓ Registered mirror %s\n", created.MirrorId)
 	default:
