@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -17,22 +18,41 @@ import (
 )
 
 func TestOPFV1RewriteDoesNotLoseConcurrentCheckpointUpdate(t *testing.T) {
-	t.Parallel()
-
+	configureFakeOPF(t, &fakeOPFForRewrite{})
 	repoRoot, repo, oldTip := setupV1RepoInDir(t)
 	tree := emptyTreeHash(t, repo)
-	goGitTip := makeOrphanCommit(t, repo, tree, []plumbing.Hash{oldTip}, "go-git OPF rewrite")
 	nativeTip := makeOrphanCommit(t, repo, tree, []plumbing.Hash{oldTip}, "native checkpoint write")
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
 	commitNative := prepareNativeRefUpdate(t, repoRoot, refName, oldTip, nativeTip)
-	opfErr := atomicSetV1Ref(t.Context(), repo, oldTip, goGitTip)
+	_, opfErr := RewriteUnpushedV1WithOPF(t.Context(), repo, "origin")
 	commitNative()
 
 	finalRef, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, nativeTip, finalRef.Hash())
-	require.Error(t, opfErr, "the OPF rewrite must not report success while a native update owns the ref lock")
+	var movedErr *V1RefMovedError
+	require.NotErrorAs(t, opfErr, &movedErr,
+		"a held lock does not prove that the ref moved")
+	require.ErrorIs(t, opfErr, gitrepo.ErrRefLocked,
+		"the OPF rewrite must report ref contention while a native update owns the ref lock")
+}
+
+func TestAtomicSetV1Ref_ReportsActualCASConflictAsMoved(t *testing.T) {
+	t.Parallel()
+	_, repo, oldTip := setupV1RepoInDir(t)
+	tree := emptyTreeHash(t, repo)
+	newTip := makeOrphanCommit(t, repo, tree, []plumbing.Hash{oldTip}, "OPF rewrite")
+	externalTip := makeOrphanCommit(t, repo, tree, []plumbing.Hash{oldTip}, "concurrent checkpoint write")
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, externalTip)))
+
+	err := atomicSetV1Ref(t.Context(), repo, oldTip, newTip)
+
+	var movedErr *V1RefMovedError
+	require.ErrorAs(t, err, &movedErr)
+	require.Equal(t, &V1RefMovedError{Expected: oldTip, Actual: externalTip}, movedErr)
+	require.NotErrorIs(t, err, gitrepo.ErrRefLocked)
 }
 
 func TestOPFCheckpointRefRewriteDoesNotLoseConcurrentCheckpointUpdate(t *testing.T) {
@@ -55,7 +75,8 @@ func TestOPFCheckpointRefRewriteDoesNotLoseConcurrentCheckpointUpdate(t *testing
 	finalRef, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, nativeTip, finalRef.Hash())
-	require.Error(t, opfErr, "the OPF rewrite must not report success while a native update owns the ref lock")
+	require.ErrorIs(t, opfErr, gitrepo.ErrRefLocked,
+		"the OPF rewrite must report ref contention while a native update owns the ref lock")
 }
 
 func prepareNativeRefUpdate(

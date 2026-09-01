@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
@@ -48,6 +49,54 @@ func TestCASPersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T) {
 	ref, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, initial, ref.Hash())
+}
+
+func TestCASPersistentRef_DoesNotDereferenceSymbolicRef(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, initial := setupBranchTestRepo(t)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	initialCommit, err := repo.CommitObject(initial)
+	require.NoError(t, err)
+	newTip, err := CreateCommit(ctx, repo, initialCommit.TreeHash, initial, "replacement", "Test", "test@test.com")
+	require.NoError(t, err)
+
+	refName := plumbing.ReferenceName("refs/entire/test-symbolic-cas")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(refName, head.Name())))
+
+	err = CASPersistentRef(ctx, repo, refName, newTip, initial)
+	require.NoError(t, err)
+
+	target, err := repo.Reference(head.Name(), false)
+	require.NoError(t, err)
+	require.Equal(t, initial, target.Hash(), "CAS must not update the target of a symbolic ref")
+	updated, err := repo.Reference(refName, false)
+	require.NoError(t, err)
+	require.Equal(t, plumbing.HashReference, updated.Type())
+	require.Equal(t, newTip, updated.Hash())
+}
+
+func TestCASPersistentRef_DoesNotClassifyRefNamespaceConflictAsContention(t *testing.T) {
+	t.Parallel()
+	repo, initial := setupBranchTestRepo(t)
+	parentRef := plumbing.ReferenceName("refs/entire/blocked")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(parentRef, initial)))
+
+	err := CASPersistentRef(
+		context.Background(),
+		repo,
+		plumbing.ReferenceName(parentRef.String()+"/child"),
+		initial,
+		plumbing.ZeroHash,
+	)
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, gitrepo.ErrRefCASConflict,
+		"a permanent ref namespace conflict must not be reported as a stale value")
+	require.NotErrorIs(t, err, gitrepo.ErrRefLocked,
+		"a permanent ref namespace conflict must not be reported as transient contention")
+	require.Contains(t, err.Error(), "cannot lock ref")
 }
 
 func holdPersistentRefLock(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) {
@@ -131,6 +180,30 @@ func TestUpdatePersistentRef_RebuildsAfterCASConflict(t *testing.T) {
 	contents, err := file.Contents()
 	require.NoError(t, err)
 	require.Equal(t, "attempt-2", contents)
+}
+
+func TestUpdatePersistentRef_RebuildsAfterRefIsDeleted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, initial := setupBranchTestRepo(t)
+	refName := plumbing.ReferenceName("refs/entire/test-cas-deleted")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
+
+	calls := 0
+	err := updatePersistentRef(ctx, repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
+		calls++
+		if calls == 1 {
+			require.NoError(t, repo.Storer.RemoveReference(refName))
+			return initial, initial, nil
+		}
+		return initial, plumbing.ZeroHash, nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "the writer must rebuild after its expected ref is deleted")
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	require.Equal(t, initial, ref.Hash())
 }
 
 func TestUpdatePersistentRef_NoOpConflictKeepsExistingCommit(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -804,15 +805,15 @@ func readBlob(repo *git.Repository, hash plumbing.Hash) ([]byte, error) {
 }
 
 // atomicSetV1Ref CAS-updates the local v1 ref through the same lock protocol as
-// checkpoint writers. A busy ref means another writer may have advanced it, so
-// return V1RefMovedError and abort the push rather than reuse the stale rewrite.
+// checkpoint writers. A stale expected value becomes V1RefMovedError; lock
+// contention remains distinct because it does not prove the ref moved.
 func atomicSetV1Ref(ctx context.Context, repo *git.Repository, expectedOld, newHash plumbing.Hash) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	err := checkpoint.CASPersistentRef(ctx, repo, refName, newHash, expectedOld)
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, checkpoint.ErrShadowRefBusy) {
+	if errors.Is(err, gitrepo.ErrRefCASConflict) {
 		actual := plumbing.ZeroHash
 		if cur, refErr := repo.Reference(refName, true); refErr == nil {
 			actual = cur.Hash()

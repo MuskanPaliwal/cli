@@ -12,22 +12,21 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// pollInterval is how often the bounded AcquireContext path retries a
-// non-blocking lock while waiting for a deadline.
+// pollInterval is how often the cancelable AcquireContext path retries a
+// non-blocking lock while waiting for ctx to finish.
 const pollInterval = 25 * time.Millisecond
 
 // Acquire takes an exclusive lock on path via Windows LockFileEx. The
 // returned release unlocks and closes the file. Callers must invoke release
 // exactly once. Acquire blocks indefinitely until the lock is available; use
-// AcquireContext with a deadline to bound the wait.
+// AcquireContext with a cancelable context to interrupt the wait.
 func Acquire(path string) (release func(), err error) {
 	return AcquireContext(context.Background(), path)
 }
 
-// AcquireContext behaves like Acquire but honors ctx. When ctx carries a
-// deadline it polls a fail-immediately lock until acquired or the deadline
-// fires; otherwise it blocks like Acquire. See the unix implementation for the
-// rationale.
+// AcquireContext behaves like Acquire but honors ctx. A cancelable context
+// polls a fail-immediately lock until acquired or ctx finishes; a context that
+// cannot be canceled blocks like Acquire.
 func AcquireContext(ctx context.Context, path string) (release func(), err error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // caller is responsible for path validation
 	if err != nil {
@@ -39,7 +38,7 @@ func AcquireContext(ctx context.Context, path string) (release func(), err error
 		_ = f.Close()
 	}
 
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+	if ctx.Done() == nil {
 		if err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("lock flock: %w", err)

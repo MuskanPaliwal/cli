@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 
@@ -35,28 +35,17 @@ func repositoryDirs(ctx context.Context, repo *git.Repository) (worktreeRoot, co
 	return worktreeRoot, commonDir, nil
 }
 
-// casUpdateRef atomically updates refName through native Git's lock protocol.
-// Pass ZeroHash as expectedHash to require that the ref does not exist.
+// casUpdateRef adapts precise native Git CAS outcomes to the legacy retry
+// sentinel used by checkpoint writers.
 func casUpdateRef(ctx context.Context, repoRoot string, refName plumbing.ReferenceName, newHash, expectedHash plumbing.Hash) error {
-	newValue := newHash.String()
-	oldValue := strings.Repeat("0", newHash.HexSize())
-	if expectedHash != plumbing.ZeroHash {
-		oldValue = expectedHash.String()
-	}
-
-	cmd := exec.CommandContext(ctx, "git", "update-ref", refName.String(), newValue, oldValue)
-	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
-	output, err := cmd.CombinedOutput()
+	err := gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
 	if err == nil {
 		return nil
 	}
-
-	out := string(output)
-	if strings.Contains(out, "cannot lock ref") || strings.Contains(out, "but expected") {
-		return ErrShadowRefBusy
+	if errors.Is(err, gitrepo.ErrRefCASConflict) || errors.Is(err, gitrepo.ErrRefLocked) {
+		return fmt.Errorf("%w: %w", ErrShadowRefBusy, err)
 	}
-	return fmt.Errorf("git update-ref %s: %s: %w", refName, strings.TrimSpace(out), err)
+	return fmt.Errorf("compare and swap ref %s: %w", refName, err)
 }
 
 func persistentRefLockPath(commonDir string, refName plumbing.ReferenceName) (string, error) {
@@ -97,7 +86,9 @@ func withLockedPersistentRef(
 }
 
 // CASPersistentRef serializes with Entire's persistent ref writers and updates
-// refName through native Git's cross-process compare-and-swap protocol.
+// refName through native Git's cross-process compare-and-swap protocol. It
+// preserves gitrepo.ErrRefCASConflict and gitrepo.ErrRefLocked for callers that
+// need different policies for stale state and transient contention.
 func CASPersistentRef(
 	ctx context.Context,
 	repo *git.Repository,
@@ -105,7 +96,7 @@ func CASPersistentRef(
 	newHash, expectedHash plumbing.Hash,
 ) error {
 	return withLockedPersistentRef(ctx, repo, refName, func(repoRoot, _ string) error {
-		return casUpdateRef(ctx, repoRoot, refName, newHash, expectedHash)
+		return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
 	})
 }
 
