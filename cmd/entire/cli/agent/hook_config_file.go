@@ -128,13 +128,15 @@ func (f *HookConfigFile) Remove() error {
 	return nil
 }
 
-// Root exposes the underlying root and the file's name inside it, for the one
-// caller that needs the primitives rather than Read: Codex re-Stats the file
-// before and after opening it and compares os.SameFile, which Read cannot
-// express. Everything else must use Read/Write/Remove.
+// Root exposes the underlying root and the file's name inside it, for the
+// callers that need a descriptor rather than the bytes. Both are Codex, which
+// bounds .codex/hooks.json on its stat size before reading any of it: Read is
+// an unbounded io.ReadAll, so it cannot express a limit, and the file arrives
+// with the checkout. Everything else must use Read/Write/Remove.
 //
-// The root is owned by the shared registry — do not close it. Callers must use
-// the osroot no-follow primitives rather than resolving name with Root.Open.
+// The root is owned by the shared registry, so do not close it. Callers must go
+// through the osroot no-follow primitives rather than resolving name with
+// Root.Open, which is what Read does for them.
 func (f *HookConfigFile) Root() (*os.Root, string) { return f.root, f.name }
 
 // GeneratedState is GeneratedHookFileState for a file read through this root.
