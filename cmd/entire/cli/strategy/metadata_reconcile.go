@@ -8,14 +8,15 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -363,7 +364,11 @@ func loadShallowHashes(_ context.Context, repoPath string) (map[plumbing.Hash]bo
 	if err != nil {
 		return nil, fmt.Errorf("resolve git common dir: %w", err)
 	}
-	data, err := os.ReadFile(filepath.Join(metadata.CommonDir, "shallow"))
+	root, err := gitdir.OpenAt(metadata.CommonDir)
+	if err != nil {
+		return nil, fmt.Errorf("open git common dir: %w", err)
+	}
+	data, err := osroot.ReadFileNoFollow(root, "shallow")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return map[plumbing.Hash]bool{}, nil

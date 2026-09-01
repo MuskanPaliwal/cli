@@ -291,6 +291,7 @@ func stateStoreForWorktree(ctx context.Context, worktreePath string) (*session.S
 	}
 
 	cmd := exec.CommandContext(ctx, "git", "-C", absWorktree, "rev-parse", "--show-toplevel", "--git-common-dir")
+	cmd.Env = gitrepo.EnvWithoutRepoOverrides()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()

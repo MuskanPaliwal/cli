@@ -17,8 +17,10 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -83,15 +85,21 @@ func getSessionStateDir(ctx context.Context) (string, error) {
 // validated) session ID; routing their writes through os.Root makes escaping
 // the directory impossible at the kernel level even if validation were bypassed.
 // Callers must Close the returned root.
+//
+// The root is derived from the git common dir's shared root with
+// Root.OpenRoot, not opened on an assembled path. That is what makes the
+// containment transitive: the state directory is proven to be a real directory
+// inside .git before anything is named within it, so neither the directory nor
+// the files under it can be redirected out of the clone.
 func openSessionStateRoot(ctx context.Context) (*os.Root, error) {
-	stateDir, err := getSessionStateDir(ctx)
+	commonRoot, err := gitdir.OpenForCurrentWorktree(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get session state directory: %w", err)
+		return nil, fmt.Errorf("failed to open git common dir: %w", err)
 	}
-	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+	if err := osroot.MkdirAllNoSymlink(commonRoot, session.SessionStateDirName, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create session state directory: %w", err)
 	}
-	root, err := os.OpenRoot(stateDir)
+	root, err := osroot.OpenChild(commonRoot, session.SessionStateDirName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session state directory: %w", err)
 	}
@@ -101,12 +109,21 @@ func openSessionStateRoot(ctx context.Context) (*os.Root, error) {
 // openSessionStateRootForRead returns an os.Root scoped to the session state
 // directory without creating it. Returns (nil, nil) when the directory does not
 // exist, so read paths can treat a missing directory as "no hint".
+//
+// osroot.OpenChild, not commonRoot.OpenRoot: the write path above is protected
+// because MkdirAllNoSymlink refuses a symlinked entire-sessions before this
+// runs, but nothing precedes the read path. os.Root follows a symlink that stays
+// INSIDE the common dir, so a bare OpenRoot would read another directory's
+// session state as this repo's.
 func openSessionStateRootForRead(ctx context.Context) (*os.Root, error) {
-	stateDir, err := getSessionStateDir(ctx)
-	if err != nil {
-		return nil, err
+	commonRoot, err := gitdir.OpenForCurrentWorktree(ctx)
+	if os.IsNotExist(err) {
+		return nil, nil //nolint:nilnil // no common dir = no hint; callers handle nil root
 	}
-	root, err := os.OpenRoot(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git common dir: %w", err)
+	}
+	root, err := osroot.OpenChild(commonRoot, session.SessionStateDirName)
 	if os.IsNotExist(err) {
 		return nil, nil //nolint:nilnil // missing dir = no hint; callers handle nil root
 	}
@@ -305,7 +322,7 @@ func StoreModelHint(ctx context.Context, sessionID, model string) error {
 	}
 	defer root.Close()
 
-	if err := osroot.WriteFile(root, sessionID+".model", []byte(model), 0o600); err != nil {
+	if err := jsonutil.WriteFileAtomicIn(root, sessionID+".model", []byte(model), 0o600); err != nil {
 		return fmt.Errorf("failed to write model hint file: %w", err)
 	}
 	return nil
@@ -330,7 +347,7 @@ func LoadModelHint(ctx context.Context, sessionID string) string {
 	}
 	defer root.Close()
 
-	data, err := osroot.ReadFile(root, sessionID+".model")
+	data, err := osroot.ReadFileNoFollow(root, sessionID+".model")
 	if err != nil {
 		if !os.IsNotExist(err) {
 			logging.Warn(logging.WithComponent(ctx, "session"), "failed to read model hint file",
@@ -446,7 +463,7 @@ func LoadAgentTypeHint(ctx context.Context, sessionID string) types.AgentType {
 	}
 	defer root.Close()
 
-	data, err := osroot.ReadFile(root, sessionID+".agent")
+	data, err := osroot.ReadFileNoFollow(root, sessionID+".agent")
 	if err != nil {
 		if !os.IsNotExist(err) {
 			logging.Warn(logging.WithComponent(ctx, "session"), "failed to read agent hint file",
@@ -697,7 +714,7 @@ func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGat
 	}
 	gate.mu.Unlock()
 
-	lockPath, err := stateLockPath(ctx, sessionID)
+	lock, err := stateLockForSession(ctx, sessionID)
 	if err != nil {
 		return nil, false, nil, fmt.Errorf("resolve state lock path: %w", err)
 	}
@@ -709,10 +726,10 @@ func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGat
 	var flockRel func()
 	if deadline, ok := sessionLockDeadlineFromContext(ctx); ok {
 		acqCtx, cancel := context.WithDeadline(ctx, deadline)
-		flockRel, err = flock.AcquireContext(acqCtx, lockPath)
+		flockRel, err = flock.AcquireContextIn(acqCtx, lock.root, lock.name)
 		cancel()
 	} else {
-		flockRel, err = flock.Acquire(lockPath)
+		flockRel, err = flock.AcquireIn(lock.root, lock.name)
 	}
 	if err != nil {
 		return nil, false, nil, fmt.Errorf("acquire state lock: %w", err)
@@ -743,23 +760,23 @@ func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGat
 // dir, then runs fn. Lock paths are deduplicated and sorted so callers that
 // span repositories or worktrees can safely acquire more than one lock.
 func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []string, fn func() error) error {
-	lockPaths, err := sessionStateLockPaths(sessionID, commonDirs)
+	locks, err := sessionStateLocks(sessionID, commonDirs)
 	if err != nil {
 		return err
 	}
 
-	releases := make([]func(), 0, len(lockPaths))
+	releases := make([]func(), 0, len(locks))
 	releaseAll := func() {
 		for i := len(releases) - 1; i >= 0; i-- {
 			releases[i]()
 		}
 	}
-	for _, lockPath := range lockPaths {
+	for _, lock := range locks {
 		if err := ctx.Err(); err != nil {
 			releaseAll()
 			return fmt.Errorf("session state lock canceled: %w", err)
 		}
-		release, err := flock.Acquire(lockPath)
+		release, err := flock.AcquireIn(lock.root, lock.name)
 		if err != nil {
 			releaseAll()
 			return fmt.Errorf("acquire session state lock: %w", err)
@@ -772,7 +789,19 @@ func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []s
 }
 
 func sessionStateLockPaths(sessionID string, commonDirs []string) ([]string, error) {
-	lockPaths := make([]string, 0, len(commonDirs))
+	locks, err := sessionStateLocks(sessionID, commonDirs)
+	if err != nil {
+		return nil, err
+	}
+	lockPaths := make([]string, 0, len(locks))
+	for _, lock := range locks {
+		lockPaths = append(lockPaths, lock.path)
+	}
+	return lockPaths, nil
+}
+
+func sessionStateLocks(sessionID string, commonDirs []string) ([]stateLock, error) {
+	physicalDirs := make([]string, 0, len(commonDirs))
 	seen := make(map[string]struct{}, len(commonDirs))
 	for _, commonDir := range commonDirs {
 		if strings.TrimSpace(commonDir) == "" {
@@ -786,18 +815,23 @@ func sessionStateLockPaths(sessionID string, commonDirs []string) ([]string, err
 		if err != nil {
 			return nil, fmt.Errorf("resolve physical git common dir %q for locking: %w", commonDir, err)
 		}
-		lockPath, err := stateLockPathInCommonDir(physicalDir, sessionID)
+		if _, ok := seen[physicalDir]; ok {
+			continue
+		}
+		seen[physicalDir] = struct{}{}
+		physicalDirs = append(physicalDirs, physicalDir)
+	}
+	slices.Sort(physicalDirs)
+
+	locks := make([]stateLock, 0, len(physicalDirs))
+	for _, physicalDir := range physicalDirs {
+		lock, err := stateLockInCommonDir(physicalDir, sessionID)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[lockPath]; ok {
-			continue
-		}
-		seen[lockPath] = struct{}{}
-		lockPaths = append(lockPaths, lockPath)
+		locks = append(locks, lock)
 	}
-	slices.Sort(lockPaths)
-	return lockPaths, nil
+	return locks, nil
 }
 
 // ErrMutationSkip signals MutateSessionState to skip the save without
@@ -835,6 +869,20 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 	return err
 }
 
+// stateLock names a per-session lock file two ways: path, for dedup and for the
+// deterministic ordering WithSessionStateLocks needs across repositories, and
+// (root, name) for the acquire itself so the session-ID-derived name resolves
+// inside the git common dir rather than as an assembled string.
+type stateLock struct {
+	path string
+	root *os.Root
+	name string
+}
+
+// SessionLockDirName is the lock directory inside the git common dir. Exported
+// so uninstall can sweep it without re-spelling the name.
+const SessionLockDirName = "entire-session-locks"
+
 // stateLockPath returns the lock file path for a session. Lock files live in
 // .git/entire-session-locks/ (a sibling to entire-sessions/) so callers that
 // enumerate session state files don't have to filter lock entries. A
@@ -842,29 +890,45 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 // holder distinct from the data — Save's atomic-rename pattern would
 // otherwise unlink the inode the flock is held on.
 func stateLockPath(ctx context.Context, sessionID string) (string, error) {
+	lock, err := stateLockForSession(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return lock.path, nil
+}
+
+func stateLockForSession(ctx context.Context, sessionID string) (stateLock, error) {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", fmt.Errorf("resolve worktree root: %w", err)
+		return stateLock{}, fmt.Errorf("resolve worktree root: %w", err)
 	}
 	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve worktree metadata: %w", err)
+		return stateLock{}, fmt.Errorf("resolve worktree metadata: %w", err)
 	}
-	return stateLockPathInCommonDir(metadata.CommonDir, sessionID)
+	return stateLockInCommonDir(metadata.CommonDir, sessionID)
 }
 
-func stateLockPathInCommonDir(commonDir, sessionID string) (string, error) {
+func stateLockInCommonDir(commonDir, sessionID string) (stateLock, error) {
 	if strings.TrimSpace(commonDir) == "" {
-		return "", errors.New("empty git common dir")
+		return stateLock{}, errors.New("empty git common dir")
 	}
 	if err := validation.ValidateSessionID(sessionID); err != nil {
-		return "", fmt.Errorf("invalid session ID: %w", err)
+		return stateLock{}, fmt.Errorf("invalid session ID: %w", err)
 	}
-	lockDir := filepath.Join(commonDir, "entire-session-locks")
-	if err := os.MkdirAll(lockDir, 0o750); err != nil {
-		return "", fmt.Errorf("create session lock directory: %w", err)
+	root, err := gitdir.OpenAt(commonDir)
+	if err != nil {
+		return stateLock{}, fmt.Errorf("open git common dir: %w", err)
 	}
-	return filepath.Join(lockDir, sessionID+".lock"), nil
+	if err := osroot.MkdirAllNoSymlink(root, SessionLockDirName, 0o750); err != nil {
+		return stateLock{}, fmt.Errorf("create session lock directory: %w", err)
+	}
+	name := SessionLockDirName + "/" + sessionID + ".lock"
+	return stateLock{
+		path: filepath.Join(commonDir, filepath.FromSlash(name)),
+		root: root,
+		name: name,
+	}, nil
 }
 
 // ClearSessionState removes the session state file for the given session ID.
@@ -874,10 +938,14 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("invalid session ID: %w", err)
 	}
 
-	stateDir, err := getSessionStateDir(ctx)
+	root, err := openSessionStateRootForRead(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get session state directory: %w", err)
+		return fmt.Errorf("failed to open session state directory for cleanup: %w", err)
 	}
+	if root == nil {
+		return nil // no state directory => nothing to clear
+	}
+	defer root.Close()
 
 	// Remove all files for this session (state .json, .model hint, any future
 	// hint files). Match by literal prefix rather than filepath.Glob: the
@@ -885,21 +953,10 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 	// match and delete other sessions' files. os.Root ensures traversal-resistant
 	// removal.
 	prefix := sessionID + "."
-	entries, _ := os.ReadDir(stateDir) //nolint:errcheck // best-effort cleanup; missing dir => nothing to clear
-	var matches []string
+	entries, _ := osroot.ReadDirNoSymlinks(root, ".") //nolint:errcheck // best-effort cleanup; missing dir => nothing to clear
 	for _, e := range entries {
 		if name := e.Name(); strings.HasPrefix(name, prefix) {
-			matches = append(matches, name)
-		}
-	}
-	if len(matches) > 0 {
-		root, rootErr := os.OpenRoot(stateDir)
-		if rootErr != nil {
-			return fmt.Errorf("failed to open session state directory for cleanup: %w", rootErr)
-		}
-		defer root.Close()
-		for _, name := range matches {
-			_ = osroot.Remove(root, name) //nolint:errcheck // best-effort cleanup
+			_ = osroot.RemoveNoSymlinks(root, name) //nolint:errcheck // best-effort cleanup
 		}
 	}
 

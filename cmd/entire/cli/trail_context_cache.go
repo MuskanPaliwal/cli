@@ -7,18 +7,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/execx"
+	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -125,29 +126,29 @@ func trailEnablementRepoKey(forge, owner, repo string) string {
 }
 
 func saveTrailEnablementScopeHint(ctx context.Context, sessionID string, scope trailEnablementScope) error {
-	path, err := trailEnablementScopeHintPath(ctx, sessionID)
+	root, name, err := trailEnablementScopeHintStore(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	if err := osroot.MkdirAllNoSymlink(root, session.SessionStateDirName, 0o750); err != nil {
 		return fmt.Errorf("create session state dir: %w", err)
 	}
 	data, err := jsonutil.MarshalIndentWithNewline(scope, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal trail scope hint: %w", err)
 	}
-	if err := jsonutil.WriteFileAtomic(path, data, 0o600); err != nil {
+	if err := jsonutil.WriteFileAtomicIn(root, name, data, 0o600); err != nil {
 		return fmt.Errorf("write trail scope hint: %w", err)
 	}
 	return nil
 }
 
 func loadTrailEnablementScopeHint(ctx context.Context, sessionID string) (trailEnablementScope, bool, error) {
-	path, err := trailEnablementScopeHintPath(ctx, sessionID)
+	root, name, err := trailEnablementScopeHintStore(ctx, sessionID)
 	if err != nil {
 		return trailEnablementScope{}, false, err
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is derived from validated session ID
+	data, err := osroot.ReadFileNoFollow(root, name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return trailEnablementScope{}, false, nil
@@ -161,19 +162,23 @@ func loadTrailEnablementScopeHint(ctx context.Context, sessionID string) (trailE
 	return scope, true, nil
 }
 
-func trailEnablementScopeHintPath(ctx context.Context, sessionID string) (string, error) {
+func trailEnablementScopeHintStore(ctx context.Context, sessionID string) (*os.Root, string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {
-		return "", fmt.Errorf("invalid session ID: %w", err)
+		return nil, "", fmt.Errorf("invalid session ID: %w", err)
 	}
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", fmt.Errorf("resolve worktree root: %w", err)
+		return nil, "", fmt.Errorf("resolve worktree root: %w", err)
 	}
 	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve git common dir: %w", err)
+		return nil, "", fmt.Errorf("resolve git common dir: %w", err)
 	}
-	return filepath.Join(metadata.CommonDir, session.SessionStateDirName, sessionID+".trail-scope.json"), nil
+	root, err := gitdir.OpenAt(metadata.CommonDir)
+	if err != nil {
+		return nil, "", fmt.Errorf("open git common dir: %w", err)
+	}
+	return root, session.SessionStateDirName + "/" + sessionID + ".trail-scope.json", nil
 }
 
 func saveTrailsEnabledForRepo(ctx context.Context, enabled bool) error {
@@ -446,30 +451,37 @@ func trailRefreshRecentlySpawned(commonDir string, now time.Time) bool {
 // trail-enablement refresh and the zombie-session sweep, each with its own
 // marker name and ttl.
 func recentlySpawnedMarker(commonDir, marker string, ttl time.Duration, now time.Time) bool {
-	dir := filepath.Join(commonDir, "entire")
-	// Create the directory before acquiring the lock: flock.Acquire opens the
-	// lock file, which fails if its parent doesn't exist yet (mirrors
-	// ModifyClonePreferences, which MkdirAlls before locking).
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	root, err := gitdir.OpenAt(commonDir)
+	if err != nil {
 		return false
 	}
-	markerPath := filepath.Join(dir, marker)
-	release, err := flock.Acquire(markerPath + ".lock")
+	// Create the directory before acquiring the lock: flock opens the lock file,
+	// which fails if its parent doesn't exist yet (mirrors
+	// ModifyClonePreferences, which creates before locking).
+	if err := osroot.MkdirAllNoSymlink(root, spawnMarkerDirName, 0o750); err != nil {
+		return false
+	}
+	markerName := spawnMarkerDirName + "/" + marker
+	release, err := flock.AcquireIn(root, markerName+".lock")
 	if err != nil {
 		return false
 	}
 	defer release()
 
-	if data, readErr := os.ReadFile(markerPath); readErr == nil { //nolint:gosec // markerPath is derived from the trusted git-common-dir, not user input
+	if data, readErr := osroot.ReadFileNoFollow(root, markerName); readErr == nil {
 		if last, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data))); parseErr == nil &&
 			now.After(last) && now.Sub(last) < ttl {
 			return true
 		}
 	}
 	//nolint:errcheck // best-effort marker; a failed write just means the next hook re-spawns
-	_ = os.WriteFile(markerPath, []byte(now.UTC().Format(time.RFC3339Nano)), 0o600)
+	_ = jsonutil.WriteFileAtomicIn(root, markerName, []byte(now.UTC().Format(time.RFC3339Nano)), 0o600)
 	return false
 }
+
+// spawnMarkerDirName is the marker directory inside the git common dir. It is
+// the same "entire" directory clone preferences live in.
+const spawnMarkerDirName = "entire"
 
 // newRefreshTrailEnablementCmd creates the hidden command that performs the
 // (potentially slow) trails-enablement network refresh out of band. It is

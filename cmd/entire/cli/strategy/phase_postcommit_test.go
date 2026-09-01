@@ -807,15 +807,14 @@ func TestPostCommit_FilesTouched_ResetsAfterCondensation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "B.txt"), []byte("file B"), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{"A.txt", "B.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1: files A and B",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{"A.txt", "B.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1: files A and B",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 
@@ -874,15 +873,14 @@ func TestPostCommit_FilesTouched_ResetsAfterCondensation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "D.txt"), []byte("file D"), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{"C.txt", "D.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 2: files C and D",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{"C.txt", "D.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 2: files C and D",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 
@@ -1065,15 +1063,14 @@ func TestPostCommit_ActiveSession_CarryForward_PartialCommit(t *testing.T) {
 
 	// Save checkpoint with all three files
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{"A.txt", "B.txt", "C.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint: files A, B, C",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{"A.txt", "B.txt", "C.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint: files A, B, C",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 
@@ -1161,15 +1158,14 @@ func TestPostCommit_ActiveSession_CarryForward_AllCommitted(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "B.txt"), []byte("file B"), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{"A.txt", "B.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint: files A, B",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{"A.txt", "B.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint: files A, B",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 
@@ -1312,17 +1308,15 @@ func TestHandleTurnEnd_PartialFailure(t *testing.T) {
 	// second.txt is included in FilesTouched — the overlap check needs it.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "second.txt"), []byte("second file"), 0o644))
 	metadataDir := ".entire/metadata/" + sessionID
-	metadataDirAbs := filepath.Join(dir, metadataDir)
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"test.txt"},
-		NewFiles:       []string{"second.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 2",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"test.txt"},
+		NewFiles:      []string{"second.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 2",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err, "SaveStep should succeed for second checkpoint")
 	state, err = s.loadSessionState(context.Background(), sessionID)
@@ -1454,15 +1448,14 @@ func setupSessionWithCheckpoint(t *testing.T, s *ManualCommitStrategy, _ *git.Re
 	// SaveStep creates the shadow branch and checkpoint
 	// Include test.txt as a modified file so it's saved to the shadow branch
 	err := s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"test.txt"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"test.txt"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err, "SaveStep should succeed to create shadow branch content")
 }
@@ -1486,15 +1479,14 @@ func setupSessionWithCheckpointAndFile(t *testing.T, s *ManualCommitStrategy, di
 		[]byte(testTranscript), 0o644))
 
 	err := s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{fileName},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{fileName},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err, "SaveStep should succeed to create shadow branch content")
 }
@@ -1784,15 +1776,14 @@ func TestPostCommit_StaleActiveSession_NotCondensed(t *testing.T) {
 		[]byte(transcript), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      newSessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{"new-feature.txt"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint: new feature",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     newSessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{"new-feature.txt"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint: new feature",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 
@@ -2256,15 +2247,14 @@ func TestPostCommit_ActiveSession_DifferentFilesThanCommit_ShouldCondense(t *tes
 		[]byte(transcript), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{".gitstats_cache.sqlite3"},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint: cache created",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{".gitstats_cache.sqlite3"},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint: cache created",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 

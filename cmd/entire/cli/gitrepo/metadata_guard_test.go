@@ -16,7 +16,11 @@ func TestGitMetadataTraversalHasSingleOwner(t *testing.T) {
 	t.Parallel()
 	allowedDotGitInspections := map[string]string{
 		"agent/codex/hook_root.go:hasDotGitEntry": "Codex policy checks whether a candidate checkout owns a .git entry",
-		"plugin_index.go:SyncPluginIndex":         "the plugin cache checks whether its private clone has been materialized",
+	}
+	allowedCommonDirQueries := map[string]string{
+		"session_adopt.go:stateStoreForWorktree":                    "adoption asks Git which repository owns an explicit source worktree",
+		"strategy/manual_commit_session.go:gitCommonDirForWorktree": "commit routing compares the repository identity of an explicit worktree",
+		"trail_checkout_worktree.go:validateTrailWorktreeReuse":     "trail reuse verifies that an existing worktree belongs to the expected repository",
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -27,6 +31,7 @@ func TestGitMetadataTraversalHasSingleOwner(t *testing.T) {
 	fset := token.NewFileSet()
 	ownerTokens := 0
 	allowedSeen := map[string]bool{}
+	allowedCommonDirSeen := map[string]bool{}
 
 	err := filepath.WalkDir(cliRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -54,6 +59,9 @@ func TestGitMetadataTraversalHasSingleOwner(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
+			if isDeletedMetadataCompatibilityAPI(rel, fn.Name.Name) {
+				t.Errorf("%s restores a deleted Git metadata compatibility API; call gitrepo.ResolveWorktreeMetadata or gitdir.OpenAt directly", fset.Position(fn.Pos()))
+			}
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				switch n := node.(type) {
 				case *ast.BasicLit:
@@ -64,16 +72,28 @@ func TestGitMetadataTraversalHasSingleOwner(t *testing.T) {
 					if unquoteErr != nil {
 						return true
 					}
+					if value == "--git-common-dir" {
+						key := rel + ":" + fn.Name.Name
+						if _, allowed := allowedCommonDirQueries[key]; allowed {
+							allowedCommonDirSeen[key] = true
+							return true
+						}
+						t.Errorf("%s runs an unaudited --git-common-dir query; use gitrepo.ResolveWorktreeMetadata or document a semantic-query exception", fset.Position(n.Pos()))
+						return true
+					}
 					if strings.HasPrefix(rel, "gitrepo/") {
-						if strings.Contains(value, "gitdir:") || value == "commondir" {
+						if value == "gitdir: " || value == "commondir" {
 							ownerTokens++
 						}
 						return true
 					}
-					if strings.Contains(value, "gitdir:") || value == "commondir" {
+					if value == "gitdir: " || value == "commondir" {
 						t.Errorf("%s independently parses Git metadata token %q; use gitrepo.ResolveWorktreeMetadata", fset.Position(n.Pos()), value)
 					}
 				case *ast.CallExpr:
+					if isDeletedMetadataCompatibilityCall(n) {
+						t.Errorf("%s calls a deleted Git metadata compatibility API", fset.Position(n.Pos()))
+					}
 					if strings.HasPrefix(rel, "gitrepo/") || !isOSMetadataInspection(n) || !containsStringLiteral(n, ".git") {
 						return true
 					}
@@ -99,6 +119,46 @@ func TestGitMetadataTraversalHasSingleOwner(t *testing.T) {
 		if !allowedSeen[key] {
 			t.Errorf("documented .git inspection exception %s (%s) no longer exists; remove or update the exception", key, reason)
 		}
+	}
+	for key, reason := range allowedCommonDirQueries {
+		if !allowedCommonDirSeen[key] {
+			t.Errorf("documented --git-common-dir exception %s (%s) no longer exists; remove or update the exception", key, reason)
+		}
+	}
+}
+
+func isDeletedMetadataCompatibilityAPI(rel, name string) bool {
+	key := rel + ":" + name
+	switch key {
+	case "gitdir/gitdir.go:CommonDir",
+		"gitdir/gitdir.go:CommonDirForWorktree",
+		"gitdir/gitdir.go:ClearCache",
+		"session/state.go:GetGitCommonDir",
+		"session/state.go:ClearGitCommonDirCache":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDeletedMetadataCompatibilityCall(call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch pkg.Name + "." + selector.Sel.Name {
+	case "gitdir.CommonDir",
+		"gitdir.CommonDirForWorktree",
+		"gitdir.ClearCache",
+		"session.GetGitCommonDir",
+		"session.ClearGitCommonDirCache":
+		return true
+	default:
+		return false
 	}
 }
 

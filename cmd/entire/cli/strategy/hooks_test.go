@@ -16,8 +16,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
-const goosWindows = "windows"
-
 // clearGlobalHooksPath overrides any global core.hooksPath setting so that
 // test repos use their default .git/hooks directory. Setting the local value
 // takes precedence over the global one.

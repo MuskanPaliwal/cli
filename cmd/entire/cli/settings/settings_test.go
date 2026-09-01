@@ -44,9 +44,7 @@ func setupSettingsDir(t *testing.T, base, local string) {
 			t.Fatalf("failed to write local settings file: %v", err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 }
 
@@ -98,9 +96,7 @@ func TestLoad_RejectsUnknownKeys(t *testing.T) {
 	}
 
 	// Initialize a git repo (required by paths.AbsPath)
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	// Change to the temp directory
 	t.Chdir(tmpDir)
@@ -143,9 +139,7 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	}
 
 	// Initialize a git repo (required by paths.AbsPath)
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	// Change to the temp directory
 	t.Chdir(tmpDir)
@@ -223,9 +217,7 @@ func TestLoad_LocalSettingsRejectsUnknownKeys(t *testing.T) {
 	}
 
 	// Initialize a git repo (required by paths.AbsPath)
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	// Change to the temp directory
 	t.Chdir(tmpDir)
@@ -250,9 +242,7 @@ func TestLoad_MissingRedactionIsNil(t *testing.T) {
 	if err := os.WriteFile(settingsFile, []byte(`{"enabled": true}`), 0o644); err != nil {
 		t.Fatalf("failed to write settings file: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	settings, err := Load(context.Background())
@@ -284,9 +274,7 @@ func TestLoad_LocalOverridesRedaction(t *testing.T) {
 		t.Fatalf("failed to write local settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	settings, err := Load(context.Background())
@@ -326,9 +314,7 @@ func TestLoad_LocalMergesRedactionSubfields(t *testing.T) {
 		t.Fatalf("failed to write local settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	settings, err := Load(context.Background())
@@ -379,9 +365,7 @@ func TestLoad_LocalIgnoresScannerToggles(t *testing.T) {
 		t.Fatalf("failed to write local settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	// Swapping the default slog logger is process-global state, which is why
@@ -496,9 +480,7 @@ func TestLoad_AcceptsDeprecatedStrategyField(t *testing.T) {
 		t.Fatalf("failed to write settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 
@@ -543,9 +525,7 @@ func TestLoad_CommitLinkingField(t *testing.T) {
 		t.Fatalf("failed to write settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 
@@ -581,9 +561,7 @@ func TestMergeJSON_CommitLinking(t *testing.T) {
 		t.Fatalf("failed to write local settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 
@@ -616,9 +594,7 @@ func TestLoad_ExternalAgentsField(t *testing.T) {
 		t.Fatalf("failed to write settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 
@@ -645,9 +621,7 @@ func TestLoad_MergesLocalOverrides(t *testing.T) {
 		t.Fatalf("failed to write settings.local.json: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 
@@ -683,9 +657,7 @@ func TestMergeJSON_ExternalAgents(t *testing.T) {
 		t.Fatalf("failed to write local settings file: %v", err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
-		t.Fatalf("failed to create .git directory: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	t.Chdir(tmpDir)
 

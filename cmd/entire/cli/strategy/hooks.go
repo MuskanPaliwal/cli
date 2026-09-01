@@ -20,6 +20,7 @@ import (
 // Hook marker used to identify Entire CLI hooks
 const entireHookMarker = "Entire CLI hooks"
 
+const goosWindows = "windows"
 const backupSuffix = ".pre-entire"
 const chainComment = "# Chain: run pre-existing hook"
 const missingEntireGitHookWarning = "[entire] Entire CLI is enabled but not installed or not on PATH. Skipping Entire Git hook; continuing. Installation guide: https://docs.entire.io/cli/installation#installation-methods"
@@ -600,7 +601,7 @@ func hookCmdPrefix(absolutePath bool) (string, error) {
 func resolveHookExePath(exe string, evalSymlinks func(string) (string, error), goos string) (string, error) {
 	resolved, err := evalSymlinks(exe)
 	if err != nil {
-		if goos == "windows" {
+		if goos == goosWindows {
 			return exe, nil
 		}
 		return "", fmt.Errorf("--absolute-git-hook-path: failed to resolve symlinks for %s: %w", exe, err)
