@@ -283,7 +283,10 @@ verified release archive because the Scoop bucket only publishes stable builds.
     function Get-EntireOnPath {
         # -All is required: without it Get-Command returns only the first
         # Application, so a later Scoop shim is never seen.
-        return @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
+        # Write-Output with the unary comma prevents PowerShell from unrolling
+        # a single-element array, which would lose .Count under StrictMode 2.0.
+        $results = @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
+        Write-Output -NoEnumerate $results
     }
 
     function Install-Entire {
@@ -434,14 +437,15 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
             Write-Success "Entire CLI installed to $installPath"
 
+            $postInstallCommands = Get-EntireOnPath
             if ($SkipPathUpdate) {
-                if ($pathCommands.Count -eq 0) {
+                if ($postInstallCommands.Count -eq 0) {
                     Write-InstallerWarning "$resolvedInstallDir is not on PATH. Add it before running entire."
                 }
             }
             else {
                 Add-ToUserPath -Directory $resolvedInstallDir
-                if ($pathCommands.Count -eq 0) {
+                if ($postInstallCommands.Count -eq 0) {
                     Write-Success "Added $resolvedInstallDir to your user PATH"
                     Write-Host "Restart your terminal, then run entire to get started."
                 }
