@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 	"github.com/entireio/cli/e2e/agents"
 	"github.com/entireio/cli/e2e/entire"
 	"github.com/entireio/cli/e2e/testutil"
@@ -119,13 +120,10 @@ func TestMain(m *testing.M) {
 		entireBin, version)
 	_ = os.WriteFile(filepath.Join(runDir, "entire-version.txt"), []byte(preflight), 0o644)
 
-	// Don't look at user's Git config, ignore everything except the project-local Git settings.
-	// This avoids oddball configs in ~/.gitconfig messing with our E2E tests.
-	// We use an empty temp file instead of os.DevNull because git on Windows
-	// cannot open NUL as a config file ("unable to access 'NUL': Invalid argument").
-	emptyConfig := filepath.Join(runDir, "empty-gitconfig")
-	_ = os.WriteFile(emptyConfig, nil, 0o644)
-	os.Setenv("GIT_CONFIG_GLOBAL", emptyConfig)
+	// Don't look at user's Git config, ignore everything except the project-local
+	// Git settings. This avoids oddball configs in ~/.gitconfig messing with our
+	// E2E tests; the isolation is inherited by every spawned binary and git hook.
+	gitenv.IsolateMain()
 
 	os.Exit(m.Run())
 }

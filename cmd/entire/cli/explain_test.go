@@ -16,6 +16,11 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -29,10 +34,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/redact"
-	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/stretchr/testify/require"
 )
 
 func TestNewExplainCmd(t *testing.T) {
@@ -636,7 +637,6 @@ func writeTemporaryCheckpointForExplainTest(t *testing.T) string {
 		BaseCommit:        initialCommit.String()[:7],
 		ModifiedFiles:     []string{"temp.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "temporary checkpoint with code changes",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@example.com",
@@ -2293,7 +2293,6 @@ func writeExternalTemporaryCheckpointForExplainTest(
 		BaseCommit:        head.Hash().String()[:7],
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "temporary external checkpoint",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@example.com",
@@ -3688,7 +3687,6 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "First checkpoint (baseline)",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@test.com",
@@ -3709,7 +3707,6 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "Second checkpoint with code changes",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@test.com",
@@ -3809,12 +3806,10 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 
 	writeCheckpoints := func(sessionID, worktreeID string) {
 		t.Helper()
-		metaDirAbs := filepath.Join(tmpDir, ".entire", "metadata", sessionID)
 		// Baseline
 		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
-			MetadataDirAbs: metaDirAbs, CommitMessage: "baseline", AuthorName: "Test",
 			AuthorEmail: "test@test.com", IsFirstCheckpoint: true,
 		}); err != nil {
 			t.Fatalf("WriteTemporary baseline error: %v", err)
@@ -3826,7 +3821,6 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
-			MetadataDirAbs: metaDirAbs, CommitMessage: "code changes", AuthorName: "Test",
 			AuthorEmail: "test@test.com", IsFirstCheckpoint: false,
 		}); err != nil {
 			t.Fatalf("WriteTemporary code changes error: %v", err)
@@ -4418,12 +4412,7 @@ func TestRunExplain_SessionFlagFiltersListView(t *testing.T) {
 		{"config", "user.name", "Test User"},
 		{"commit", "--allow-empty", "-m", "init"},
 	} {
-		cmd := exec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = tmp
-		cmd.Env = testutil.GitIsolatedEnv()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+		testutil.RunGit(t, tmp, args...)
 	}
 	t.Chdir(tmp)
 
