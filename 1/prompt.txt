@@ -1,0 +1,53 @@
+https://github.com/entireio/cli/pull/2131#issuecomment-5484149660 we resolved the conflicts here though
+
+---
+
+i want to see what the 1926 pr had in common with my pr, and whether the conflicts were resolved keeping the main issue in account.
+
+---
+
+yeah so we lost the actual thing we did in our pr right? we planned batching sessions but stage 1 and stage 2 had no batching implemented. cehck the transcript. also we should keep 1926's actual correctness fix.
+
+---
+
+yeah but why did we lose the 1926's locking mechanism?
+
+---
+
+okay then we need it but in next or stage 3 we remove this?
+
+---
+
+how the two locks are different?
+
+---
+
+can you help me understand this in more simpler way?
+
+---
+
+but we anyway want checkpoints to be in batching right?
+
+---
+
+okay
+
+---
+
+preserve the mechanism now
+
+---
+
+no we should have the code 1926 had
+
+---
+
+wait explain me what's happening?
+
+---
+
+right so we need to maintain our pr work along with 1926's work too
+
+---
+
+why the original file? we decided to keep the 1926 work but that would be blend in our architecture and the tests? and the transaction api?

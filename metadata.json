@@ -3,10 +3,21 @@
   "checkpoint_id": "01M1DSZR0NR1169EABA5M8XWBS",
   "strategy": "manual-commit",
   "branch": "improve-process-sessions-condensation",
-  "checkpoints_count": 2,
+  "checkpoints_count": 13,
   "files_touched": [
+    "cmd/entire/cli/checkpoint/ephemeral.go",
+    "cmd/entire/cli/checkpoint/ephemeral_test.go",
     "cmd/entire/cli/checkpoint/migrate.go",
-    "cmd/entire/cli/checkpoint/refs_store.go"
+    "cmd/entire/cli/checkpoint/persistent.go",
+    "cmd/entire/cli/checkpoint/persistent_batch.go",
+    "cmd/entire/cli/checkpoint/persistent_cas_test.go",
+    "cmd/entire/cli/checkpoint/persistent_write_test.go",
+    "cmd/entire/cli/checkpoint/ref_transaction.go",
+    "cmd/entire/cli/checkpoint/ref_transaction_lock.go",
+    "cmd/entire/cli/checkpoint/ref_transaction_test.go",
+    "cmd/entire/cli/checkpoint/refs_store.go",
+    "cmd/entire/cli/checkpoint/refs_store_test.go",
+    "cmd/entire/cli/checkpoint/routing_store.go"
   ],
   "sessions": [
     {
@@ -15,13 +26,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 245032,
+    "input_tokens": 956583,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 13705728,
-    "output_tokens": 29793,
-    "api_call_count": 107
+    "cache_read_tokens": 34476288,
+    "output_tokens": 121274,
+    "api_call_count": 304
   }
 }

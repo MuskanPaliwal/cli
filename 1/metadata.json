@@ -1,0 +1,169 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1DSZR0NR1169EABA5M8XWBS",
+  "session_id": "01a05994-eca0-7271-805e-2d5ebda3b39f",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T06:20:04.458028Z",
+  "branch": "improve-process-sessions-condensation",
+  "checkpoints_count": 11,
+  "save_step_count": 11,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/ephemeral.go",
+    "cmd/entire/cli/checkpoint/ephemeral_test.go",
+    "cmd/entire/cli/checkpoint/migrate.go",
+    "cmd/entire/cli/checkpoint/persistent.go",
+    "cmd/entire/cli/checkpoint/persistent_batch.go",
+    "cmd/entire/cli/checkpoint/persistent_cas_test.go",
+    "cmd/entire/cli/checkpoint/persistent_write_test.go",
+    "cmd/entire/cli/checkpoint/ref_transaction.go",
+    "cmd/entire/cli/checkpoint/ref_transaction_lock.go",
+    "cmd/entire/cli/checkpoint/ref_transaction_test.go",
+    "cmd/entire/cli/checkpoint/refs_store.go",
+    "cmd/entire/cli/checkpoint/refs_store_test.go",
+    "cmd/entire/cli/checkpoint/routing_store.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "8ec4940e5e3b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 711551,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 20770560,
+    "output_tokens": 91481,
+    "api_call_count": 197
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T06:20:04.086332Z",
+    "agent_lines": 137,
+    "agent_removed": 43,
+    "human_added": 258,
+    "human_modified": 89,
+    "human_removed": 0,
+    "total_committed": 483,
+    "total_lines_changed": 527,
+    "agent_percentage": 34.15559772296015,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2096,
+      "user_lines_removed": 584,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".zed/tasks.json": 23,
+        "cmd/entire/cli/strategy/commit_hook_perf_assertions_test.go": 191,
+        "cmd/entire/cli/strategy/commit_hook_perf_fixture_test.go": 347,
+        "cmd/entire/cli/strategy/commit_hook_perf_repo_test.go": 153,
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 60,
+        "docs/architecture/checkpoint-batch-condensation.md": 1086,
+        "technical.md": 236
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/strategy/commit_hook_perf_test.go": 584
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 583,
+      "user_lines_removed": 87,
+      "agent_lines_added": 2096,
+      "agent_lines_removed": 584,
+      "user_added_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_batch.go": 10,
+        "cmd/entire/cli/checkpoint/persistent_ref_update.go": 146,
+        "cmd/entire/cli/checkpoint/persistent_ref_update_test.go": 150,
+        "cmd/entire/cli/checkpoint/ref_transaction.go": 137,
+        "cmd/entire/cli/checkpoint/ref_transaction_test.go": 138,
+        "cmd/entire/cli/checkpoint/routing_store.go": 2
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_batch.go": 2,
+        "cmd/entire/cli/checkpoint/ref_transaction.go": 83,
+        "cmd/entire/cli/checkpoint/routing_store.go": 2
+      }
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 30,
+      "user_lines_removed": 1,
+      "agent_lines_added": 2638,
+      "agent_lines_removed": 715,
+      "user_added_per_file": {
+        "cmd/entire/cli/checkpoint/ephemeral.go": 1,
+        "cmd/entire/cli/checkpoint/ephemeral_test.go": 29
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/checkpoint/ephemeral.go": 1
+      }
+    }
+  ]
+}
