@@ -15,3 +15,7 @@ i didn't understand the re-executable case? what is it? and what is it about chi
 ---
 
 2 knoqs the go test and 3
+
+---
+
+this is a good go-learning. after we fix the bug and create a draft pr, let's add this into our go learning
