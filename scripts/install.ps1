@@ -347,34 +347,6 @@ verified release archive because the Scoop bucket only publishes stable builds.
         $resolvedInstallDir = Get-NormalizedPath -Path $SelectedInstallDir
         $installPath = Join-Path $resolvedInstallDir "entire.exe"
 
-        # Match install.sh: abort if another entire wins on PATH. Check before
-        # copying so a conflict does not leave files behind.
-        $pathCommands = Get-EntireOnPath
-        $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
-        if ($conflicting.Count -gt 0) {
-            $first = $pathCommands | Select-Object -First 1
-            $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
-            Write-Host ""
-            Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
-            Write-Host "!"
-            Write-Host "! Install destination: $installPath"
-            foreach ($cmd in $conflicting) {
-                Write-Host "! Also found:   $($cmd.Source)"
-            }
-            if (-not $firstIsOurs) {
-                Write-Host "!"
-                Write-Host "! 'entire' currently resolves to: $($first.Source)"
-                Write-Host "! Remove the old installation or adjust PATH to prioritize:"
-                Write-Host "!   $resolvedInstallDir"
-                Write-Host ""
-                throw "PATH needs adjustment. Then rerun the installation."
-            }
-            Write-Host "!"
-            Write-Host "! The installed version takes priority, but consider removing"
-            Write-Host "! the other installation to avoid confusion."
-            Write-Host ""
-        }
-
         # GitHub requires TLS 1.2. Use the numeric value so this remains valid
         # on .NET versions whose SecurityProtocolType enum omits the name.
         [Net.ServicePointManager]::SecurityProtocol =
@@ -437,15 +409,42 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
             Write-Success "Entire CLI installed to $installPath"
 
-            $postInstallCommands = Get-EntireOnPath
+            # Check for PATH conflicts now that the binary exists on disk,
+            # so Test-SamePath can resolve both paths reliably.
+            $pathCommands = Get-EntireOnPath
+            $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
+            if ($conflicting.Count -gt 0) {
+                $first = $pathCommands | Select-Object -First 1
+                $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
+                Write-Host ""
+                Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
+                Write-Host "!"
+                Write-Host "! Installed to: $installPath"
+                foreach ($cmd in $conflicting) {
+                    Write-Host "! Also found:   $($cmd.Source)"
+                }
+                if (-not $firstIsOurs) {
+                    Write-Host "!"
+                    Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                    Write-Host "! Remove the old installation or adjust PATH to prioritize:"
+                    Write-Host "!   $resolvedInstallDir"
+                    Write-Host ""
+                    throw "Installation completed, but PATH needs adjustment."
+                }
+                Write-Host "!"
+                Write-Host "! The installed version takes priority, but consider removing"
+                Write-Host "! the other installation to avoid confusion."
+                Write-Host ""
+            }
+
             if ($SkipPathUpdate) {
-                if ($postInstallCommands.Count -eq 0) {
+                if ($pathCommands.Count -eq 0) {
                     Write-InstallerWarning "$resolvedInstallDir is not on PATH. Add it before running entire."
                 }
             }
             else {
                 Add-ToUserPath -Directory $resolvedInstallDir
-                if ($postInstallCommands.Count -eq 0) {
+                if ($pathCommands.Count -eq 0) {
                     Write-Success "Added $resolvedInstallDir to your user PATH"
                     Write-Host "Restart your terminal, then run entire to get started."
                 }
