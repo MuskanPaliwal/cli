@@ -1,0 +1,26 @@
+go trhough all the open or closes prs in entire in the last three weeks, research on what part of the product they are mainly working on, what kind of bug fixes are there and finx small 1-2 file
+  bug fixes which i can also work on, like performance, syntactice sugar or some minor test fixes etc. prepare a proper list of bugs in priority order and also pr description sometimes do mention that out of scope or not covered in this pr etc kinda things which can be helpeful to us
+
+---
+
+why?
+
+---
+
+continue
+
+---
+
+ice. with this can you check what worktrees in entire/cli has open prs and wqhich are not active and then cleanup which atr not active
+
+---
+
+fair remove merged pr worktrees, and remove fix-claude-hook-launch-timeout wokrtree too
+
+---
+
+now can we put the bug fixes in the md file we already have or it's in obsidisn vault?
+
+---
+
+yupp
