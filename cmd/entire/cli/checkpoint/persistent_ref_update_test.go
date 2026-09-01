@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -18,7 +19,39 @@ func TestUpdatePersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T
 	t.Parallel()
 	repo, _ := setupBranchTestRepo(t)
 	refName := plumbing.ReferenceName("refs/entire/test-deadline")
+	holdPersistentRefLock(t, repo, refName)
 
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	buildCalled := false
+	err := updatePersistentRef(ctx, repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
+		buildCalled = true
+		return plumbing.ZeroHash, plumbing.ZeroHash, nil
+	})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.False(t, buildCalled, "the ref builder must not run without the lock")
+}
+
+func TestCASPersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T) {
+	t.Parallel()
+	repo, initial := setupBranchTestRepo(t)
+	refName := plumbing.ReferenceName("refs/entire/test-cas-deadline")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
+	holdPersistentRefLock(t, repo, refName)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err := CASPersistentRef(ctx, repo, refName, plumbing.ZeroHash, initial)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	require.Equal(t, initial, ref.Hash())
+}
+
+func holdPersistentRefLock(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) {
+	t.Helper()
 	_, commonDir, err := repositoryDirs(context.Background(), repo)
 	require.NoError(t, err)
 	lockPath, err := persistentRefLockPath(commonDir, refName)
@@ -26,17 +59,6 @@ func TestUpdatePersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T
 	release, err := flock.Acquire(lockPath)
 	require.NoError(t, err)
 	t.Cleanup(release)
-
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer cancel()
-	buildCalled := false
-	err = updatePersistentRef(ctx, repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
-		buildCalled = true
-		return plumbing.ZeroHash, plumbing.ZeroHash, nil
-	})
-
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.False(t, buildCalled, "the ref builder must not run without the lock")
 }
 
 func TestUpdatePersistentRef_RebuildsAfterCASConflict(t *testing.T) {

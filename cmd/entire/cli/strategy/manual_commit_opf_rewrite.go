@@ -28,7 +28,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/go-git/go-git/v6/storage"
 )
 
 // assetsDirName mirrors paths.AssetsDirName, captured at package scope so the
@@ -404,7 +403,7 @@ func RewriteUnpushedV1WithOPF(ctx context.Context, repo *git.Repository, target 
 		parent = newHash
 	}
 
-	if err := atomicSetV1Ref(repo, localTip, parent); err != nil {
+	if err := atomicSetV1Ref(ctx, repo, localTip, parent); err != nil {
 		return plumbing.ZeroHash, err
 	}
 	return parent, nil
@@ -804,22 +803,16 @@ func readBlob(repo *git.Repository, hash plumbing.Hash) ([]byte, error) {
 	return data, nil
 }
 
-// atomicSetV1Ref CAS-updates the local v1 ref. A concrete
-// ErrReferenceHasChanged from the storer means another worktree
-// advanced the ref during our rewrite — return V1RefMovedError so the
-// hook aborts the push. Other errors (I/O, packed-ref locks, storage
-// bugs) get wrapped as-is so they aren't misreported as concurrency
-// failures.
-func atomicSetV1Ref(repo *git.Repository, expectedOld, newHash plumbing.Hash) error {
+// atomicSetV1Ref CAS-updates the local v1 ref through the same lock protocol as
+// checkpoint writers. A busy ref means another writer may have advanced it, so
+// return V1RefMovedError and abort the push rather than reuse the stale rewrite.
+func atomicSetV1Ref(ctx context.Context, repo *git.Repository, expectedOld, newHash plumbing.Hash) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	err := repo.Storer.CheckAndSetReference(
-		plumbing.NewHashReference(refName, newHash),
-		plumbing.NewHashReference(refName, expectedOld),
-	)
+	err := checkpoint.CASPersistentRef(ctx, repo, refName, newHash, expectedOld)
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, storage.ErrReferenceHasChanged) {
+	if errors.Is(err, checkpoint.ErrShadowRefBusy) {
 		actual := plumbing.ZeroHash
 		if cur, refErr := repo.Reference(refName, true); refErr == nil {
 			actual = cur.Hash()

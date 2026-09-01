@@ -81,16 +81,39 @@ func withPersistentRefFlock(ctx context.Context, commonDir string, refName plumb
 	return fn()
 }
 
-// updatePersistentRef serializes Entire writers for one ref and retains a CAS
-// retry for native Git or other external writers. build runs again after every
-// conflict, so each retry reconstructs its tree and commit from the fresh tip.
-func updatePersistentRef(ctx context.Context, repo *git.Repository, refName plumbing.ReferenceName, build persistentRefBuilder) error {
+func withLockedPersistentRef(
+	ctx context.Context,
+	repo *git.Repository,
+	refName plumbing.ReferenceName,
+	fn func(repoRoot, commonDir string) error,
+) error {
 	repoRoot, commonDir, err := repositoryDirs(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("resolve repository directories: %w", err)
 	}
-
 	return withPersistentRefFlock(ctx, commonDir, refName, func() error {
+		return fn(repoRoot, commonDir)
+	})
+}
+
+// CASPersistentRef serializes with Entire's persistent ref writers and updates
+// refName through native Git's cross-process compare-and-swap protocol.
+func CASPersistentRef(
+	ctx context.Context,
+	repo *git.Repository,
+	refName plumbing.ReferenceName,
+	newHash, expectedHash plumbing.Hash,
+) error {
+	return withLockedPersistentRef(ctx, repo, refName, func(repoRoot, _ string) error {
+		return casUpdateRef(ctx, repoRoot, refName, newHash, expectedHash)
+	})
+}
+
+// updatePersistentRef serializes Entire writers for one ref and retains a CAS
+// retry for native Git or other external writers. build runs again after every
+// conflict, so each retry reconstructs its tree and commit from the fresh tip.
+func updatePersistentRef(ctx context.Context, repo *git.Repository, refName plumbing.ReferenceName, build persistentRefBuilder) error {
+	return withLockedPersistentRef(ctx, repo, refName, func(repoRoot, commonDir string) error {
 		for attempt := range shadowRefMaxRetries {
 			newHash, expectedHash, buildErr := build()
 			if buildErr != nil {
