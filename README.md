@@ -199,33 +199,21 @@ A **checkpoint** is a snapshot within a session—a "save point" in your work.
 
 Checkpoints are created when you or the agent make a git commit, and the commit carries an `Entire-Checkpoint: <id>` trailer linking the two.
 
-**Checkpoint IDs** come in two formats, decided by the storage backend: a 26-character ULID (e.g. `01K9TQ8ZP7X3F5M2WVJ4CNRB6D`) on the default `git-refs` backend, or a legacy 12-character hex string (e.g. `a3b2c4d5e6f7`) on `git-branch`. Both formats stay readable in the same repo.
+**Checkpoint IDs** are 26-character ULIDs (e.g. `01K9TQ8ZP7X3F5M2WVJ4CNRB6D`), which sort by creation time. Checkpoints written by older versions of Entire carry a legacy 12-character hex ID (e.g. `a3b2c4d5e6f7`); both formats stay readable in the same repo, and you can pass either to any command that takes a checkpoint ID.
 
 ### Checkpoint Storage
 
-Checkpoints live in your repository's own git object store, never in your branch's history. Two backends exist, and which one a repo uses is recorded in its `.entire/settings.json`:
-
-**`git-refs` — the default for new repos, and the recommended backend.** Each checkpoint is its own git ref:
+Checkpoints live in your repository's own git object store, never in your branch's history. Each checkpoint is its own git ref:
 
 ```
 refs/entire/checkpoints/<shard>/<id>
 ```
 
-The ref points at a commit whose tree *is* that checkpoint. Because checkpoints are independent refs, they are written, pushed, and fetched independently: there is no shared tip for concurrent sessions to contend on, and a reader can fetch exactly the one checkpoint it needs instead of a whole branch of history. Checkpoint IDs are ULIDs, which sort by creation time.
+The ref points at a commit whose tree *is* that checkpoint — `metadata.json`, the per-session transcript files, and any subagent task records. `<shard>` is the last two characters of the ID, which keeps the refs evenly distributed.
 
-**`git-branch` — the legacy backend.** Every checkpoint is a subtree of one long-lived branch, `entire/checkpoints/v1`. That branch is a serialization point: every checkpoint rewrites its tip, every push races on the same ref, and the entire history travels together on fetch. Checkpoint IDs are 12-character hex strings.
+Because checkpoints are independent refs, they are written, pushed, and fetched independently. There is no shared branch tip for concurrent sessions to contend on, and a reader can fetch exactly the one checkpoint it needs instead of a whole history. A checkpoint written on another machine is fetched on demand the first time you read it.
 
-`entire enable` writes `git-refs` into the settings of a repo it sets up for the first time. A repo configured before that default — anything with no `checkpoints` block in its settings — keeps running on `git-branch`, unchanged, until you switch it.
-
-Choose or change the backend:
-
-```bash
-entire configure --checkpoint-backend refs      # switch an existing repo to per-checkpoint refs
-entire configure --checkpoint-backend branch    # back to the shared v1 branch
-entire enable --checkpoint-backend branch       # opt out at first-time setup
-```
-
-Or set it directly:
+`entire enable` sets this up; there is nothing to configure. It is recorded in `.entire/settings.json` as:
 
 ```json
 {
@@ -235,11 +223,13 @@ Or set it directly:
 }
 ```
 
-**Switching is safe in both directions and needs no migration.** Readers route by checkpoint ID: a ULID resolves through refs, and a legacy hex ID is tried in refs first and then on the `entire/checkpoints/v1` branch. Checkpoints already written stay readable exactly where they are; only new checkpoints use the new backend. This holds for every reader — the CLI, entire.io, and the Entire API all route the same way.
+Inspect what a repo has locally with plain git, or through Entire:
 
-Moving existing branch checkpoints into refs is optional. `entire doctor migrate-checkpoints` does it, is idempotent, and leaves the existing branch commits in place; run it with `--dry-run` first to see what it would convert.
-
-One consequence worth knowing: an older CLI cannot read ULID checkpoints. It fails closed with an upgrade prompt rather than half-working.
+```bash
+git for-each-ref refs/entire/checkpoints    # the raw refs
+entire checkpoint list                      # checkpoints on this branch
+entire checkpoint explain <id>              # one checkpoint in full
+```
 
 ### How It Works
 
@@ -270,7 +260,7 @@ Entire uses a manual-commit strategy that keeps your git history clean:
 
 - **No commits on your branch** — Entire never creates commits on the active branch
 - **Safe on any branch** — works on main, master, and feature branches alike
-- **Metadata stored separately** — session data lives in per-checkpoint refs (or on the `entire/checkpoints/v1` branch on the legacy backend), never in your branch's history
+- **Metadata stored separately** — session data lives in per-checkpoint refs, never in your branch's history
 
 ### Git Worktrees
 
@@ -401,7 +391,6 @@ These are visible in developer and nightly builds and hidden in stable releases,
 | `--agent <name>`                            | Agent to set up hooks for: `claude-code`, `codex`, `copilot-cli`, `cursor`, `factoryai-droid`, `gemini`, `opencode`, `pi` (external agents on `$PATH` also work). Enables non-interactive mode |
 | `--yes`, `-y`                               | Accept all defaults without prompting                                                                             |
 | `--force`, `-f`                             | Force reinstall hooks (removes existing Entire hooks first)                                                       |
-| `--checkpoint-backend refs` / `branch`      | Checkpoint storage backend (see [Checkpoint Storage](#checkpoint-storage)); new repos default to `refs`            |
 | `--checkpoint-remote <provider:owner/repo>` | Push checkpoint data to a separate repo (e.g., `github:org/checkpoints-repo`)                                     |
 | `--skip-push-sessions`                      | Disable automatic pushing of checkpoint data on git push                                                           |
 | `--local`                                   | Write settings to `.entire/settings.local.json` instead of `.entire/settings.json`                                |
@@ -440,7 +429,6 @@ Typical uses:
 
 - Toggle telemetry
 - Reinstall the Entire git hook (`--force`, `--absolute-git-hook-path`)
-- Switch the checkpoint storage backend (`--checkpoint-backend`)
 - Update strategy options such as `--checkpoint-remote` or `--skip-push-sessions`
 - Pick the provider, model, and timeout for `entire checkpoint explain --generate` (`--summarize-provider`, `--summarize-model`, `--summarize-timeout-seconds`)
 
@@ -455,9 +443,6 @@ entire configure --telemetry=false
 
 # Reinstall the Entire git hook with an absolute binary path
 entire configure --absolute-git-hook-path
-
-# Move this repo to per-checkpoint refs
-entire configure --checkpoint-backend refs
 
 # Update strategy options on an existing repo
 entire configure --checkpoint-remote github:myorg/checkpoints-private
@@ -530,12 +515,11 @@ Personal overrides, gitignored by default:
 | ----------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------- |
 | `enabled`                                 | `true`, `false`                              | Enable/disable Entire                                                             |
 | `log_level`                               | `debug`, `info`, `warn`, `error`             | Logging verbosity                                                                 |
-| `checkpoints.primary.type`                | `git-refs`, `git-branch`                     | Checkpoint storage backend (see [Checkpoint Storage](#checkpoint-storage)). Absent means `git-branch` |
+| `checkpoints.primary.type`                | `git-refs`                                   | Checkpoint storage backend — written by `entire enable`, see [Checkpoint Storage](#checkpoint-storage) |
 | `telemetry`                               | `true`, `false`                              | Send anonymous usage statistics to Posthog                                        |
 | `absolute_git_hook_path`                  | `true`, `false`                              | Embed the full binary path in git hooks, for GUI git clients that don't source shell profiles |
 | `commit_linking`                          | `always`, `prompt`                           | Link commits to sessions automatically, or ask each time (default `prompt`)        |
 | `sign_checkpoint_commits`                 | `true`, `false`                              | Sign checkpoint commits (default: on). See [checkpoint signing](docs/architecture/checkpoint-signing.md) |
-| `vercel`                                  | `true`, `false`                              | Stop Vercel from deploying Entire's metadata branch (see below)                   |
 | `strategy_options.push_sessions`          | `true`, `false`                              | Auto-push checkpoint data on git push (default `true`)                            |
 | `strategy_options.checkpoint_remote`      | `{"provider": "github", "repo": "org/repo"}` | Push checkpoint data to a separate repo (see below)                               |
 | `strategy_options.checkpoint_push_remote` | remote name, e.g. `"upstream"`               | Pin which single remote carries checkpoint data (see below)                       |
@@ -646,26 +630,6 @@ entire configure --summarize-provider codex
 - The configured provider's CLI installed and authenticated
 - Summary generation is non-blocking: failures are logged but don't prevent commits
 
-### Vercel Projects
-
-On the legacy `git-branch` backend, Entire pushes a real branch — `entire/checkpoints/v1` — and Vercel builds a deployment for every branch it sees. `vercel: true` stops that: Entire merges a `vercel.json` into the metadata branch's own tree setting
-
-```json
-{
-  "git": {
-    "deploymentEnabled": {
-      "entire/**": false
-    }
-  }
-}
-```
-
-so Vercel skips the branch. Any other `vercel.json` content already on that branch is preserved, and your repo's own `vercel.json` is never modified.
-
-`entire enable` and `entire configure` detect a Vercel project (a `vercel.json`, `.vercel`, or `vercel.ts` in the repo root) and offer to set this. Without an interactive terminal they print a note instead, so run `entire configure` interactively to answer it.
-
-The setting has no effect on the default `git-refs` backend: per-checkpoint refs live under `refs/entire/checkpoints/`, which are not branches, so Vercel never sees them and there is nothing to disable. The detection doesn't check the backend, so you may still be asked — answering either way is harmless there.
-
 ### Settings Priority
 
 Local settings override project settings field-by-field. `entire status --detailed` shows the state of each settings file.
@@ -684,7 +648,7 @@ Two exceptions to field-by-field merging:
 
 ## Security & Privacy
 
-**Your session transcripts are stored in your git repository** — in per-checkpoint refs or on the `entire/checkpoints/v1` branch, depending on the [backend](#checkpoint-storage). If your repository is public, this data is visible to anyone.
+**Your session transcripts are stored in your git repository**, in the [per-checkpoint refs](#checkpoint-storage) described above. If your repository is public, this data is visible to anyone.
 
 Entire automatically redacts detected secrets (API keys, tokens, credentials) from transcripts and metadata before writing a checkpoint, but redaction is best-effort.
 
