@@ -1,0 +1,1 @@
+https://github.com/entireio/cli/issues/2204 lets fix this issue. keep me in the loop and walk me through the issue first and then solution. run-playbook
