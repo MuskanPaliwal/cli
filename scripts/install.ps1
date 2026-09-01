@@ -126,7 +126,7 @@ verified release archive because the Scoop bucket only publishes stable builds.
             $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
         }
 
-        Invoke-RestMethod -Uri $Uri -Headers $headers -UseBasicParsing
+        Invoke-RestMethod -Uri $Uri -Headers $headers
     }
 
     function Get-ReleaseVersion {
@@ -346,29 +346,43 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
             Write-Success "Entire CLI installed to $installPath"
 
-            $pathCommand = Get-Command "entire" -CommandType Application -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            if ($null -ne $pathCommand -and -not (Test-SamePath -Left $pathCommand.Source -Right $installPath)) {
+            $pathCommands = @(Get-Command "entire" -CommandType Application -ErrorAction SilentlyContinue)
+            $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
+            if ($conflicting.Count -gt 0) {
+                $first = $pathCommands | Select-Object -First 1
+                $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
                 Write-Host ""
                 Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
                 Write-Host "!"
                 Write-Host "! Installed to: $installPath"
-                Write-Host "! But 'entire' resolves to: $($pathCommand.Source)"
-                Write-Host "!"
-                Write-Host "! Remove the old installation or adjust PATH to prioritize:"
-                Write-Host "!   $resolvedInstallDir"
+                foreach ($cmd in $conflicting) {
+                    Write-Host "! Also found:   $($cmd.Source)"
+                }
+                if (-not $firstIsOurs) {
+                    Write-Host "!"
+                    Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                    Write-Host "! Remove the old installation or adjust PATH to prioritize:"
+                    Write-Host "!   $resolvedInstallDir"
+                }
+                else {
+                    Write-Host "!"
+                    Write-Host "! The installed version takes priority, but consider removing"
+                    Write-Host "! the other installation to avoid confusion."
+                }
                 Write-Host ""
-                throw "Installation completed, but PATH needs adjustment."
+                if (-not $firstIsOurs) {
+                    throw "Installation completed, but PATH needs adjustment."
+                }
             }
 
             if ($SkipPathUpdate) {
-                if ($null -eq $pathCommand) {
+                if ($pathCommands.Count -eq 0) {
                     Write-InstallerWarning "$resolvedInstallDir is not on PATH. Add it before running entire."
                 }
             }
             else {
                 Add-ToUserPath -Directory $resolvedInstallDir
-                if ($null -eq $pathCommand) {
+                if ($pathCommands.Count -eq 0) {
                     Write-Success "Added $resolvedInstallDir to your user PATH"
                     Write-Host "Restart your terminal, then run entire to get started."
                 }
