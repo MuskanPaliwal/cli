@@ -435,6 +435,9 @@ func TestServerMode_JurisdictionIsSentAsQuerySelector(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		if err := json.NewEncoder(w).Encode(map[string]any{
+			// The gateway echoes the jurisdiction whenever the caller named
+			// one; runServer fails closed without it.
+			"jurisdiction":       "eu",
 			"window":             map[string]any{"normalized_since": "2026-04-09T00:00:00Z", "normalized_until": "2026-04-16T00:00:00Z"},
 			"covered_repos":      []string{testRepoFullName},
 			"repos":              []any{},
@@ -468,17 +471,20 @@ func TestServerMode_JurisdictionIsSentAsQuerySelector(t *testing.T) {
 func TestCheckDispatchJurisdiction(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-	if err := checkDispatchJurisdiction(ctx, "", "us"); err != nil {
+	if err := checkDispatchJurisdiction("", "us"); err != nil {
 		t.Fatalf("no selector sent: any stamp is fine, got %v", err)
 	}
-	if err := checkDispatchJurisdiction(ctx, "eu", " EU "); err != nil {
+	if err := checkDispatchJurisdiction("", ""); err != nil {
+		t.Fatalf("no selector, no stamp: fine, got %v", err)
+	}
+	if err := checkDispatchJurisdiction("eu", " EU "); err != nil {
 		t.Fatalf("matching stamp must pass, got %v", err)
 	}
-	if err := checkDispatchJurisdiction(ctx, "eu", ""); err != nil {
-		t.Fatalf("an unstamped response (older gateway) is tolerated, got %v", err)
+	err := checkDispatchJurisdiction("eu", "")
+	if err == nil || !strings.Contains(err.Error(), "ignored --jurisdiction eu") {
+		t.Fatalf("an unconfirmed selector must fail (the gateway echoes it whenever sent), got %v", err)
 	}
-	err := checkDispatchJurisdiction(ctx, "eu", "us")
+	err = checkDispatchJurisdiction("eu", "us")
 	if err == nil || err.Error() != "dispatch was generated in jurisdiction US, not the requested EU" {
 		t.Fatalf("a wrong-region result must fail, got %v", err)
 	}

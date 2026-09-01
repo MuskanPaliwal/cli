@@ -10,7 +10,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -93,7 +92,7 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		}
 		return nil, err
 	}
-	if err := checkDispatchJurisdiction(ctx, opts.Jurisdiction, response.Jurisdiction); err != nil {
+	if err := checkDispatchJurisdiction(opts.Jurisdiction, response.Jurisdiction); err != nil {
 		return nil, err
 	}
 
@@ -105,13 +104,12 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 }
 
 // checkDispatchJurisdiction verifies the gateway generated the dispatch where
-// --jurisdiction asked. A different stamp is a wrong-region result and fails
-// (worse than no result: the output would be labelled with a jurisdiction it
-// did not come from). No stamp at all means a gateway that predates the
-// selector and ignored it — reported at warn level only, since older gateways
-// are expected during rollout and the home-routed output is still a valid
-// dispatch of the caller's own repos.
-func checkDispatchJurisdiction(ctx context.Context, requested, stamped string) error {
+// --jurisdiction asked. The gateway echoes `jurisdiction` whenever the caller
+// named one, so a missing echo means a gateway that ignored the selector and
+// routed home — and a different echo means another region entirely. Both fail:
+// a wrong-region result would be rendered labelled with a jurisdiction it did
+// not come from, which is worse than no result. No selector, no check.
+func checkDispatchJurisdiction(requested, stamped string) error {
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
 		return nil
@@ -119,7 +117,7 @@ func checkDispatchJurisdiction(ctx context.Context, requested, stamped string) e
 	stamped = strings.ToLower(strings.TrimSpace(stamped))
 	switch {
 	case stamped == "":
-		logging.Warn(ctx, "dispatch service did not confirm the requested jurisdiction; it may predate --jurisdiction", "requested", requested)
+		return fmt.Errorf("the dispatch service ignored --jurisdiction %s (no jurisdiction in its response); it may predate jurisdiction-scoped dispatches — retry without the flag for a home dispatch", requested)
 	case stamped != requested:
 		return fmt.Errorf("dispatch was generated in jurisdiction %s, not the requested %s", strings.ToUpper(stamped), strings.ToUpper(requested))
 	}

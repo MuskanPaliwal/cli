@@ -149,3 +149,24 @@ func TestResolveDataAPIToken_UsesPlainHTTPDiscoveryForLoopbackDataOrigin(t *test
 		t.Fatal("token must be the stored login JWT, verbatim")
 	}
 }
+
+// A context that exists and has a keychain slot but no stored token must
+// surface an error unwrapping to ErrNotLoggedIn, so every ResolveDataAPIToken
+// caller (activity, search, recap, dispatch) renders its `entire login`
+// guidance instead of a raw failure. Re-pins the coverage that lived on the
+// deleted exchange provider.
+func TestResolveDataAPIToken_NotLoggedInPreservesSentinel(t *testing.T) {
+	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	ctxObj := &contexts.Context{Name: "me@core", CoreURL: "https://core.example", Handle: "me", KeychainService: "kc:me"}
+	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		return ctxObj, nil
+	})
+
+	_, err := ResolveDataAPIToken(context.Background(), "https://data.example")
+	if !errors.Is(err, ErrNotLoggedIn) {
+		t.Fatalf("error must unwrap to ErrNotLoggedIn, got %v", err)
+	}
+}

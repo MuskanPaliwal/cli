@@ -292,15 +292,29 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	}
 	if IsAccessibleMode() {
 		// huh's accessible runner ignores hide funcs and never evaluates an
-		// OptionsFunc, so the jurisdiction picker cannot be dynamic there.
-		// Route to the default jurisdiction (home when the caller has repos
-		// there) and offer only the repos placed in it, so what is offered and
-		// where the request is sent agree. Scoping to another jurisdiction is
-		// `entire dispatch --jurisdiction <slug> --repos <slug>` (no wizard).
-		scope := loadScope()
-		state.jurisdiction = scope.defaultJurisdiction
-		repoPicker.Options(buildDispatchRepoOptions(scope.reposIn(scope.defaultJurisdiction))...)
-		groups = append(groups, huh.NewGroup(repoPicker))
+		// OptionsFunc, so the jurisdiction picker cannot be dynamic there and
+		// the repo options must be static. Ask Mode as its own form first, so
+		// a local answer never pays for the cloud catalogue; only a cloud
+		// answer loads it (synchronously — accessible mode has no spinner).
+		// The picker then routes to the default jurisdiction (home when the
+		// caller has repos there) and offers only the repos placed in it, so
+		// what is offered and where the request is sent agree. Scoping to
+		// another jurisdiction is `entire dispatch --jurisdiction <slug>
+		// --repos <slug>` (no wizard).
+		fmt.Fprintln(cmd.OutOrStdout())
+		if err := runDispatchWizardForm(NewAccessibleForm(groups...)); err != nil {
+			if handled := handleFormCancellation(cmd.OutOrStdout(), "dispatch", err); handled == nil {
+				return dispatchpkg.Options{}, errDispatchCancelled
+			}
+			return dispatchpkg.Options{}, fmt.Errorf("run dispatch wizard: %w", err)
+		}
+		groups = nil
+		if !state.isLocal() {
+			scope := loadScope()
+			state.jurisdiction = scope.defaultJurisdiction
+			repoPicker.Options(buildDispatchRepoOptions(scope.reposIn(scope.defaultJurisdiction))...)
+			groups = append(groups, huh.NewGroup(repoPicker))
+		}
 	} else {
 		groups = append(groups,
 			huh.NewGroup(
