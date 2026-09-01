@@ -1,17 +1,1 @@
-https://github.com/entireio/cli/pull/2200#issuecomment-5495294114 let's address this
-
----
-
-what did we do here?
-
----
-
-what is a package coverage?
-
----
-
-push the changes and do draft a smal
-
----
-
-push the changes and do draft a small comment
+yupp
