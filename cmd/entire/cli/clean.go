@@ -272,9 +272,16 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 		return fmt.Errorf("failed to list items: %w", err)
 	}
 
+	// Either temp-file scan may fail without stopping the command, so each one
+	// that does is named for the summary. Warning on stderr is not enough on its
+	// own: the counts and the "Deleted N items" line go to stdout, and a reader
+	// of stdout alone would take an incomplete list for a complete one.
+	var unscanned []string
+
 	tempFiles, err := listAllTempFiles(ctx)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to list temp files: %v\n", err)
+		unscanned = append(unscanned, "temp files")
 	}
 
 	orphanTemps, err := listOrphanAgentTemps(ctx)
@@ -284,9 +291,22 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 		// away the shadow branches, session states and checkpoints already
 		// computed for deletion.
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to list orphan agent temp files: %v\n", err)
+		unscanned = append(unscanned, "stray agent temp files")
 	}
 
-	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles, orphanTemps)
+	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles, orphanTemps, unscanned)
+}
+
+// printUnscannedNote names the inputs whose listing failed, so a summary of
+// what was found is never mistaken for a summary of what is there. The command
+// still succeeds: the scans that did work were cleaned, which is the whole
+// reason a failed listing does not abort.
+func printUnscannedNote(w io.Writer, unscanned []string) {
+	if len(unscanned) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nCould not scan %s, so this may be incomplete. See the warnings above.\n",
+		strings.Join(unscanned, " or "))
 }
 
 // printSection prints a titled list of items if the slice is non-empty.
@@ -314,12 +334,13 @@ func printResultSection(w io.Writer, title string, items []string) {
 
 // runCleanAllWithItems is the core logic for cleaning all items.
 // Separated for testability — tests pass a cmd without a TTY and use force or dryRun to avoid prompts.
-func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun bool, items []strategy.CleanupItem, tempFiles, orphanTemps []string) error {
+func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun bool, items []strategy.CleanupItem, tempFiles, orphanTemps, unscanned []string) error {
 	w := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 	// Handle no items case
 	if len(items) == 0 && len(tempFiles) == 0 && len(orphanTemps) == 0 {
 		fmt.Fprintln(w, "No items to clean up.")
+		printUnscannedNote(w, unscanned)
 		return nil
 	}
 
@@ -349,6 +370,7 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 		printSection(w, "Redaction cache", cleanupItemIDs(redactCaches))
 		printSection(w, "Temp files", tempFiles)
 		printSection(w, "Stray agent temp files", orphanTemps)
+		printUnscannedNote(w, unscanned)
 
 		if dryRun {
 			fmt.Fprintln(w, "Run without --dry-run to delete these items.")
@@ -400,6 +422,7 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 		printResultSection(w, "Temp files", deletedTempFiles)
 		printResultSection(w, "Stray agent temp files", deletedOrphans)
 	}
+	printUnscannedNote(w, unscanned)
 
 	if totalFailed > 0 {
 		fmt.Fprintf(errW, "\nFailed to delete %d %s:\n", totalFailed, itemWord(totalFailed))

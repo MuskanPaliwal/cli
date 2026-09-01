@@ -719,7 +719,7 @@ func TestRunCleanAllWithItems_PartialFailure(t *testing.T) {
 	}
 
 	cmd, stdout, stderr := newTestCleanCmd(t)
-	err := runCleanAllWithItems(cmd.Context(), cmd, true, false, items, nil, nil)
+	err := runCleanAllWithItems(cmd.Context(), cmd, true, false, items, nil, nil, nil)
 
 	if err == nil {
 		t.Fatal("runCleanAllWithItems() should return error when items fail to delete")
@@ -753,7 +753,7 @@ func TestRunCleanAllWithItems_AllFailures(t *testing.T) {
 	}
 
 	cmd, stdout, stderr := newTestCleanCmd(t)
-	err := runCleanAllWithItems(cmd.Context(), cmd, true, false, items, nil, nil)
+	err := runCleanAllWithItems(cmd.Context(), cmd, true, false, items, nil, nil, nil)
 
 	if err == nil {
 		t.Fatal("runCleanAllWithItems() should return error when items fail to delete")
@@ -777,7 +777,7 @@ func TestRunCleanAllWithItems_NoItems(t *testing.T) {
 	setupCleanTestRepo(t)
 
 	cmd, stdout, _ := newTestCleanCmd(t)
-	err := runCleanAllWithItems(cmd.Context(), cmd, false, false, []strategy.CleanupItem{}, nil, nil)
+	err := runCleanAllWithItems(cmd.Context(), cmd, false, false, []strategy.CleanupItem{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("runCleanAllWithItems() error = %v", err)
 	}
@@ -798,7 +798,7 @@ func TestRunCleanAllWithItems_MixedTypes_Preview(t *testing.T) {
 	}
 
 	cmd, stdout, _ := newTestCleanCmd(t)
-	err := runCleanAllWithItems(cmd.Context(), cmd, false, true, items, nil, nil)
+	err := runCleanAllWithItems(cmd.Context(), cmd, false, true, items, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("runCleanAllWithItems() error = %v", err)
 	}
@@ -915,4 +915,57 @@ func TestDeleteTempFiles_RefusesASymlinkedTmpDirectory(t *testing.T) {
 	if _, err := os.Lstat(victim); err != nil {
 		t.Errorf("the link target must survive: %v", err)
 	}
+}
+
+// A failed listing does not abort the command, which means the summary is the
+// only place a caller learns the list was not complete. The warning goes to
+// stderr and the counts go to stdout, so stdout has to say it too.
+func TestRunCleanAllWithItems_NamesTheScansThatFailed(t *testing.T) {
+	t.Run("with nothing else to clean", func(t *testing.T) {
+		cmd, stdout, _ := newTestCleanCmd(t)
+
+		err := runCleanAllWithItems(cmd.Context(), cmd, true, false,
+			[]strategy.CleanupItem{}, nil, nil, []string{"stray agent temp files"})
+		if err != nil {
+			t.Fatalf("runCleanAllWithItems() error = %v", err)
+		}
+
+		out := stdout.String()
+		if !strings.Contains(out, "No items to clean up.") {
+			t.Errorf("stdout should still report what was found, got:\n%s", out)
+		}
+		if !strings.Contains(out, "Could not scan stray agent temp files") {
+			t.Errorf("stdout should name the failed scan, got:\n%s", out)
+		}
+	})
+
+	t.Run("in the preview", func(t *testing.T) {
+		cmd, stdout, _ := newTestCleanCmd(t)
+
+		err := runCleanAllWithItems(cmd.Context(), cmd, false, true,
+			[]strategy.CleanupItem{}, []string{"a.json"}, nil,
+			[]string{"temp files", "stray agent temp files"})
+		if err != nil {
+			t.Fatalf("runCleanAllWithItems() error = %v", err)
+		}
+
+		out := stdout.String()
+		if !strings.Contains(out, "Could not scan temp files or stray agent temp files") {
+			t.Errorf("preview should name both failed scans, got:\n%s", out)
+		}
+	})
+
+	t.Run("and stays quiet when every scan worked", func(t *testing.T) {
+		cmd, stdout, _ := newTestCleanCmd(t)
+
+		err := runCleanAllWithItems(cmd.Context(), cmd, true, false,
+			[]strategy.CleanupItem{}, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("runCleanAllWithItems() error = %v", err)
+		}
+
+		if strings.Contains(stdout.String(), "Could not scan") {
+			t.Errorf("a complete scan must not print the note, got:\n%s", stdout.String())
+		}
+	})
 }
