@@ -1,0 +1,41 @@
+we got another comment. https://github.com/entireio/cli/pull/2211#issuecomment-5498149722 let's dicuss this and what's actually wrong with the pr now?
+
+---
+
+what does the comment says to do ?
+
+---
+
+okay let'sb do the fixes
+
+---
+
+$correctness-review and security review
+
+---
+
+no take a pull from main
+
+---
+
+what is toctou?
+
+---
+
+yeah but make sure we address the comment concern properly
+
+---
+
+also do the testing as the reviewer did in the comment
+
+---
+
+why the testcompareandswapref test?
+
+---
+
+yeah but in that test, do we even have to hardcode the edge cases?
+
+---
+
+did we overengineered it?
