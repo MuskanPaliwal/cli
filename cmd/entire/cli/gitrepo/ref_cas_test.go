@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,137 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
 )
+
+type refCASBackend struct {
+	name string
+	init func(*testing.T) (repoDir, initial, replacement string)
+}
+
+func refCASBackends() []refCASBackend {
+	return []refCASBackend{
+		{name: "files", init: initFilesRefCASRepo},
+		{
+			name: "reftable",
+			init: func(t *testing.T) (string, string, string) {
+				t.Helper()
+				repoDir, initial := initReftableRepo(t, "initial.txt", "initial\n")
+				replacement := reftableCommit(t, repoDir, "next.txt", "next\n")
+				return repoDir, initial, replacement
+			},
+		},
+	}
+}
+
+func initFilesRefCASRepo(t *testing.T) (string, string, string) {
+	t.Helper()
+	repoDir := t.TempDir()
+	gitenv.Run(t, repoDir, "init", "-b", "main")
+	gitenv.Run(t, repoDir, "config", "user.name", "Test User")
+	gitenv.Run(t, repoDir, "config", "user.email", "test@example.com")
+	gitenv.Run(t, repoDir, "config", "commit.gpgsign", "false")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "initial.txt"), []byte("initial\n"), 0o644))
+	gitenv.Run(t, repoDir, "add", "initial.txt")
+	gitenv.Run(t, repoDir, "commit", "--no-gpg-sign", "-m", "initial")
+	initial := strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", "HEAD"))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "next.txt"), []byte("next\n"), 0o644))
+	gitenv.Run(t, repoDir, "add", "next.txt")
+	gitenv.Run(t, repoDir, "commit", "--no-gpg-sign", "-m", "next")
+	replacement := strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", "HEAD"))
+	return repoDir, initial, replacement
+}
+
+func TestCompareAndSwapRef_RejectsSymbolicRef(t *testing.T) {
+	t.Parallel()
+	for _, tt := range refCASBackends() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := tt.init(t)
+			refName := plumbing.ReferenceName("refs/entire/symbolic-cas")
+			targetName := plumbing.NewBranchReferenceName("main")
+			gitenv.Run(t, repoDir, "update-ref", targetName.String(), initial)
+			gitenv.Run(t, repoDir, "symbolic-ref", refName.String(), targetName.String())
+
+			err := CompareAndSwapRef(
+				context.Background(),
+				repoDir,
+				refName,
+				plumbing.NewHash(replacement),
+				plumbing.NewHash(initial),
+			)
+
+			require.ErrorIs(t, err, ErrRefSymbolic)
+			require.Equal(t, targetName.String(), strings.TrimSpace(gitenv.Run(t, repoDir, "symbolic-ref", refName.String())))
+			require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", targetName.String())))
+
+			gitenv.Run(t, repoDir, "symbolic-ref", "-d", refName.String())
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial)
+			err = CompareAndSwapRef(
+				context.Background(),
+				repoDir,
+				refName,
+				plumbing.NewHash(replacement),
+				plumbing.NewHash(initial),
+			)
+			require.NoError(t, err)
+			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestPreparedRefCASPreventsConcurrentSymbolicConversion(t *testing.T) {
+	t.Parallel()
+	for _, tt := range refCASBackends() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := tt.init(t)
+			refName := plumbing.ReferenceName("refs/entire/prepared-cas")
+			targetName := plumbing.NewBranchReferenceName("main")
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial)
+
+			tx, err := prepareRefCAS(
+				context.Background(),
+				repoDir,
+				refName,
+				plumbing.NewHash(replacement),
+				plumbing.NewHash(initial),
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, tx.abort()) })
+
+			cmd := exec.Command("git", "symbolic-ref", refName.String(), targetName.String()) //nolint:noctx // must run while the prepared transaction is open
+			cmd.Dir = repoDir
+			cmd.Env = gitenv.Isolated()
+			output, err := cmd.CombinedOutput()
+			require.Error(t, err, "a writer must not change the ref type after CAS preparation")
+			require.Contains(t, strings.ToLower(string(output)), "lock")
+			require.NoError(t, tx.abort())
+
+			_, symbolic, err := symbolicRefTarget(context.Background(), repoDir, refName)
+			require.NoError(t, err)
+			require.False(t, symbolic)
+			require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestCompareAndSwapRef_RejectsRefProtocolInjection(t *testing.T) {
+	t.Parallel()
+	repoDir, initial, replacement := initFilesRefCASRepo(t)
+	targetName := plumbing.NewBranchReferenceName("main")
+	gitenv.Run(t, repoDir, "update-ref", targetName.String(), initial)
+	maliciousName := plumbing.ReferenceName("refs/entire/invalid\nupdate " + targetName.String())
+
+	err := CompareAndSwapRef(
+		context.Background(),
+		repoDir,
+		maliciousName,
+		plumbing.NewHash(replacement),
+		plumbing.NewHash(initial),
+	)
+
+	require.ErrorContains(t, err, "validate ref for compare-and-swap")
+	require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", targetName.String())))
+}
 
 func TestCompareAndSwapRef_ReftableLockContention(t *testing.T) {
 	t.Parallel()

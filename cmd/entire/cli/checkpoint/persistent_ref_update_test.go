@@ -51,7 +51,43 @@ func TestCASPersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T) {
 	require.Equal(t, initial, ref.Hash())
 }
 
-func TestCASPersistentRef_DoesNotDereferenceSymbolicRef(t *testing.T) {
+func TestCASPersistentRef_BoundsFlockWaitWithoutCallerDeadline(t *testing.T) {
+	t.Parallel()
+	repo, initial := setupBranchTestRepo(t)
+	refName := plumbing.ReferenceName("refs/entire/test-cas-bounded-wait")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
+	holdPersistentRefLock(t, repo, refName)
+
+	started := time.Now()
+	result := make(chan error, 1)
+	go func() {
+		result <- CASPersistentRef(context.Background(), repo, refName, plumbing.ZeroHash, initial)
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("CAS returned before its bounded wait elapsed: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CAS did not stop waiting for the held flock")
+	}
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Contains(t, err.Error(), "timed out waiting for persistent ref lock")
+	elapsed := time.Since(started)
+	require.GreaterOrEqual(t, elapsed, persistentRefCASLockWait/2)
+	require.Less(t, elapsed, 5*time.Second)
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	require.Equal(t, initial, ref.Hash())
+}
+
+func TestCASPersistentRef_RejectsSymbolicRef(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repo, initial := setupBranchTestRepo(t)
@@ -66,15 +102,15 @@ func TestCASPersistentRef_DoesNotDereferenceSymbolicRef(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(refName, head.Name())))
 
 	err = CASPersistentRef(ctx, repo, refName, newTip, initial)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, gitrepo.ErrRefSymbolic)
 
 	target, err := repo.Reference(head.Name(), false)
 	require.NoError(t, err)
 	require.Equal(t, initial, target.Hash(), "CAS must not update the target of a symbolic ref")
 	updated, err := repo.Reference(refName, false)
 	require.NoError(t, err)
-	require.Equal(t, plumbing.HashReference, updated.Type())
-	require.Equal(t, newTip, updated.Hash())
+	require.Equal(t, plumbing.SymbolicReference, updated.Type())
+	require.Equal(t, head.Name(), updated.Target(), "CAS must leave the symbolic ref intact")
 }
 
 func TestCASPersistentRef_DoesNotClassifyRefNamespaceConflictAsContention(t *testing.T) {
