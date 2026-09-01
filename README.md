@@ -180,7 +180,7 @@ Removes the git hooks. Your code and commit history remain untouched.
 
 A **session** represents a complete interaction with your AI agent, from start to finish. Each session captures all prompts, responses, files modified, and timestamps.
 
-The session ID is the agent's own session identifier — a UUID for every currently supported agent (e.g. `019efea2-b46a-7cbc-be01-4c13460f5019`), so an ID you see in `entire session list` is the same one the agent uses.
+The session ID is the unique identifier the agent itself provides — Entire never mints its own — so an ID you see in `entire session list` is the same one the agent uses. The format is the agent's to choose: most supply a UUID (e.g. `019efea2-b46a-7cbc-be01-4c13460f5019`), while OpenCode uses `ses_`-prefixed IDs.
 
 Sessions are stored separately from your code commits, in the repo's checkpoint storage.
 
