@@ -146,8 +146,8 @@ func newRepoCloneCmd() *cobra.Command {
 			"A full `entire://` URL already names the cluster, so it's passed straight " +
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
-		Example: "  entire repo clone /et/paul/dogbark\n" +
-			"  entire repo clone paul/dogbark\n" +
+		Example: "  entire repo clone /et/project/example\n" +
+			"  entire repo clone project/example\n" +
 			"  entire repo clone /gh/entirehq/entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api ./entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io\n" +
