@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,8 +19,8 @@ func TestRunnerDefaults_AreValidAndComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runnerdefaults.Files: %v", err)
 	}
-	if len(files) < 7 {
-		t.Fatalf("expected at least 7 default runners, got %d", len(files))
+	if len(files) < 6 {
+		t.Fatalf("expected at least 6 default runners, got %d", len(files))
 	}
 	for _, f := range files {
 		var doc struct {
@@ -46,7 +47,6 @@ func TestRunnerDefaults_AreValidAndComplete(t *testing.T) {
 		contractToken := map[string]string{
 			"trail_monitor":        `"value"`,
 			"code_review_comments": `"comments"`,
-			"trail_review_focus":   `"files"`,
 			"trail_summary":        "Problem",
 		}[doc.Output.ResultType]
 		if contractToken == "" {
@@ -86,15 +86,15 @@ func TestEnsureRunnersPresent_CreatesDefaultsWhenEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureRunnersPresent: %v", err)
 	}
-	if len(created) < 7 {
-		t.Fatalf("expected >=7 created runner IDs, got %d: %v", len(created), created)
+	if len(created) < 6 {
+		t.Fatalf("expected >=6 created runner IDs, got %d: %v", len(created), created)
 	}
 
 	written, err := filepath.Glob(filepath.Join(repoRoot, ".entire", "runners", "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(written) < 7 {
+	if len(written) < 6 {
 		t.Fatalf("expected the default set written, got %d files", len(written))
 	}
 	// And every written file is loadable by the tuner.
@@ -134,5 +134,54 @@ func TestEnsureRunnersPresent_NoopWhenRunnersExist(t *testing.T) {
 	}
 	if len(after) != 1 {
 		t.Errorf("expected the existing single runner untouched, got %d files", len(after))
+	}
+}
+
+// A push-triggered default must survive entire-api's push-only admission rule
+// (SelectEventLaunch in internal/runnerconfig/launch.go): either a review, or a
+// runner that writes the trail body or a monitor. A default that fails it is
+// rejected before launch on every push of every repo that ran `runner setup`,
+// which is how trail-review-focus produced thousands of warns a week and no runs.
+func TestRunnerDefaults_PushTriggeredAreLaunchable(t *testing.T) {
+	t.Parallel()
+
+	files, err := runnerdefaults.Files()
+	if err != nil {
+		t.Fatalf("runnerdefaults.Files: %v", err)
+	}
+	for _, f := range files {
+		var doc struct {
+			Select struct {
+				TriggerTypes []string `json:"trigger_types"`
+			} `json:"select"`
+			Output struct {
+				Adapter      string          `json:"adapter"`
+				ResultType   string          `json:"result_type"`
+				TrailField   string          `json:"trail_field"`
+				TrailMonitor json.RawMessage `json:"trail_monitor"`
+			} `json:"output"`
+			TrailsReview struct {
+				Enabled bool `json:"enabled"`
+			} `json:"trails_review"`
+		}
+		if err := json.Unmarshal(f.Data, &doc); err != nil {
+			t.Errorf("%s: invalid JSON: %v", f.Name, err)
+			continue
+		}
+		if !slices.Contains(doc.Select.TriggerTypes, "push") {
+			continue
+		}
+		const lastJSONLine, trailBody = "last_json_line", "body"
+		review := doc.TrailsReview.Enabled &&
+			doc.Output.Adapter == lastJSONLine && doc.Output.ResultType == "code_review_comments"
+		writesBody := doc.Output.TrailField == trailBody &&
+			(doc.Output.Adapter == "markdown" || doc.Output.Adapter == lastJSONLine)
+		writesMonitor := len(doc.Output.TrailMonitor) > 0 &&
+			(doc.Output.Adapter == "json" || doc.Output.Adapter == lastJSONLine)
+		firstClass := writesBody || writesMonitor
+		if !review && (!firstClass || doc.TrailsReview.Enabled) {
+			t.Errorf("%s: selects the push trigger but is neither a review nor a first-class "+
+				"trail-output runner — entire-api rejects it before launch", f.Name)
+		}
 	}
 }
