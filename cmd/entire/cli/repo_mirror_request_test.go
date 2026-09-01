@@ -280,6 +280,22 @@ func TestCreateAndAwaitMirror_AsyncLocationValidation(t *testing.T) {
 func TestCreateAndAwaitMirror_AsyncTimeout(t *testing.T) {
 	useFastMirrorPolling(t)
 
+	t.Run("operation timeout covers submission", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(100 * time.Millisecond)
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		t.Cleanup(srv.Close)
+		client, err := coreapi.NewWithBearer(srv.URL, "token")
+		require.NoError(t, err)
+
+		_, err = createAndAwaitMirror(t.Context(), client, "owner", "repo", "cluster", mirrorCreateOptions{
+			async: true, timeout: 10 * time.Millisecond,
+		})
+		require.ErrorContains(t, err, "timed out submitting mirror request")
+		require.NotContains(t, err.Error(), "waiting for mirror placement")
+	})
+
 	t.Run("operation timeout covers clone polling", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {

@@ -605,8 +605,11 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 			ClusterHost: clusterHost,
 		})
 		if submitErr != nil {
-			if waitCtx.Err() != nil {
-				return mirrorCreateOutcome{}, classifyPlacementWaitContextErr(waitCtx.Err())
+			if waitErr := waitCtx.Err(); waitErr != nil {
+				if errors.Is(waitErr, context.Canceled) {
+					return mirrorCreateOutcome{}, NewSilentError(waitErr)
+				}
+				return mirrorCreateOutcome{}, fmt.Errorf("timed out submitting mirror request: %w", waitErr)
 			}
 			return mirrorCreateOutcome{}, submitErr
 		}
