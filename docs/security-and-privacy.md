@@ -285,7 +285,7 @@ Several places retain content that OPF *didn't* redact, with different lifetimes
 
 | Location | Redaction level | Lifetime | Reaches remote? |
 |---|---|---|---|
-| `.entire/metadata/<session>/full.jsonl` | **None — raw** | Until the session's data is cleaned up (`entire clean`) | No |
+| `.entire/metadata/<session>/full.jsonl` | **None** — sanitized, not redacted | Until the session's data is cleaned up (`entire clean`) | No |
 | The agent's own transcript (e.g. `~/.claude/projects/…`) | **None — raw** | Owned and managed by the agent | No |
 | Shadow branch `entire/<commit>-<worktree>` | 8-layer | Auto-deleted after the next successful push (only when its session has ended cleanly) | No |
 | Unreachable git objects after the pre-push rewrite | 8-layer | Until `git gc --prune` (default `gc.pruneExpire` is 2 weeks) | No |
