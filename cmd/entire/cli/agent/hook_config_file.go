@@ -14,9 +14,9 @@ import (
 // HookConfigFile is an agent's hook-configuration file inside the worktree —
 // .claude/settings.json, .cursor/hooks.json, .gemini/settings.json,
 // .github/hooks/entire.json, .factory/settings.json, .codex/hooks.json,
-// .opencode/plugin/entire.ts.
+// .opencode/plugins/entire.ts, .pi/extensions/entire/index.ts.
 //
-// Seven agents each carried the same four lines: filepath.Join a repo root with
+// Eight agents each carried the same four lines: filepath.Join a repo root with
 // a fixed relative path, then os.ReadFile / os.MkdirAll / os.WriteFile /
 // os.Remove on the result, each with a //nolint:gosec saying the path came from
 // the repo root. That justification is about where the path was BUILT and says
@@ -29,9 +29,11 @@ import (
 // Anchoring on worktreedir fixes that at the root rather than at each call site:
 // the base is the worktree root, the agent's fixed subpath is a NAME inside it,
 // and directories are created with MkdirAllNoSymlink so a symlinked component is
-// refused by name instead of silently followed. It also collapses the seven
+// refused by name instead of silently followed. It also collapses the eight
 // copies into one, which is what keeps the next agent integration from
-// reintroducing the pattern.
+// reintroducing the pattern. Pi was the one that got left behind on the first
+// pass and had to be migrated afterwards, which is the argument for routing a
+// new agent through here rather than for trusting that someone will notice.
 //
 // Every symlink component is refused, including the file itself. os.Root blocks
 // a link that escapes the worktree but follows one pointing elsewhere inside
@@ -124,6 +126,31 @@ func (f *HookConfigFile) Write(data []byte, perm os.FileMode) error {
 func (f *HookConfigFile) Remove() error {
 	if err := osroot.RemoveNoSymlinks(f.root, f.name); err != nil {
 		return fmt.Errorf("remove %s: %w", f.path, err)
+	}
+	return nil
+}
+
+// RemoveDir deletes the directory the file lives in, and everything in it,
+// refusing a symlink at any component along the way.
+//
+// One agent needs this, and it is not a general uninstall: Pi's whole
+// integration is `.pi/extensions/entire/index.ts`, a directory that exists only
+// to hold that one file, and pi discovers extensions BY DIRECTORY — so removing
+// the file alone leaves an empty `.pi/extensions/entire` for pi to find and
+// nothing to load from it. Every other agent writes into a directory the agent
+// itself owns (`.claude`, `.codex`, `.cursor`), where Remove of the file is the
+// correct uninstall and taking the parent would delete the user's own config
+// with it.
+//
+// Refuses to act when the file sits directly at the worktree root, which would
+// make the directory to delete the repository.
+func (f *HookConfigFile) RemoveDir() error {
+	dir := path.Dir(f.name)
+	if dir == "." {
+		return fmt.Errorf("remove %s: refusing to remove the worktree root", filepath.Dir(f.path))
+	}
+	if err := osroot.RemoveAllNoSymlinks(f.root, dir); err != nil {
+		return fmt.Errorf("remove %s: %w", filepath.Dir(f.path), err)
 	}
 	return nil
 }

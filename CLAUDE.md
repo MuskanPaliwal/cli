@@ -778,7 +778,7 @@ to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 | `.entire` | `entiredir` | worktree root (`paths.WorktreeRoot`), cwd only when there is provably no repo |
 | git common dir | `gitdir` | `git rev-parse --git-common-dir`, absolutized |
 | the working tree | `worktreedir` | worktree root |
-| an agent's hook config | `agent.HookConfigFile` | worktree root (`.claude/`, `.cursor/`, `.gemini/`, `.github/hooks/`, `.factory/`, `.codex/`, `.opencode/plugin/`) |
+| an agent's hook config | `agent.HookConfigFile` | worktree root (`.claude/`, `.cursor/`, `.gemini/`, `.github/hooks/`, `.factory/`, `.codex/`, `.opencode/plugins/`, `.pi/extensions/entire/`) |
 | an agent's session store | `agent.SessionStore` | the agent's own `GetSessionDir` |
 | per-user config / cache | `userdirs.ConfigRoot` / `CacheRoot` | `$ENTIRE_CONFIG_DIR` else `~/.config/entire`; `$XDG_CACHE_HOME/entire` else `~/.cache/entire` |
 | managed plugin tree | `pluginRoot` (`plugin_store.go`) | `pluginParentDir()` — `$ENTIRE_PLUGIN_DIR`, `%LOCALAPPDATA%`, or `$XDG_DATA_HOME` |
@@ -902,9 +902,17 @@ comments at each site say which case applies:
   stopped rather than that the setup is fine.
   The agent hook-config directories get the same treatment via
   `agent.HookConfigFile`: a symlinked `.claude` / `.cursor` / `.gemini` /
-  `.codex` is refused at the create, because a working tree arrives by clone and
-  `entire enable` must not create directories and write JSON through a link the
-  repository supplied. The config FILE may still be a symlink — pointing
+  `.codex` / `.pi` is refused at the create, because a working tree arrives by
+  clone and `entire enable` must not create directories and write JSON through a
+  link the repository supplied. Pi was the last agent still joining its path onto
+  the repo root and calling `os.ReadFile` / `os.MkdirAll` / `os.WriteFile` /
+  `os.RemoveAll` on the result, which was worse there than for the settings-file
+  agents because pi is **auto-detected**: `DetectPresence` stats `.pi`, which
+  follows the link, so a repository shipping one had `entire enable` install
+  through it — and uninstall `RemoveAll` through it — without the user ever
+  naming pi. Its uninstall is also the one caller of
+  `HookConfigFile.RemoveDir`, because pi discovers extensions by directory, so
+  removing only the file would leave a half-uninstalled extension behind. The config FILE may still be a symlink — pointing
   `.claude/settings.json` at a dotfile repo is a real setup — with one behaviour
   change worth knowing: an **absolute** link there no longer resolves, since
   `os.Root` refuses absolute symlinks unconditionally. A relative one inside the
