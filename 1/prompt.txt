@@ -1,0 +1,21 @@
+should we first merge this pr 2190 or the batching mechanism 2131?
+
+---
+
+also created a draft comment on this PR asking itself that we should first merge this PR
+
+---
+
+a bit more descriptive and use unslop And do not buy that PR needs conflict resolution. Assume the conflicts are solved even after that.
+
+---
+
+can you post it on the pr
+
+---
+
+https://github.com/entireio/cli/pull/2190 let's resolve the conflicts
+
+---
+
+no don't stash the local review. that should be committed too
