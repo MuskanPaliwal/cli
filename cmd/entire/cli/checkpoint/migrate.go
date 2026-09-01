@@ -46,6 +46,17 @@ type MigrateResult struct {
 // run still gets pushed. This function does not push. When dryRun is true it
 // reports what would change without writing or enqueuing anything.
 func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool) (MigrateResult, error) {
+	return migrateBranchToRefs(ctx, repo, dryRun, updatePersistentRef)
+}
+
+type persistentRefUpdater func(context.Context, *git.Repository, plumbing.ReferenceName, persistentRefBuilder) error
+
+func migrateBranchToRefs(
+	ctx context.Context,
+	repo *git.Repository,
+	dryRun bool,
+	updateRef persistentRefUpdater,
+) (MigrateResult, error) {
 	var result MigrateResult
 
 	branch := NewGitStore(repo, DefaultV1Refs())
@@ -112,7 +123,7 @@ func MigrateBranchToRefs(ctx context.Context, repo *git.Repository, dryRun bool)
 		}
 
 		migrated := false
-		if err := updatePersistentRef(ctx, repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
+		if err := updateRef(ctx, repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
 			// Re-read the parent and idempotency state on every CAS retry so a
 			// migration commit never overwrites a concurrently advanced ref.
 			parent, _, baseErr := refsStore.refBase(cid)

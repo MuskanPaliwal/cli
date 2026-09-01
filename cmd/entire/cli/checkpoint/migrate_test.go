@@ -259,6 +259,38 @@ func TestMigrateBranchToRefs_IdempotentRerunDoesNotUpdateRef(t *testing.T) {
 	}
 }
 
+func TestMigrateBranchToRefs_RechecksIdempotencyAfterConcurrentImport(t *testing.T) {
+	t.Parallel()
+	repo, _ := setupBranchTestRepo(t)
+	branch := NewGitStore(repo, DefaultV1Refs())
+	cid := id.MustCheckpointID("a1b2c3d4e5f6")
+	seedBranchCheckpoint(t, branch, cid, "s1")
+
+	var imported plumbing.Hash
+	updateCalls := 0
+	concurrentImport := func(
+		ctx context.Context,
+		repo *git.Repository,
+		refName plumbing.ReferenceName,
+		build persistentRefBuilder,
+	) error {
+		updateCalls++
+
+		// Another importer wins the lock after this migration's unlocked check,
+		// then this migration acquires it and must recognize the imported tree.
+		require.NoError(t, updatePersistentRef(ctx, repo, refName, build))
+		imported = refHash(t, repo, cid)
+		return updatePersistentRef(ctx, repo, refName, build)
+	}
+
+	result, err := migrateBranchToRefs(t.Context(), repo, false, concurrentImport)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updateCalls, "the unlocked check must miss before the concurrent import")
+	assert.Empty(t, result.Migrated)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, imported, refHash(t, repo, cid), "the second importer must leave the winning ref unchanged")
+}
+
 // TestMigrateBranchToRefs_MetadataMatchesNativeRefsLayout pins the migration's
 // metadata rebasing to the git-refs writer it must mirror. The migration rebases
 // session paths by string surgery rather than round-tripping the metadata model,
