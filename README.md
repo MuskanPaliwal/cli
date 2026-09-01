@@ -91,7 +91,7 @@ If the first step fails with "couldn't find manifest", your bucket clone predate
 ```bash
 go install github.com/entireio/cli/cmd/entire@latest
 
-# The git remote helper that resolves entire:// URLs, needed for `entire clone`
+# The git remote helper that resolves entire:// URLs, needed for `entire repo clone`
 # and `git clone entire://…`. The packaged installs above bundle it.
 go install github.com/entireio/cli/cmd/git-remote-entire@latest
 
@@ -329,7 +329,6 @@ Descriptions below are the commands' own summaries. `entire help` always reflect
 
 | Command          | Description                                                                       |
 | ---------------- | --------------------------------------------------------------------------------- |
-| `entire clone`   | Clone an Entire repository                                                        |
 | `entire org`     | Manage Entire organizations (`create`, `list`, `get`, `delete`)                    |
 | `entire project` | Manage Entire projects (`create`, `list`, `get`, `delete`)                         |
 | `entire repo`    | Manage Entire repositories (`create`, `list`, `get`, `delete`, `clone`, `mirror`, `visibility`) |
@@ -504,7 +503,7 @@ Personal overrides, gitignored by default:
 | `strategy_options.summarize.enabled`      | `true`, `false`                              | Auto-generate AI summaries at commit time                                         |
 | `summary_generation.provider`             | e.g. `claude-code`, `codex`, `gemini`        | Which agent generates summaries (defaults to Claude)                              |
 | `summary_generation.model`                | provider-specific model hint                 | Model hint for summary generation (requires `provider`)                            |
-| `summary_timeout_seconds`                 | seconds, `0` clears                          | Hard deadline for `entire checkpoint explain --generate` (default 5m)             |
+| `summary_timeout_seconds`                 | seconds                                      | Hard deadline for `entire checkpoint explain --generate`. Unset or `0` means **no deadline** |
 | `redaction.*`                             | nested object                                | PII redaction, custom secret patterns, scanner engines, and the OpenAI Privacy Filter — documented in [docs/security-and-privacy.md](docs/security-and-privacy.md) |
 
 ### Agent Hook Configuration
