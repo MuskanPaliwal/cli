@@ -121,7 +121,6 @@ func awaitMirrorPlacement(ctx context.Context, c mirrorRequestGetter, initial co
 				return nil, errors.New("mirror request succeeded without a mirror id and URL")
 			}
 			return &coreapi.CreatedMirror{
-				Created:   true,
 				MirrorId:  result.MirrorId,
 				MirrorUrl: result.MirrorUrl,
 				PublicUrl: result.PublicUrl,
@@ -204,7 +203,7 @@ func mirrorRequestFailureError(request coreapi.MirrorRequest) error {
 	if known {
 		message = fmt.Sprintf("mirror placement failed (%s): %s", failure.Code, failure.Message)
 	} else {
-		message = fmt.Sprintf("mirror placement failed with unknown failure code %q", failure.Code)
+		message = fmt.Sprintf("mirror placement failed with unknown failure code %q: %s", failure.Code, failure.Message)
 	}
 	if failure.Retryable {
 		message += "; retry this command"

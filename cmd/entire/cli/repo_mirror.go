@@ -490,11 +490,10 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 			"  entire repo mirror create github.com/octocat/hello-world aws-us-east-2.entire.io",
 		Args: cobra.RangeArgs(0, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			settings, err := LoadEntireSettings(cmd.Context())
-			if err != nil {
-				return err
+			asyncMirrorRequests := false
+			if settings, err := LoadEntireSettings(cmd.Context()); err == nil {
+				asyncMirrorRequests = settings.AsyncMirrorRequests
 			}
-			asyncMirrorRequests := settings.AsyncMirrorRequests
 			if len(args) == 0 {
 				return runMirrorCreateWizard(cmd, noWait, waitTimeout, asyncMirrorRequests)
 			}
@@ -553,9 +552,10 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 // observed while waiting. polled is false for --no-wait and for empty upstreams,
 // where there is nothing to await; in those cases status is unset.
 type mirrorCreateOutcome struct {
-	created *coreapi.CreatedMirror
-	status  coreapi.MirrorStatus
-	polled  bool
+	created             *coreapi.CreatedMirror
+	status              coreapi.MirrorStatus
+	polled              bool
+	createdStateUnknown bool
 }
 
 type mirrorCreatePhase string
@@ -632,7 +632,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 	if err != nil {
 		return mirrorCreateOutcome{}, err
 	}
-	outcome := mirrorCreateOutcome{created: created}
+	outcome := mirrorCreateOutcome{created: created, createdStateUnknown: opts.async}
 	if created.Suspended {
 		// The placement already existed and an admin has suspended it, so it
 		// will never serve — skip the clone poll. The caller warns after echoing
@@ -681,12 +681,17 @@ func reportOneShotMirror(out, errW io.Writer, outcome mirrorCreateOutcome, err e
 	if created == nil {
 		return err
 	}
-	if created.Created {
+	switch {
+	case outcome.createdStateUnknown:
+		fmt.Fprintf(out, "\nMirror placed at %s\n", created.MirrorUrl)
+	case created.Created:
 		fmt.Fprintf(out, "\n✓ Registered mirror %s\n", created.MirrorId)
-	} else {
+	default:
 		fmt.Fprintf(out, "\nMirror exists (%s)\n", created.MirrorId)
 	}
-	fmt.Fprintf(out, "  %s\n", created.MirrorUrl)
+	if !outcome.createdStateUnknown {
+		fmt.Fprintf(out, "  %s\n", created.MirrorUrl)
+	}
 
 	if created.Suspended {
 		// Echo the placement (above), warn, and exit non-zero: the mirror can't

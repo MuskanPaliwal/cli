@@ -141,7 +141,7 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
-	// AsyncMirrorRequests selects the async mirror route only from settings.local.json.
+	// AsyncMirrorRequests selects the async mirror creation route.
 	AsyncMirrorRequests bool `json:"async_mirror_requests,omitempty"`
 
 	// SummaryGeneration stores provider preferences for explain --generate.
@@ -627,7 +627,6 @@ func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs
 	if err != nil {
 		return nil, fmt.Errorf("reading settings file: %w", err)
 	}
-	settings.AsyncMirrorRequests = false // Only the local layer may enable it.
 
 	if preferencesFileAbs != "" {
 		preferences, err := loadClonePreferencesFromFile(preferencesFileAbs)

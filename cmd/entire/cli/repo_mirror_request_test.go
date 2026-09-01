@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/internal/coreapi"
 )
@@ -69,6 +70,8 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, "mirror-1", outcome.created.MirrorId)
+		require.False(t, outcome.created.Created)
+		require.True(t, outcome.createdStateUnknown)
 		require.Equal(t, coreapi.MirrorStatusReady, outcome.status)
 		require.Equal(t, []mirrorCreatePhase{mirrorCreatePhaseQueued, mirrorCreatePhasePlacing, mirrorCreatePhaseCloning}, phases)
 		require.Equal(t, []string{
@@ -107,6 +110,30 @@ func TestCreateAndAwaitMirror_AsyncSuccess(t *testing.T) {
 	})
 }
 
+func TestRepoMirrorCreate_BrokenEntireDirUsesDefaultRoute(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		newRepoWithSymlinkedEntireDir(t)
+		assertMirrorCreateReachesArgumentValidation(t)
+	})
+
+	t.Run("regular file", func(t *testing.T) {
+		repoDir := t.TempDir()
+		testutil.InitRepo(t, repoDir)
+		require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".entire"), []byte("broken"), 0o600))
+		t.Chdir(repoDir)
+		paths.ClearWorktreeRootCache()
+		t.Cleanup(paths.ClearWorktreeRootCache)
+		assertMirrorCreateReachesArgumentValidation(t)
+	})
+}
+
+func assertMirrorCreateReachesArgumentValidation(t *testing.T) {
+	t.Helper()
+	cmd := newRepoMirrorCreateCmd()
+	cmd.SetArgs([]string{"not-a-github-url"})
+	require.ErrorContains(t, cmd.Execute(), "not a recognized GitHub URL")
+}
+
 func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 	useFastMirrorPolling(t)
 
@@ -129,16 +156,17 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 	})
 
 	for _, tt := range []struct {
-		name      string
-		code      string
-		message   string
-		retryable bool
-		want      string
-		wantRetry bool
+		name       string
+		code       string
+		message    string
+		retryable  bool
+		want       string
+		wantDetail string
+		wantRetry  bool
 	}{
 		{name: "known", code: "repo_inaccessible", message: "repository is not accessible", want: "repository is not accessible"},
 		{name: "retryable", code: "github_unavailable", message: "GitHub is unavailable", retryable: true, want: "github_unavailable", wantRetry: true},
-		{name: "unknown", code: "future_failure", message: "future detail", want: "unknown failure code"},
+		{name: "unknown", code: "future_failure", message: "future detail", want: "unknown failure code", wantDetail: "future detail"},
 	} {
 		t.Run("terminal failure "+tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +191,9 @@ func TestCreateAndAwaitMirror_AsyncFailures(t *testing.T) {
 				async: true, timeout: time.Second,
 			})
 			require.ErrorContains(t, err, tt.want)
+			if tt.wantDetail != "" {
+				require.ErrorContains(t, err, tt.wantDetail)
+			}
 			if tt.wantRetry {
 				require.ErrorContains(t, err, "retry this command")
 			} else {
@@ -442,7 +473,7 @@ func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
 	testutil.InitRepo(t, repoDir)
 	entireDir := filepath.Join(repoDir, ".entire")
 	require.NoError(t, os.MkdirAll(entireDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.local.json"), []byte(`{"async_mirror_requests":true}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"async_mirror_requests":true}`), 0o600))
 	t.Chdir(repoDir)
 
 	requestPolls := 0
@@ -476,8 +507,9 @@ func TestRepoMirrorCreate_AsyncSetting(t *testing.T) {
 	cmd.SetErr(&stderr)
 	cmd.SetArgs([]string{"mirror", "create", "--no-wait", "github.com/owner/repo", "aws-us-east-2.entire.io"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
-	require.Contains(t, stdout.String(), "Registered mirror mirror-1")
-	require.Contains(t, stdout.String(), "entire://cluster/gh/owner/repo")
+	require.Contains(t, stdout.String(), "Mirror placed at entire://cluster/gh/owner/repo")
+	require.NotContains(t, stdout.String(), "Registered mirror")
+	require.NotContains(t, stdout.String(), "Mirror exists")
 	require.Contains(t, stderr.String(), "Queued mirror owner/repo")
 	require.Contains(t, stderr.String(), "Placing mirror owner/repo")
 	require.Equal(t, []string{mirrorRequestsAPIPath, mirrorRequestPath(), mirrorRequestPath()}, paths)

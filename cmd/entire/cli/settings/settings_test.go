@@ -664,7 +664,7 @@ func TestLoad_MergesLocalOverrides(t *testing.T) {
 	}
 }
 
-func TestLoad_AsyncMirrorRequestsIsLocalOnly(t *testing.T) {
+func TestLoad_AsyncMirrorRequestsUsesLayeredSettings(t *testing.T) {
 	tests := []struct {
 		name  string
 		base  string
@@ -672,7 +672,7 @@ func TestLoad_AsyncMirrorRequestsIsLocalOnly(t *testing.T) {
 		want  bool
 	}{
 		{name: "unset", base: `{"enabled": true}`},
-		{name: "project setting ignored", base: `{"async_mirror_requests": true}`},
+		{name: "project setting enabled", base: `{"async_mirror_requests": true}`, want: true},
 		{name: "local setting enabled", base: `{"enabled": true}`, local: `{"async_mirror_requests": true}`, want: true},
 		{name: "local false", base: `{"async_mirror_requests": true}`, local: `{"async_mirror_requests": false}`},
 	}

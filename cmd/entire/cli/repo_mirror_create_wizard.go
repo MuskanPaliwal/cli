@@ -45,7 +45,7 @@ const (
 type regionChoice struct {
 	slug         string
 	jurisdiction string
-	host         string // bare cluster host passed to CreateMirror / validateClusterHost
+	host         string // bare cluster host passed to mirror creation and validateClusterHost
 	isDefault    bool
 }
 
@@ -501,7 +501,7 @@ func pickRegions(ctx context.Context, w io.Writer, regions []regionChoice, juris
 	return chosen, nil
 }
 
-// createMirrors fans out CreateMirror (and the clone-readiness poll) across all
+// createMirrors fans out mirror creation (and the clone-readiness poll) across all
 // targets in parallel, returning one result per target in input order. One
 // cluster client is built per region and shared across that region's repos; a
 // region the active login can't reach fails every pair in that region rather
@@ -526,7 +526,7 @@ func createMirrors(ctx context.Context, errW io.Writer, targets []mirrorTarget, 
 	}
 
 	// Docker-pull-style live progress: one line per (repo, region), each
-	// updating independently as its CreateMirror + clone poll advance.
+	// updating independently as its create request and clone poll advance.
 	labels := make([]string, len(targets))
 	for i, t := range targets {
 		labels[i] = t.owner + "/" + t.repo + " @ " + t.region.host

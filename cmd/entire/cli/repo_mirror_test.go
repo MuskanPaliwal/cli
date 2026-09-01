@@ -270,6 +270,17 @@ func TestReportOneShotMirror(t *testing.T) {
 		require.Contains(t, out.String(), "git clone "+mirrorURL)
 	})
 
+	t.Run("async result does not guess whether the placement was created", func(t *testing.T) {
+		t.Parallel()
+		var out, errW bytes.Buffer
+		outcome := mirrorCreateOutcome{created: mk(true, false), createdStateUnknown: true}
+		err := reportOneShotMirror(&out, &errW, outcome, nil)
+		require.NoError(t, err)
+		require.Contains(t, out.String(), "Mirror placed at "+mirrorURL)
+		require.NotContains(t, out.String(), "Registered mirror")
+		require.NotContains(t, out.String(), "Mirror exists")
+	})
+
 	t.Run("suspended surfaces support guidance as SilentError", func(t *testing.T) {
 		t.Parallel()
 		var out, errW bytes.Buffer
