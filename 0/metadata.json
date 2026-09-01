@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1DSZR0NR1169EABA5M8XWBS",
+  "session_id": "01a05943-d877-7d72-b03d-fa402a203ff2",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T06:20:01.487377Z",
+  "branch": "improve-process-sessions-condensation",
+  "checkpoints_count": 2,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/migrate.go",
+    "cmd/entire/cli/checkpoint/refs_store.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "e70f599d3a43",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 245032,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13705728,
+    "output_tokens": 29793,
+    "api_call_count": 107
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T06:20:01.31784Z",
+    "agent_lines": 4,
+    "agent_removed": 4,
+    "human_added": 567,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 571,
+    "total_lines_changed": 702,
+    "agent_percentage": 1.1396011396011396,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 2036,
+      "user_lines_removed": 0,
+      "agent_lines_added": 60,
+      "agent_lines_removed": 584,
+      "user_added_per_file": {
+        ".zed/tasks.json": 23,
+        "cmd/entire/cli/strategy/commit_hook_perf_assertions_test.go": 191,
+        "cmd/entire/cli/strategy/commit_hook_perf_fixture_test.go": 347,
+        "cmd/entire/cli/strategy/commit_hook_perf_repo_test.go": 153,
+        "docs/architecture/checkpoint-batch-condensation.md": 1086,
+        "technical.md": 236
+      }
+    }
+  ]
+}
