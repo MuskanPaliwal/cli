@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -272,6 +273,22 @@ func TestOpenPath_DoesNotDowngradeMalformedWorktreeMetadata(t *testing.T) {
 	repo, err := OpenPath(root)
 	require.ErrorContains(t, err, "resolve worktree metadata")
 	require.ErrorContains(t, err, "inspect Git directory")
+	require.Nil(t, repo)
+}
+
+func TestOpenPath_DoesNotDowngradeDanglingGitSymlink(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == windowsOS {
+		t.Skip("symlink creation requires privileges on some Windows builders")
+	}
+
+	root := filepath.Join(t.TempDir(), "bare.git")
+	runMetadataGit(t, filepath.Dir(root), "init", "--bare", root)
+	require.NoError(t, os.Symlink("missing", filepath.Join(root, gitDir)))
+
+	repo, err := OpenPath(root)
+	require.ErrorContains(t, err, "resolve worktree metadata")
+	require.ErrorContains(t, err, "inspect .git entry")
 	require.Nil(t, repo)
 }
 

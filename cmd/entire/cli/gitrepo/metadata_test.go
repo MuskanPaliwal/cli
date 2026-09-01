@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const windowsOS = "windows"
+
 func TestResolveWorktreeMetadata_RealGitLayouts(t *testing.T) {
 	t.Parallel()
 
@@ -114,7 +116,7 @@ func TestResolveWorktreeMetadata_RealGitLayouts(t *testing.T) {
 
 	t.Run("symlink-aliased common directory", func(t *testing.T) {
 		t.Parallel()
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == windowsOS {
 			t.Skip("symlink creation requires privileges on some Windows builders")
 		}
 		mainRoot, linked := conventionalMetadataWorktree(t, "aliased")
@@ -129,7 +131,7 @@ func TestResolveWorktreeMetadata_RealGitLayouts(t *testing.T) {
 
 	t.Run("symlink-aliased worktree root preserves lexical paths", func(t *testing.T) {
 		t.Parallel()
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == windowsOS {
 			t.Skip("symlink creation requires privileges on some Windows builders")
 		}
 		root := filepath.Join(t.TempDir(), "physical-root")
@@ -141,6 +143,23 @@ func TestResolveWorktreeMetadata_RealGitLayouts(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, filepath.Join(alias, gitDir), metadata.GitDir)
 		require.Equal(t, filepath.Join(alias, gitDir), metadata.CommonDir)
+	})
+
+	t.Run("symlinked .git directory", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == windowsOS {
+			t.Skip("symlink creation requires privileges on some Windows builders")
+		}
+		tmp := t.TempDir()
+		root := filepath.Join(tmp, "checkout")
+		storage := filepath.Join(tmp, "storage")
+		initMetadataRepo(t, root)
+		require.NoError(t, os.Rename(filepath.Join(root, gitDir), storage))
+		require.NoError(t, os.Symlink(storage, filepath.Join(root, gitDir)))
+
+		metadata := assertMetadataMatchesGit(t, root, "")
+		require.Equal(t, filepath.Join(root, gitDir), metadata.GitDir)
+		require.Equal(t, filepath.Join(root, gitDir), metadata.CommonDir)
 	})
 }
 
@@ -224,6 +243,41 @@ func TestResolveWorktreeMetadata_MalformedMetadata(t *testing.T) {
 			want: "empty gitdir value",
 		},
 		{
+			name: "gitdir prefix without space",
+			setup: func(t *testing.T) string {
+				return malformedGitDirMetadata(t, "gitdir:target\n")
+			},
+			want: "missing gitdir prefix",
+		},
+		{
+			name: "gitdir leading whitespace",
+			setup: func(t *testing.T) string {
+				return malformedGitDirMetadata(t, " gitdir: target\n")
+			},
+			want: "missing gitdir prefix",
+		},
+		{
+			name: "gitdir tab separator",
+			setup: func(t *testing.T) string {
+				return malformedGitDirMetadata(t, "gitdir:\ttarget\n")
+			},
+			want: "missing gitdir prefix",
+		},
+		{
+			name: "gitdir trailing whitespace",
+			setup: func(t *testing.T) string {
+				return malformedGitDirMetadata(t, "gitdir: target \n")
+			},
+			want: "inspect Git directory",
+		},
+		{
+			name: "gitdir extra content",
+			setup: func(t *testing.T) string {
+				return malformedGitDirMetadata(t, "gitdir: target\nignored\n")
+			},
+			want: "inspect Git directory",
+		},
+		{
 			name: "missing Git directory",
 			setup: func(t *testing.T) string {
 				root := t.TempDir()
@@ -250,6 +304,27 @@ func TestResolveWorktreeMetadata_MalformedMetadata(t *testing.T) {
 				return root
 			},
 			want: "empty value",
+		},
+		{
+			name: "commondir leading whitespace",
+			setup: func(t *testing.T) string {
+				return malformedCommonDirMetadata(t, " ../..\n")
+			},
+			want: "inspect common Git directory",
+		},
+		{
+			name: "commondir trailing whitespace",
+			setup: func(t *testing.T) string {
+				return malformedCommonDirMetadata(t, "../.. \n")
+			},
+			want: "inspect common Git directory",
+		},
+		{
+			name: "commondir extra content",
+			setup: func(t *testing.T) string {
+				return malformedCommonDirMetadata(t, "../..\nignored\n")
+			},
+			want: "inspect common Git directory",
 		},
 		{
 			name: "missing common directory",
@@ -351,6 +426,21 @@ func malformedLinkedMetadata(t *testing.T) (string, string) {
 	require.NoError(t, os.MkdirAll(perWorktree, 0o750))
 	writeMetadataFile(t, filepath.Join(root, gitDir), "gitdir: "+perWorktree+"\n")
 	return root, perWorktree
+}
+
+func malformedGitDirMetadata(t *testing.T, content string) string {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "target"), 0o750))
+	writeMetadataFile(t, filepath.Join(root, gitDir), content)
+	return root
+}
+
+func malformedCommonDirMetadata(t *testing.T, content string) string {
+	t.Helper()
+	root, perWorktree := malformedLinkedMetadata(t)
+	writeMetadataFile(t, filepath.Join(perWorktree, "commondir"), content)
+	return root
 }
 
 func initMetadataRepo(t *testing.T, root string) {

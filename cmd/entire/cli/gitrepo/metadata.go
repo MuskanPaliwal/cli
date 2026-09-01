@@ -59,12 +59,18 @@ func ResolveWorktreeMetadata(worktreeRoot string) (WorktreeMetadata, error) {
 
 func resolveWorktreeGitDir(worktreeRoot string) (string, error) {
 	gitEntry := filepath.Join(worktreeRoot, gitDir)
-	info, err := os.Stat(gitEntry)
+	info, err := os.Lstat(gitEntry)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("%w at %s: %w", ErrWorktreeMetadataNotFound, gitEntry, err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("inspect .git entry at %s: %w", gitEntry, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		info, err = os.Stat(gitEntry)
+		if err != nil {
+			return "", fmt.Errorf("inspect .git entry at %s: %w", gitEntry, err)
+		}
 	}
 	if info.IsDir() {
 		return gitEntry, nil
@@ -77,12 +83,10 @@ func resolveWorktreeGitDir(worktreeRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read .git file at %s: %w", gitEntry, err)
 	}
-	line, _, _ := strings.Cut(string(content), "\n")
-	pointer, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
+	pointer, ok := strings.CutPrefix(strings.TrimRight(string(content), "\r\n"), "gitdir: ")
 	if !ok {
 		return "", fmt.Errorf("parse .git file at %s: missing gitdir prefix", gitEntry)
 	}
-	pointer = strings.TrimSpace(pointer)
 	if pointer == "" {
 		return "", fmt.Errorf("parse .git file at %s: empty gitdir value", gitEntry)
 	}
@@ -91,7 +95,7 @@ func resolveWorktreeGitDir(worktreeRoot string) (string, error) {
 	if err := requireDirectory("Git directory", resolved); err != nil {
 		return "", err
 	}
-	return resolved, nil
+	return filepath.Clean(resolved), nil
 }
 
 func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
@@ -111,7 +115,7 @@ func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read commondir file at %s: %w", commonFile, err)
 	}
-	pointer := strings.TrimSpace(string(content))
+	pointer := strings.TrimRight(string(content), "\r\n")
 	if pointer == "" {
 		return "", fmt.Errorf("parse commondir file at %s: empty value", commonFile)
 	}
@@ -120,7 +124,7 @@ func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
 	if err := requireDirectory("common Git directory", resolved); err != nil {
 		return "", err
 	}
-	return resolved, nil
+	return filepath.Clean(resolved), nil
 }
 
 func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
@@ -148,11 +152,13 @@ func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
 	return id, nil
 }
 
+// Keep every component until after validation so malformed paths cannot use
+// lexical cleaning to bypass a missing intermediate directory.
 func resolveMetadataPath(base, value string) string {
 	if filepath.IsAbs(value) {
-		return filepath.Clean(value)
+		return value
 	}
-	return filepath.Clean(filepath.Join(base, value))
+	return base + string(filepath.Separator) + value
 }
 
 func requireDirectory(label, path string) error {
