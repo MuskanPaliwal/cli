@@ -58,6 +58,28 @@ type HookConfigFile struct {
 	path string
 }
 
+// HookConfigLocator is implemented by an agent whose Entire hook configuration
+// is a file inside the worktree: it returns the same worktree-relative,
+// slash-separated path the agent passes to OpenHookConfig.
+//
+// It exists for the callers that must reason about that path WITHOUT doing I/O
+// on it. Doctor's symlink diagnosis is the first: the directories BETWEEN an
+// agent's own directory and its config file — `.pi/extensions`,
+// `.pi/extensions/entire`, `.opencode/plugins` — are created by Entire and
+// appear in no other registry, because ProtectedDirs names what the AGENT owns
+// (`.pi`, `.opencode`) and stops there. Deriving them from a hand-kept list in
+// the caller is how two of them came to be unchecked in the first place.
+//
+// Optional: an agent whose hooks are not a worktree file (an external plugin
+// declaring them in its manifest) does not implement it. See
+// TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent for the ones that
+// must.
+type HookConfigLocator interface {
+	// HookConfigRelPath returns the config file's path relative to the worktree
+	// root, slash-separated, exactly as passed to OpenHookConfig.
+	HookConfigRelPath() string
+}
+
 // OpenHookConfig returns the hook-config file at relPath inside worktreeRoot.
 //
 // relPath is slash-separated and relative to the worktree root

@@ -15,8 +15,9 @@ import (
 
 // Compile-time interface assertions
 var (
-	_ agent.HookSupport   = (*PiAgent)(nil)
-	_ agent.HookFreshness = (*PiAgent)(nil)
+	_ agent.HookSupport       = (*PiAgent)(nil)
+	_ agent.HookConfigLocator = (*PiAgent)(nil)
+	_ agent.HookFreshness     = (*PiAgent)(nil)
 )
 
 //go:embed entire_extension.ts
@@ -67,7 +68,7 @@ func extensionConfig(ctx context.Context) (*agent.HookConfigFile, error) {
 			return nil, fmt.Errorf("resolve repo root: %w", err)
 		}
 	}
-	return agent.OpenHookConfig(root, extensionDirName+"/"+extensionFileName) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+	return agent.OpenHookConfig(root, (&PiAgent{}).HookConfigRelPath()) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 }
 
 // renderExtension returns the extension file content, substituting the entire
@@ -168,3 +169,6 @@ func (a *PiAgent) CheckHookConfig(ctx context.Context) agent.HookConfigState {
 	// outdated and gets rewritten rather than being trusted as up to date.
 	return cfg.GeneratedState(entireMarker, renderExtension())
 }
+
+// HookConfigRelPath implements agent.HookConfigLocator.
+func (a *PiAgent) HookConfigRelPath() string { return extensionDirName + "/" + extensionFileName }
