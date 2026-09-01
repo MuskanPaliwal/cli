@@ -1,0 +1,125 @@
+https://github.com/entireio/cli/pull/2131#issuecomment-5484149660 we resolved the conflicts here though
+
+---
+
+i want to see what the 1926 pr had in common with my pr, and whether the conflicts were resolved keeping the main issue in account.
+
+---
+
+yeah so we lost the actual thing we did in our pr right? we planned batching sessions but stage 1 and stage 2 had no batching implemented. cehck the transcript. also we should keep 1926's actual correctness fix.
+
+---
+
+yeah but why did we lose the 1926's locking mechanism?
+
+---
+
+okay then we need it but in next or stage 3 we remove this?
+
+---
+
+how the two locks are different?
+
+---
+
+can you help me understand this in more simpler way?
+
+---
+
+but we anyway want checkpoints to be in batching right?
+
+---
+
+okay
+
+---
+
+preserve the mechanism now
+
+---
+
+no we should have the code 1926 had
+
+---
+
+wait explain me what's happening?
+
+---
+
+right so we need to maintain our pr work along with 1926's work too
+
+---
+
+why the original file? we decided to keep the 1926 work but that would be blend in our architecture and the tests? and the transaction api?
+
+---
+
+yupp
+
+---
+
+with this i also want to know if we can create a draft reply to what our strategy was for the conflict resolution
+
+---
+
+no can we go more indepth, what 1231 has and what's left and how the two prs fit in together
+
+---
+
+can we make it compact and only talk about overlapping part while giving a brief of what is already there and
+
+---
+
+right we can elaborate it a bit more and use unslop
+
+---
+
+okay can we make it such that the merge is still yet to happen
+
+---
+
+ddd
+
+---
+
+right. re-verify it
+
+---
+
+why we will push the commit ofocurse.
+
+---
+
+okay.
+
+---
+
+but i am planning to post the reply first
+
+---
+
+okay
+
+---
+
+yupp
+
+---
+
+post
+
+---
+
+yupp
+
+---
+
+https://github.com/entireio/cli/pull/2131 we have got one more conflict
+
+---
+
+no we should have the merge changes too, like stashed out
+
+---
+
+cas full form?
