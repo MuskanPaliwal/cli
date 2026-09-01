@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1EP36XBZAFQRYK5C98NYCKF",
+  "strategy": "manual-commit",
+  "branch": "refactor-git-metadata-traversal",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata.go",
+    "cmd/entire/cli/gitrepo/metadata_test.go",
+    "cmd/entire/cli/gitrepo/repository_test.go",
+    "cmd/entire/cli/trail_cell_client_test.go",
+    "cmd/entire/cli/trail_context_cache.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 135769,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2951680,
+    "output_tokens": 10335,
+    "api_call_count": 46
+  }
+}
