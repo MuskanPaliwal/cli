@@ -86,9 +86,9 @@ func withLockedPersistentRef(
 }
 
 // CASPersistentRef serializes with Entire's persistent ref writers and updates
-// refName through native Git's cross-process compare-and-swap protocol. It
-// preserves gitrepo.ErrRefCASConflict and gitrepo.ErrRefLocked for callers that
-// need different policies for stale state and transient contention.
+// refName through native Git's cross-process compare-and-swap protocol. Native
+// lock contention is retried without rebuilding because the expected ref has
+// not moved; a compare-and-swap conflict remains terminal for the stale write.
 func CASPersistentRef(
 	ctx context.Context,
 	repo *git.Repository,
@@ -96,8 +96,35 @@ func CASPersistentRef(
 	newHash, expectedHash plumbing.Hash,
 ) error {
 	return withLockedPersistentRef(ctx, repo, refName, func(repoRoot, _ string) error {
-		return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
+		return retryPersistentRefLockContention(ctx, refName, func() error {
+			return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
+		})
 	})
+}
+
+func retryPersistentRefLockContention(
+	ctx context.Context,
+	refName plumbing.ReferenceName,
+	update func() error,
+) error {
+	var lockErr error
+	for attempt := range shadowRefMaxRetries {
+		refErr := update()
+		if refErr == nil {
+			return nil
+		}
+		if !errors.Is(refErr, gitrepo.ErrRefLocked) {
+			return refErr
+		}
+		lockErr = refErr
+		if attempt+1 == shadowRefMaxRetries {
+			break
+		}
+		if backoffErr := shadowRefBackoff(ctx, attempt); backoffErr != nil {
+			return backoffErr
+		}
+	}
+	return fmt.Errorf("update persistent ref %s after %d lock attempts: %w", refName, shadowRefMaxRetries, lockErr)
 }
 
 // updatePersistentRef serializes Entire writers for one ref and retains a CAS

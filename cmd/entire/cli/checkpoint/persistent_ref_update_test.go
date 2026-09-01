@@ -99,6 +99,50 @@ func TestCASPersistentRef_DoesNotClassifyRefNamespaceConflictAsContention(t *tes
 	require.Contains(t, err.Error(), "cannot lock ref")
 }
 
+func TestRetryPersistentRefLockContention_RetriesOnlyLockErrors(t *testing.T) {
+	t.Parallel()
+	refName := plumbing.ReferenceName("refs/entire/test-opf-lock-retry")
+
+	t.Run("lock contention is retried", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := retryPersistentRefLockContention(t.Context(), refName, func() error {
+			attempts++
+			if attempts < 3 {
+				return fmt.Errorf("attempt %d: %w", attempts, gitrepo.ErrRefLocked)
+			}
+			return nil
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, 3, attempts)
+	})
+
+	t.Run("CAS conflict is terminal", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := retryPersistentRefLockContention(t.Context(), refName, func() error {
+			attempts++
+			return fmt.Errorf("stale rewrite: %w", gitrepo.ErrRefCASConflict)
+		})
+
+		require.ErrorIs(t, err, gitrepo.ErrRefCASConflict)
+		require.Equal(t, 1, attempts)
+	})
+
+	t.Run("lock retry budget is bounded", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := retryPersistentRefLockContention(t.Context(), refName, func() error {
+			attempts++
+			return fmt.Errorf("still locked: %w", gitrepo.ErrRefLocked)
+		})
+
+		require.ErrorIs(t, err, gitrepo.ErrRefLocked)
+		require.Equal(t, shadowRefMaxRetries, attempts)
+	})
+}
+
 func holdPersistentRefLock(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) {
 	t.Helper()
 	_, commonDir, err := repositoryDirs(context.Background(), repo)
