@@ -51,3 +51,11 @@ right so we need to maintain our pr work along with 1926's work too
 ---
 
 why the original file? we decided to keep the 1926 work but that would be blend in our architecture and the tests? and the transaction api?
+
+---
+
+yupp
+
+---
+
+with this i also want to know if we can create a draft reply to what our strategy was for the conflict resolution
