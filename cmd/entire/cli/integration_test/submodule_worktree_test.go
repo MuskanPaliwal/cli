@@ -4,7 +4,6 @@ package integration
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,12 +35,7 @@ func TestSubmoduleWorktree_SessionCreatesCheckpoint(t *testing.T) {
 
 	runGit := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = dir
-		cmd.Env = testutil.GitIsolatedEnv()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git -C %s %v: %v\n%s", dir, args, err, out)
-		}
+		testutil.RunGit(t, dir, args...)
 	}
 	writeFileAt := func(path, content string) {
 		t.Helper()

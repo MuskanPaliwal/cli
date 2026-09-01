@@ -5,7 +5,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1141,11 +1140,7 @@ func setupLinkedSubmoduleForDoctorTest(t *testing.T) string {
 func runGitForDoctorTest(t *testing.T, repoRoot string, args ...string) {
 	t.Helper()
 	commandArgs := append([]string{"-C", repoRoot}, args...)
-	gitCmd := exec.CommandContext(t.Context(), "git", commandArgs...)
-	gitCmd.Dir = repoRoot
-	gitCmd.Env = testutil.GitIsolatedEnv()
-	output, err := gitCmd.CombinedOutput()
-	require.NoError(t, err, "%s", output)
+	testutil.RunGit(t, repoRoot, commandArgs...)
 }
 
 // TestCheckHookDrift_SilentWhenNotInstalled — the generalized drift check

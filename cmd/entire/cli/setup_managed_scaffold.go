@@ -29,15 +29,29 @@ const (
 type managedScaffoldResult struct {
 	Status  managedScaffoldStatus
 	RelPath string
+	// RemovedLegacyRelPath is the repo-relative path of a superseded
+	// Entire-managed file deleted alongside this install ("" when none).
+	RemovedLegacyRelPath string
+	// LegacyCleanupWarning describes a failed best-effort deletion of a
+	// superseded Entire-managed file ("" when cleanup succeeded or there was
+	// nothing to clean). The install itself still succeeded.
+	LegacyCleanupWarning string
 }
 
-// writeManagedScaffold writes content to targetPath idempotently: it creates the
-// file when absent, leaves it untouched (Unchanged) when identical, rewrites it
-// (Updated) only when Entire already manages it, and refuses to clobber an
-// unmanaged file (SkippedConflict). isManaged reports whether existing bytes
-// carry this feature's management marker.
-func writeManagedScaffold(targetPath, relPath string, content []byte, isManaged func([]byte) bool) (managedScaffoldResult, error) {
-	existingData, err := os.ReadFile(targetPath) //nolint:gosec // target path is derived from repo root + fixed relative path
+// writeManagedScaffold writes content to relPath under root idempotently: it
+// creates the file when absent, leaves it untouched (Unchanged) when
+// identical, rewrites it (Updated) only when Entire already manages it, and
+// refuses to clobber an unmanaged file (SkippedConflict). isManaged reports
+// whether existing bytes carry this feature's management marker.
+//
+// All IO goes through the *os.Root so a symlinked path component cannot
+// redirect the write outside the repository, and the write lands via rename
+// so a symlink at the target (dangling ones read as "absent" — the shape
+// settings.readConfined exists for) is replaced rather than written through.
+// The relative path is fixed, but its resolution is not; that is why the
+// root, not the caller-joined absolute path, is the API.
+func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManaged func([]byte) bool) (managedScaffoldResult, error) {
+	existingData, err := root.ReadFile(relPath)
 	if err == nil {
 		if !isManaged(existingData) {
 			return managedScaffoldResult{Status: managedScaffoldSkippedConflict, RelPath: relPath}, nil
@@ -45,7 +59,7 @@ func writeManagedScaffold(targetPath, relPath string, content []byte, isManaged 
 		if bytes.Equal(existingData, content) {
 			return managedScaffoldResult{Status: managedScaffoldUnchanged, RelPath: relPath}, nil
 		}
-		if err := os.WriteFile(targetPath, content, 0o600); err != nil {
+		if err := writeScaffoldViaRename(root, relPath, content); err != nil {
 			return managedScaffoldResult{}, fmt.Errorf("update managed scaffold: %w", err)
 		}
 		return managedScaffoldResult{Status: managedScaffoldUpdated, RelPath: relPath}, nil
@@ -54,13 +68,60 @@ func writeManagedScaffold(targetPath, relPath string, content []byte, isManaged 
 		return managedScaffoldResult{}, fmt.Errorf("read managed scaffold: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
+	// Scaffolds are ordinary project files meant to be committed, so they get
+	// standard shareable permissions, not config-file 0o600/0o750.
+	if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
 		return managedScaffoldResult{}, fmt.Errorf("create managed scaffold directory: %w", err)
 	}
-	if err := os.WriteFile(targetPath, content, 0o600); err != nil {
+	if err := writeScaffoldViaRename(root, relPath, content); err != nil {
 		return managedScaffoldResult{}, fmt.Errorf("write managed scaffold: %w", err)
 	}
 	return managedScaffoldResult{Status: managedScaffoldCreated, RelPath: relPath}, nil
+}
+
+// writeScaffoldViaRename writes to a sibling temp file and renames it over
+// relPath. Rename replaces a symlink at the target instead of writing through
+// it (jsonutil.WriteFileAtomic's property); a root-relative Root.WriteFile
+// alone would follow the link.
+//
+// The temp path is predictable, so a checkout can plant a symlink there
+// pointing at another in-repo file — Root confinement would not stop a write
+// through it. Two guards close that: any pre-existing entry at the temp path
+// is removed first (Remove unlinks a planted link itself, and clears a stale
+// temp a crashed run left behind), and the create is O_EXCL, so whatever
+// still exists at the path fails the write instead of receiving it.
+func writeScaffoldViaRename(root *os.Root, relPath string, content []byte) error {
+	tmpPath := relPath + ".tmp"
+	if err := root.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear scaffold temp path: %w", err)
+	}
+	tmp, err := root.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create scaffold temp file: %w", err)
+	}
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed write
+		return fmt.Errorf("write scaffold temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed close
+		return fmt.Errorf("close scaffold temp file: %w", err)
+	}
+	if err := root.Rename(tmpPath, relPath); err != nil {
+		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed rename
+		return fmt.Errorf("rename scaffold into place: %w", err)
+	}
+	return nil
+}
+
+// openScaffoldRoot opens the repository root for confined scaffold IO.
+func openScaffoldRoot(repoRoot string) (*os.Root, error) {
+	root, err := os.OpenRoot(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open repository root for scaffolding: %w", err)
+	}
+	return root, nil
 }
 
 // setupOptionalSkillForNames installs an optional skill (search, agent-help, ...)
