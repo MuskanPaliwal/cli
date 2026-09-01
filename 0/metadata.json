@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1DX14DBV29GZYVQD27RADAN",
+  "session_id": "01a05943-d877-7d72-b03d-fa402a203ff2",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T07:13:12.787265Z",
+  "branch": "improve-process-sessions-condensation",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/strategy/commit_hook_perf_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "e70f599d3a43",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 245032,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13705728,
+    "output_tokens": 29793,
+    "api_call_count": 107
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T07:13:12.615266Z",
+    "agent_lines": 4,
+    "agent_removed": 20,
+    "human_added": 897,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 901,
+    "total_lines_changed": 2975,
+    "agent_percentage": 0.8067226890756303,
+    "metric_version": 2
+  }
+}
