@@ -1,0 +1,37 @@
+https://github.com/entireio/cli/pull/2211 review this pr, run-playbook
+
+---
+
+lets' fix those and what do you mean by batching? where do we need batching?
+
+---
+
+what could be a possible solution then? batching? how big of an effort is this?
+
+---
+
+run-playbook interrogate this issue and the solution we implemented here.
+
+---
+
+Can you explain each point where you are saying that we should act on them?
+
+---
+
+now
+
+---
+
+can you use show me skill to make me understand the gaps in simpler terms also why would writer two change the checkpoint before cas is applied/.
+
+---
+
+also who are the writer 1 and 2 here?
+
+---
+
+right. let;s fix the gaps
+
+---
+
+commit and push the changes
