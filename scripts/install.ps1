@@ -14,12 +14,15 @@ param(
 
 # Keep all installer functions and preference changes in a child scope. This
 # matters when the script is piped to Invoke-Expression in an existing shell.
+# Path is empty under irm | iex; pass it in so the child can tell file vs pipe
+# without leaking a variable into the caller's session.
 & {
     param(
         [string] $SelectedChannel,
         [string] $SelectedInstallDir,
         [bool] $SkipPathUpdate,
-        [bool] $ShowHelp
+        [bool] $ShowHelp,
+        [bool] $InvokedFromFile
     )
 
     Set-StrictMode -Version 2.0
@@ -202,7 +205,17 @@ verified release archive because the Scoop bucket only publishes stable builds.
     function Get-NormalizedPath {
         param([string] $Path)
 
-        return [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar)
+        $fullPath = [IO.Path]::GetFullPath($Path)
+        $root = [IO.Path]::GetPathRoot($fullPath)
+        if ([string]::Equals($fullPath, $root, [StringComparison]::OrdinalIgnoreCase)) {
+            return $root
+        }
+
+        [char[]] $separators = @(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar
+        )
+        return $fullPath.TrimEnd($separators)
     }
 
     function Test-SamePath {
@@ -267,6 +280,12 @@ verified release archive because the Scoop bucket only publishes stable builds.
         }
     }
 
+    function Get-EntireOnPath {
+        # -All is required: without it Get-Command returns only the first
+        # Application, so a later Scoop shim is never seen.
+        return @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
+    }
+
     function Install-Entire {
         if ($ShowHelp) {
             Write-Usage
@@ -278,10 +297,79 @@ verified release archive because the Scoop bucket only publishes stable builds.
         $scoopCommand = Get-Command "scoop" -ErrorAction SilentlyContinue
         if ($SelectedChannel -eq "stable" -and $null -ne $scoopCommand) {
             Install-EntireWithScoop
+
+            $prefixOutput = & "scoop" prefix entire 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Scoop installed Entire CLI, but its installation path could not be resolved."
+            }
+            $scoopPrefix = ($prefixOutput | Select-Object -First 1).ToString().Trim()
+            $scoopRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scoopPrefix))
+            $scoopShim = Join-Path $scoopRoot "shims\entire.exe"
+
+            $pathCommands = Get-EntireOnPath
+            $first = $pathCommands | Select-Object -First 1
+            if ($null -eq $first -or -not (Test-SamePath -Left $first.Source -Right $scoopShim)) {
+                Write-Host ""
+                Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
+                Write-Host "!"
+                Write-Host "! Scoop shim: $scoopShim"
+                if ($null -eq $first) {
+                    Write-Host "! 'entire' does not resolve to an executable on PATH."
+                }
+                else {
+                    Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                }
+                Write-Host "! Remove the old installation or adjust PATH to prioritize:"
+                Write-Host "!   $(Split-Path -Parent $scoopShim)"
+                Write-Host ""
+                throw "Scoop installed Entire CLI, but its shim does not take priority on PATH."
+            }
+
+            $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $scoopShim) })
+            if ($conflicting.Count -gt 0) {
+                Write-Host ""
+                Write-Host "! WARNING: Other Entire CLI installations remain on PATH" -ForegroundColor Yellow
+                foreach ($cmd in $conflicting) {
+                    Write-Host "! Also found: $($cmd.Source)"
+                }
+                Write-Host "! The Scoop shim takes priority, but consider removing the other installation."
+                Write-Host ""
+            }
             return
         }
         if ($SelectedChannel -eq "nightly" -and $null -ne $scoopCommand) {
             Write-InstallerWarning "Scoop only publishes stable releases; installing nightly from the verified release archive."
+        }
+
+        $resolvedInstallDir = Get-NormalizedPath -Path $SelectedInstallDir
+        $installPath = Join-Path $resolvedInstallDir "entire.exe"
+
+        # Match install.sh: abort if another entire wins on PATH. Check before
+        # copying so a conflict does not leave files behind.
+        $pathCommands = Get-EntireOnPath
+        $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
+        if ($conflicting.Count -gt 0) {
+            $first = $pathCommands | Select-Object -First 1
+            $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
+            Write-Host ""
+            Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
+            Write-Host "!"
+            Write-Host "! Install destination: $installPath"
+            foreach ($cmd in $conflicting) {
+                Write-Host "! Also found:   $($cmd.Source)"
+            }
+            if (-not $firstIsOurs) {
+                Write-Host "!"
+                Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                Write-Host "! Remove the old installation or adjust PATH to prioritize:"
+                Write-Host "!   $resolvedInstallDir"
+                Write-Host ""
+                throw "PATH needs adjustment. Then rerun the installation."
+            }
+            Write-Host "!"
+            Write-Host "! The installed version takes priority, but consider removing"
+            Write-Host "! the other installation to avoid confusion."
+            Write-Host ""
         }
 
         # GitHub requires TLS 1.2. Use the numeric value so this remains valid
@@ -328,11 +416,9 @@ verified release archive because the Scoop bucket only publishes stable builds.
                 throw "entire.exe was not found in $archiveName."
             }
 
-            $resolvedInstallDir = Get-NormalizedPath -Path $SelectedInstallDir
             Write-Info "Installing to $resolvedInstallDir..."
             New-Item -ItemType Directory -Path $resolvedInstallDir -Force | Out-Null
 
-            $installPath = Join-Path $resolvedInstallDir "entire.exe"
             Copy-Item -LiteralPath $sourceBinary -Destination $installPath -Force
 
             if (Test-Path -LiteralPath $sourceHelper -PathType Leaf) {
@@ -347,35 +433,6 @@ verified release archive because the Scoop bucket only publishes stable builds.
                 throw "Installation completed, but entire.exe failed to execute."
             }
             Write-Success "Entire CLI installed to $installPath"
-
-            $pathCommands = @(Get-Command "entire" -CommandType Application -ErrorAction SilentlyContinue)
-            $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
-            if ($conflicting.Count -gt 0) {
-                $first = $pathCommands | Select-Object -First 1
-                $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
-                Write-Host ""
-                Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
-                Write-Host "!"
-                Write-Host "! Installed to: $installPath"
-                foreach ($cmd in $conflicting) {
-                    Write-Host "! Also found:   $($cmd.Source)"
-                }
-                if (-not $firstIsOurs) {
-                    Write-Host "!"
-                    Write-Host "! 'entire' currently resolves to: $($first.Source)"
-                    Write-Host "! Remove the old installation or adjust PATH to prioritize:"
-                    Write-Host "!   $resolvedInstallDir"
-                }
-                else {
-                    Write-Host "!"
-                    Write-Host "! The installed version takes priority, but consider removing"
-                    Write-Host "! the other installation to avoid confusion."
-                }
-                Write-Host ""
-                if (-not $firstIsOurs) {
-                    throw "Installation completed, but PATH needs adjustment."
-                }
-            }
 
             if ($SkipPathUpdate) {
                 if ($pathCommands.Count -eq 0) {
@@ -399,7 +456,13 @@ verified release archive because the Scoop bucket only publishes stable builds.
         Install-Entire
     }
     catch {
-        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-        throw
+        $message = "Error: $($_.Exception.Message)"
+        if ($InvokedFromFile) {
+            Write-Host $message -ForegroundColor Red
+            exit 1
+        }
+        # irm | iex: throw without Write-Host so the message appears once, and
+        # do not exit 1 — that would close the user's interactive shell.
+        throw $message
     }
-} $Channel $InstallDir $NoPathUpdate.IsPresent $Help.IsPresent
+} $Channel $InstallDir $NoPathUpdate.IsPresent $Help.IsPresent (-not [string]::IsNullOrEmpty($MyInvocation.MyCommand.Path))
