@@ -134,9 +134,13 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 // resolveNativeCloneURL resolves an Entire-native repo (by project and repo
 // name) to its entire:// clone URL: name → ULID via the project-scoped lookup,
 // then GetRepo — the one call that returns both clusterHost and path. The URL
-// is the server's own coordinates via repoRemoteURL, never synthesized from
-// the user's ref (note: no .git suffix — the server strips it for /gh/ paths
-// only, so a /et/ path with it would 404).
+// is the server's own coordinates via repoRemoteURL, never synthesized from the
+// user's ref, so it ends in `.git` exactly when the repo is genuinely named
+// that — a legal name, which is why the suffix is never stripped while parsing
+// (see gitDirSuffix). A suffix the USER appended is the other case and not this
+// function's to fix: the server strips `.git` for /gh/ paths only, so on a
+// native ref it stays part of the name looked up here, and the miss carries
+// hintDroppedGitSuffix's advice.
 func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repoName string) (string, error) {
 	repoID, err := resolveRepoRef(ctx, c, repoName, project)
 	if err != nil {
