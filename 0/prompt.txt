@@ -1,0 +1,65 @@
+I want to discuss and possibly work on: GMT-001 — establish the canonical Git worktree metadata owner
+
+Context:
+- The repository is entireio/cli. Work in the existing branch `refactor-git-metadata-owner`, which was created cleanly from current `main` at `ee6d53f3d3398267358e8f9d306267c87a088101`.
+- This is the first replacement PR in the split of https://github.com/entireio/cli/pull/2190.
+- The agreed merge constraints are recorded in https://github.com/entireio/cli/pull/2190#issuecomment-5497182310 and the requested split/order is in https://github.com/entireio/cli/pull/2190#issuecomment-5499945525.
+- The old `refactor-git-metadata-traversal` branch is behavioral evidence only. Recent `main` changes added rooted/no-follow I/O and substantially changed overlapping code, so do not mechanically apply the old patch.
+- This slice must be a near-pure addition: canonical resolver, repository-opening boundary, focused tests, and a migration-aware ownership guard. Do not migrate production consumers.
+
+Before doing any implementation:
+- Find the entireio/cli repository and enter the existing `refactor-git-metadata-owner` worktree/branch.
+- Read the local agent/repository instructions completely.
+- Confirm the branch is clean and still based on the intended current-main commit. Re-check live `upstream/main`, PR #2190, and the two linked comments; report if the assumptions are stale before changing code.
+- Inspect the `gitrepo` package, its repository-opening and reftable behavior, the current `gitdir` rooted-access package, related tests, recent commits, and Entire checkpoint history where available.
+- Run the repository's related-code discovery workflow before writing Go. If that workflow is unavailable, use a repository-wide `rg`/AST inventory and state the fallback.
+- Independently decide whether the GMT-001 direction is still correct, already solved, over-scoped, or needs a smaller/better implementation. Call out any stop condition before editing.
+
+Task, if the independent review supports it:
+- Add a focused `gitrepo.WorktreeMetadata` value containing `GitDir`, `CommonDir`, and `WorktreeID`, plus `gitrepo.ResolveWorktreeMetadata(explicitWorktreeRoot)`.
+- Make the resolver explicit-root, context-free, option-free, cache-free, subprocess-free, and all-or-error. It must not discover CWD, inspect Git environment overrides, or own caller policy.
+- Return cleaned absolute lexical paths. Use physical filesystem identity only to compare Git/common directories and to establish whether the per-worktree Git directory is an immediate child of `CommonDir/worktrees` when deriving `WorktreeID`.
+- Validate required metadata and pointer syntax. Distinguish a genuinely absent `.git` entry from malformed, dangling, unreadable, or wrong-typed metadata; broken metadata must never yield usable paths.
+- Integrate the canonical result into `gitrepo.OpenPath`. Only the typed genuinely-absent case may try separately validated bare-repository opening. Malformed worktree metadata must not downgrade to `git.PlainOpen`.
+- Preserve existing object-alternates and reftable behavior. Failure to inspect specialized storage is not evidence that fallback is safe.
+- Add a migration-aware source guard. It must reject new `.git`/`gitdir:`/`commondir` traversal owners and unaudited `--git-common-dir` traversal, while temporarily enumerating the exact legacy sites that later split PRs will remove. Do not install the final zero-legacy allowlist yet, because no consumers migrate in GMT-001.
+- Keep the production diff centered on the `gitrepo` package. Likely files are `metadata.go`, `metadata_test.go`, `metadata_guard_test.go`, `repository.go`, `repository_test.go`, `reftable.go`, and `reftable_test.go`; justify any expansion.
+
+Important constraints:
+- Do not change `gitdir` APIs or migrate checkpoint, session, strategy/hooks, settings, status, Codex, review, investigate, trail, setup/cleanup, or other consumers in this slice.
+- Do not add compatibility wrappers, a layout enum, resolver options, a generic Git facade, a metadata cache, or global path canonicalization.
+- Preserve Codex trust/backlink/diagnostic/installation policy and settings behavior untouched.
+- Preserve `paths.WorktreeRoot` as the owner of cached CWD-to-worktree discovery.
+- Keep source comments rare and limited to non-obvious invariants; do not add task/phase/process commentary to production code.
+- Do not edit another split worktree or shared planning files.
+
+Validation:
+- Use Git-created isolated fixtures for valid layouts: ordinary repository, conventional linked worktree, `.bare/worktrees`, bare-backed linked worktree, separate Git directory, ordinary and linked submodules, relative pointers, moved registrations, and symlink aliases.
+- Use small handwritten fixtures only for malformed states: absent/malformed/empty/dangling `.git`, missing or non-directory targets, malformed/empty `commondir`, and invalid nested registration.
+- Test repository opening with alternates and reftable, including failure paths that must not downgrade.
+- Test that the resolver starts zero Git subprocesses and ignores Git environment overrides.
+- Every eligible top-level test and subtest must call `t.Parallel()`. Tests using CWD, environment, or other process-global state must remain serial. All Git tests must use isolated temporary repositories and repository test helpers where applicable.
+- Run focused `gitrepo` tests first, then formatting, lint, duplication inspection, `mise run check`, and `git diff --check`. Do not run paid real-agent E2E tests.
+- Positive-control the ownership guard with a temporary forbidden traversal, observe the expected failure, remove the probe, and rerun the focused guard test.
+
+Output:
+- Start with independent review findings and a recommendation before editing.
+- If proceeding, implement only GMT-001 and report the exact files changed, behavioral contract, test matrix, commands, and results.
+- Explicitly confirm that no production consumer was migrated and no Git subprocess was added.
+- Leave the worktree ready for user review. Do not commit, push, merge, open/update/close PRs or issues, add labels, or post public comments without explicit user authorization.
+
+---
+
+did you get access to plan.md? you know we only have to implement gmt1 right?
+
+---
+
+yupp continue, run-playbook
+
+---
+
+refactor but whatever you do make sure you stick to plan.
+
+---
+
+commit the changes

@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GN18Z2310QK1JTC22AS0C3",
+  "session_id": "01a060c2-d5d3-7b51-91fd-e1aebc91ee42",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T08:51:11.964919Z",
+  "branch": "refactor-git-metadata-owner",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/gitrepo/metadata_test.go",
+    "cmd/entire/cli/gitrepo/reftable.go",
+    "cmd/entire/cli/gitrepo/reftable_test.go",
+    "cmd/entire/cli/gitrepo/repository.go",
+    "cmd/entire/cli/gitrepo/repository_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "1c4822633348",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 468095,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 20575744,
+    "output_tokens": 65994,
+    "api_call_count": 164
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T08:51:11.750874Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 58,
+    "total_committed": 0,
+    "total_lines_changed": 58,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1173,
+      "user_lines_removed": 58,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/gitrepo/metadata.go": 196,
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 172,
+        "cmd/entire/cli/gitrepo/metadata_test.go": 581,
+        "cmd/entire/cli/gitrepo/reftable.go": 12,
+        "cmd/entire/cli/gitrepo/reftable_test.go": 14,
+        "cmd/entire/cli/gitrepo/repository.go": 78,
+        "cmd/entire/cli/gitrepo/repository_test.go": 120
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/reftable.go": 5,
+        "cmd/entire/cli/gitrepo/reftable_test.go": 2,
+        "cmd/entire/cli/gitrepo/repository.go": 48,
+        "cmd/entire/cli/gitrepo/repository_test.go": 3
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1173,
+      "agent_lines_removed": 58
+    }
+  ]
+}
