@@ -1,0 +1,41 @@
+run-playbook review this branch diff against main and see if we have successfully done the splitting gmt 1
+
+---
+
+okay act on the findings
+
+---
+
+so what is the big picture now after this gtm1 refactor? give me a broader picture of what functions we removed and what is being used now?
+
+---
+
+nice. let's commit the changes, push them and we craete a draft or
+
+---
+
+nice. let's commit the changes, push them and we craete a draft pr
+
+---
+
+fix the linting i mean line lengths and do not use gmt 001 rather use split part 1
+
+---
+
+also add the file changed before and after table
+
+---
+
+no maybe we can have better words than split part 5 or whatever
+
+---
+
+no not the reviww split tbale i meant look at the pr 2091 and the description how we have added the files in description for broader picture
+
+---
+
+nice now make it liniting clean like line lengths
+
+---
+
+use unslop

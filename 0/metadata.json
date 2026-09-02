@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GWMZ0ZW99Z51JJYYPSK1JS",
+  "session_id": "01a06154-ff3a-7963-b766-33732023c08e",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T11:04:16.32185Z",
+  "branch": "refactor-git-metadata-owner",
+  "checkpoints_count": 8,
+  "save_step_count": 7,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/gitrepo/metadata_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "9077d7799617",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 390493,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 18845952,
+    "output_tokens": 69748,
+    "api_call_count": 177
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T11:04:16.201378Z",
+    "agent_lines": 280,
+    "agent_removed": 21,
+    "human_added": 0,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 296,
+    "total_lines_changed": 317,
+    "agent_percentage": 94.95268138801262,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 298,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 298,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 16,
+      "user_lines_removed": 16,
+      "agent_lines_added": 298,
+      "agent_lines_removed": 23,
+      "user_added_per_file": {
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 16
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 16
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 312,
+      "agent_lines_removed": 37
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 312,
+      "agent_lines_removed": 37
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 312,
+      "agent_lines_removed": 37
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 312,
+      "agent_lines_removed": 37
+    }
+  ]
+}
