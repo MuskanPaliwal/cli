@@ -205,7 +205,12 @@ verified release archive because the Scoop bucket only publishes stable builds.
     function Get-NormalizedPath {
         param([string] $Path)
 
-        $fullPath = [IO.Path]::GetFullPath($Path)
+        # Resolve against $PWD and expand ~. [IO.Path]::GetFullPath alone uses
+        # [Environment]::CurrentDirectory, which Windows PowerShell 5.1 does
+        # not keep in sync with Set-Location, and does not expand ~.
+        $fullPath = [IO.Path]::GetFullPath(
+            $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+        )
         $root = [IO.Path]::GetPathRoot($fullPath)
         if ([string]::Equals($fullPath, $root, [StringComparison]::OrdinalIgnoreCase)) {
             return $root
