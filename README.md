@@ -73,6 +73,7 @@ Install with Windows PowerShell 5.1 or later:
 
 ```powershell
 irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing | iex
+# & ([scriptblock]::Create((irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing))) -Channel nightly
 ```
 
 For stable releases, the PowerShell installer uses Scoop when it is available,
