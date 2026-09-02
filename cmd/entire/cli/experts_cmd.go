@@ -59,9 +59,7 @@ const (
 	expertsDefaultLimit = 8
 	expertsMaxLimit     = 20
 	// expertsAPIReposPath is the entire-api route prefix for the repo-scoped
-	// experts POST route (see expertsAPIPath). It is no longer also used for a
-	// GET repo-listing lookup — that resolution now happens against the
-	// control plane instead (resolveRepoCellPlacement / resolveRepoCellTarget).
+	// experts POST route (see expertsAPIPath).
 	expertsAPIReposPath = "/api/v1/repos"
 )
 
@@ -228,11 +226,14 @@ func runExperts(ctx context.Context, out, errOut io.Writer, args []string, f *ex
 	}
 
 	// The data API (entire-api) is repo-ULID keyed. --repo may be a ULID (used
-	// directly) or an owner/repo, which we resolve to its ULID after the client
-	// exists (via the caller's accessible-repo list). With no --repo we derive
-	// owner/repo from the git origin.
+	// directly) or an owner/repo, which the control plane resolves to its
+	// processing placement id below, before the cell client is built. With no
+	// --repo we derive owner/repo from the git origin.
 	repoOverride := strings.TrimSpace(f.repo)
 	repoIsULID := looksLikeULID(repoOverride)
+	if repoIsULID {
+		repoOverride = strings.ToUpper(repoOverride) // canonicalize casing before it becomes a path segment
+	}
 	var repoFullName string
 	if !repoIsULID {
 		var err error
@@ -303,10 +304,8 @@ func runExperts(ctx context.Context, out, errOut io.Writer, args []string, f *ex
 			return fmt.Errorf("resolve experts cell: %w", err)
 		}
 	} else {
-		owner, repo, ok := strings.Cut(repoFullName, "/")
-		if !ok {
-			return fmt.Errorf("invalid repo %q: expected owner/repo", repoFullName)
-		}
+		// resolveExpertsRepo already validated repoFullName as "owner/repo".
+		owner, repo, _ := strings.Cut(repoFullName, "/")
 		placement, err := resolveRepoCellPlacement(ctx, owner, repo)
 		if err != nil {
 			// Not-onboarded is the most common way cell resolution fails, and
@@ -323,9 +322,6 @@ func runExperts(ctx context.Context, out, errOut io.Writer, args []string, f *ex
 
 	client, err := newExpertsAPIClient(ctx, f.insecureHTTP, target)
 	if err != nil {
-		if rendered := renderRepoNotOnboarded(errOut, repoFullName, err); rendered != nil {
-			return rendered
-		}
 		return fmt.Errorf("create experts API client: %w", err)
 	}
 

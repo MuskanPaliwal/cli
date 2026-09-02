@@ -646,7 +646,7 @@ func TestParseGitStagedScopeLinesNormalizesCRLF(t *testing.T) {
 	}
 }
 
-func TestExpertsCommandAcceptsRepoULIDWithoutResolution(t *testing.T) {
+func TestExpertsCommandAcceptsRepoULIDWithoutRepoIndexLookup(t *testing.T) {
 	fake := &fakeExpertsClient{body: `{"repo_full_name":"acme/widget","scopes":["api/x.go"],"query":null,"branch":"main","source":"db","profiles":[]}`}
 	cellFake := withExpertsFakeCellCore(t)
 	restore := setExpertsClientFactoryForTest(t, func(_ context.Context, _ bool, target *auth.CellTarget) (expertsAPIClient, error) {
@@ -671,6 +671,9 @@ func TestExpertsCommandAcceptsRepoULIDWithoutResolution(t *testing.T) {
 	}
 	if fake.gotPath != expertsAPIReposPath+"/"+expertsTestRepoULID+"/experts" {
 		t.Fatalf("path = %q, want %s/%s/experts", fake.gotPath, expertsAPIReposPath, expertsTestRepoULID)
+	}
+	if fake.gotTarget == nil || fake.gotTarget.BaseURL != expertsTestCellAPIURL {
+		t.Fatalf("cell target = %#v, want BaseURL %s", fake.gotTarget, expertsTestCellAPIURL)
 	}
 }
 
