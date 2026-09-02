@@ -60,6 +60,9 @@ Options:
 
 Stable installs use Scoop when it is available. Nightly installs use the
 verified release archive because the Scoop bucket only publishes stable builds.
+
+Scoop chooses its own install location and manages its own PATH entry, so
+-InstallDir and -NoPathUpdate apply only to release-archive installs.
 "@
     }
 
@@ -86,6 +89,27 @@ verified release archive because the Scoop bucket only publishes stable builds.
         }
     }
 
+    function Test-ScoopAppInstalled {
+        param([string] $AppName)
+
+        # Only the exit code matters, so discard every stream. scoop's abort /
+        # warn / info all use Write-Host, i.e. the information stream, which
+        # 2>&1 neither captures nor suppresses -- a failed probe would
+        # otherwise print "Could not find app path for '<app>'" straight to the
+        # console and read as a failure during a successful first install.
+        # Deliberately not folded into Invoke-Scoop: a blanket redirect there
+        # would also hide scoop's install and update progress, which is useful.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & "scoop" prefix $AppName *> $null
+            return $LASTEXITCODE -eq 0
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+    }
+
     function Install-EntireWithScoop {
         Write-Info "Scoop detected; installing Entire CLI with Scoop..."
 
@@ -104,8 +128,7 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
         }
 
-        $probe = Invoke-Scoop prefix entire
-        $isInstalled = $probe.ExitCode -eq 0
+        $isInstalled = Test-ScoopAppInstalled -AppName "entire"
         if ($isInstalled) {
             Write-Info "Updating Entire CLI with Scoop..."
             $updated = Invoke-Scoop update entire/entire
@@ -378,6 +401,9 @@ verified release archive because the Scoop bucket only publishes stable builds.
 
         $scoopCommand = Get-Command "scoop" -ErrorAction SilentlyContinue
         if ($SelectedChannel -eq "stable" -and $null -ne $scoopCommand) {
+            # Scoop owns the install location and the shims directory it puts on
+            # PATH, so -InstallDir and -NoPathUpdate do not apply on this branch.
+            # Write-Usage says so; keep the two in step if this changes.
             Install-EntireWithScoop
 
             $prefixResult = Invoke-Scoop prefix entire
