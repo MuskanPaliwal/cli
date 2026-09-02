@@ -125,6 +125,61 @@ func TestPreparedRefCASPreventsConcurrentSymbolicConversion(t *testing.T) {
 	}
 }
 
+func TestPreparedRefCASCancellationReleasesGitLock(t *testing.T) {
+	t.Parallel()
+	for _, tt := range refCASBackends() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := tt.init(t)
+			refName := plumbing.ReferenceName("refs/entire/canceled-cas")
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			tx, err := prepareRefCAS(
+				ctx,
+				repoDir,
+				refName,
+				plumbing.NewHash(replacement),
+				plumbing.NewHash(initial),
+			)
+			require.NoError(t, err)
+
+			cancel()
+			require.ErrorIs(t, tx.wait(), context.Canceled)
+			require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), replacement, initial)
+			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestCompareAndSwapRef_IgnoresInheritedRepoOverrides(t *testing.T) {
+	// Not parallel: t.Setenv is incompatible with t.Parallel.
+	targetDir, initial, replacement := initFilesRefCASRepo(t)
+	decoyDir, _, _ := initFilesRefCASRepo(t)
+	refName := plumbing.ReferenceName("refs/entire/environment-cas")
+	gitenv.Run(t, targetDir, "update-ref", refName.String(), initial)
+	t.Setenv("GIT_DIR", filepath.Join(decoyDir, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoyDir)
+
+	err := CompareAndSwapRef(
+		context.Background(),
+		targetDir,
+		refName,
+		plumbing.NewHash(replacement),
+		plumbing.NewHash(initial),
+	)
+
+	require.NoError(t, err)
+	verify := exec.Command("git", "rev-parse", "--verify", refName.String()) //nolint:noctx // short local test command
+	verify.Dir = targetDir
+	verify.Env = EnvWithoutRepoOverrides()
+	out, err := verify.Output()
+	require.NoError(t, err)
+	require.Equal(t, replacement, strings.TrimSpace(string(out)))
+}
+
 func TestCompareAndSwapRef_RejectsRefProtocolInjection(t *testing.T) {
 	t.Parallel()
 	repoDir, initial, replacement := initFilesRefCASRepo(t)

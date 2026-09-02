@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -50,13 +51,14 @@ func CompareAndSwapRef(
 }
 
 type refCASTransaction struct {
-	ctx     context.Context
-	refName plumbing.ReferenceName
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  *bufio.Scanner
-	stderr  bytes.Buffer
-	done    bool
+	ctx      context.Context
+	refName  plumbing.ReferenceName
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *bufio.Scanner
+	stderr   bytes.Buffer
+	done     bool
+	canceled atomic.Bool
 }
 
 func prepareRefCAS(
@@ -91,6 +93,11 @@ func prepareRefCAS(
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  bufio.NewScanner(stdout),
+	}
+	cmd.Cancel = func() error {
+		tx.canceled.Store(true)
+		_ = stdin.Close()
+		return nil
 	}
 	cmd.Stderr = &tx.stderr
 	if err := cmd.Start(); err != nil {
@@ -171,7 +178,11 @@ func (tx *refCASTransaction) wait() error {
 	}
 	tx.done = true
 	_ = tx.stdin.Close()
-	if err := tx.cmd.Wait(); err != nil {
+	err := tx.cmd.Wait()
+	if tx.canceled.Load() {
+		return fmt.Errorf("wait for git update-ref transaction: %w", tx.ctx.Err())
+	}
+	if err != nil {
 		return fmt.Errorf("wait for git update-ref transaction: %w", err)
 	}
 	return nil

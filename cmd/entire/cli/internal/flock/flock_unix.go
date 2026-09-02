@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// pollInterval is how often the cancelable AcquireContext path retries a
-// non-blocking lock while waiting for ctx to finish.
+// pollInterval is how often the bounded AcquireContext path retries a
+// non-blocking lock while waiting for a deadline.
 const pollInterval = 25 * time.Millisecond
 
 // Acquire takes an exclusive advisory lock on path, creating the file if
@@ -26,14 +26,18 @@ const pollInterval = 25 * time.Millisecond
 // disk — so the lockfile contents are immaterial.
 //
 // Acquire blocks indefinitely until the lock is available. Use AcquireContext
-// with a cancelable context to interrupt the wait.
+// with a deadline to bound the wait.
 func Acquire(path string) (release func(), err error) {
 	return AcquireContext(context.Background(), path)
 }
 
-// AcquireContext behaves like Acquire but honors ctx. A cancelable context
-// polls a non-blocking lock until the lock is acquired or ctx finishes. A
-// context that cannot be canceled takes the blocking kernel path as Acquire.
+// AcquireContext behaves like Acquire but honors ctx. When ctx carries a
+// deadline it polls a non-blocking lock until the lock is acquired or the
+// deadline/cancellation fires, returning a wrapped ctx.Err() on timeout. When
+// ctx has no deadline it takes the same blocking kernel path as Acquire, so
+// existing callers keep their exact behavior. This lets latency-critical hooks
+// (turn-start) bound their wait and degrade gracefully instead of stalling
+// behind a long-running lock holder (e.g. checkpoint condensation).
 func AcquireContext(ctx context.Context, path string) (release func(), err error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // caller is responsible for path validation
 	if err != nil {
@@ -62,8 +66,10 @@ func AcquireContextIn(ctx context.Context, root *os.Root, name string) (release 
 // lockFile holds the locking logic shared by the path- and root-based entry
 // points, which differ only in how the file was opened.
 func lockFile(ctx context.Context, f *os.File) (release func(), err error) {
-	// Fast path for contexts that can never finish, such as Background.
-	if ctx.Done() == nil {
+	// Fast path: no deadline -> block in the kernel exactly like the historical
+	// Acquire. This preserves behavior (and efficiency) for callers that must
+	// wait as long as it takes, such as turn-end checkpoint condensation.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // file descriptors are non-negative; standard Go pattern for syscall.Flock
 			_ = f.Close()
 			return nil, fmt.Errorf("flock: %w", err)

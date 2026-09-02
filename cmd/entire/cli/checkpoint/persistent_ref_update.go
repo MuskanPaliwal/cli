@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
@@ -19,10 +18,6 @@ import (
 )
 
 type persistentRefBuilder func() (newHash, expectedHash plumbing.Hash, err error)
-
-// CAS runs on the push path, so it must not wait through another writer's
-// potentially expensive checkpoint build while holding up the user's push.
-const persistentRefCASLockWait = 2 * time.Second
 
 func repositoryDirs(ctx context.Context, repo *git.Repository) (worktreeRoot, commonDir string, err error) {
 	wt, err := repo.Worktree()
@@ -63,31 +58,12 @@ func persistentRefLockPath(commonDir string, refName plumbing.ReferenceName) (st
 }
 
 func withPersistentRefFlock(ctx context.Context, commonDir string, refName plumbing.ReferenceName, fn func() error) error {
-	return withPersistentRefFlockWait(ctx, commonDir, refName, 0, fn)
-}
-
-func withPersistentRefFlockWait(
-	ctx context.Context,
-	commonDir string,
-	refName plumbing.ReferenceName,
-	wait time.Duration,
-	fn func() error,
-) error {
 	path, err := persistentRefLockPath(commonDir, refName)
 	if err != nil {
 		return err
 	}
-	acquireCtx := ctx
-	cancel := func() {}
-	if wait > 0 {
-		acquireCtx, cancel = context.WithTimeout(ctx, wait)
-	}
-	release, err := flock.AcquireContext(acquireCtx, path)
-	cancel()
+	release, err := flock.AcquireContext(ctx, path)
 	if err != nil {
-		if wait > 0 && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return fmt.Errorf("timed out waiting for persistent ref lock %s after %s: %w", refName, wait, err)
-		}
 		return fmt.Errorf("acquire persistent ref flock %s: %w", refName, err)
 	}
 	defer release()
@@ -113,7 +89,6 @@ func withLockedPersistentRef(
 // refName through native Git's cross-process compare-and-swap protocol. Native
 // lock contention is retried without rebuilding because the expected ref has
 // not moved; a compare-and-swap conflict remains terminal for the stale write.
-// Acquiring Entire's outer writer lock is bounded because this runs on a push.
 func CASPersistentRef(
 	ctx context.Context,
 	repo *git.Repository,
@@ -124,7 +99,7 @@ func CASPersistentRef(
 	if err != nil {
 		return fmt.Errorf("resolve repository directories: %w", err)
 	}
-	return withPersistentRefFlockWait(ctx, commonDir, refName, persistentRefCASLockWait, func() error {
+	return withPersistentRefFlock(ctx, commonDir, refName, func() error {
 		return retryPersistentRefLockContention(ctx, refName, func() error {
 			return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
 		})

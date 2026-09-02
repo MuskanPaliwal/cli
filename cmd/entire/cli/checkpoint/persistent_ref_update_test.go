@@ -51,40 +51,45 @@ func TestCASPersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T) {
 	require.Equal(t, initial, ref.Hash())
 }
 
-func TestCASPersistentRef_BoundsFlockWaitWithoutCallerDeadline(t *testing.T) {
+func TestCASPersistentRef_WaitsForHeldFlockWithoutCallerDeadline(t *testing.T) {
 	t.Parallel()
 	repo, initial := setupBranchTestRepo(t)
-	refName := plumbing.ReferenceName("refs/entire/test-cas-bounded-wait")
+	refName := plumbing.ReferenceName("refs/entire/test-cas-wait")
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
-	holdPersistentRefLock(t, repo, refName)
+	_, commonDir, err := repositoryDirs(context.Background(), repo)
+	require.NoError(t, err)
+	lockPath, err := persistentRefLockPath(commonDir, refName)
+	require.NoError(t, err)
+	releaseHolder, err := flock.Acquire(lockPath)
+	require.NoError(t, err)
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			releaseHolder()
+		}
+	})
 
-	started := time.Now()
 	result := make(chan error, 1)
 	go func() {
-		result <- CASPersistentRef(context.Background(), repo, refName, plumbing.ZeroHash, initial)
+		result <- CASPersistentRef(context.Background(), repo, refName, initial, initial)
 	}()
 
+	// A deadline-free caller must keep its place in the lock queue instead of
+	// turning a busy checkpoint writer into a failed user push.
 	select {
 	case err := <-result:
-		t.Fatalf("CAS returned before its bounded wait elapsed: %v", err)
-	case <-time.After(250 * time.Millisecond):
+		t.Fatalf("CAS returned while another Entire writer still held the flock: %v", err)
+	case <-time.After(2250 * time.Millisecond):
 	}
 
-	var err error
+	releaseHolder()
+	released = true
 	select {
 	case err = <-result:
-	case <-time.After(5 * time.Second):
-		t.Fatal("CAS did not stop waiting for the held flock")
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("CAS did not continue after the persistent ref flock was released")
 	}
-
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Contains(t, err.Error(), "timed out waiting for persistent ref lock")
-	elapsed := time.Since(started)
-	require.GreaterOrEqual(t, elapsed, persistentRefCASLockWait/2)
-	require.Less(t, elapsed, 5*time.Second)
-	ref, err := repo.Reference(refName, true)
-	require.NoError(t, err)
-	require.Equal(t, initial, ref.Hash())
 }
 
 func TestCASPersistentRef_RejectsSymbolicRef(t *testing.T) {

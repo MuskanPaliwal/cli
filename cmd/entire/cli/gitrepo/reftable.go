@@ -159,7 +159,7 @@ func (s *reftableStorer) execGit(args ...string) (string, []byte, error) {
 // (os/exec keeps the last value for a duplicate key). Mirrors the sibling
 // shell-out in checkpoint/shadow_ref.go.
 func gitPlumbingEnv() []string {
-	return append(os.Environ(),
+	return append(EnvWithoutRepoOverrides(),
 		"GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C",
 		"LANG=C",
