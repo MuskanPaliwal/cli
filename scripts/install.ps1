@@ -534,6 +534,24 @@ Scoop chooses its own install location and manages its own PATH entry, so
                 foreach ($cmd in $conflicting) {
                     Write-Host "! Also found:   $($cmd.Source)"
                 }
+
+                # Our PATH write only ever lands in the user half, and Windows
+                # composes a new session as machine-then-user. So a conflict on
+                # the machine PATH outranks this install in every new terminal,
+                # whatever the current session resolves to -- say so, because
+                # neither the verdict below nor reordering the user PATH can fix
+                # it.
+                $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+                foreach ($cmd in $conflicting) {
+                    if (Test-PathContains -PathValue $machinePath -Directory (Split-Path -Parent $cmd.Source)) {
+                        Write-Host "!"
+                        Write-Host "! $($cmd.Source) is on the machine-wide PATH, which Windows places"
+                        Write-Host "! ahead of your user PATH. It will win in a new terminal even though"
+                        Write-Host "! this session now resolves to the new install. Remove it, or run"
+                        Write-Host "! entire from $resolvedInstallDir explicitly."
+                    }
+                }
+
                 if (-not $firstIsOurs) {
                     Write-Host "!"
                     Write-Host "! 'entire' currently resolves to: $($first.Source)"
