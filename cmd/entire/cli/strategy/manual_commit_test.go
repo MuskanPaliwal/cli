@@ -869,6 +869,20 @@ func TestAddCheckpointTrailerWithComment_NoPrompt(t *testing.T) {
 	}
 }
 
+func TestParseCheckpointFromCommitMessageFileSkipsTrailingComments(t *testing.T) {
+	t.Parallel()
+
+	message := "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# Entire explanation\n\n# git status\n"
+	cpID, found := parseCheckpointFromCommitMessageFile(message)
+	t.Logf("message=%q parsed=%v found=%v", message, cpID, found)
+	if !found {
+		t.Fatal("parseCheckpointFromCommitMessageFile() did not find the trailer above comments")
+	}
+	if cpID.String() != "a1b2c3d4e5f6" {
+		t.Errorf("parseCheckpointFromCommitMessageFile() = %v, want a1b2c3d4e5f6", cpID)
+	}
+}
+
 func TestAddCheckpointTrailer_ConventionalCommitSubject(t *testing.T) {
 	t.Parallel()
 

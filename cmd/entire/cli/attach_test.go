@@ -35,6 +35,7 @@ import (
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestAttach_MissingSessionID(t *testing.T) {
@@ -2014,6 +2015,37 @@ func TestAttach_NonInteractivePrintsTrailerForManualPaste(t *testing.T) {
 	re := regexp.MustCompile(`Entire-Checkpoint: ` + id.CheckpointPattern)
 	if !re.MatchString(out.String()) {
 		t.Errorf("expected Entire-Checkpoint trailer for manual paste, got:\n%s", out.String())
+	}
+}
+
+func TestAttachIgnoresCheckpointShapedBodyText(t *testing.T) {
+	t.Parallel()
+
+	forgedID := "a1b2c3d4e5f6"
+	headCommit := &object.Commit{
+		Hash:    plumbing.NewHash("0123456789abcdef0123456789abcdef01234567"),
+		Message: "Subject\n\nEntire-Checkpoint: " + forgedID + "\n\nSigned-off-by: Test User <test@example.com>\n",
+	}
+
+	cpID, reused := resolveCheckpointID(context.Background(), headCommit)
+	t.Logf("message=%q resolved checkpoint=%v reused=%v", headCommit.Message, cpID, reused)
+	if reused {
+		t.Fatal("resolveCheckpointID() reused checkpoint-shaped body text")
+	}
+	if cpID.IsEmpty() || cpID.String() == forgedID {
+		t.Fatalf("resolveCheckpointID() = %v, want a newly generated checkpoint", cpID)
+	}
+
+	var out bytes.Buffer
+	if err := promptAmendCommit(context.Background(), &out, headCommit, forgedID, false); err != nil {
+		t.Fatalf("promptAmendCommit() error = %v", err)
+	}
+	t.Logf("prompt output=%q", out.String())
+	if strings.Contains(out.String(), "already has Entire-Checkpoint") {
+		t.Fatalf("promptAmendCommit() treated body text as an existing trailer:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Copy to your commit message to attach") {
+		t.Fatalf("promptAmendCommit() output = %q, want manual attach instructions", out.String())
 	}
 }
 

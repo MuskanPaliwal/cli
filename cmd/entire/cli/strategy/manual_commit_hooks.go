@@ -148,8 +148,7 @@ func (s *ManualCommitStrategy) CommitMsg(_ context.Context, commitMsgFile string
 
 	message := string(content)
 
-	// Check if our trailer is present (ParseCheckpoint validates format, so found==true means valid)
-	if _, found := trailers.ParseCheckpoint(message); !found {
+	if _, found := parseCheckpointFromCommitMessageFile(message); !found {
 		// No trailer, nothing to do
 		return nil
 	}
@@ -286,6 +285,19 @@ func stripCheckpointTrailer(message string) string {
 		}
 	}
 	return strings.Join(result, "\n")
+}
+
+func parseCheckpointFromCommitMessageFile(message string) (id.CheckpointID, bool) {
+	lines := strings.Split(strings.TrimRight(message, "\n"), "\n")
+	i := len(lines) - 1
+	for i >= 0 {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		i--
+	}
+	return trailers.ParseCheckpointFromFinalTrailerBlock(strings.Join(lines[:i+1], "\n"))
 }
 
 // isGitSequenceOperation checks if git is currently in the middle of a rebase,
@@ -432,8 +444,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 
 	message := string(content)
 
-	// Check if trailer already exists (ParseCheckpoint validates format, so found==true means valid)
-	if existingCpID, found := trailers.ParseCheckpoint(message); found {
+	if existingCpID, found := parseCheckpointFromCommitMessageFile(message); found {
 		readCommitMessageSpan.End()
 		// Trailer already exists (e.g., amend) - keep it
 		logging.Debug(logCtx, "prepare-commit-msg: trailer already exists",
@@ -550,7 +561,7 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 	message := string(content)
 
 	// If message already has a trailer, keep it unchanged
-	if existingCpID, found := trailers.ParseCheckpoint(message); found {
+	if existingCpID, found := parseCheckpointFromCommitMessageFile(message); found {
 		logging.Debug(logCtx, "prepare-commit-msg: amend preserves existing trailer",
 			slog.String("strategy", "manual-commit"),
 			slog.String("checkpoint_id", existingCpID.String()),
@@ -932,8 +943,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 		return nil
 	}
 
-	// Check if commit has checkpoint trailer (ParseCheckpoint validates format)
-	checkpointID, found := trailers.ParseCheckpoint(commit.Message)
+	checkpointID, found := trailers.ParseCheckpointFromFinalTrailerBlock(commit.Message)
 	openRepoSpan.End()
 
 	if !found {
@@ -2393,7 +2403,7 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 	message := string(content)
 
 	// Don't add if trailer already exists
-	if _, found := trailers.ParseCheckpoint(message); found {
+	if _, found := parseCheckpointFromCommitMessageFile(message); found {
 		return nil
 	}
 
