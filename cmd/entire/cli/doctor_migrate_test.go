@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	git "github.com/go-git/go-git/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,35 +118,79 @@ func TestDoctorMigrateCheckpoints_RefusesWhenRefsPrimary(t *testing.T) {
 		"must refuse to migrate when git-refs is already the primary store")
 }
 
-// A command whose push gates on redact.OPFEnabled() must configure redaction at
-// its own entry point. EnsureRedactionConfigured lives in doctor's PreRunE,
-// which cobra does not inherit, so a subcommand that omits it reads a
-// process-global OPF flag nothing ever set — and its OPF gate passes silently,
-// pushing un-OPF'd checkpoint content.
-func TestDoctorMigrateCheckpoints_ConfiguresRedaction(t *testing.T) {
+// The OPF gate inside the push reads process-global config that only
+// EnsureRedactionConfigured sets, so the push path must configure it before
+// gating — otherwise the gate reads "OPF off" and flushes unscanned content.
+//
+// Asserted on the push path itself rather than through cobra: the guarantee
+// must not depend on whether a parent command configures redaction, since
+// PreRunE is not inherited and doctor's lives on its own.
+func TestPushMigratedRefs_ConfiguresRedactionBeforeGating(t *testing.T) {
+	repo, bareDir := setupMigratePushRepo(t,
+		`{"enabled": true, "redaction": {"openai_privacy_filter": {"enabled": true, "categories": {"private_person": true}}}}`)
+
+	strategy.ResetRedactionConfiguredForTest()
+	t.Cleanup(strategy.ResetRedactionConfiguredForTest)
+	redact.ResetOPFConfigForTest()
+	t.Cleanup(redact.ResetOPFConfigForTest)
+	require.False(t, redact.OPFEnabled(), "precondition: OPF unconfigured before the push")
+
+	var out bytes.Buffer
+	require.NoError(t, pushMigratedRefs(context.Background(), &out, repo, bareDir))
+
+	assert.True(t, redact.OPFEnabled(),
+		"the push must configure redaction, or its OPF gate is a no-op and ships unscanned content")
+}
+
+// Read-only outcomes must not consult redaction settings at all: a repo whose
+// scanner config is invalid still gets an honest --dry-run report. Regression —
+// an unconditional PreRunE ran ahead of these early returns and failed here.
+func TestDoctorMigrateCheckpoints_ReadOnlyPathsIgnoreScannerConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")
 	testutil.GitAdd(t, tmpDir, "f.txt")
 	testutil.GitCommit(t, tmpDir, "init")
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	// Both scanners off — settings.Load fails with ErrScannerConfig.
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"),
-		[]byte(`{"enabled": true, "redaction": {"openai_privacy_filter": {"enabled": true, "categories": {"private_person": true}}}}`), 0o644))
+		[]byte(`{"enabled": true, "redaction": {"betterleaks": {"enabled": false}, "goredact": {"enabled": false}}}`), 0o644))
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
-
-	strategy.ResetRedactionConfiguredForTest()
-	t.Cleanup(strategy.ResetRedactionConfiguredForTest)
-	redact.ResetOPFConfigForTest()
-	t.Cleanup(redact.ResetOPFConfigForTest)
 
 	cmd := newDoctorMigrateCheckpointsCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--dry-run"})
 	cmd.SetContext(context.Background())
-	require.NoError(t, cmd.Execute())
 
-	assert.True(t, redact.OPFEnabled(),
-		"the OPF gate on this command's push reads this flag; unconfigured it is always false and the gate is a no-op")
+	require.NoError(t, cmd.Execute(), "--dry-run reads nothing redaction-related and must not fail on it")
+	assert.Contains(t, out.String(), "nothing to migrate")
+}
+
+// setupMigratePushRepo builds a repo with the given .entire/settings.json, a
+// bare remote, and one queued checkpoint ref, and returns the open repo plus
+// the remote path.
+func setupMigratePushRepo(t *testing.T, settingsJSON string) (*git.Repository, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.json"), []byte(settingsJSON), 0o644))
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	bareDir := t.TempDir()
+	testutil.RunGit(t, bareDir, "init", "--bare")
+
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { repo.Close() })
+	return repo, bareDir
 }

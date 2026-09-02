@@ -288,12 +288,19 @@ func opfGateForCheckpointRefs(ctx context.Context, repo *git.Repository) error {
 // warnOPFCheckpointRefsWithheld reports a withheld flush on both channels: the
 // log for diagnosis, and the user's terminal so a silently un-synced checkpoint
 // is never the first they hear of it.
+//
+// Names no cause, for the reason PushQueuedCheckpointRefs does not either: the
+// gate withholds on an unresolvable decision or a failed scan, but also on a
+// ref update that lost a race after a scan that ran fine. Saying "OPF did not
+// run" on the pre-push channel — the one nearly every withheld flush comes
+// through — would send those users after the wrong problem. The wrapped error
+// says which it was.
 func warnOPFCheckpointRefsWithheld(ctx context.Context, err error) {
-	logging.Warn(ctx, "OPF pre-push failed; skipping checkpoint ref push, refs left queued",
+	logging.Warn(ctx, "checkpoint ref push withheld; refs left queued",
 		slog.String("error", err.Error()),
 	)
 	fmt.Fprintf(stderrWriter,
-		"[entire] OPF did not run, so checkpoint refs were not pushed and stay queued for your next push: %v\n", err)
+		"[entire] Your checkpoint refs were not pushed and stay queued for the next push: %v\n", err)
 }
 
 // deferCheckpointPushOnEmptyRemote reports whether publication of the git-branch
