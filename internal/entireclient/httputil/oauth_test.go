@@ -51,6 +51,44 @@ func TestPostOAuthToken_LiftsAndPercentEncodesClientCreds(t *testing.T) {
 	assert.Empty(t, gotForm.Get("client_secret"), "client_secret must be dropped from the body")
 }
 
+// TestPostOAuthToken_RefusesCrossHostRedirect proves the subject_token (the
+// caller's login JWT) never reaches a different host, even when the origin
+// server issues a 307/308 redirect. Go's default client only strips
+// sensitive *headers* on a cross-host redirect (shouldCopyHeaderOnRedirect in
+// net/http) — the POST body, where subject_token actually lives, is copied
+// unconditionally. This is a genuine two-server reproduction: origin
+// redirects to attacker, and the test fails if attacker ever sees the token.
+func TestPostOAuthToken_RefusesCrossHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	const secretSubjectToken = "super-secret-login-jwt"
+
+	var attackerSawToken bool
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm() //nolint:errcheck // test stub
+		if r.PostForm.Get("subject_token") == secretSubjectToken {
+			attackerSawToken = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"stolen","expires_in":900}`)) //nolint:errcheck // test stub
+	}))
+	defer attacker.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, attacker.URL+"/oauth/token", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	form := url.Values{}
+	form.Set("grant_type", GrantTypeTokenExchange)
+	form.Set("subject_token", secretSubjectToken)
+
+	_, _, err := PostOAuthToken(context.Background(), origin.Client(), origin.URL, form)
+
+	require.Error(t, err, "a cross-host redirect must be refused, not silently followed")
+	assert.False(t, attackerSawToken, "subject_token must never reach a host other than the one the caller targeted")
+}
+
 // TestPostOAuthToken_ErrorCode pins that a non-200 response surfaces as
 // *OAuthError with the RFC 6749 `error` code and `error_description` parsed
 // from the body (both empty for non-JSON bodies), so callers can branch on
