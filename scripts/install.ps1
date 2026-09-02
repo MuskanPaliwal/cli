@@ -100,12 +100,20 @@ verified release archive because the Scoop bucket only publishes stable builds.
     }
 
     function Get-PlatformArchitecture {
-        # OSArchitecture is the machine, not this process. PROCESSOR_* env
-        # vars report AMD64 for x64 PowerShell on ARM64 Windows.
-        $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+        # The machine-level value is the native OS architecture. The
+        # $env:PROCESSOR_ARCHITECTURE seen by the script is the process's, so
+        # x64 PowerShell on ARM64 Windows reports AMD64. RuntimeInformation is
+        # not an option either: it needs .NET 4.7.1+, so it is missing on
+        # stock Windows PowerShell 5.1 installs.
+        $environmentKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+        $architecture = (Get-ItemProperty -LiteralPath $environmentKey -Name "PROCESSOR_ARCHITECTURE").PROCESSOR_ARCHITECTURE
+
+        if ([string]::IsNullOrWhiteSpace($architecture)) {
+            throw "Cannot determine the Windows architecture."
+        }
 
         switch ($architecture.ToUpperInvariant()) {
-            "X64" { return "amd64" }
+            "AMD64" { return "amd64" }
             "ARM64" { return "arm64" }
             default { throw "Unsupported architecture: $architecture" }
         }
