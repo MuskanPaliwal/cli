@@ -21,10 +21,15 @@ import (
 	"github.com/entireio/cli/redact"
 )
 
-// errOPFAbortedByUser is returned when the user chose Abort (or pressed
+// ErrOPFAbortedByUser is returned when the user chose Abort (or pressed
 // Ctrl-C) at the OPF prompt. PrePush returns it verbatim; the hook
 // command propagates the non-zero exit code so git push aborts.
-var errOPFAbortedByUser = errors.New("OPF prompt aborted by user; push cancelled")
+//
+// Exported because a user-initiated abort is a decline, not a failure, and
+// only the calling command knows how to say so: `doctor migrate-checkpoints`
+// matches it to report the same clean "refs stay queued" its own declined
+// prompt does, rather than an error.
+var ErrOPFAbortedByUser = errors.New("OPF prompt aborted by user; push cancelled")
 
 var opfPrePushProgressWriter io.Writer = os.Stderr
 
@@ -146,7 +151,7 @@ func (s *ManualCommitStrategy) prePush(ctx context.Context, remote string, prote
 		}
 		switch decision {
 		case OPFAbort:
-			return errOPFAbortedByUser
+			return ErrOPFAbortedByUser
 		case OPFSkip:
 			// User opted out for this push (or settings/env say
 			// "never"). Push regex-only (8-layer) content as-is.
@@ -246,6 +251,14 @@ func opfPrePushDecision(ctx context.Context) (OPFDecision, error) {
 // Reporting belongs to the caller: the pre-push hook warns and carries on,
 // because a checkpoint failure must never block the user's own git push, while
 // an explicitly requested push surfaces the error instead.
+//
+// Precondition, and the one way to make this gate a silent no-op: OPFEnabled
+// reads process-global config that only EnsureRedactionConfigured sets, so a
+// caller whose entry point skipped it reads "OPF off" and flushes everything
+// unscanned. It is not called here because its error is the scanner-config one
+// hooks deliberately survive (see setupHookContext), which is not this gate's
+// to raise. `doctor migrate-checkpoints` needed its own PreRunE for exactly
+// this reason — cobra does not inherit a parent's.
 func opfGateForCheckpointRefs(ctx context.Context, repo *git.Repository) error {
 	if !redact.OPFEnabled() {
 		return nil
@@ -256,7 +269,7 @@ func opfGateForCheckpointRefs(ctx context.Context, repo *git.Repository) error {
 	}
 	switch decision {
 	case OPFAbort:
-		return errOPFAbortedByUser
+		return ErrOPFAbortedByUser
 	case OPFSkip:
 		// Explicit opt-out for this push: flush the 8-layer content as-is,
 		// untagged — same as the v1 path.

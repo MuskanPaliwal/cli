@@ -35,6 +35,13 @@ New refs are queued for push. Run interactively, it asks whether to push them
 now; non-interactively it never pushes — the refs stay queued and flush on the
 next push once the git-refs store is the configured primary.`,
 		Args: cobra.NoArgs,
+		// Doctor configures redaction in its own PreRunE, which cobra does not
+		// inherit, so this subcommand must do it too: the OPF gate on the push
+		// below reads a process-global flag, and an unconfigured one reads as
+		// "OPF off" and waves un-OPF'd checkpoint content through.
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			return strategy.EnsureRedactionConfigured(cmd.Context())
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			out := cmd.OutOrStdout()
@@ -101,6 +108,14 @@ next push once the git-refs store is the configured primary.`,
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return NewSilentError(err)
+				}
+				// Ctrl-C at the OPF prompt is the same gesture as declining the
+				// push prompt above, and lands in the same place: nothing
+				// shipped, refs still queued. confirmDoctorFix reports that as a
+				// clean decline, so this must not report it as a failure.
+				if errors.Is(err, strategy.ErrOPFAbortedByUser) {
+					fmt.Fprintln(out, "OPF cancelled; refs stay queued for the next push.")
+					return nil
 				}
 				return fmt.Errorf("push migrated refs: %w", err)
 			}
