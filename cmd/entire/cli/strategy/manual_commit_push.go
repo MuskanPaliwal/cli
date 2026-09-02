@@ -460,7 +460,12 @@ func PushQueuedCheckpointRefs(ctx context.Context, repo *git.Repository, remote 
 		return 0, false, errors.New("checkpoint policy does not allow pushing checkpoint refs; refs stay queued")
 	}
 	if opfErr := opfGateForCheckpointRefs(ctx, repo); opfErr != nil {
-		return 0, false, fmt.Errorf("OPF did not run, so checkpoint refs stay queued: %w", opfErr)
+		// Names no cause, matching flushCheckpointRefsQueue's retry message
+		// below: the gate fails on an unresolvable decision or a failed scan,
+		// but also on a ref update that lost a race after a scan that ran
+		// fine, so "OPF did not run" would sometimes send the user after the
+		// wrong problem. The wrapped error says which it was.
+		return 0, false, fmt.Errorf("checkpoint refs stay queued: %w", opfErr)
 	}
 	pushed, err = flushCheckpointRefsQueue(ctx, repo, ps)
 	// Clean up even on a partial/failed flush: a diverged batch can push some
