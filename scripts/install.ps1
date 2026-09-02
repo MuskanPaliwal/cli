@@ -259,25 +259,71 @@ verified release archive because the Scoop bucket only publishes stable builds.
         return $false
     }
 
+    function Test-PathIsFirst {
+        param(
+            [AllowNull()]
+            [string] $PathValue,
+            [string] $Directory
+        )
+
+        if ([string]::IsNullOrWhiteSpace($PathValue)) {
+            return $false
+        }
+
+        foreach ($entry in ($PathValue -split ";")) {
+            $trimmed = $entry.Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed)) {
+                continue
+            }
+            return (Test-SamePath -Left $trimmed -Right $Directory)
+        }
+        return $false
+    }
+
+    function Get-PathWithDirectoryFirst {
+        param(
+            [AllowNull()]
+            [string] $PathValue,
+            [string] $Directory
+        )
+
+        $parts = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::IsNullOrWhiteSpace($PathValue)) {
+            foreach ($entry in ($PathValue -split ";")) {
+                $trimmed = $entry.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed)) {
+                    continue
+                }
+                if (-not (Test-SamePath -Left $trimmed -Right $Directory)) {
+                    $parts.Add($trimmed)
+                }
+            }
+        }
+        if ($parts.Count -eq 0) {
+            return $Directory
+        }
+        return "$Directory;" + ($parts -join ";")
+    }
+
     function Add-ToUserPath {
         param([string] $Directory)
 
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if (-not (Test-PathContains -PathValue $userPath -Directory $Directory)) {
-            if ([string]::IsNullOrWhiteSpace($userPath)) {
-                $newUserPath = $Directory
-            }
-            else {
-                $newUserPath = "$Directory;$userPath"
-            }
+        $userPathChanged = $false
+        if (-not (Test-PathIsFirst -PathValue $userPath -Directory $Directory)) {
+            $newUserPath = Get-PathWithDirectoryFirst -PathValue $userPath -Directory $Directory
             [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+            $userPathChanged = $true
         }
 
         # Make the command available immediately when install.ps1 is evaluated
-        # in the caller's current PowerShell process.
-        if (-not (Test-PathContains -PathValue $env:Path -Directory $Directory)) {
-            $env:Path = "$Directory;$($env:Path)"
+        # in the caller's current PowerShell process. Do this before Get-Command
+        # "entire", which caches the first Application hit for the session.
+        if (-not (Test-PathIsFirst -PathValue $env:Path -Directory $Directory)) {
+            $env:Path = Get-PathWithDirectoryFirst -PathValue $env:Path -Directory $Directory
         }
+
+        return $userPathChanged
     }
 
     function Get-EntireOnPath {
@@ -409,8 +455,14 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
             Write-Success "Entire CLI installed to $installPath"
 
-            # Check for PATH conflicts now that the binary exists on disk,
-            # so Test-SamePath can resolve both paths reliably.
+            # Prepend PATH before Get-Command "entire". Checking first throws on
+            # the documented nightly path (Scoop stable already installed) and
+            # never updates PATH, so a rerun fails the same way.
+            $userPathChanged = $false
+            if (-not $SkipPathUpdate) {
+                $userPathChanged = Add-ToUserPath -Directory $resolvedInstallDir
+            }
+
             $pathCommands = Get-EntireOnPath
             $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
             if ($conflicting.Count -gt 0) {
@@ -429,6 +481,9 @@ verified release archive because the Scoop bucket only publishes stable builds.
                     Write-Host "! Remove the old installation or adjust PATH to prioritize:"
                     Write-Host "!   $resolvedInstallDir"
                     Write-Host ""
+                    if ($SkipPathUpdate) {
+                        throw "Installation completed, but PATH was not updated (-NoPathUpdate)."
+                    }
                     throw "Installation completed, but PATH needs adjustment."
                 }
                 Write-Host "!"
@@ -438,16 +493,13 @@ verified release archive because the Scoop bucket only publishes stable builds.
             }
 
             if ($SkipPathUpdate) {
-                if ($pathCommands.Count -eq 0) {
+                if (-not (Test-PathContains -PathValue $env:Path -Directory $resolvedInstallDir)) {
                     Write-InstallerWarning "$resolvedInstallDir is not on PATH. Add it before running entire."
                 }
             }
-            else {
-                Add-ToUserPath -Directory $resolvedInstallDir
-                if ($pathCommands.Count -eq 0) {
-                    Write-Success "Added $resolvedInstallDir to your user PATH"
-                    Write-Host "Restart your terminal, then run entire to get started."
-                }
+            elseif ($userPathChanged) {
+                Write-Success "Added $resolvedInstallDir to your user PATH"
+                Write-Host "Restart your terminal, then run entire to get started."
             }
         }
         finally {
