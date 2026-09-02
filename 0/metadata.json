@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GWTBX3MKKJCMPRZVMT9GD4",
+  "session_id": "01a06151-a821-78a2-8b42-fea915e74807",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T11:07:14.092916Z",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/attach.go",
+    "cmd/entire/cli/attach_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_test.go",
+    "cmd/entire/cli/strategy/manual_commit_worktree_session_test.go",
+    "cmd/entire/cli/trailers/trailers.go",
+    "cmd/entire/cli/trailers/trailers_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "b6ebb427feb8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 559140,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11622656,
+    "output_tokens": 47450,
+    "api_call_count": 113
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T11:07:13.867889Z",
+    "agent_lines": 175,
+    "agent_removed": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 6,
+    "total_committed": 175,
+    "total_lines_changed": 191,
+    "agent_percentage": 96.8586387434555,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 23,
+      "user_lines_removed": 6,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/trailers/trailers.go": 4,
+        "cmd/entire/cli/trailers/trailers_test.go": 19
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/trailers/trailers.go": 3,
+        "cmd/entire/cli/trailers/trailers_test.go": 3
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 204,
+      "agent_lines_removed": 16
+    }
+  ]
+}
