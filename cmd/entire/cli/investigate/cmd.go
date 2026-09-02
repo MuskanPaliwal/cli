@@ -206,6 +206,14 @@ func newFixSubcommand(deps Deps) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open manifest store: %w", err)
 			}
+			// Soft: a store that fails to open still lets the fix agent
+			// launch, just without a findings section — RunFix falls back
+			// to resolving one itself if this is left nil.
+			stateStore, stateErr := NewStateStore(ctx)
+			if stateErr != nil {
+				logging.Debug(ctx, "investigate fix: open run state store",
+					slog.String("err", stateErr.Error()))
+			}
 			runID := ""
 			if len(args) == 1 {
 				runID = args[0]
@@ -220,6 +228,7 @@ func newFixSubcommand(deps Deps) *cobra.Command {
 				ErrOut: cmd.ErrOrStderr(),
 			}, FixDeps{
 				ManifestStore: store,
+				StateStore:    stateStore,
 				Launch:        launch,
 			})
 			// Ctrl+C in the spawned fix agent surfaces as a wrapped
