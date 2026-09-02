@@ -1,0 +1,14 @@
+go through all my closed and merged prs and all other recently reviewed prs in entire cli and create properly researched document on what mistakes i should avoid and what i should focus more on ,
+  like code quality and syntax and edge cases and everything
+
+---
+
+now
+
+---
+
+no not just mine all the prs
+
+---
+
+continue
