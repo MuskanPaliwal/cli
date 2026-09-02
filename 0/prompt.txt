@@ -1,1 +1,1 @@
-we need to implement gmt 002 from plan.md which is in  git-metadata-traversal worktree. we will have to take a pull from the gmt 001 wokrtree for this to start i guess
+yupp commit the changes but also check if the gmt 001 has recent changes?
