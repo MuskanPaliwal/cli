@@ -1,10 +1,13 @@
 package gitrepo
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -22,23 +25,28 @@ func TestGitMetadataTraversalHasCanonicalOwner(t *testing.T) {
 		"status.go:resolveWorktreeBranch":            "status migrates with the remaining consumers",
 	}
 	policyDotGitInspections := map[string]string{
-		"agent/codex/hook_root.go:hasDotGitEntry":                    "Codex policy checks whether a candidate checkout owns a .git entry",
-		"agent/codex/hook_root.go:linkedWorktreeRegistrationMatches": "Codex backlink policy validates the registered worktree path",
-		"dispatch_wizard.go:discoverLocalRepoRoots":                  "dispatch discovery filters sibling repository candidates",
-		"gitrepo/status.go:insideNestedCheckout":                     "status walking stops at nested checkout boundaries",
-		"plugin_index.go:SyncPluginIndex":                            "plugin index sync checks whether Entire's cache directory contains its clone",
+		"agent/codex/hook_root.go:hasDotGitEntry":   "Codex policy checks whether a candidate checkout owns a .git entry",
+		"dispatch_wizard.go:discoverLocalRepoRoots": "dispatch discovery filters sibling repository candidates",
+		"gitrepo/status.go:insideNestedCheckout":    "status walking stops at nested checkout boundaries",
+		"plugin_index.go:SyncPluginIndex":           "plugin index sync checks whether Entire's cache directory contains its clone",
 	}
-	allowedCommonDirQueries := map[string]string{
-		"checkpoint/git_common_dir.go:resolveGitCommonDir":          "checkpoint migrates in the checkpoint split",
-		"gitdir/gitdir.go:CommonDir":                                "session removes the current-worktree resolver in the session split",
-		"gitdir/gitdir.go:CommonDirForWorktree":                     "session removes the explicit-worktree resolver in the session split",
-		"session_adopt.go:stateStoreForWorktree":                    "adoption validates an arbitrary source repository in the session split",
-		"settings/settings.go:clonePreferencesPathForWorktreeRoot":  "settings migrates with the remaining consumers",
-		"strategy/common.go:GetGitCommonDir":                        "strategy migrates in the strategy-and-hooks split",
-		"strategy/manual_commit_session.go:gitCommonDirForWorktree": "session routing migrates in the strategy-and-hooks split",
-		"strategy/metadata_reconcile.go:loadShallowHashes":          "shallow metadata access migrates in the strategy-and-hooks split",
-		"trail_checkout_worktree.go:gitCommonDirForTrailWorktree":   "trail storage paths migrate with the remaining consumers",
-		"trail_checkout_worktree.go:validateTrailWorktreeReuse":     "trail reuse validation migrates with the remaining consumers",
+	allowedMetadataQueries := map[guardMetadataQuery]string{
+		{source: "checkpoint/git_common_dir.go:resolveGitCommonDir", flag: "--git-common-dir"}:          "checkpoint migrates in the checkpoint split",
+		{source: "dispatch/mode_local.go:resolveRepoRoots", flag: "--show-toplevel"}:                    "local dispatch resolves explicit repository candidates",
+		{source: "dispatch_wizard.go:resolveGitTopLevel", flag: "--show-toplevel"}:                      "dispatch discovery resolves explicit repository candidates",
+		{source: "gitdir/gitdir.go:CommonDir", flag: "--git-common-dir"}:                                "session removes the current-worktree resolver in the session split",
+		{source: "gitdir/gitdir.go:CommonDirForWorktree", flag: "--git-common-dir"}:                     "session removes the explicit-worktree resolver in the session split",
+		{source: "paths/paths.go:resolveWorktreeRoot", flag: "--show-toplevel"}:                         "worktree-root discovery remains separate from explicit-root metadata resolution",
+		{source: "session_adopt.go:stateStoreForWorktree", flag: "--git-common-dir"}:                    "adoption validates an arbitrary source repository in the session split",
+		{source: "session_adopt.go:stateStoreForWorktree", flag: "--show-toplevel"}:                     "adoption validates an arbitrary source repository in the session split",
+		{source: "settings/settings.go:clonePreferencesPathForWorktreeRoot", flag: "--git-common-dir"}:  "settings migrates with the remaining consumers",
+		{source: "strategy/common.go:GetGitCommonDir", flag: "--git-common-dir"}:                        "strategy migrates in the strategy-and-hooks split",
+		{source: "strategy/hooks.go:getGitDirInPath", flag: "--git-dir"}:                                "hook directory discovery migrates in the strategy-and-hooks split",
+		{source: "strategy/manual_commit_session.go:gitCommonDirForWorktree", flag: "--git-common-dir"}: "session routing migrates in the strategy-and-hooks split",
+		{source: "strategy/metadata_reconcile.go:loadShallowHashes", flag: "--git-common-dir"}:          "shallow metadata access migrates in the strategy-and-hooks split",
+		{source: "trail_checkout_worktree.go:gitCommonDirForTrailWorktree", flag: "--git-common-dir"}:   "trail storage paths migrate with the remaining consumers",
+		{source: "trail_checkout_worktree.go:validateTrailWorktreeReuse", flag: "--git-common-dir"}:     "trail reuse validation migrates with the remaining consumers",
+		{source: "trail_checkout_worktree.go:validateTrailWorktreeReuse", flag: "--show-toplevel"}:      "trail reuse validation migrates with the remaining consumers",
 	}
 	allowedLegacyResolverCalls := map[string]string{
 		"agent/codex/hook_root.go:resolveHookDiscovery": "Codex discovery migrates with the remaining consumers",
@@ -49,28 +57,76 @@ func TestGitMetadataTraversalHasCanonicalOwner(t *testing.T) {
 	if !ok {
 		t.Fatal("resolve guard source path")
 	}
-	cliRoot := filepath.Dir(filepath.Dir(thisFile))
-	fset := token.NewFileSet()
-	canonicalTokens := 0
-	legacyOwnersSeen := map[string]bool{}
-	policyInspectionsSeen := map[string]bool{}
-	commonDirQueriesSeen := map[string]bool{}
-	legacyResolverCallsSeen := map[string]bool{}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", "..", ".."))
+	policy := gitMetadataGuardPolicy{
+		legacyTraversalOwners:   legacyTraversalOwners,
+		policyDotGitInspections: policyDotGitInspections,
+		allowedMetadataQueries:  allowedMetadataQueries,
+		allowedLegacyCalls:      allowedLegacyResolverCalls,
+	}
+	result, err := scanGitMetadataSources(repoRoot, policy)
+	if err != nil {
+		t.Fatalf("scan Go sources: %v", err)
+	}
+	for _, violation := range result.violations {
+		t.Error(violation)
+	}
+	if result.canonicalTokens < 2 {
+		t.Fatal("guard found no canonical gitdir/commondir parser tokens")
+	}
+	assertGuardLedgerSeen(t, "legacy traversal owner", legacyTraversalOwners, result.legacyOwnersSeen)
+	assertGuardLedgerSeen(t, ".git policy inspection", policyDotGitInspections, result.policyInspectionsSeen)
+	assertMetadataQueryLedgerSeen(t, allowedMetadataQueries, result.metadataQueriesSeen)
+	assertGuardLedgerSeen(t, "legacy resolver call", allowedLegacyResolverCalls, result.legacyResolverCallsSeen)
+}
 
-	err := filepath.WalkDir(cliRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+type guardMetadataQuery struct {
+	source string
+	flag   string
+}
+
+type gitMetadataGuardPolicy struct {
+	legacyTraversalOwners   map[string]string
+	policyDotGitInspections map[string]string
+	allowedMetadataQueries  map[guardMetadataQuery]string
+	allowedLegacyCalls      map[string]string
+}
+
+type gitMetadataGuardResult struct {
+	canonicalTokens         int
+	legacyOwnersSeen        map[string]bool
+	policyInspectionsSeen   map[string]bool
+	metadataQueriesSeen     map[guardMetadataQuery]bool
+	legacyResolverCallsSeen map[string]bool
+	violations              []string
+}
+
+func scanGitMetadataSources(repoRoot string, policy gitMetadataGuardPolicy) (gitMetadataGuardResult, error) {
+	packageValues, err := collectGuardPackageStringValues(repoRoot)
+	if err != nil {
+		return gitMetadataGuardResult{}, fmt.Errorf("collect package string values: %w", err)
+	}
+	fset := token.NewFileSet()
+	result := gitMetadataGuardResult{
+		legacyOwnersSeen:        map[string]bool{},
+		policyInspectionsSeen:   map[string]bool{},
+		metadataQueriesSeen:     map[guardMetadataQuery]bool{},
+		legacyResolverCallsSeen: map[string]bool{},
+	}
+
+	err = filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(cliRoot, path)
+		rel, err := filepath.Rel(repoRoot, path)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") ||
-			strings.HasPrefix(rel, "integration_test/") || strings.HasPrefix(rel, "benchutil/") {
+		if !isGuardSourceFile(rel) {
 			return nil
 		}
 
@@ -78,114 +134,146 @@ func TestGitMetadataTraversalHasCanonicalOwner(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		dotGitIdentifiers := metadataStringIdentifiers(file, ".git")
-		dotGitIdentifiers["gitDir"] = true
+		values := packageValues[guardPackageKey(rel, file)]
+		valueResolver := newGuardValueResolver(fset, file, values)
 		gitrepoImports, dotImportedGitrepo := gitrepoImportNames(file)
-		filesystemImports := filesystemImportNames(file)
+		samePackage := filepath.ToSlash(filepath.Dir(rel)) == "cmd/entire/cli/gitrepo"
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				continue
 			}
-			key := rel + ":" + fn.Name.Name
-			canonicalOwner := rel == "gitrepo/metadata.go"
-			_, legacyOwner := legacyTraversalOwners[key]
-			_, policyInspection := policyDotGitInspections[key]
+			key := guardSourceKey(rel, fn.Name.Name)
+			canonicalOwner := guardSourcePath(rel) == "gitrepo/metadata.go"
+			_, legacyOwner := policy.legacyTraversalOwners[key]
+			_, policyInspection := policy.policyDotGitInspections[key]
 
-			hasDotGitReference := containsMetadataString(fn.Body, ".git") || containsAnyIdentifier(fn.Body, dotGitIdentifiers)
-			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				switch n := node.(type) {
-				case *ast.BasicLit:
-					if n.Kind != token.STRING {
-						return true
-					}
-					value, unquoteErr := strconv.Unquote(n.Value)
-					if unquoteErr != nil {
-						return true
-					}
-					if value == "--git-common-dir" {
-						if _, allowed := allowedCommonDirQueries[key]; allowed {
-							commonDirQueriesSeen[key] = true
-						} else {
-							t.Errorf("%s runs an unaudited --git-common-dir query; use gitrepo.ResolveWorktreeMetadata or document a semantic-query exception", fset.Position(n.Pos()))
-						}
-					}
-					if value != "gitdir: " && value != "gitdir:" && value != "commondir" {
-						return true
-					}
-					if canonicalOwner {
-						canonicalTokens++
-						return true
-					}
-					if legacyOwner {
-						legacyOwnersSeen[key] = true
-					} else {
-						t.Errorf("%s independently parses Git metadata token %q; use gitrepo.ResolveWorktreeMetadata", fset.Position(n.Pos()), value)
-					}
-				case *ast.CallExpr:
-					if isLegacyMetadataResolverCall(n, gitrepoImports, dotImportedGitrepo) {
-						if _, allowed := allowedLegacyResolverCalls[key]; allowed {
-							legacyResolverCallsSeen[key] = true
-						} else {
-							t.Errorf("%s calls a legacy Git metadata resolver; use gitrepo.ResolveWorktreeMetadata or document the migration exception", fset.Position(n.Pos()))
-						}
-					}
-					callHasDotGitReference := containsMetadataString(n, ".git") || containsAnyIdentifier(n, dotGitIdentifiers)
-					packageInspection := hasDotGitReference && isPackageFilesystemInspection(n, filesystemImports)
-					if (!callHasDotGitReference && !packageInspection) || !isFilesystemMetadataInspection(n) || canonicalOwner {
-						return true
-					}
-					if legacyOwner {
-						legacyOwnersSeen[key] = true
-						return true
-					}
-					if policyInspection {
-						policyInspectionsSeen[key] = true
-						return true
-					}
-					t.Errorf("%s independently inspects a .git entry; use gitrepo.ResolveWorktreeMetadata or document a narrow policy exception", fset.Position(n.Pos()))
+			for _, value := range []string{"gitdir: ", "gitdir:", "commondir"} {
+				if !valueResolver.contains(fn.Body, value) {
+					continue
 				}
+				if canonicalOwner {
+					result.canonicalTokens++
+					continue
+				}
+				if legacyOwner {
+					result.legacyOwnersSeen[key] = true
+					continue
+				}
+				result.violations = append(result.violations, fmt.Sprintf("%s independently parses Git metadata token %q; use gitrepo.ResolveWorktreeMetadata", fset.Position(fn.Pos()), value))
+			}
+			if valueResolver.contains(fn.Body, "rev-parse") {
+				for _, flag := range []string{"--absolute-git-dir", "--git-common-dir", "--git-dir", "--show-toplevel"} {
+					if !valueResolver.contains(fn.Body, flag) {
+						continue
+					}
+					query := guardMetadataQuery{source: key, flag: flag}
+					if _, allowed := policy.allowedMetadataQueries[query]; allowed {
+						result.metadataQueriesSeen[query] = true
+					} else {
+						result.violations = append(result.violations, fmt.Sprintf("%s runs an unaudited git rev-parse %s query; use gitrepo.ResolveWorktreeMetadata or document a semantic-query exception", fset.Position(fn.Pos()), flag))
+					}
+				}
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if isLegacyMetadataResolverCall(call, gitrepoImports, dotImportedGitrepo, samePackage) {
+					if _, allowed := policy.allowedLegacyCalls[key]; allowed {
+						result.legacyResolverCallsSeen[key] = true
+					} else {
+						result.violations = append(result.violations, fmt.Sprintf("%s calls a legacy Git metadata resolver; use gitrepo.ResolveWorktreeMetadata or document the migration exception", fset.Position(call.Pos())))
+					}
+				}
+				if !valueResolver.contains(call, ".git") || !isFilesystemMetadataInspection(call) || canonicalOwner {
+					return true
+				}
+				if legacyOwner {
+					result.legacyOwnersSeen[key] = true
+					return true
+				}
+				if policyInspection {
+					result.policyInspectionsSeen[key] = true
+					return true
+				}
+				result.violations = append(result.violations, fmt.Sprintf("%s independently inspects a .git entry; use gitrepo.ResolveWorktreeMetadata or document a narrow policy exception", fset.Position(call.Pos())))
 				return true
 			})
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("scan Go sources: %v", err)
-	}
-	if canonicalTokens < 2 {
-		t.Fatal("guard found no canonical gitdir/commondir parser tokens")
-	}
-	assertGuardLedgerSeen(t, "legacy traversal owner", legacyTraversalOwners, legacyOwnersSeen)
-	assertGuardLedgerSeen(t, ".git policy inspection", policyDotGitInspections, policyInspectionsSeen)
-	assertGuardLedgerSeen(t, "--git-common-dir query", allowedCommonDirQueries, commonDirQueriesSeen)
-	assertGuardLedgerSeen(t, "legacy resolver call", allowedLegacyResolverCalls, legacyResolverCallsSeen)
+	return result, err
 }
 
 func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		source     string
-		wantLegacy bool
+		name        string
+		source      string
+		kind        string
+		value       string
+		samePackage bool
+		want        bool
 	}{
 		{
-			name:   "rooted filesystem",
-			source: `package probe; import "os"; func inspect(root *os.Root) { _, _ = root.Lstat(".git") }`,
+			name:   "rooted filesystem with local alias",
+			source: `package probe; import "os"; func inspect(root *os.Root) { name := ".git"; _, _ = root.Lstat(name) }`,
+			kind:   "filesystem",
+			want:   true,
 		},
 		{
 			name:   "package constant",
 			source: `package probe; import "os"; const dotGitName = ".git"; func inspect() { _, _ = os.Stat(dotGitName) }`,
+			kind:   "filesystem",
+			want:   true,
+		},
+		{
+			name:   "open root",
+			source: `package probe; import "os"; func inspect() { _, _ = os.OpenRoot(".git") }`,
+			kind:   "filesystem",
+			want:   true,
 		},
 		{
 			name:   "readlink",
 			source: `package probe; import "os"; func inspect() { _, _ = os.Readlink(".git") }`,
+			kind:   "filesystem",
+			want:   true,
 		},
 		{
-			name:       "aliased legacy resolver import",
-			source:     `package probe; import repo "github.com/entireio/cli/cmd/entire/cli/gitrepo"; func inspect() { _, _ = repo.ResolveDotGitPath(".") }`,
-			wantLegacy: true,
+			name:   "package parser token",
+			source: `package probe; import "strings"; const prefix = "gitdir: "; func inspect(data string) { _, _ = strings.CutPrefix(data, prefix) }`,
+			kind:   "token",
+			value:  "gitdir: ",
+			want:   true,
+		},
+		{
+			name:   "absolute git directory query",
+			source: `package probe; import "os/exec"; const flag = "--absolute-git-dir"; func inspect() { _ = exec.Command("git", "rev-parse", flag) }`,
+			kind:   "query",
+			value:  "--absolute-git-dir",
+			want:   true,
+		},
+		{
+			name:   "aliased legacy resolver import",
+			source: `package probe; import repo "github.com/entireio/cli/cmd/entire/cli/gitrepo"; func inspect() { _, _ = repo.ResolveDotGitPath(".") }`,
+			kind:   "legacy",
+			want:   true,
+		},
+		{
+			name:        "same-package legacy resolver",
+			source:      `package gitrepo; func inspect() { _, _ = ResolveDotGitPath(".") }`,
+			kind:        "legacy",
+			samePackage: true,
+			want:        true,
+		},
+		{
+			name:   "git directory parameter is not metadata traversal",
+			source: `package probe; import "os"; func inspect(gitDir string) { _, _ = os.Stat(gitDir) }`,
+			kind:   "filesystem",
+			want:   false,
 		},
 	}
 
@@ -197,8 +285,8 @@ func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse probe: %v", err)
 			}
-			identifiers := metadataStringIdentifiers(file, ".git")
-			identifiers["gitDir"] = true
+			values := packageStringValues(file)
+			valueResolver := newGuardValueResolver(fset, file, values)
 			imports, dotImported := gitrepoImportNames(file)
 			found := false
 			for _, decl := range file.Decls {
@@ -206,24 +294,78 @@ func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
 				if !ok || fn.Body == nil {
 					continue
 				}
-				hasDotGitReference := containsMetadataString(fn.Body, ".git") || containsAnyIdentifier(fn.Body, identifiers)
+				switch tt.kind {
+				case "token":
+					found = valueResolver.contains(fn.Body, tt.value)
+				case "query":
+					found = valueResolver.contains(fn.Body, "rev-parse") &&
+						valueResolver.contains(fn.Body, tt.value)
+				}
 				ast.Inspect(fn.Body, func(node ast.Node) bool {
 					call, ok := node.(*ast.CallExpr)
 					if !ok {
 						return true
 					}
-					if tt.wantLegacy {
-						found = found || isLegacyMetadataResolverCall(call, imports, dotImported)
-					} else {
-						found = found || hasDotGitReference && isFilesystemMetadataInspection(call)
+					switch tt.kind {
+					case "legacy":
+						found = found || isLegacyMetadataResolverCall(call, imports, dotImported, tt.samePackage)
+					case "filesystem":
+						found = found || valueResolver.contains(call, ".git") && isFilesystemMetadataInspection(call)
 					}
 					return true
 				})
 			}
-			if !found {
-				t.Fatal("guard did not recognize probe")
+			if found != tt.want {
+				t.Fatalf("guard recognition = %t, want %t", found, tt.want)
 			}
 		})
+	}
+}
+
+func TestGitMetadataGuardScansCompleteRepository(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeGuardSource(t, repoRoot, "probe/tokens.go", `package probe; const dotGitName = ".git"`)
+	writeGuardSource(t, repoRoot, "probe/use.go", `package probe; import "os"; func crossFileConstant() { _, _ = os.Stat(dotGitName) }`)
+	writeGuardSource(t, repoRoot, "internal/probe/probe.go", `package probe; import "os"; func internalReadlink() { _, _ = os.Readlink(".git") }`)
+	writeGuardSource(t, repoRoot, "probe/shadow.go", `package probe; import "os"; func shadowed(gitDir string) { _, _ = os.Stat(gitDir) }`)
+	writeGuardSource(t, repoRoot, "probe/query.go", `package probe; import "os/exec"; func existingException() { _ = exec.Command("git", "rev-parse", "--show-toplevel", "--git-dir") }`)
+
+	allowedQuery := guardMetadataQuery{source: "probe/query.go:existingException", flag: "--show-toplevel"}
+	result, err := scanGitMetadataSources(repoRoot, gitMetadataGuardPolicy{
+		allowedMetadataQueries: map[guardMetadataQuery]string{allowedQuery: "fixture exception"},
+	})
+	if err != nil {
+		t.Fatalf("scan fixture repository: %v", err)
+	}
+	if !result.metadataQueriesSeen[allowedQuery] {
+		t.Fatal("scanner did not observe the exact allowed metadata query")
+	}
+	if len(result.violations) != 3 {
+		t.Fatalf("violations = %d, want 3:\n%s", len(result.violations), strings.Join(result.violations, "\n"))
+	}
+	violations := strings.Join(result.violations, "\n")
+	for _, want := range []string{"probe/use.go", "internal/probe/probe.go", "--git-dir"} {
+		if !strings.Contains(violations, want) {
+			t.Errorf("violations do not contain %q:\n%s", want, violations)
+		}
+	}
+	for _, notWant := range []string{"probe/shadow.go", "--show-toplevel"} {
+		if strings.Contains(violations, notWant) {
+			t.Errorf("violations unexpectedly contain %q:\n%s", notWant, violations)
+		}
+	}
+}
+
+func writeGuardSource(t *testing.T, repoRoot, rel, source string) {
+	t.Helper()
+	path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatalf("write fixture source: %v", err)
 	}
 }
 
@@ -233,15 +375,49 @@ func isFilesystemMetadataInspection(call *ast.CallExpr) bool {
 		return false
 	}
 	switch selector.Sel.Name {
-	case "Lstat", "Open", "OpenFile", "ReadDir", "ReadFile", "Readlink", "Stat":
+	case "DirFS", "Lstat", "Open", "OpenFile", "OpenInRoot", "OpenRoot", "ReadDir", "ReadFile", "Readlink", "Stat":
 		return true
 	default:
 		return false
 	}
 }
 
-func metadataStringIdentifiers(file *ast.File, want string) map[string]bool {
-	identifiers := map[string]bool{}
+func collectGuardPackageStringValues(repoRoot string) (map[string]map[string]string, error) {
+	values := map[string]map[string]string{}
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if !isGuardSourceFile(rel) {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		key := guardPackageKey(rel, file)
+		if values[key] == nil {
+			values[key] = map[string]string{}
+		}
+		for name, value := range packageStringValues(file) {
+			values[key][name] = value
+		}
+		return nil
+	})
+	return values, err
+}
+
+func packageStringValues(file *ast.File) map[string]string {
+	values := map[string]string{}
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok {
@@ -252,19 +428,19 @@ func metadataStringIdentifiers(file *ast.File, want string) map[string]bool {
 			if !ok {
 				continue
 			}
-			for i, value := range valueSpec.Values {
-				literal, ok := value.(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
+			for i, expr := range valueSpec.Values {
+				literal, ok := expr.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING || i >= len(valueSpec.Names) {
 					continue
 				}
 				unquoted, err := strconv.Unquote(literal.Value)
-				if err == nil && unquoted == want && i < len(valueSpec.Names) {
-					identifiers[valueSpec.Names[i].Name] = true
+				if err == nil {
+					values[valueSpec.Names[i].Name] = unquoted
 				}
 			}
 		}
 	}
-	return identifiers
+	return values
 }
 
 func gitrepoImportNames(file *ast.File) (map[string]bool, bool) {
@@ -287,38 +463,12 @@ func gitrepoImportNames(file *ast.File) (map[string]bool, bool) {
 	return names, dotImported
 }
 
-func filesystemImportNames(file *ast.File) map[string]bool {
-	names := map[string]bool{}
-	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil || (path != "os" && path != "io/fs") || (spec.Name != nil && spec.Name.Name == "_") {
-			continue
-		}
-		switch {
-		case spec.Name == nil:
-			names[filepath.Base(path)] = true
-		case spec.Name.Name != ".":
-			names[spec.Name.Name] = true
-		}
-	}
-	return names
-}
-
-func isPackageFilesystemInspection(call *ast.CallExpr, importNames map[string]bool) bool {
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	pkg, ok := selector.X.(*ast.Ident)
-	return ok && importNames[pkg.Name]
-}
-
-func isLegacyMetadataResolverCall(call *ast.CallExpr, importNames map[string]bool, dotImported bool) bool {
+func isLegacyMetadataResolverCall(call *ast.CallExpr, importNames map[string]bool, dotImported, samePackage bool) bool {
 	legacyName := func(name string) bool {
 		return name == "ResolveDotGitPath" || name == "ResolveCommonGitPath"
 	}
 	if ident, ok := call.Fun.(*ast.Ident); ok {
-		return dotImported && legacyName(ident.Name)
+		return (dotImported || samePackage) && legacyName(ident.Name)
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || !legacyName(selector.Sel.Name) {
@@ -337,32 +487,152 @@ func assertGuardLedgerSeen(t *testing.T, label string, ledger map[string]string,
 	}
 }
 
-func containsMetadataString(node ast.Node, want string) bool {
-	found := false
-	ast.Inspect(node, func(n ast.Node) bool {
-		literal, ok := n.(*ast.BasicLit)
-		if !ok || literal.Kind != token.STRING {
-			return true
+func assertMetadataQueryLedgerSeen(t *testing.T, ledger map[guardMetadataQuery]string, seen map[guardMetadataQuery]bool) {
+	t.Helper()
+	for query, reason := range ledger {
+		if !seen[query] {
+			t.Errorf("documented git metadata query %s %s (%s) no longer exists; remove or update the exception", query.source, query.flag, reason)
 		}
-		value, err := strconv.Unquote(literal.Value)
-		if err == nil && value == want {
-			found = true
-			return false
+	}
+}
+
+type guardValueResolver struct {
+	packageValues map[string]string
+	typeInfo      *types.Info
+	bindings      map[types.Object]ast.Expr
+}
+
+func newGuardValueResolver(fset *token.FileSet, file *ast.File, packageValues map[string]string) guardValueResolver {
+	typeInfo := &types.Info{
+		Defs: map[*ast.Ident]types.Object{},
+		Uses: map[*ast.Ident]types.Object{},
+	}
+	config := types.Config{Error: func(error) {}}
+	_, typeErr := config.Check(file.Name.Name, fset, []*ast.File{file}, typeInfo)
+	// Files are checked in isolation, so unresolved cross-file imports are
+	// expected; local definitions collected before that error remain usable.
+	if typeErr != nil && len(typeInfo.Defs) == 0 && len(typeInfo.Uses) == 0 {
+		return guardValueResolver{packageValues: packageValues, typeInfo: typeInfo}
+	}
+	return guardValueResolver{
+		packageValues: packageValues,
+		typeInfo:      typeInfo,
+		bindings:      guardValueBindings(file, typeInfo),
+	}
+}
+
+func guardValueBindings(file *ast.File, typeInfo *types.Info) map[types.Object]ast.Expr {
+	bindings := map[types.Object]ast.Expr{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch decl := node.(type) {
+		case *ast.ValueSpec:
+			for i, name := range decl.Names {
+				if object := typeInfo.Defs[name]; object != nil {
+					bindings[object] = expressionAt(decl.Values, i)
+				}
+			}
+		case *ast.AssignStmt:
+			if decl.Tok != token.DEFINE {
+				return true
+			}
+			for i, lhs := range decl.Lhs {
+				name, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if object := typeInfo.Defs[name]; object != nil {
+					bindings[object] = expressionAt(decl.Rhs, i)
+				}
+			}
 		}
 		return true
+	})
+	return bindings
+}
+
+func expressionAt(expressions []ast.Expr, index int) ast.Expr {
+	if index < len(expressions) {
+		return expressions[index]
+	}
+	if len(expressions) == 1 {
+		return expressions[0]
+	}
+	return nil
+}
+
+func (r guardValueResolver) contains(node ast.Node, want string) bool {
+	return r.containsSeen(node, want, map[types.Object]bool{})
+}
+
+func (r guardValueResolver) containsSeen(node ast.Node, want string, seen map[types.Object]bool) bool {
+	found := false
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch value := n.(type) {
+		case *ast.BasicLit:
+			if value.Kind != token.STRING {
+				return true
+			}
+			unquoted, err := strconv.Unquote(value.Value)
+			if err == nil && unquoted == want {
+				found = true
+				return false
+			}
+		case *ast.Ident:
+			object := r.typeInfo.Uses[value]
+			if object == nil {
+				object = r.typeInfo.Defs[value]
+			}
+			if object == nil {
+				if r.packageValues[value.Name] == want {
+					found = true
+				}
+				return false
+			}
+			if seen[object] {
+				return false
+			}
+			expr := r.bindings[object]
+			if expr == nil {
+				return false
+			}
+			seen[object] = true
+			if r.containsSeen(expr, want, seen) {
+				found = true
+			}
+			delete(seen, object)
+			return false
+		}
+		return !found
 	})
 	return found
 }
 
-func containsAnyIdentifier(node ast.Node, want map[string]bool) bool {
-	found := false
-	ast.Inspect(node, func(n ast.Node) bool {
-		ident, ok := n.(*ast.Ident)
-		if ok && want[ident.Name] {
-			found = true
+func guardPackageKey(rel string, file *ast.File) string {
+	return filepath.ToSlash(filepath.Dir(rel)) + ":" + file.Name.Name
+}
+
+func guardSourceKey(rel, function string) string {
+	return guardSourcePath(rel) + ":" + function
+}
+
+func guardSourcePath(rel string) string {
+	return strings.TrimPrefix(filepath.ToSlash(rel), "cmd/entire/cli/")
+}
+
+func isGuardSourceFile(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
+		return false
+	}
+	for _, prefix := range []string{
+		"cmd/entire/cli/agent/testutil/",
+		"cmd/entire/cli/benchutil/",
+		"cmd/entire/cli/integration_test/",
+		"e2e/",
+	} {
+		if strings.HasPrefix(rel, prefix) {
 			return false
 		}
-		return true
-	})
-	return found
+	}
+	return true
 }

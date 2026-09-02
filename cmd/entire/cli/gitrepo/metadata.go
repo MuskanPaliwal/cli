@@ -142,23 +142,16 @@ func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
 	}
 
 	registrationRoot := filepath.Join(commonDir, "worktrees")
-	registrationPath := gitDirPath
+	registrationPath, err := filepath.EvalSymlinks(gitDirPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve linked-worktree registration %s: %w", gitDirPath, err)
+	}
 	same, err = metadataDirectoriesIdentifySameFile(filepath.Dir(registrationPath), registrationRoot)
 	if err != nil {
 		return "", fmt.Errorf("validate linked-worktree registration for %s: %w", gitDirPath, err)
 	}
 	if !same {
-		registrationPath, err = filepath.EvalSymlinks(gitDirPath)
-		if err != nil {
-			return "", fmt.Errorf("resolve linked-worktree registration %s: %w", gitDirPath, err)
-		}
-		same, err = metadataDirectoriesIdentifySameFile(filepath.Dir(registrationPath), registrationRoot)
-		if err != nil {
-			return "", fmt.Errorf("validate linked-worktree registration for %s: %w", gitDirPath, err)
-		}
-		if !same {
-			return "", fmt.Errorf("git directory %s is not an immediate child of %s", gitDirPath, registrationRoot)
-		}
+		return "", fmt.Errorf("git directory %s is not an immediate child of %s", gitDirPath, registrationRoot)
 	}
 
 	id := filepath.Base(registrationPath)

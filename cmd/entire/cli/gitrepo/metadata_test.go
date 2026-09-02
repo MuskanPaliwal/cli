@@ -196,6 +196,42 @@ func TestResolveWorktreeMetadata_MovedRegistrationPreservesFacts(t *testing.T) {
 	require.Equal(t, "moved", metadata.WorktreeID)
 }
 
+func TestResolveWorktreeMetadata_RejectsRegistrationSymlinkEscapingCommonDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == windowsOS {
+		t.Skip("symlink creation requires privileges on some Windows builders")
+	}
+
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "worktree")
+	commonDir := filepath.Join(tmp, "common")
+	registrationRoot := filepath.Join(commonDir, "worktrees")
+	plantedRegistration := filepath.Join(tmp, "planted-registration")
+	require.NoError(t, os.MkdirAll(root, 0o750))
+	require.NoError(t, os.MkdirAll(registrationRoot, 0o750))
+	require.NoError(t, os.MkdirAll(plantedRegistration, 0o750))
+	require.NoError(t, os.Symlink(plantedRegistration, filepath.Join(registrationRoot, "escaped")))
+	writeMetadataFile(t, filepath.Join(root, gitDir), "gitdir: "+filepath.Join(registrationRoot, "escaped")+"\n")
+	writeMetadataFile(t, filepath.Join(plantedRegistration, "commondir"), commonDir+"\n")
+
+	metadata, err := ResolveWorktreeMetadata(root)
+	require.ErrorContains(t, err, "not an immediate child")
+	require.Equal(t, WorktreeMetadata{}, metadata)
+
+	repo, err := OpenPath(root)
+	require.ErrorContains(t, err, "resolve worktree metadata")
+	require.ErrorContains(t, err, "not an immediate child")
+	require.Nil(t, repo)
+}
+
+func TestResolveWorktreeMetadata_RequiresExplicitRoot(t *testing.T) {
+	t.Parallel()
+
+	metadata, err := ResolveWorktreeMetadata("")
+	require.EqualError(t, err, "worktree root is required")
+	require.Equal(t, WorktreeMetadata{}, metadata)
+}
+
 func TestResolveWorktreeMetadata_WhitespaceOnlyRoot(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "   ")
