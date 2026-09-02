@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1HFSN9QMDT30BZJ0T2XC77A",
+  "session_id": "01a062d7-4e09-7791-8451-b8045872c084",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T16:38:56.442725Z",
+  "branch": "refactor-git-metadata-owner",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/gitrepo/metadata_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "81d638bce6b4",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 140668,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4914432,
+    "output_tokens": 23805,
+    "api_call_count": 58
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T16:38:56.346344Z",
+    "agent_lines": 0,
+    "agent_removed": 22,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 151,
+    "total_committed": 117,
+    "total_lines_changed": 173,
+    "agent_percentage": 12.716763005780345,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 521,
+      "user_lines_removed": 151,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/gitrepo/metadata.go": 5,
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 314,
+        "cmd/entire/cli/gitrepo/metadata_test.go": 36,
+        "review.md": 166
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/metadata.go": 12,
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 139
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 638,
+      "agent_lines_removed": 173
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 638,
+      "agent_lines_removed": 173
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 638,
+      "agent_lines_removed": 173
+    }
+  ]
+}
