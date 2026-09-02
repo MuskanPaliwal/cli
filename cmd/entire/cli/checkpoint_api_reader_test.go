@@ -356,6 +356,54 @@ func TestAPICheckpointReader_NoSessionsIsAnError(t *testing.T) {
 	require.ErrorContains(t, err, "no sessions to explain")
 }
 
+// A wrong-checkpoint response that ALSO trips a content-based check must be
+// reported as the identity mismatch it is, not as a fact about the checkpoint
+// the caller asked for. With the identity check ordered after the
+// zero-sessions guard, this payload produced "checkpoint <requested> in
+// acme/widgets has no sessions to explain" -- a statement about a checkpoint
+// the server never answered about, and the misleading error Copilot flagged
+// on the PR.
+func TestAPICheckpointReader_IdentityCheckedBeforeContentGuards(t *testing.T) {
+	t.Parallel()
+
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"repo_full_name":"totally-different/other-repo","checkpoint": {"checkpointId":"01KXGTTNGCEACC83QZEJ5YAFOTHER","sessions":[]}}`)
+	})
+	_, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "identity mismatch")
+	assert.NotContains(t, err.Error(), "no sessions to explain",
+		"a foreign response must not be described as a property of the requested checkpoint")
+}
+
+// The identity comparisons fold case, so a cell that returned a
+// differently-cased spelling of the very checkpoint that was requested is
+// accepted rather than failing closed. id.Validate only admits the canonical
+// uppercase ULID alphabet, so this cannot arise from user input today -- the
+// test pins the tolerance so a later "tighten it to ==" does not silently
+// make a server-side casing change break `explain --repo`.
+func TestAPICheckpointReader_IdentityComparisonFoldsCase(t *testing.T) {
+	t.Parallel()
+
+	lower := strings.ToLower(testAPICheckpointID.String())
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
+			fmt.Fprint(w, `{"type":"user"}`)
+			return
+		}
+		body := strings.Replace(checkpointEnvelopeJSON,
+			`"checkpointId": "01KXGTTNGCEACC83QZEJ5YAF0D"`, `"checkpointId": "`+lower+`"`, 1)
+		body = strings.Replace(body,
+			`"repo_full_name": "acme/widgets"`, `"repo_full_name": "ACME/WIDGETS"`, 1)
+		fmt.Fprint(w, body)
+	})
+
+	summary, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.NoError(t, err, "a differently-cased spelling of the requested identity must not be a mismatch")
+	assert.Equal(t, id.CheckpointID(lower), summary.CheckpointID,
+		"CheckpointID is sourced from the verified server response, so it carries the server's spelling")
+}
+
 // A transcript larger than the read cap must fail loudly. Truncating it would
 // hand the renderer a silently-incomplete transcript, which reads as a real one.
 func TestAPICheckpointReader_OversizeTranscriptFailsLoudly(t *testing.T) {

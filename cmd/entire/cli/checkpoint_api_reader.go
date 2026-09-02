@@ -363,11 +363,16 @@ func (r *apiCheckpointReader) loadDetail(ctx context.Context, checkpointID id.Ch
 	if env.Checkpoint == nil {
 		return nil, fmt.Errorf("checkpoint %s is not available for %s (the server returned no checkpoint)", checkpointID, r.ownerRepo)
 	}
-	if len(env.Checkpoint.Sessions) == 0 {
-		return nil, fmt.Errorf("checkpoint %s in %s has no sessions to explain", checkpointID, r.ownerRepo)
-	}
+	// Identity first, ahead of every content-based check below: a
+	// wrong-repo or wrong-checkpoint response that also happens to trip one
+	// of those (zero sessions, say) would otherwise be reported as a fact
+	// about the checkpoint the caller asked for -- "checkpoint X in Y has no
+	// sessions" when the server never answered about X in Y at all.
 	if err := r.verifyResponseIdentity(checkpointID, env); err != nil {
 		return nil, err
+	}
+	if len(env.Checkpoint.Sessions) == 0 {
+		return nil, fmt.Errorf("checkpoint %s in %s has no sessions to explain", checkpointID, r.ownerRepo)
 	}
 
 	r.detail = env.Checkpoint
@@ -385,7 +390,14 @@ func (r *apiCheckpointReader) loadDetail(ctx context.Context, checkpointID id.Ch
 // "successful" read of foreign private transcript/session data silently
 // labeled as belonging to the repo the caller asked about.
 func (r *apiCheckpointReader) verifyResponseIdentity(checkpointID id.CheckpointID, env apiCheckpointEnvelope) error {
-	if got := env.Checkpoint.CheckpointID; got != checkpointID.String() {
+	// EqualFold on both comparisons below is defensive, not a live fix:
+	// id.Validate accepts only the canonical uppercase ULID alphabet
+	// ([0-9ABCDEFGHJKMNPQRSTVWXYZ]), so a lowercase id never reaches here
+	// and the cell returns canonical case today. Folding costs nothing and
+	// cannot weaken the check -- two distinct valid IDs stay distinct under
+	// it -- while a strict compare would fail closed on a server-side
+	// casing change, breaking `explain --repo` rather than protecting it.
+	if got := env.Checkpoint.CheckpointID; !strings.EqualFold(got, checkpointID.String()) {
 		return fmt.Errorf("checkpoint identity mismatch: requested checkpoint %s from %s, but the server returned checkpoint %q; refusing to display possibly-mismatched data (this looks like a server-side bug, please report it)",
 			checkpointID, r.ownerRepo, got)
 	}
@@ -396,7 +408,7 @@ func (r *apiCheckpointReader) verifyResponseIdentity(checkpointID id.CheckpointI
 	// tolerated (never observed from a real 200, but some minimal test/legacy
 	// payloads omit it) rather than treated as a mismatch, since there is
 	// nothing to disagree with the request in that case.
-	if got := env.RepoFullName; got != "" && !strings.EqualFold(got, r.ownerRepo) && got != r.repoID {
+	if got := env.RepoFullName; got != "" && !strings.EqualFold(got, r.ownerRepo) && !strings.EqualFold(got, r.repoID) {
 		return fmt.Errorf("checkpoint identity mismatch: requested checkpoint %s from %s, but the server returned data for repo %q; refusing to display possibly-mismatched data (this looks like a server-side bug, please report it)",
 			checkpointID, r.ownerRepo, got)
 	}
