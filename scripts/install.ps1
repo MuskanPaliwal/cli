@@ -542,8 +542,10 @@ Scoop chooses its own install location and manages its own PATH entry, so
                 # neither the verdict below nor reordering the user PATH can fix
                 # it.
                 $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+                $machineConflict = $false
                 foreach ($cmd in $conflicting) {
                     if (Test-PathContains -PathValue $machinePath -Directory (Split-Path -Parent $cmd.Source)) {
+                        $machineConflict = $true
                         Write-Host "!"
                         Write-Host "! $($cmd.Source) is on the machine-wide PATH, which Windows places"
                         Write-Host "! ahead of your user PATH. It will win in a new terminal even though"
@@ -563,9 +565,15 @@ Scoop chooses its own install location and manages its own PATH entry, so
                     }
                     throw "Installation completed, but PATH needs adjustment."
                 }
-                Write-Host "!"
-                Write-Host "! The installed version takes priority, but consider removing"
-                Write-Host "! the other installation to avoid confusion."
+                # Suppressed on a machine-PATH conflict: the paragraph above has
+                # already said that install wins in a new terminal, and claiming
+                # priority as well leaves the reader nothing to act on.
+                if (-not $machineConflict) {
+                    $others = if ($conflicting.Count -gt 1) { "the other installations" } else { "the other installation" }
+                    Write-Host "!"
+                    Write-Host "! The installed version takes priority, but consider removing"
+                    Write-Host "! $others to avoid confusion."
+                }
                 Write-Host ""
             }
 
