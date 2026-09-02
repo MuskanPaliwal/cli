@@ -254,11 +254,15 @@ func opfPrePushDecision(ctx context.Context) (OPFDecision, error) {
 //
 // Precondition, and the one way to make this gate a silent no-op: OPFEnabled
 // reads process-global config that only EnsureRedactionConfigured sets, so a
-// caller whose entry point skipped it reads "OPF off" and flushes everything
-// unscanned. It is not called here because its error is the scanner-config one
-// hooks deliberately survive (see setupHookContext), which is not this gate's
-// to raise. `doctor migrate-checkpoints` needed its own PreRunE for exactly
-// this reason — cobra does not inherit a parent's.
+// caller that reaches here without it having run reads "OPF off" and flushes
+// everything unscanned. Every caller must ensure it — the hook path via
+// withHookSession (hooks_git_cmd.go), the migration push via pushMigratedRefs
+// (doctor_migrate.go).
+//
+// This gate does not call it itself: on the hook path its scanner-config error
+// is deliberately logged and survived rather than propagated, so raising it
+// here would withhold pushes on a condition that path documents as
+// non-fatal.
 func opfGateForCheckpointRefs(ctx context.Context, repo *git.Repository) error {
 	if !redact.OPFEnabled() {
 		return nil
