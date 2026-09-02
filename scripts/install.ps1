@@ -31,6 +31,7 @@ param(
 
     $GitHubRepo = "entireio/cli"
     $ScoopBucketUrl = "https://github.com/entireio/scoop-bucket.git"
+    $WebTimeoutSec = 60
 
     function Write-Info {
         param([string] $Message)
@@ -130,7 +131,7 @@ verified release archive because the Scoop bucket only publishes stable builds.
             $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
         }
 
-        Invoke-RestMethod -Uri $Uri -Headers $headers
+        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec
     }
 
     function Get-ReleaseVersion {
@@ -177,7 +178,7 @@ verified release archive because the Scoop bucket only publishes stable builds.
 
         # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
         # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
-        Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing
+        Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec $WebTimeoutSec
     }
 
     function Assert-Checksum {
