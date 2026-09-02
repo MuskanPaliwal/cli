@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GVFKKDZXJT02X4T9P6HGBX",
+  "session_id": "01a05bee-8c3d-7d90-8149-16f1536d724a",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T10:43:52.210847Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 4,
+  "save_step_count": 1,
+  "files_touched": [
+    ".tmp/manual-auth-lock/main.go",
+    "AGENTS.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "27dc347feac9",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 307218,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 14732032,
+    "output_tokens": 63332,
+    "api_call_count": 139
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T10:43:52.114276Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 17029,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17029,
+    "total_lines_changed": 20473,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
