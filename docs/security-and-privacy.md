@@ -36,6 +36,16 @@ Entire automatically scans transcript and metadata content before writing it to 
 
 Detected secrets are replaced with `REDACTED` before the data is ever written to a git object. Of the six secret-detection passes above, the scanner layer (pass 2) is configurable — see [Choosing secret-scanner engines](#choosing-secret-scanner-engines) below — while the other five are **always on** and cannot be disabled. User-defined rules (inline `custom_redactions` and rule packs) add a seventh secret-detection pass that only runs when configured.
 
+### What Entire does NOT scan: pasted images and screenshots
+
+**Every layer described above — all nine passes, including the opt-in PII and OpenAI Privacy Filter layers — operates only on transcript text. None of them ever inspect image content.**
+
+When you paste an image into an agent conversation (a screenshot of a terminal with a visible API key, a cloud console page showing a misconfigured resource, a photo of a document), Entire externalizes it out of the transcript and stores it as a **raw binary blob** under the checkpoint's `assets/` folder — completely unredacted, byte-for-byte identical to what you pasted. This blob is written to `entire/checkpoints/v1` (or the equivalent per-checkpoint ref on the `git-refs` backend) and pushed to your remote like any other checkpoint content.
+
+This is a **deliberate design choice, not a bug**: byte-level regex and entropy redaction cannot safely touch binary image data without corrupting the image, so Entire does not attempt it. There is currently no OCR pass, no vision-model PII/secret scan, and no gate that holds image assets back until reviewed — an image that enters a conversation ships to your checkpoint history exactly as pasted.
+
+**If you would not commit an image to your repository unredacted, do not paste it into an agent conversation.** This applies equally to a private repository — anyone with read access to checkpoint data can see it — and especially to a public one.
+
 ### Choosing secret-scanner engines
 
 Pattern matching (layer 2 above) is served by two independent scanner engines, each of which can be turned on or off:
@@ -362,6 +372,7 @@ If your AI sessions will touch sensitive data:
 
 - **Use a private repository.** This is the simplest and most complete protection. Committed checkpoints are then only visible to collaborators.
 - **Avoid passing sensitive files to your agent.** Content that never enters the agent conversation never appears in transcripts.
+- **Never paste a screenshot or image containing secrets or personal data.** Unlike text, pasted images are never scanned or redacted by any layer — see [What Entire does NOT scan: pasted images and screenshots](#what-entire-does-not-scan-pasted-images-and-screenshots).
 - **Review before pushing.** Checkpoints are written locally at commit time and pushed separately, so there is always a window to inspect them:
 
   ```fish
@@ -512,7 +523,7 @@ File an issue when the rule would benefit every Entire user (e.g., a major SaaS 
 
 - **Best-effort.** Novel or low-entropy secrets (short passwords, predictable tokens) may not be caught.
 - **Filenames and binary data.** Secrets in filenames, binary files, or deeply nested structures may not be detected.
-- **JSONL skip rules.** Entire skips scanning fields named `signature`, fields ending in `id`/`ids`, structural-path fields (`filepath`, `file_path`, `cwd`, `root`, `directory`, `dir`, `path`), and objects whose `type` starts with `image` or equals `base64` — all to avoid false positives.
+- **JSONL skip rules.** Entire skips scanning fields named `signature`, fields ending in `id`/`ids`, and structural-path fields (`filepath`, `file_path`, `cwd`, `root`, `directory`, `dir`, `path`) to avoid false positives. Objects whose `type` starts with `image` or equals `base64` are also skipped by the text scanner — but this is not merely a false-positive optimization: images are never scanned by *any* layer, text or otherwise. See [What Entire does NOT scan: pasted images and screenshots](#what-entire-does-not-scan-pasted-images-and-screenshots) above for the full picture.
 - **Built-in PII patterns are US-centric.** `phone` matches North American (NANP) formats only — international formats, including E.164 numbers outside `+1`, are not detected. `address` matches the street line only; city, state, and ZIP/postcode are preserved. If you handle personal data from other regions, add `custom_patterns` for your locale rather than relying on the built-in categories alone.
 - **Custom PII patterns are user-authored.** Teams own the correctness of their `custom_patterns`. An invalid regex is logged and skipped, not enforced.
 - **Users are ultimately responsible** for reviewing what they commit and push. Redaction is a safety net, not a guarantee.
