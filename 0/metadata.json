@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GP72QE66J5Q15QZE4XMZS9",
+  "session_id": "01a06147-e1d1-7112-8efa-4a37f2170cd9",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T09:11:51.493226Z",
+  "branch": "fix-attach-remote-hint",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/attach.go",
+    "cmd/entire/cli/attach_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "3dbe5855ceab",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 116245,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4654848,
+    "output_tokens": 19713,
+    "api_call_count": 55
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T09:11:51.354074Z",
+    "agent_lines": 88,
+    "agent_removed": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 88,
+    "total_lines_changed": 98,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 315,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "BUG_FIX_CANDIDATES.md": 315
+      }
+    }
+  ]
+}
