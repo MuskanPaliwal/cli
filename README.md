@@ -72,8 +72,8 @@ curl -fsSL https://entire.io/install.sh | bash                          # stable
 Install with Windows PowerShell 5.1 or later:
 
 ```powershell
-irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing | iex
-# & ([scriptblock]::Create((irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing))) -Channel nightly
+irm https://entire.io/install.ps1 -UseBasicParsing | iex
+# & ([scriptblock]::Create((irm https://entire.io/install.ps1 -UseBasicParsing))) -Channel nightly
 ```
 
 For stable releases, the PowerShell installer uses Scoop when it is available,
@@ -141,8 +141,8 @@ How to use each channel:
 - Homebrew nightly: `brew install --cask entire@nightly`
 - `install.sh` stable: `curl -fsSL https://entire.io/install.sh | bash`
 - `install.sh` nightly: `curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly`
-- `install.ps1` stable (uses Scoop when available): `irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing | iex`
-- `install.ps1` nightly: `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/entireio/cli/main/scripts/install.ps1 -UseBasicParsing))) -Channel nightly`
+- `install.ps1` stable (uses Scoop when available): `irm https://entire.io/install.ps1 -UseBasicParsing | iex`
+- `install.ps1` nightly: `& ([scriptblock]::Create((irm https://entire.io/install.ps1 -UseBasicParsing))) -Channel nightly`
 - Scoop: currently supports `stable` only via `scoop install entire/entire`
 
 ## Typical Workflow
