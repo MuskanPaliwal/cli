@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -22,7 +21,14 @@ import (
 // leading slash. owner/repo reuse the GitHub identifier charsets from
 // parseGitHubURL so the same metacharacter vectors are closed at the boundary
 // (owner/repo flow unescaped into the synthesised entire:// clone URL).
-var mirrorCloneRefRe = regexp.MustCompile(`^/?gh/` + gitHubOwnerPat + `/` + gitHubRepoPat + `$`)
+var mirrorCloneRefRe = regexp.MustCompile(`^/?` + mirrorCloneForge + `/` + gitHubOwnerPat + `/` + gitHubRepoPat + `$`)
+
+// mirrorCloneForge is the path token of GitHub mirrors in entire:// clone URLs
+// (`/gh/<owner>/<repo>`), the counterpart of nativeCloneForge. Scoped to the
+// ref grammar: mirrorCloneURL still spells the token inline, because its doc
+// comment documents that hardcoding as a reviewed assumption about the URL
+// template rather than a token to swap.
+const mirrorCloneForge = "gh"
 
 // mirrorCloneProviderGitHub is the upstream provider the `gh` path token maps to
 // — the value the control plane records and the list API filters on. Kept local
@@ -93,13 +99,6 @@ var (
 	nativeRepoRe    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$`)
 )
 
-// nativeProjectRule / nativeRepoRule state the shapes above in the words an
-// error message needs: the rule the user broke, never the shape they just typed.
-const (
-	nativeProjectRule = "3-32 characters of letters, digits and '-', not starting or ending with '-'"
-	nativeRepoRule    = "1-64 characters of letters, digits, '.' and '-', not starting or ending with '.' or '-', and with no consecutive dots"
-)
-
 // parseNativeCloneRef turns a native clone ref — `/et/<project>/<repo>` or the
 // `<project>/<repo>` shorthand, leading slash optional — into its project and
 // repo names.
@@ -124,10 +123,10 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 	}
 	project, repo = segs[0], segs[1]
 	if !nativeProjectRe.MatchString(project) {
-		return "", "", fmt.Errorf("project %q must be %s", project, nativeProjectRule)
+		return "", "", fmt.Errorf("project %q must be 3-32 characters of letters, digits and '-', not starting or ending with '-'", project)
 	}
 	if !nativeRepoRe.MatchString(repo) || strings.Contains(repo, "..") {
-		return "", "", fmt.Errorf("repo %q must be %s", repo, nativeRepoRule)
+		return "", "", fmt.Errorf("repo %q must be 1-64 characters of letters, digits, '.' and '-', not starting or ending with '.' or '-', and with no consecutive dots", repo)
 	}
 	return project, repo, nil
 }
@@ -166,6 +165,13 @@ func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repo
 // interior dot), so it can be neither stripped nor rejected while parsing
 // without risking a clone of the wrong repo. `entire-trails.el` is the same
 // shape; there is no telling the two apart from the ref alone.
+//
+// A full `entire://` URL carrying the suffix gets no equivalent hint here, and
+// deliberately so: `repo clone` performs no lookup on that branch, so it could
+// only guess at a failed clone's cause. git-remote-entire's fatalMessage is the
+// layer that holds both the parsed URL and the classified transfer error — it
+// already rewrites the URL for the wrong-cluster case — so that is where the
+// unhedged version belongs.
 const gitDirSuffix = ".git"
 
 // hintDroppedGitSuffix adds retry-without-the-suffix advice to a repo-name
@@ -175,42 +181,20 @@ const gitDirSuffix = ".git"
 // auth, transport — is returned untouched, since the suffix is not why it
 // failed.
 func hintDroppedGitSuffix(err error, project, repoName string) error {
-	var miss *noRepoNamedError
-	if !errors.As(err, &miss) || !strings.HasSuffix(repoName, gitDirSuffix) {
+	if !errors.Is(err, errNoRepoNamed) || !strings.HasSuffix(repoName, gitDirSuffix) {
 		return err
 	}
 	return fmt.Errorf("%w; a native ref keeps the %s suffix (it is stripped for /gh/ paths only) — retry as /%s/%s/%s",
 		err, gitDirSuffix, nativeCloneForge, project, strings.TrimSuffix(repoName, gitDirSuffix))
 }
 
-// nativeCloneURLGitSuffixRe matches a full entire:// URL whose native (`/et/`)
-// path carries a `.git` suffix. Such a URL is passed through verbatim, so the
-// server resolves it against a repo literally named "<name>.git" and 404s when
-// there is none, with nothing to say the suffix is why.
-var nativeCloneURLGitSuffixRe = regexp.MustCompile(`^entire://[^/]+/` + nativeCloneForge + `/[^/]+/[^/]+` + regexp.QuoteMeta(gitDirSuffix) + `$`)
-
-// warnNativeURLGitSuffix notes the suffix after a failed passthrough clone of
-// such a URL. It runs after the failure, not before, because the suffix cannot
-// be stripped up front (see gitDirSuffix), and it hedges, because a clone that
-// failed is just as likely to have failed on auth or the network — git has
-// already printed the real diagnosis above it.
-func warnNativeURLGitSuffix(w io.Writer, cloneURL string) {
-	if !nativeCloneURLGitSuffixRe.MatchString(strings.TrimSpace(cloneURL)) {
-		return
-	}
-	fmt.Fprintf(w, "note: a /%s/ path keeps its %s suffix (the server strips it for /gh/ paths only); if the repo was not found, retry the URL without it\n",
-		nativeCloneForge, gitDirSuffix)
+// declaresForge reports whether ref opens with a forge token (leading slash
+// optional). Declaring a token is what says the user meant that grammar, so a
+// malformed ref gets that parser's reason — the bad owner, project or repo name
+// — instead of a list of every shape `repo clone` accepts.
+func declaresForge(ref, token string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(ref, "/"), token+"/")
 }
-
-// mirrorCloneRefPrefixRe matches the `gh/` forge token (leading slash optional)
-// that says the user meant a mirror ref, so a malformed one gets an error about
-// its owner/repo rather than a list of every shape `repo clone` accepts.
-var mirrorCloneRefPrefixRe = regexp.MustCompile(`^/?gh/`)
-
-// nativeCloneRefPrefixRe is the same for the `et/` token, so a malformed native
-// ref is answered with the rule its project or repo name broke rather than with
-// the very shape the user just typed.
-var nativeCloneRefPrefixRe = regexp.MustCompile(`^/?` + nativeCloneForge + `/`)
 
 // cloneRefShapes lists every ref shape `repo clone` accepts, for error text.
 const cloneRefShapes = "/et/<project>/<repo>, <project>/<repo>, /gh/<owner>/<repo>, or a full entire:// URL"
@@ -231,10 +215,10 @@ func invalidCloneRefError(ref string, nativeErr, mirrorErr error) error {
 	if owner, repo, err := parseHostedGitHubURL(ref); err == nil {
 		return fmt.Errorf("invalid <repo> %q: pass GitHub mirrors as /gh/%s/%s", ref, owner, repo)
 	}
-	if mirrorCloneRefPrefixRe.MatchString(ref) {
+	if declaresForge(ref, mirrorCloneForge) {
 		return fmt.Errorf("invalid <repo> %q: %w", ref, mirrorErr)
 	}
-	if nativeCloneRefPrefixRe.MatchString(ref) {
+	if declaresForge(ref, nativeCloneForge) {
 		return fmt.Errorf("invalid <repo> %q: %w", ref, nativeErr)
 	}
 	return fmt.Errorf("invalid <repo> %q: expected %s", ref, cloneRefShapes)
@@ -301,11 +285,7 @@ func newRepoCloneCmd() *cobra.Command {
 			// where we *synthesize* the URL from a --cluster flag or an API-supplied
 			// host — values that flow into the STS audience under our own construction.
 			if isEntireCloneURL(ref) {
-				err := runGitClone(cmd.Context(), cmd, ref, targetDir)
-				if err != nil {
-					warnNativeURLGitSuffix(cmd.ErrOrStderr(), ref)
-				}
-				return err
+				return runGitClone(cmd.Context(), cmd, ref, targetDir)
 			}
 
 			// Native ref: resolve the repo's home cluster via the active-context

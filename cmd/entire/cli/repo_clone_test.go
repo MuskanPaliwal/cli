@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -127,6 +126,26 @@ func TestParseNativeCloneRef(t *testing.T) {
 	}
 }
 
+// TestForgeTokensCannotBeProjectNames enforces the fact that makes the
+// `<project>/<repo>` shorthand unambiguous. Dropping the explicit
+// `segs[0] == "gh" || segs[0] == "et"` guard was only safe because the project
+// minimum already excludes both tokens, and that is an inference from a server
+// constant rather than a local rule — so pin it. This fails the day a forge
+// token is added that a project could legally be named, which is exactly when
+// the grammar needs a guard of its own back.
+func TestForgeTokensCannotBeProjectNames(t *testing.T) {
+	t.Parallel()
+	for _, token := range []string{nativeCloneForge, mirrorCloneForge} {
+		t.Run(token, func(t *testing.T) {
+			t.Parallel()
+			require.False(t, nativeProjectRe.MatchString(token),
+				"forge token %q is a legal project name, so %q is ambiguous between a forge ref and a shorthand", token, token+"/<repo>")
+			_, _, err := parseNativeCloneRef(token + "/dogbark")
+			require.Error(t, err)
+		})
+	}
+}
+
 // TestInvalidCloneRefError locks in that a ref which declared a forge token is
 // answered with the rule it broke, and that one which declared none is not:
 // telling someone who typed /et/<project>/<repo> to type /et/<project>/<repo>
@@ -179,8 +198,10 @@ const testNativeRepoULID = "01ARZ3NDEKTSV4RRFFQ69G5FBB"
 
 // serveNativeRepo fakes the three-call native resolution chain: project by
 // name, repo by name within the project, then the single-repo GET (the one
-// response that carries clusterHost + path).
-func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
+// response that carries clusterHost + path). A nil repo serves a repo-name
+// miss instead — the project resolves and the repo lookup answers with no
+// repo, which is what the control plane returns for a name nothing matches.
+func serveNativeRepo(t *testing.T, repo *coreapi.Repo) *coreapi.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -191,11 +212,15 @@ func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
 				ID: testProjectULID, Name: "paul", OwnerId: testProjectULID, OwnerType: coreapi.ProjectOwnerTypeOrg,
 			})}
 		case "/api/v1/projects/" + testProjectULID + "/repos":
-			body = &coreapi.ListProjectReposOutputBody{Repo: coreapi.NewOptRepo(coreapi.Repo{
-				ID: testNativeRepoULID, Name: repo.Name, OwningProjectId: testProjectULID,
-			})}
+			out := &coreapi.ListProjectReposOutputBody{}
+			if repo != nil {
+				out.Repo = coreapi.NewOptRepo(coreapi.Repo{
+					ID: testNativeRepoULID, Name: repo.Name, OwningProjectId: testProjectULID,
+				})
+			}
+			body = out
 		case "/api/v1/repos/" + testNativeRepoULID:
-			body = &repo
+			body = repo
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -214,8 +239,8 @@ func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
 func TestResolveNativeCloneURL(t *testing.T) {
 	t.Parallel()
 
-	native := func(host, path string) coreapi.Repo {
-		r := coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark", OwningProjectId: testProjectULID}
+	native := func(host, path string) *coreapi.Repo {
+		r := &coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark", OwningProjectId: testProjectULID}
 		if host != "" {
 			r.ClusterHost = coreapi.NewOptString(host)
 		}
@@ -258,36 +283,6 @@ func TestResolveNativeCloneURL(t *testing.T) {
 	})
 }
 
-// serveNativeRepoMiss fakes the native resolution chain up to a repo-name miss:
-// the project resolves, and the repo lookup answers with no repo (what the
-// control plane returns for a name nothing matches).
-func serveNativeRepoMiss(t *testing.T) *coreapi.Client {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		var body any
-		switch r.URL.Path {
-		case "/api/v1/projects":
-			body = &coreapi.ListProjectsOutputBody{Project: coreapi.NewOptProject(coreapi.Project{
-				ID: testProjectULID, Name: "paul", OwnerId: testProjectULID, OwnerType: coreapi.ProjectOwnerTypeOrg,
-			})}
-		case "/api/v1/projects/" + testProjectULID + "/repos":
-			body = &coreapi.ListProjectReposOutputBody{}
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if err := printJSON(w, body); err != nil {
-			t.Errorf("encode response: %v", err)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	c, err := coreapi.NewWithBearer(srv.URL, "tok")
-	require.NoError(t, err)
-	return c
-}
-
 // TestResolveNativeCloneURL_GitSuffixHint covers the one thing a native ref
 // carrying `.git` can be told: not at parse time (the name is legal, so the
 // suffix cannot be stripped or refused without risking the wrong repo), but on
@@ -297,7 +292,7 @@ func TestResolveNativeCloneURL_GitSuffixHint(t *testing.T) {
 
 	t.Run("a missing .git-suffixed repo suggests dropping the suffix", func(t *testing.T) {
 		t.Parallel()
-		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepoMiss(t), "paul", "dogbark.git")
+		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepo(t, nil), "paul", "dogbark.git")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), `no repo named "dogbark.git"`)
 		require.Contains(t, err.Error(), "retry as /et/paul/dogbark")
@@ -305,7 +300,7 @@ func TestResolveNativeCloneURL_GitSuffixHint(t *testing.T) {
 
 	t.Run("a missing repo without the suffix gets no hint", func(t *testing.T) {
 		t.Parallel()
-		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepoMiss(t), "paul", "dogbark")
+		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepo(t, nil), "paul", "dogbark")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), `no repo named "dogbark"`)
 		require.NotContains(t, err.Error(), "retry as")
@@ -323,39 +318,8 @@ func TestHintDroppedGitSuffix(t *testing.T) {
 
 	miss := noRepoNamedErr("dogbark.git")
 	got := hintDroppedGitSuffix(miss, "paul", "dogbark.git")
-	require.ErrorIs(t, got, miss)
+	require.ErrorIs(t, got, errNoRepoNamed)
 	require.Contains(t, got.Error(), "retry as /et/paul/dogbark")
-}
-
-// TestWarnNativeURLGitSuffix covers the passthrough half: a full entire:// URL
-// gets no lookup of ours, so the note can only be printed after `git clone`
-// has failed, and only for the path shape where the server does not strip the
-// suffix.
-func TestWarnNativeURLGitSuffix(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		cloneURL string
-		wantNote bool
-	}{
-		{name: "native path with the suffix", cloneURL: "entire://host/et/paul/dogbark.git", wantNote: true},
-		{name: "native path without it", cloneURL: "entire://host/et/paul/dogbark"},
-		{name: "mirror path has the suffix stripped server-side", cloneURL: "entire://host/gh/entirehq/entire-api.git"},
-		{name: "suffix not at the end of the path", cloneURL: "entire://host/et/paul/dogbark.git/extra"},
-		{name: "not a clone URL", cloneURL: "/et/paul/dogbark.git"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var buf bytes.Buffer
-			warnNativeURLGitSuffix(&buf, tt.cloneURL)
-			if !tt.wantNote {
-				require.Empty(t, buf.String())
-				return
-			}
-			require.Contains(t, buf.String(), "a /et/ path keeps its .git suffix")
-		})
-	}
 }
 
 // TestRepoClone_NativeRefRejectsClusterFlag locks in that --cluster (a mirror

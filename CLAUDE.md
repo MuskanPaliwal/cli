@@ -112,9 +112,11 @@ the commands are always runnable in every build.
   only, and `foo.git` is a legal native repo name, so the suffix is never
   stripped or refused while parsing — a `/et/` ref keeps it, and the advice to
   drop it is attached where it is provably the cause: the repo-name lookup miss
-  (`hintDroppedGitSuffix`, keyed on the typed `noRepoNamedError`), or, for a
-  passthrough `entire://` URL that we never look up, a hedged note after
-  `git clone` fails (`warnNativeURLGitSuffix`).
+  (`hintDroppedGitSuffix`, keyed on the `errNoRepoNamed` sentinel). A full
+  `entire://` URL gets no equivalent hint, deliberately — `clone` performs no
+  lookup on that branch, so it could only guess at a failed clone's cause;
+  git-remote-entire's `fatalMessage` holds both the parsed URL and the
+  classified transfer error, and is where the unhedged version belongs.
 - `grant`: manage access grants and org membership — `org`, `project`, and `repo`
   each support `add` / `list` / `remove`
 
