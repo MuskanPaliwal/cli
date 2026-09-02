@@ -168,7 +168,7 @@ func ParseAllCheckpointsFromFinalTrailerBlock(commitMessage string) []checkpoint
 	seen := make(map[string]bool)
 	ids := make([]checkpointID.CheckpointID, 0, len(lines))
 	for _, line := range lines {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		key, value, ok := strings.Cut(line, ":")
 		if !ok || key != CheckpointTrailerKey {
 			continue
 		}
@@ -291,7 +291,6 @@ func AppendCheckpointTrailer(message, checkpointID string) string {
 // "yes, applied."
 func HasOPFApplied(commitMessage string) bool {
 	for _, line := range finalTrailerBlock(commitMessage) {
-		line = strings.TrimSpace(line)
 		key, value, ok := strings.Cut(line, ":")
 		if !ok || key != OPFAppliedTrailerKey {
 			continue
@@ -314,15 +313,25 @@ func finalTrailerBlock(message string) []string {
 		i--
 	}
 	end := i + 1
-	for i >= 0 && IsTrailerLine(strings.TrimSpace(lines[i])) {
+	for i >= 0 && strings.TrimSpace(lines[i]) != "" {
 		i--
 	}
 	start := i + 1
 	if start == end {
 		return nil
 	}
-	if i >= 0 && strings.TrimSpace(lines[i]) != "" {
-		return nil
+
+	seenTrailer := false
+	for _, line := range lines[start:end] {
+		switch {
+		case IsTrailerLine(line):
+			seenTrailer = true
+		case seenTrailer && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")):
+			// Git treats an indented line after a trailer as a continuation
+			// of that trailer's value, never as a new trailer.
+		default:
+			return nil
+		}
 	}
 	return lines[start:end]
 }

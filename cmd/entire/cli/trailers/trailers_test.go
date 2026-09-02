@@ -61,6 +61,8 @@ func TestIsTrailerLine(t *testing.T) {
 	}{
 		{"Signed-off-by: User <user@example.com>", true},
 		{"Entire-Checkpoint: abc123def456", true},
+		{"  Entire-Checkpoint: abc123def456", false},
+		{"\tEntire-Checkpoint: abc123def456", false},
 		{"not a trailer", false},
 		{"error: connection refused", true}, // "error" is a valid trailer key format
 		{"", false},
@@ -367,6 +369,26 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 		{
 			name:    "checkpoint key embedded in another trailer value ignored",
 			message: "Message\n\nNotes: Entire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "indented checkpoint is not a trailer",
+			message: "Message\n\n  Entire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "tab-indented checkpoint is not a trailer",
+			message: "Message\n\n\tEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "continuation after checkpoint remains in trailer block",
+			message: "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n continuation text\nSigned-off-by: Test User <test@example.com>\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:    "continuation of another trailer does not become checkpoint",
+			message: "Message\n\nNotes: details\n  Entire-Checkpoint: a1b2c3d4e5f6\n",
 			want:    nil,
 		},
 	}
