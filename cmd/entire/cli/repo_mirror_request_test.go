@@ -436,11 +436,11 @@ func TestCreateAndAwaitMirror_AsyncCancellation(t *testing.T) {
 	}
 }
 
-func TestRepoMirrorCreate_AsyncDefault(t *testing.T) {
+func TestRepoMirrorCreate_AsyncDefaultWhenSettingsFail(t *testing.T) {
 	useFastMirrorPolling(t)
 
 	setupTestRepo(t)
-	writeSettings(t, `{"enabled":true}`)
+	writeSettings(t, `{`)
 
 	requestPolls := 0
 	var paths []string

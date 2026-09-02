@@ -493,7 +493,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 			"  entire repo mirror create github.com/octocat/hello-world aws-us-east-2.entire.io",
 		Args: cobra.RangeArgs(0, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := mirrorCreateOptions{noWait: noWait, timeout: waitTimeout}
+			opts := mirrorCreateOptions{async: true, noWait: noWait, timeout: waitTimeout}
 			if settings, err := LoadEntireSettings(cmd.Context()); err == nil {
 				opts.async = settings.IsAsyncMirrorRequestsEnabled()
 			}
