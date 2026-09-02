@@ -129,9 +129,12 @@ func PostOAuthToken(ctx context.Context, httpClient *http.Client, coreURL string
 	// copies the request body unconditionally — a POST body is not
 	// protected the way a bearer header is. Guard here, once, for every
 	// caller, rather than requiring each constructed *http.Client to set
-	// its own CheckRedirect. A shallow copy avoids mutating (and
-	// overriding any redirect policy already set on) a client instance
-	// callers may share elsewhere.
+	// its own CheckRedirect. The guard is applied to a shallow copy so a
+	// client instance callers may share elsewhere is not mutated; note
+	// that it does take precedence over any CheckRedirect the caller had
+	// set, for the duration of this request. No caller sets one today,
+	// and a caller that needs a different policy here should be given a
+	// same-host-preserving hook rather than having this guard removed.
 	guarded := *httpClient
 	guarded.CheckRedirect = rejectCrossHostRedirect
 	resp, err := guarded.Do(req)

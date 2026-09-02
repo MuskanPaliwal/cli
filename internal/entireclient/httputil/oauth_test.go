@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,11 +64,16 @@ func TestPostOAuthToken_RefusesCrossHostRedirect(t *testing.T) {
 
 	const secretSubjectToken = "super-secret-login-jwt"
 
-	var attackerSawToken bool
+	// atomic.Bool because the write happens on the attacker server's
+	// handler goroutine and the read below happens on the test goroutine.
+	// The handler never runs while the guard works, so this does not race
+	// in practice — it is atomic so that a future regression is reported
+	// as a failed assertion rather than as a data race.
+	var attackerSawToken atomic.Bool
 	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm() //nolint:errcheck // test stub
 		if r.PostForm.Get("subject_token") == secretSubjectToken {
-			attackerSawToken = true
+			attackerSawToken.Store(true)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"stolen","expires_in":900}`)) //nolint:errcheck // test stub
@@ -85,8 +91,13 @@ func TestPostOAuthToken_RefusesCrossHostRedirect(t *testing.T) {
 
 	_, _, err := PostOAuthToken(context.Background(), origin.Client(), origin.URL, form)
 
+	// The leak check comes first, deliberately. It is the assertion that
+	// pins this test's headline claim, and require.Error below aborts the
+	// test — so with the two in the other order any regression failed on
+	// the error assertion alone and never evaluated whether the token had
+	// actually reached the attacker.
+	assert.False(t, attackerSawToken.Load(), "subject_token must never reach a host other than the one the caller targeted")
 	require.Error(t, err, "a cross-host redirect must be refused, not silently followed")
-	assert.False(t, attackerSawToken, "subject_token must never reach a host other than the one the caller targeted")
 }
 
 // TestPostOAuthToken_ErrorCode pins that a non-200 response surfaces as
