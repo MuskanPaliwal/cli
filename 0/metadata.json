@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1GS5TTQ68XZMB4C8000WPP7",
+  "session_id": "01a06160-2af2-7f11-8e81-c96e934c4279",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-02T10:03:34.613122Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/persistent_ref_update.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update_test.go",
+    "cmd/entire/cli/gitrepo/ref_cas.go",
+    "cmd/entire/cli/gitrepo/ref_cas_test.go",
+    "cmd/entire/cli/gitrepo/reftable.go",
+    "cmd/entire/cli/gitrepo/reftable_test.go",
+    "cmd/entire/cli/internal/flock/flock_test.go",
+    "cmd/entire/cli/internal/flock/flock_unix.go",
+    "cmd/entire/cli/internal/flock/flock_windows.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "8088d70b6935",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 194537,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7297024,
+    "output_tokens": 36957,
+    "api_call_count": 64
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-02T10:03:34.545061Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 111,
+    "total_committed": 0,
+    "total_lines_changed": 111,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 130,
+      "user_lines_removed": 111,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_ref_update.go": 2,
+        "cmd/entire/cli/checkpoint/persistent_ref_update_test.go": 24,
+        "cmd/entire/cli/gitrepo/ref_cas.go": 19,
+        "cmd/entire/cli/gitrepo/ref_cas_test.go": 55,
+        "cmd/entire/cli/gitrepo/reftable.go": 1,
+        "cmd/entire/cli/gitrepo/reftable_test.go": 7,
+        "cmd/entire/cli/internal/flock/flock_unix.go": 14,
+        "cmd/entire/cli/internal/flock/flock_windows.go": 8
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_ref_update.go": 27,
+        "cmd/entire/cli/checkpoint/persistent_ref_update_test.go": 19,
+        "cmd/entire/cli/gitrepo/ref_cas.go": 8,
+        "cmd/entire/cli/gitrepo/reftable.go": 1,
+        "cmd/entire/cli/internal/flock/flock_test.go": 41,
+        "cmd/entire/cli/internal/flock/flock_unix.go": 8,
+        "cmd/entire/cli/internal/flock/flock_windows.go": 7
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 130,
+      "agent_lines_removed": 111
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 130,
+      "agent_lines_removed": 111
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 130,
+      "agent_lines_removed": 111
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 130,
+      "agent_lines_removed": 111
+    }
+  ]
+}
