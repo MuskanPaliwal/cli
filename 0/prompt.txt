@@ -1,0 +1,21 @@
+the issue 2091 got one more comment where it ignore our pr: https://github.com/entireio/cli/issues/2091#issuecomment-5495285673 we need to give the maintainers a heads up that pr 2131 fixes some of the item b. can you check and help me draft a pr?
+
+---
+
+unslop
+
+---
+
+what is 2b?
+
+---
+
+check my open prs and see if i have this addressed too?
+
+---
+
+check my open prs and see if i have this addressed too? but before that we should post the draft comment on the issue
+
+---
+
+we are working on stage 3 locally. chcek if that part has this?
