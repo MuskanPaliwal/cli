@@ -100,20 +100,13 @@ verified release archive because the Scoop bucket only publishes stable builds.
     }
 
     function Get-PlatformArchitecture {
-        # PROCESSOR_ARCHITEW6432 identifies the native OS architecture when
-        # this script is running in a 32-bit PowerShell process.
-        $architecture = $env:PROCESSOR_ARCHITEW6432
-        if ([string]::IsNullOrWhiteSpace($architecture)) {
-            $architecture = $env:PROCESSOR_ARCHITECTURE
-        }
-
-        if ([string]::IsNullOrWhiteSpace($architecture)) {
-            throw "Cannot determine the Windows architecture."
-        }
+        # OSArchitecture is the machine, not this process. PROCESSOR_* env
+        # vars report AMD64 for x64 PowerShell on ARM64 Windows.
+        $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
 
         switch ($architecture.ToUpperInvariant()) {
-            { $_ -in @("AMD64", "X86_64") } { return "amd64" }
-            { $_ -in @("ARM64", "AARCH64") } { return "arm64" }
+            "X64" { return "amd64" }
+            "ARM64" { return "arm64" }
             default { throw "Unsupported architecture: $architecture" }
         }
     }
