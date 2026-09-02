@@ -151,6 +151,9 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
+	// AsyncMirrorRequests selects the async mirror creation route.
+	AsyncMirrorRequests bool `json:"async_mirror_requests,omitempty"`
+
 	// SummaryGeneration stores provider preferences for explain --generate.
 	// This is separate from strategy_options.summarize, which controls
 	// checkpoint auto-summarize behavior.
@@ -1294,6 +1297,9 @@ func mergeScalarFields(settings *EntireSettings, raw map[string]json.RawMessage)
 		return err
 	}
 	if err := mergeRawBool(raw, "external_agents", &settings.ExternalAgents); err != nil {
+		return err
+	}
+	if err := mergeRawBool(raw, "async_mirror_requests", &settings.AsyncMirrorRequests); err != nil {
 		return err
 	}
 	if err := mergeRawBool(raw, "vercel", &settings.Vercel); err != nil {
