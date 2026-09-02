@@ -63,38 +63,62 @@ verified release archive because the Scoop bucket only publishes stable builds.
 "@
     }
 
+    function Invoke-Scoop {
+        param(
+            [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
+            [string[]] $ScoopArgs
+        )
+
+        # Native stderr redirected with 2>&1 becomes ErrorRecord. With
+        # $ErrorActionPreference Stop that is terminating even when scoop
+        # exits 0 (update notices, deprecation warnings).
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & "scoop" @ScoopArgs 2>&1
+            return @{
+                ExitCode = [int] $LASTEXITCODE
+                Output   = $output
+            }
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+    }
+
     function Install-EntireWithScoop {
         Write-Info "Scoop detected; installing Entire CLI with Scoop..."
 
-        $bucketOutput = & "scoop" bucket list 2>&1
-        $bucketExitCode = $LASTEXITCODE
-        if ($bucketExitCode -ne 0) {
-            $details = ($bucketOutput | Out-String).Trim()
+        $listed = Invoke-Scoop bucket list
+        if ($listed.ExitCode -ne 0) {
+            $details = ($listed.Output | Out-String).Trim()
             throw "Failed to list Scoop buckets. $details"
         }
 
-        $bucketList = $bucketOutput | Out-String
+        $bucketList = $listed.Output | Out-String
         if ($bucketList -notmatch "(?im)^\s*entire(?:\s|$)") {
             Write-Info "Adding the Entire Scoop bucket..."
-            & "scoop" bucket add entire $ScoopBucketUrl
-            if ($LASTEXITCODE -ne 0) {
+            $added = Invoke-Scoop bucket add entire $ScoopBucketUrl
+            if ($added.ExitCode -ne 0) {
                 throw "Failed to add the Entire Scoop bucket."
             }
         }
 
-        & "scoop" prefix entire *> $null
-        $isInstalled = $LASTEXITCODE -eq 0
+        $probe = Invoke-Scoop prefix entire
+        $isInstalled = $probe.ExitCode -eq 0
         if ($isInstalled) {
             Write-Info "Updating Entire CLI with Scoop..."
-            & "scoop" update entire/entire
+            $updated = Invoke-Scoop update entire/entire
+            if ($updated.ExitCode -ne 0) {
+                throw "Scoop failed to install Entire CLI."
+            }
         }
         else {
             Write-Info "Installing Entire CLI with Scoop..."
-            & "scoop" install entire/entire
-        }
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Scoop failed to install Entire CLI."
+            $installed = Invoke-Scoop install entire/entire
+            if ($installed.ExitCode -ne 0) {
+                throw "Scoop failed to install Entire CLI."
+            }
         }
 
         Write-Success "Entire CLI installed with Scoop"
@@ -131,7 +155,9 @@ verified release archive because the Scoop bucket only publishes stable builds.
             $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
         }
 
-        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec
+        # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
+        # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
+        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec -UseBasicParsing
     }
 
     function Get-ReleaseVersion {
@@ -142,10 +168,10 @@ verified release archive because the Scoop bucket only publishes stable builds.
             $releases = Invoke-GitHubApi -Uri $uri
             $release = $null
 
-            # Windows PowerShell 5.1 returns a JSON array from
-            # Invoke-RestMethod as one pipeline object. A Where-Object pipeline
-            # would therefore test the whole release list at once instead of
-            # each release, so enumerate it explicitly.
+            # GitHub returns created_at descending. The first *nightly* tag is
+            # the latest nightly. Windows PowerShell 5.1 returns a JSON array
+            # from Invoke-RestMethod as one pipeline object, so enumerate it
+            # explicitly instead of piping to Where-Object.
             foreach ($candidate in $releases) {
                 if ($candidate.tag_name -like "*nightly*") {
                     $release = $candidate
@@ -354,11 +380,11 @@ verified release archive because the Scoop bucket only publishes stable builds.
         if ($SelectedChannel -eq "stable" -and $null -ne $scoopCommand) {
             Install-EntireWithScoop
 
-            $prefixOutput = & "scoop" prefix entire 2>&1
-            if ($LASTEXITCODE -ne 0) {
+            $prefixResult = Invoke-Scoop prefix entire
+            if ($prefixResult.ExitCode -ne 0) {
                 throw "Scoop installed Entire CLI, but its installation path could not be resolved."
             }
-            $scoopPrefix = ($prefixOutput | Select-Object -First 1).ToString().Trim()
+            $scoopPrefix = ($prefixResult.Output | Select-Object -First 1).ToString().Trim()
             $scoopRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scoopPrefix))
             $scoopShim = Join-Path $scoopRoot "shims\entire.exe"
 
