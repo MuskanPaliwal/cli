@@ -51,7 +51,18 @@ var (
 )
 
 func parseGitHubURL(rawURL string) (owner, repo string, err error) {
-	for _, re := range []*regexp.Regexp{gitHubHTTPSRe, gitHubSSHRe, gitHubBareRe} {
+	return matchGitHubURL(rawURL, gitHubHTTPSRe, gitHubSSHRe, gitHubBareRe)
+}
+
+// parseHostedGitHubURL accepts only the github.com-hosted shapes (https, ssh),
+// not the bare `owner/repo` one, for callers where a bare pair means something
+// else (the native clone shorthand). Same dot-only guard as parseGitHubURL.
+func parseHostedGitHubURL(rawURL string) (owner, repo string, err error) {
+	return matchGitHubURL(rawURL, gitHubHTTPSRe, gitHubSSHRe)
+}
+
+func matchGitHubURL(rawURL string, res ...*regexp.Regexp) (owner, repo string, err error) {
+	for _, re := range res {
 		m := re.FindStringSubmatch(rawURL)
 		if m == nil {
 			continue
