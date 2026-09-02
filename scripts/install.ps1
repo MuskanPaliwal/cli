@@ -548,9 +548,11 @@ Scoop chooses its own install location and manages its own PATH entry, so
                         $machineConflict = $true
                         Write-Host "!"
                         Write-Host "! $($cmd.Source) is on the machine-wide PATH, which Windows places"
-                        Write-Host "! ahead of your user PATH. It will win in a new terminal even though"
-                        Write-Host "! this session now resolves to the new install. Remove it, or run"
-                        Write-Host "! entire from $resolvedInstallDir explicitly."
+                        Write-Host "! ahead of your user PATH, so it wins in a new terminal however your"
+                        Write-Host "! user PATH is ordered. Remove that copy, or drop its directory from"
+                        Write-Host "! the machine PATH (needs an administrator). To install over it"
+                        Write-Host "! instead, rerun with:"
+                        Write-Host "!   -InstallDir $(Split-Path -Parent $cmd.Source)"
                     }
                 }
 
