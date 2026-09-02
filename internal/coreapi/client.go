@@ -120,7 +120,7 @@ func clientForTarget(target auth.ControlPlaneTarget) (*Client, error) {
 	base := strings.TrimRight(target.CoreURL, "/")
 	httpClient, err := newCrossJurisHTTPClient(base)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build cross-juris HTTP client: %w", err)
 	}
 	client, err := NewClient(base+apiBasePath, src, WithClient(httpClient))
 	if err != nil {
@@ -152,7 +152,7 @@ func NewWithBearer(coreBaseURL, token string) (*Client, error) {
 	base := strings.TrimRight(coreBaseURL, "/")
 	httpClient, err := newCrossJurisHTTPClient(base)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build cross-juris HTTP client: %w", err)
 	}
 	client, err := NewClient(base+apiBasePath, staticBearer{token: token}, WithClient(httpClient))
 	if err != nil {
