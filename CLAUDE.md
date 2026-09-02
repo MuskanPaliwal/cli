@@ -88,8 +88,13 @@ the commands are always runnable in every build.
   choose a placement through the shared `selectPlacement` picker. `clone`
   accepts a native `/et/<project>/<repo>` ref (or the `<project>/<repo>`
   shorthand — the `gh`/`et` forge tokens can never be project names, which are
-  3+ chars server-side, so the grammar is unambiguous), a mirror
-  `/gh/<owner>/<repo>` ref, or a full `entire://` URL passed through verbatim.
+  3+ chars server-side, so the grammar is unambiguous; both segments must also
+  match the server's name charsets, so `git@github.com:foo/bar` is not a
+  shorthand), a mirror `/gh/<owner>/<repo>` ref, or a full `entire://` URL
+  passed through verbatim. A ref matching none of these gets a targeted error
+  (`invalidCloneRefError`): a GitHub URL is pointed at its `/gh/` form, a
+  malformed `gh/` ref keeps the mirror parser's reason, anything else lists
+  the accepted shapes.
   A native ref resolves project → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, and clones
   `entire://<clusterHost><path>` from the repo's home cluster (no `.git`

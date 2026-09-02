@@ -59,6 +59,13 @@ func TestParseNativeCloneRef(t *testing.T) {
 		{name: "no leading slash", ref: "et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
 		{name: "shorthand", ref: "paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
 		{name: "shorthand leading slash", ref: "/paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
+		{name: "uppercase folds server-side", ref: "Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark", wantOk: true},
+		{name: "dotted repo", ref: "paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el", wantOk: true},
+		{name: "ssh github url is not a shorthand", ref: "git@github.com:foo/bar", wantOk: false},
+		{name: "ssh github url with .git", ref: "git@github.com:foo/bar.git", wantOk: false},
+		{name: "dotted project", ref: "github.com/dogbark", wantOk: false},
+		{name: "underscore in project", ref: "foo_bar/dogbark", wantOk: false},
+		{name: "space in repo", ref: "paul/dog bark", wantOk: false},
 		{name: "gh ref is not native", ref: "/gh/entirehq/entire-api", wantOk: false},
 		{name: "truncated gh ref is not a shorthand", ref: "/gh/entirehq", wantOk: false},
 		{name: "truncated et ref", ref: "/et/paul", wantOk: false},
@@ -78,6 +85,37 @@ func TestParseNativeCloneRef(t *testing.T) {
 			}
 			require.Equal(t, tt.wantProject, project)
 			require.Equal(t, tt.wantRepo, repo)
+		})
+	}
+}
+
+func TestInvalidCloneRefError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		ref      string
+		want     string
+		dontWant string
+	}{
+		{name: "ssh github url points at /gh/", ref: "git@github.com:Foo/Bar", want: "pass GitHub mirrors as /gh/foo/bar"},
+		{name: "https github url points at /gh/", ref: "https://github.com/foo/bar.git", want: "pass GitHub mirrors as /gh/foo/bar"},
+		{name: "bad owner keeps parser reason", ref: "/gh/foo_bar/baz", want: "owner: letters, digits, '-'", dontWant: "/et/<project>/<repo>"},
+		{name: "dot-only repo keeps parser reason", ref: "/gh/foo/..", want: "repo cannot be dot-only", dontWant: "/et/<project>/<repo>"},
+		{name: "missing repo keeps parser reason", ref: "gh/foo", want: "expected gh/<owner>/<repo>", dontWant: "/et/<project>/<repo>"},
+		{name: "unknown shape lists all shapes", ref: "/gl/foo/bar", want: cloneRefShapes, dontWant: "expected gh/"},
+		{name: "single segment lists all shapes", ref: "dogbark", want: cloneRefShapes},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, _, parseErr := parseMirrorCloneRef(tt.ref)
+			require.Error(t, parseErr)
+			got := invalidCloneRefError(tt.ref, parseErr).Error()
+			require.Contains(t, got, `invalid <repo> "`+tt.ref+`"`)
+			require.Contains(t, got, tt.want)
+			if tt.dontWant != "" {
+				require.NotContains(t, got, tt.dontWant)
+			}
 		})
 	}
 }
