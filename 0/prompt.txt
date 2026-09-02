@@ -1,0 +1,5 @@
+review the pr 2241
+
+---
+
+https://github.com/entireio/cli/pull/2241#issuecomment-5511224983 we got this comment too. let's address the issue and the findings too
