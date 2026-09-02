@@ -45,7 +45,7 @@ func (a *PiAgent) HookNames() []string {
 //   - session_start       → SessionStart
 //   - before_agent_start  → TurnStart
 //   - agent_end           → TurnEnd
-//   - session_shutdown    → (cleanup-only, no lifecycle event — see ParseHookEvent)
+//   - session_shutdown    → (no lifecycle event — see ParseHookEvent)
 func (a *PiAgent) GetSupportedHooks() []agent.HookType {
 	return []agent.HookType{
 		agent.HookSessionStart,
