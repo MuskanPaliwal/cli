@@ -99,6 +99,7 @@ func TestInvalidCloneRefError(t *testing.T) {
 	}{
 		{name: "ssh github url points at /gh/", ref: "git@github.com:Foo/Bar", want: "pass GitHub mirrors as /gh/foo/bar"},
 		{name: "https github url points at /gh/", ref: "https://github.com/foo/bar.git", want: "pass GitHub mirrors as /gh/foo/bar"},
+		{name: "dot-only github url gets no /gh/ hint", ref: "git@github.com:foo/..", want: cloneRefShapes, dontWant: "/gh/foo/.."},
 		{name: "bad owner keeps parser reason", ref: "/gh/foo_bar/baz", want: "owner: letters, digits, '-'", dontWant: "/et/<project>/<repo>"},
 		{name: "dot-only repo keeps parser reason", ref: "/gh/foo/..", want: "repo cannot be dot-only", dontWant: "/et/<project>/<repo>"},
 		{name: "missing repo keeps parser reason", ref: "gh/foo", want: "expected gh/<owner>/<repo>", dontWant: "/et/<project>/<repo>"},

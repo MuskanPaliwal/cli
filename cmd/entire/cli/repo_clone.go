@@ -138,13 +138,11 @@ const cloneRefShapes = "/et/<project>/<repo>, <project>/<repo>, /gh/<owner>/<rep
 // repo charset, dot-only repo, missing segment), and anything else gets the
 // list of accepted shapes.
 func invalidCloneRefError(ref string, mirrorErr error) error {
-	// Only the hosted github.com forms, not gitHubBareRe: bare `x/y` is what
-	// the native shorthand already rejected, and a truncated `gh/foo` would
-	// otherwise read as owner "gh".
-	for _, re := range []*regexp.Regexp{gitHubHTTPSRe, gitHubSSHRe} {
-		if m := re.FindStringSubmatch(ref); m != nil {
-			return fmt.Errorf("invalid <repo> %q: pass GitHub mirrors as /gh/%s/%s", ref, strings.ToLower(m[1]), strings.ToLower(m[2]))
-		}
+	// Hosted forms only: bare `x/y` is what the native shorthand already
+	// rejected, and a truncated `gh/foo` would otherwise read as owner "gh".
+	// The parser's dot-only guard also keeps `foo/..` out of the hint.
+	if owner, repo, err := parseHostedGitHubURL(ref); err == nil {
+		return fmt.Errorf("invalid <repo> %q: pass GitHub mirrors as /gh/%s/%s", ref, owner, repo)
 	}
 	if mirrorCloneRefPrefixRe.MatchString(ref) {
 		return fmt.Errorf("invalid <repo> %q: %w", ref, mirrorErr)
