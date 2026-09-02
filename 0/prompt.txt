@@ -1,0 +1,1 @@
+we need to implement gmt 002 from plan.md which is in  git-metadata-traversal worktree. we will have to take a pull from the gmt 001 wokrtree for this to start i guess

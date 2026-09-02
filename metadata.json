@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.4-nightly.202608280917.20dc86ea5",
+  "checkpoint_id": "01M1HFKF1ERFGCAZAF4AN18Q1B",
+  "strategy": "manual-commit",
+  "branch": "refactor-checkpoint-metadata-resolution",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/ephemeral.go",
+    "cmd/entire/cli/checkpoint/git_common_dir.go",
+    "cmd/entire/cli/checkpoint/git_common_dir_test.go",
+    "cmd/entire/cli/checkpoint/metadata_resolution_test.go",
+    "cmd/entire/cli/checkpoint/migrate_test.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update_test.go",
+    "cmd/entire/cli/checkpoint/pushqueue.go",
+    "cmd/entire/cli/checkpoint/redact_cache.go",
+    "cmd/entire/cli/checkpoint/redact_cache_scope_test.go",
+    "cmd/entire/cli/checkpoint/refs_store.go",
+    "cmd/entire/cli/checkpoint/refs_store_test.go",
+    "cmd/entire/cli/checkpoint/repository_metadata.go",
+    "cmd/entire/cli/checkpoint/shadow_ref.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 189412,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 9364480,
+    "output_tokens": 24569,
+    "api_call_count": 76
+  }
+}
