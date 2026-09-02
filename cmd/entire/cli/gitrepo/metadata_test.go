@@ -129,6 +129,25 @@ func TestResolveWorktreeMetadata_RealGitLayouts(t *testing.T) {
 		require.Equal(t, alias, got.CommonDir)
 	})
 
+	t.Run("symlink-aliased linked-worktree registration", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == windowsOS {
+			t.Skip("symlink creation requires privileges on some Windows builders")
+		}
+		mainRoot, linked := conventionalMetadataWorktree(t, "registration-alias")
+		metadata := assertMetadataMatchesGit(t, linked, "registration-alias")
+		alias := filepath.Join(t.TempDir(), "registration")
+		require.NoError(t, os.Symlink(metadata.GitDir, alias))
+		writeMetadataFile(t, filepath.Join(linked, gitDir), "gitdir: "+alias+"\n")
+
+		got := assertMetadataMatchesGit(t, linked, "registration-alias")
+		require.Equal(t, alias, got.GitDir)
+		requireSameDirectory(t, filepath.Join(mainRoot, gitDir), got.CommonDir)
+		repo, err := OpenPath(linked)
+		require.NoError(t, err)
+		require.NoError(t, repo.Close())
+	})
+
 	t.Run("symlink-aliased worktree root", func(t *testing.T) {
 		t.Parallel()
 		if runtime.GOOS == windowsOS {
@@ -175,6 +194,17 @@ func TestResolveWorktreeMetadata_MovedRegistrationPreservesFacts(t *testing.T) {
 	require.Equal(t, before.GitDir, metadata.GitDir)
 	requireSameDirectory(t, filepath.Join(mainRoot, gitDir), metadata.CommonDir)
 	require.Equal(t, "moved", metadata.WorktreeID)
+}
+
+func TestResolveWorktreeMetadata_WhitespaceOnlyRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "   ")
+	initMetadataRepo(t, root)
+	t.Chdir(parent)
+
+	metadata, err := ResolveWorktreeMetadata("   ")
+	require.NoError(t, err)
+	requireSameDirectory(t, filepath.Join(root, gitDir), metadata.GitDir)
 }
 
 func TestResolveWorktreeMetadata_IgnoresGitEnvironment(t *testing.T) {
@@ -325,6 +355,18 @@ func TestResolveWorktreeMetadata_MalformedMetadata(t *testing.T) {
 			want: "inspect .git entry",
 		},
 		{
+			name: ".git symlink loop",
+			setup: func(t *testing.T) string {
+				if runtime.GOOS == windowsOS {
+					t.Skip("symlink creation requires privileges on some Windows builders")
+				}
+				root := t.TempDir()
+				require.NoError(t, os.Symlink(gitDir, filepath.Join(root, gitDir)))
+				return root
+			},
+			want: "inspect .git entry",
+		},
+		{
 			name: "missing Git directory",
 			setup: func(t *testing.T) string {
 				root := t.TempDir()
@@ -434,6 +476,9 @@ func TestResolveWorktreeMetadata_MalformedMetadata(t *testing.T) {
 			root := tt.setup(t)
 			metadata, err := ResolveWorktreeMetadata(root)
 			require.ErrorContains(t, err, tt.want)
+			if tt.name != "absent .git" {
+				require.NotErrorIs(t, err, ErrWorktreeMetadataNotFound)
+			}
 			require.Equal(t, WorktreeMetadata{}, metadata)
 		})
 	}

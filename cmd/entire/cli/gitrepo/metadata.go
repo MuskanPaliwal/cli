@@ -26,7 +26,7 @@ type WorktreeMetadata struct {
 // worktree root. It does not discover a root, inspect Git environment
 // variables, run Git, cache results, or decide caller policy.
 func ResolveWorktreeMetadata(worktreeRoot string) (WorktreeMetadata, error) {
-	if strings.TrimSpace(worktreeRoot) == "" {
+	if worktreeRoot == "" {
 		return WorktreeMetadata{}, errors.New("worktree root is required")
 	}
 
@@ -96,11 +96,11 @@ func resolveWorktreeGitDir(worktreeRoot string) (string, error) {
 		return "", fmt.Errorf("parse .git file at %s: empty gitdir value", gitEntry)
 	}
 
-	resolved := resolveMetadataPath(worktreeRoot, pointer)
-	if err := requireMetadataDirectory("Git directory", resolved); err != nil {
+	resolved, err := resolveMetadataDirectory("Git directory", worktreeRoot, pointer)
+	if err != nil {
 		return "", err
 	}
-	return filepath.Clean(resolved), nil
+	return resolved, nil
 }
 
 func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
@@ -125,11 +125,11 @@ func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
 		return "", fmt.Errorf("parse commondir file at %s: empty value", commonFile)
 	}
 
-	resolved := resolveMetadataPath(gitDirPath, pointer)
-	if err := requireMetadataDirectory("common Git directory", resolved); err != nil {
+	resolved, err := resolveMetadataDirectory("common Git directory", gitDirPath, pointer)
+	if err != nil {
 		return "", err
 	}
-	return filepath.Clean(resolved), nil
+	return resolved, nil
 }
 
 func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
@@ -142,15 +142,26 @@ func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
 	}
 
 	registrationRoot := filepath.Join(commonDir, "worktrees")
-	same, err = metadataDirectoriesIdentifySameFile(filepath.Dir(gitDirPath), registrationRoot)
+	registrationPath := gitDirPath
+	same, err = metadataDirectoriesIdentifySameFile(filepath.Dir(registrationPath), registrationRoot)
 	if err != nil {
 		return "", fmt.Errorf("validate linked-worktree registration for %s: %w", gitDirPath, err)
 	}
 	if !same {
-		return "", fmt.Errorf("git directory %s is not an immediate child of %s", gitDirPath, registrationRoot)
+		registrationPath, err = filepath.EvalSymlinks(gitDirPath)
+		if err != nil {
+			return "", fmt.Errorf("resolve linked-worktree registration %s: %w", gitDirPath, err)
+		}
+		same, err = metadataDirectoriesIdentifySameFile(filepath.Dir(registrationPath), registrationRoot)
+		if err != nil {
+			return "", fmt.Errorf("validate linked-worktree registration for %s: %w", gitDirPath, err)
+		}
+		if !same {
+			return "", fmt.Errorf("git directory %s is not an immediate child of %s", gitDirPath, registrationRoot)
+		}
 	}
 
-	id := filepath.Base(gitDirPath)
+	id := filepath.Base(registrationPath)
 	if id == "." || id == string(filepath.Separator) || id == "" {
 		return "", fmt.Errorf("git directory %s has no worktree registration name", gitDirPath)
 	}
@@ -166,6 +177,29 @@ func resolveMetadataPath(base, value string) string {
 	return base + string(filepath.Separator) + value
 }
 
+func resolveMetadataDirectory(label, base, value string) (string, error) {
+	resolved := resolveMetadataPath(base, value)
+	if err := requireMetadataDirectory(label, resolved); err != nil {
+		return "", err
+	}
+
+	cleaned := filepath.Clean(resolved)
+	if cleaned == resolved {
+		return cleaned, nil
+	}
+	// Cleaning a path through a symlink before resolving ".." can change which
+	// directory it names, so keep the lexical result only when identity agrees.
+	if same, err := metadataDirectoriesIdentifySameFile(resolved, cleaned); err == nil && same {
+		return cleaned, nil
+	}
+
+	physical, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s at %s: %w", label, resolved, err)
+	}
+	return filepath.Clean(physical), nil
+}
+
 func requireMetadataDirectory(label, path string) error {
 	info, err := os.Stat(path) //nolint:gosec // the explicit-root API resolves caller-selected repository metadata.
 	if err != nil {
@@ -178,7 +212,7 @@ func requireMetadataDirectory(label, path string) error {
 }
 
 func metadataDirectoriesIdentifySameFile(a, b string) (bool, error) {
-	aInfo, err := os.Stat(a)
+	aInfo, err := os.Stat(a) //nolint:gosec // explicit-root metadata paths are validated before identity comparison.
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w", a, err)
 	}
