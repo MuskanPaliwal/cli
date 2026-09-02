@@ -1,0 +1,17 @@
+let's fix this bug which is mentioned in bug-fix-candidates?
+
+---
+
+let's fix this bug which is mentioned in bug-fix-candidates? run-playbook
+
+---
+
+how did you repro it?
+
+---
+
+so what was the issue?
+
+---
+
+are we sure?
