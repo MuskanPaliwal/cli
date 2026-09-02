@@ -277,6 +277,75 @@ func TestAPICheckpointReader_EmptyEnvelopeIsNotFound(t *testing.T) {
 	require.ErrorContains(t, err, "not available")
 }
 
+// If the cell ever answers with a DIFFERENT repo's checkpoint data than the
+// one requested (server bug, cache-key collision, authz bug), the reader must
+// refuse it instead of caching and rendering it labeled as the requested
+// repo. This is the reproduction for the cross-repo checkpoint identity gap.
+func TestAPICheckpointReader_RepoFullNameMismatchIsRejected(t *testing.T) {
+	t.Parallel()
+
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
+			fmt.Fprint(w, `{"type":"user"}`)
+			return
+		}
+		// Same checkpoint payload, but the envelope claims a DIFFERENT repo than
+		// the one the reader was constructed for (testAPIOwnerRep = acme/widgets).
+		fmt.Fprint(w, strings.Replace(checkpointEnvelopeJSON, `"repo_full_name": "acme/widgets"`, `"repo_full_name": "totally-different/other-repo"`, 1))
+	})
+
+	_, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.Error(t, err, "a wrong-repo response must not be accepted as the requested repo's checkpoint")
+	assert.Contains(t, err.Error(), "identity mismatch")
+	assert.Contains(t, err.Error(), "other-repo")
+
+	// The same guard applies to every read tier that flows through loadDetail,
+	// not just Read().
+	_, _, err = reader.ReadSessionMetadataAndPrompts(context.Background(), testAPICheckpointID, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "identity mismatch")
+}
+
+// The repo's own ULID is a legitimate stand-in for repo_full_name (entire-api
+// falls back to it when the repo's display name hasn't resolved yet), so it
+// must NOT be rejected as a mismatch.
+func TestAPICheckpointReader_RepoFullNameAsRepoIDIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
+			fmt.Fprint(w, `{"type":"user"}`)
+			return
+		}
+		fmt.Fprint(w, strings.Replace(checkpointEnvelopeJSON, `"repo_full_name": "acme/widgets"`, `"repo_full_name": "`+testAPIRepoID+`"`, 1))
+	})
+
+	summary, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.NoError(t, err)
+	assert.Equal(t, testAPICheckpointID, summary.CheckpointID)
+}
+
+// If the cell ever answers with a DIFFERENT checkpoint than the one
+// requested, the reader must refuse it rather than relabeling the mismatched
+// content with the requested ID.
+func TestAPICheckpointReader_CheckpointIDMismatchIsRejected(t *testing.T) {
+	t.Parallel()
+
+	const otherCheckpointID = "01KXGTTNGCEACC83QZEJ5YAFOTHER"
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
+			fmt.Fprint(w, `{"type":"user"}`)
+			return
+		}
+		fmt.Fprint(w, strings.Replace(checkpointEnvelopeJSON, `"checkpointId": "01KXGTTNGCEACC83QZEJ5YAF0D"`, `"checkpointId": "`+otherCheckpointID+`"`, 1))
+	})
+
+	_, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.Error(t, err, "a wrong-checkpoint response must not be accepted as the requested checkpoint")
+	assert.Contains(t, err.Error(), "identity mismatch")
+	assert.Contains(t, err.Error(), otherCheckpointID)
+}
+
 func TestAPICheckpointReader_NoSessionsIsAnError(t *testing.T) {
 	t.Parallel()
 
