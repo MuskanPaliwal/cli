@@ -151,7 +151,7 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
-	// AsyncMirrorRequests selects the async mirror creation route.
+	// AsyncMirrorRequests selects the async mirror creation route. Merged settings default to true.
 	AsyncMirrorRequests bool `json:"async_mirror_requests,omitempty"`
 
 	// SummaryGeneration stores provider preferences for explain --generate.
@@ -641,7 +641,10 @@ func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot strin
 
 func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {
 	// Load base settings
-	settings, err := loadFromFile(settingsFileAbs)
+	settings, err := loadFromFileWithDefaults(settingsFileAbs, EntireSettings{
+		Enabled:             true,
+		AsyncMirrorRequests: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("reading settings file: %w", err)
 	}
@@ -1025,9 +1028,11 @@ func writeClonePreferencesAtomic(filePath string, data []byte, perm fs.FileMode)
 // loadFromFile loads settings from a specific file path.
 // Returns default settings if the file doesn't exist.
 func loadFromFile(filePath string) (*EntireSettings, error) {
-	settings := &EntireSettings{
-		Enabled: true, // Default to enabled
-	}
+	return loadFromFileWithDefaults(filePath, EntireSettings{Enabled: true})
+}
+
+func loadFromFileWithDefaults(filePath string, defaults EntireSettings) (*EntireSettings, error) {
+	settings := &defaults
 
 	data, err := readConfined(filePath)
 	if err != nil {

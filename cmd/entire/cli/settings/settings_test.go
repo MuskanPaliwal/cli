@@ -645,8 +645,9 @@ func TestLoad_AsyncMirrorRequestsUsesLayeredSettings(t *testing.T) {
 		local string
 		want  bool
 	}{
-		{name: "unset", base: `{"enabled": true}`},
+		{name: "unset", base: `{"enabled": true}`, want: true},
 		{name: "project setting enabled", base: `{"async_mirror_requests": true}`, want: true},
+		{name: "project setting disabled", base: `{"async_mirror_requests": false}`},
 		{name: "local setting enabled", base: `{"enabled": true}`, local: `{"async_mirror_requests": true}`, want: true},
 		{name: "local false", base: `{"async_mirror_requests": true}`, local: `{"async_mirror_requests": false}`},
 	}
