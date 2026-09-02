@@ -87,19 +87,34 @@ the commands are always runnable in every build.
   non-interactively it repoints `--remote` directly. Both `use` and `clone`
   choose a placement through the shared `selectPlacement` picker. `clone`
   accepts a native `/et/<project>/<repo>` ref (or the `<project>/<repo>`
-  shorthand — the `gh`/`et` forge tokens can never be project names, which are
-  3+ chars server-side, so the grammar is unambiguous; both segments must also
-  match the server's name charsets, so `git@github.com:foo/bar` is not a
   shorthand), a mirror `/gh/<owner>/<repo>` ref, or a full `entire://` URL
-  passed through verbatim. A ref matching none of these gets a targeted error
-  (`invalidCloneRefError`): a GitHub URL is pointed at its `/gh/` form, a
-  malformed `gh/` ref keeps the mirror parser's reason, anything else lists
-  the accepted shapes.
+  passed through verbatim.
+  Both native segments must match the server's whole name shape, not just its
+  charset — the rules `normalizeName` enforces in entiredb
+  `core/resource/project_name.go`: a project is 3–32 chars of letters, digits
+  and `-`, a repo 1–64 with interior `.` also allowed, neither starting or
+  ending with `-` (or `.`), and no consecutive dots. Uppercase is accepted
+  because both lookups fold case (project via `foldProjectName`, repo on
+  `lower(name)`). Two consequences: `git@github.com:foo/bar` is not a
+  shorthand, and the 3-char project minimum is what makes the shorthand
+  unambiguous, since the two-char `gh`/`et` forge tokens can never be project
+  names — a future forge token of 3+ chars would need a guard of its own.
+  A ref matching none of the grammars gets a targeted error
+  (`invalidCloneRefError`): a GitHub URL is pointed at its `/gh/` form; a ref
+  that declared a forge token keeps its own parser's reason (`gh/` the mirror
+  parser's, `et/` the native parser's — the rule its project or repo name
+  broke); anything else, a bare two-segment ref included, lists the accepted
+  shapes, because a ref that declared nothing is equally a mangled URL.
   A native ref resolves project → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, and clones
-  `entire://<clusterHost><path>` from the repo's home cluster (no `.git`
-  suffix — the server strips it for `/gh/` paths only; `--cluster` is
-  rejected on native refs).
+  `entire://<clusterHost><path>` from the repo's home cluster (`--cluster` is
+  rejected on native refs). The server strips a `.git` suffix for `/gh/` paths
+  only, and `foo.git` is a legal native repo name, so the suffix is never
+  stripped or refused while parsing — a `/et/` ref keeps it, and the advice to
+  drop it is attached where it is provably the cause: the repo-name lookup miss
+  (`hintDroppedGitSuffix`, keyed on the typed `noRepoNamedError`), or, for a
+  passthrough `entire://` URL that we never look up, a hedged note after
+  `git clone` fails (`warnNativeURLGitSuffix`).
 - `grant`: manage access grants and org membership — `org`, `project`, and `repo`
   each support `add` / `list` / `remove`
 

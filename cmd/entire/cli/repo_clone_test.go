@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -46,49 +49,88 @@ func TestParseMirrorCloneRef(t *testing.T) {
 	}
 }
 
+// TestParseNativeCloneRef pins the accepted shape against the server's own
+// name rules (entiredb core/resource/project_name.go): every accepted case here
+// is a name the server can hold, and every rejected one is a name it would
+// refuse — a ref the CLI cannot resolve should cost a shape error, not a
+// control-plane round trip.
 func TestParseNativeCloneRef(t *testing.T) {
 	t.Parallel()
+	// Bounds are the server's: projects 3-32 chars, repos 1-64.
+	maxProject := "a" + strings.Repeat("b", 30) + "c"
+	maxRepo := "a" + strings.Repeat("b", 62) + "c"
 	tests := []struct {
 		name        string
 		ref         string
 		wantProject string
 		wantRepo    string
-		wantOk      bool
+		wantErr     bool
 	}{
-		{name: "full et ref", ref: "/et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
-		{name: "no leading slash", ref: "et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
-		{name: "shorthand", ref: "paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
-		{name: "shorthand leading slash", ref: "/paul/dogbark", wantProject: "paul", wantRepo: "dogbark", wantOk: true},
-		{name: "uppercase folds server-side", ref: "Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark", wantOk: true},
-		{name: "dotted repo", ref: "paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el", wantOk: true},
-		{name: "ssh github url is not a shorthand", ref: "git@github.com:foo/bar", wantOk: false},
-		{name: "ssh github url with .git", ref: "git@github.com:foo/bar.git", wantOk: false},
-		{name: "dotted project", ref: "github.com/dogbark", wantOk: false},
-		{name: "underscore in project", ref: "foo_bar/dogbark", wantOk: false},
-		{name: "space in repo", ref: "paul/dog bark", wantOk: false},
-		{name: "gh ref is not native", ref: "/gh/entirehq/entire-api", wantOk: false},
-		{name: "truncated gh ref is not a shorthand", ref: "/gh/entirehq", wantOk: false},
-		{name: "truncated et ref", ref: "/et/paul", wantOk: false},
-		{name: "single segment", ref: "dogbark", wantOk: false},
-		{name: "too many segments", ref: "/et/paul/dogbark/extra", wantOk: false},
-		{name: "empty project", ref: "/et//dogbark", wantOk: false},
-		{name: "empty repo", ref: "paul/", wantOk: false},
-		{name: "empty", ref: "", wantOk: false},
+		{name: "full et ref", ref: "/et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "no leading slash", ref: "et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "shorthand", ref: "paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "shorthand leading slash", ref: "/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "uppercase folds server-side", ref: "Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark"},
+		{name: "dotted repo", ref: "paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el"},
+		// A .git suffix is a legal repo name (interior dot), so it parses and
+		// resolves as typed rather than being stripped — see gitDirSuffix.
+		{name: "git suffix is a name, not a suffix to strip", ref: "paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		{name: "single-char repo", ref: "paul/x", wantProject: "paul", wantRepo: "x"},
+		{name: "shortest project", ref: "abc/dogbark", wantProject: "abc", wantRepo: "dogbark"},
+		{name: "longest project", ref: maxProject + "/dogbark", wantProject: maxProject, wantRepo: "dogbark"},
+		{name: "longest repo", ref: "paul/" + maxRepo, wantProject: "paul", wantRepo: maxRepo},
+		// Hyphens and dots are only constrained at the edges and by the ".."
+		// ban, so these interior runs are names the server accepts: a
+		// per-segment regex would wrongly refuse them.
+		{name: "consecutive hyphens", ref: "paul/dog--bark", wantProject: "paul", wantRepo: "dog--bark"},
+		{name: "hyphen beside a dot", ref: "paul/dog-.bark", wantProject: "paul", wantRepo: "dog-.bark"},
+		{name: "ssh github url is not a shorthand", ref: "git@github.com:foo/bar", wantErr: true},
+		{name: "ssh github url with .git", ref: "git@github.com:foo/bar.git", wantErr: true},
+		{name: "dotted project", ref: "github.com/dogbark", wantErr: true},
+		{name: "underscore in project", ref: "foo_bar/dogbark", wantErr: true},
+		{name: "underscore in repo", ref: "paul/dog_bark", wantErr: true},
+		{name: "space in repo", ref: "paul/dog bark", wantErr: true},
+		{name: "two-char project cannot exist server-side", ref: "ab/dogbark", wantErr: true},
+		{name: "over-long project", ref: maxProject + "d/dogbark", wantErr: true},
+		{name: "over-long repo", ref: "paul/" + maxRepo + "d", wantErr: true},
+		{name: "leading hyphen in project", ref: "-paul/dogbark", wantErr: true},
+		{name: "trailing hyphen in project", ref: "paul-/dogbark", wantErr: true},
+		{name: "leading hyphen in repo", ref: "paul/-dogbark", wantErr: true},
+		{name: "trailing hyphen in repo", ref: "paul/dogbark-", wantErr: true},
+		{name: "leading dot in repo", ref: "paul/.dogbark", wantErr: true},
+		{name: "trailing dot in repo", ref: "paul/dogbark.", wantErr: true},
+		{name: "consecutive dots in repo", ref: "paul/dog..bark", wantErr: true},
+		{name: "dot-only repo", ref: "paul/..", wantErr: true},
+		{name: "gh ref is not native", ref: "/gh/entirehq/entire-api", wantErr: true},
+		{name: "truncated gh ref is not a shorthand", ref: "/gh/entirehq", wantErr: true},
+		{name: "truncated et ref", ref: "/et/paul", wantErr: true},
+		{name: "et token alone", ref: "/et/", wantErr: true},
+		{name: "forge token in the project position", ref: "/et/gh/foo", wantErr: true},
+		{name: "single segment", ref: "dogbark", wantErr: true},
+		{name: "too many segments", ref: "/et/paul/dogbark/extra", wantErr: true},
+		{name: "empty project", ref: "/et//dogbark", wantErr: true},
+		{name: "empty repo", ref: "paul/", wantErr: true},
+		{name: "empty", ref: "", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			project, repo, ok := parseNativeCloneRef(tt.ref)
-			require.Equal(t, tt.wantOk, ok)
-			if !tt.wantOk {
+			project, repo, err := parseNativeCloneRef(tt.ref)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 			require.Equal(t, tt.wantProject, project)
 			require.Equal(t, tt.wantRepo, repo)
 		})
 	}
 }
 
+// TestInvalidCloneRefError locks in that a ref which declared a forge token is
+// answered with the rule it broke, and that one which declared none is not:
+// telling someone who typed /et/<project>/<repo> to type /et/<project>/<repo>
+// is the self-contradiction both forge branches exist to avoid.
 func TestInvalidCloneRefError(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -100,18 +142,30 @@ func TestInvalidCloneRefError(t *testing.T) {
 		{name: "ssh github url points at /gh/", ref: "git@github.com:Foo/Bar", want: "pass GitHub mirrors as /gh/foo/bar"},
 		{name: "https github url points at /gh/", ref: "https://github.com/foo/bar.git", want: "pass GitHub mirrors as /gh/foo/bar"},
 		{name: "dot-only github url gets no /gh/ hint", ref: "git@github.com:foo/..", want: cloneRefShapes, dontWant: "/gh/foo/.."},
-		{name: "bad owner keeps parser reason", ref: "/gh/foo_bar/baz", want: "owner: letters, digits, '-'", dontWant: "/et/<project>/<repo>"},
-		{name: "dot-only repo keeps parser reason", ref: "/gh/foo/..", want: "repo cannot be dot-only", dontWant: "/et/<project>/<repo>"},
-		{name: "missing repo keeps parser reason", ref: "gh/foo", want: "expected gh/<owner>/<repo>", dontWant: "/et/<project>/<repo>"},
+		{name: "bad owner keeps mirror reason", ref: "/gh/foo_bar/baz", want: "owner: letters, digits, '-'", dontWant: cloneRefShapes},
+		{name: "dot-only repo keeps mirror reason", ref: "/gh/foo/..", want: "repo cannot be dot-only", dontWant: cloneRefShapes},
+		{name: "missing repo keeps mirror reason", ref: "gh/foo", want: "expected gh/<owner>/<repo>", dontWant: cloneRefShapes},
+		{name: "bad project keeps native reason", ref: "/et/foo_bar/dogbark", want: `project "foo_bar" must be 3-32 characters`, dontWant: cloneRefShapes},
+		{name: "bad repo keeps native reason", ref: "/et/paul/dog_bark", want: `repo "dog_bark" must be 1-64 characters`, dontWant: cloneRefShapes},
+		{name: "dot-only native repo keeps native reason", ref: "/et/paul/..", want: "no consecutive dots", dontWant: cloneRefShapes},
+		{name: "empty native repo keeps native reason", ref: "/et/paul/", want: `repo "" must be`, dontWant: cloneRefShapes},
+		{name: "truncated et ref names the missing segment", ref: "/et/paul", want: "expected /et/<project>/<repo> or <project>/<repo> (2 names, got 1)", dontWant: cloneRefShapes},
+		{name: "et ref without a leading slash keeps native reason", ref: "et/ab/cd", want: `project "ab" must be`, dontWant: cloneRefShapes},
+		// A bare two-segment ref declared nothing, so the native reason is
+		// withheld: it is equally a mangled URL, and #2223's `git@github.com:foo/bar`
+		// case is exactly a bad "project" name under the shorthand grammar.
+		{name: "bare shorthand lists all shapes", ref: "paul/.foo", want: cloneRefShapes, dontWant: "must be"},
 		{name: "unknown shape lists all shapes", ref: "/gl/foo/bar", want: cloneRefShapes, dontWant: "expected gh/"},
 		{name: "single segment lists all shapes", ref: "dogbark", want: cloneRefShapes},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, _, _, parseErr := parseMirrorCloneRef(tt.ref)
-			require.Error(t, parseErr)
-			got := invalidCloneRefError(tt.ref, parseErr).Error()
+			_, _, nativeErr := parseNativeCloneRef(tt.ref)
+			require.Error(t, nativeErr)
+			_, _, _, mirrorErr := parseMirrorCloneRef(tt.ref)
+			require.Error(t, mirrorErr)
+			got := invalidCloneRefError(tt.ref, nativeErr, mirrorErr).Error()
 			require.Contains(t, got, `invalid <repo> "`+tt.ref+`"`)
 			require.Contains(t, got, tt.want)
 			if tt.dontWant != "" {
@@ -202,6 +256,106 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid cluster host")
 	})
+}
+
+// serveNativeRepoMiss fakes the native resolution chain up to a repo-name miss:
+// the project resolves, and the repo lookup answers with no repo (what the
+// control plane returns for a name nothing matches).
+func serveNativeRepoMiss(t *testing.T) *coreapi.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var body any
+		switch r.URL.Path {
+		case "/api/v1/projects":
+			body = &coreapi.ListProjectsOutputBody{Project: coreapi.NewOptProject(coreapi.Project{
+				ID: testProjectULID, Name: "paul", OwnerId: testProjectULID, OwnerType: coreapi.ProjectOwnerTypeOrg,
+			})}
+		case "/api/v1/projects/" + testProjectULID + "/repos":
+			body = &coreapi.ListProjectReposOutputBody{}
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := printJSON(w, body); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, err := coreapi.NewWithBearer(srv.URL, "tok")
+	require.NoError(t, err)
+	return c
+}
+
+// TestResolveNativeCloneURL_GitSuffixHint covers the one thing a native ref
+// carrying `.git` can be told: not at parse time (the name is legal, so the
+// suffix cannot be stripped or refused without risking the wrong repo), but on
+// the lookup miss, where it is provably why nothing matched.
+func TestResolveNativeCloneURL_GitSuffixHint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a missing .git-suffixed repo suggests dropping the suffix", func(t *testing.T) {
+		t.Parallel()
+		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepoMiss(t), "paul", "dogbark.git")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `no repo named "dogbark.git"`)
+		require.Contains(t, err.Error(), "retry as /et/paul/dogbark")
+	})
+
+	t.Run("a missing repo without the suffix gets no hint", func(t *testing.T) {
+		t.Parallel()
+		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepoMiss(t), "paul", "dogbark")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `no repo named "dogbark"`)
+		require.NotContains(t, err.Error(), "retry as")
+	})
+}
+
+// TestHintDroppedGitSuffix pins the hint to the repo-name miss. Any other
+// failure carrying the same suffix — auth, transport, a project that does not
+// exist — is not the suffix's fault, and advice about it would send the user
+// after the wrong problem.
+func TestHintDroppedGitSuffix(t *testing.T) {
+	t.Parallel()
+	other := errors.New("Post \"https://core\": dial tcp: connection refused")
+	require.Equal(t, other, hintDroppedGitSuffix(other, "paul", "dogbark.git"))
+
+	miss := noRepoNamedErr("dogbark.git")
+	got := hintDroppedGitSuffix(miss, "paul", "dogbark.git")
+	require.ErrorIs(t, got, miss)
+	require.Contains(t, got.Error(), "retry as /et/paul/dogbark")
+}
+
+// TestWarnNativeURLGitSuffix covers the passthrough half: a full entire:// URL
+// gets no lookup of ours, so the note can only be printed after `git clone`
+// has failed, and only for the path shape where the server does not strip the
+// suffix.
+func TestWarnNativeURLGitSuffix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		cloneURL string
+		wantNote bool
+	}{
+		{name: "native path with the suffix", cloneURL: "entire://host/et/paul/dogbark.git", wantNote: true},
+		{name: "native path without it", cloneURL: "entire://host/et/paul/dogbark"},
+		{name: "mirror path has the suffix stripped server-side", cloneURL: "entire://host/gh/entirehq/entire-api.git"},
+		{name: "suffix not at the end of the path", cloneURL: "entire://host/et/paul/dogbark.git/extra"},
+		{name: "not a clone URL", cloneURL: "/et/paul/dogbark.git"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			warnNativeURLGitSuffix(&buf, tt.cloneURL)
+			if !tt.wantNote {
+				require.Empty(t, buf.String())
+				return
+			}
+			require.Contains(t, buf.String(), "a /et/ path keeps its .git suffix")
+		})
+	}
 }
 
 // TestRepoClone_NativeRefRejectsClusterFlag locks in that --cluster (a mirror

@@ -216,8 +216,18 @@ func noProjectNamedErr(name string) error {
 	return fmt.Errorf("no project named %q (run `entire project list` to see names, or pass a ULID)", name)
 }
 
+// noRepoNamedError is the repo-name lookup miss. It carries the name as a type
+// rather than only in its message so a caller holding context the resolver does
+// not can recognise the miss (errors.As) and add advice — `repo clone` appends
+// the dropped-`.git` hint — without matching on the text.
+type noRepoNamedError struct{ name string }
+
+func (e *noRepoNamedError) Error() string {
+	return fmt.Sprintf("no repo named %q in that project (run `entire repo list <project>` to see names, or pass a ULID)", e.name)
+}
+
 func noRepoNamedErr(name string) error {
-	return fmt.Errorf("no repo named %q in that project (run `entire repo list <project>` to see names, or pass a ULID)", name)
+	return &noRepoNamedError{name: name}
 }
 
 // resolvedRefLabel formats a reference for a success message so it always
