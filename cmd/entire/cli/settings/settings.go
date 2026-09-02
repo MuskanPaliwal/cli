@@ -151,8 +151,9 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
-	// AsyncMirrorRequests selects the async mirror creation route. Merged settings default to true.
-	AsyncMirrorRequests bool `json:"async_mirror_requests,omitempty"`
+	// AsyncMirrorRequests selects the mirror creation route.
+	// nil/true = async request route (default), false = synchronous route.
+	AsyncMirrorRequests *bool `json:"async_mirror_requests,omitempty"`
 
 	// SummaryGeneration stores provider preferences for explain --generate.
 	// This is separate from strategy_options.summarize, which controls
@@ -641,10 +642,7 @@ func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot strin
 
 func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {
 	// Load base settings
-	settings, err := loadFromFileWithDefaults(settingsFileAbs, EntireSettings{
-		Enabled:             true,
-		AsyncMirrorRequests: true,
-	})
+	settings, err := loadFromFile(settingsFileAbs)
 	if err != nil {
 		return nil, fmt.Errorf("reading settings file: %w", err)
 	}
@@ -1028,11 +1026,7 @@ func writeClonePreferencesAtomic(filePath string, data []byte, perm fs.FileMode)
 // loadFromFile loads settings from a specific file path.
 // Returns default settings if the file doesn't exist.
 func loadFromFile(filePath string) (*EntireSettings, error) {
-	return loadFromFileWithDefaults(filePath, EntireSettings{Enabled: true})
-}
-
-func loadFromFileWithDefaults(filePath string, defaults EntireSettings) (*EntireSettings, error) {
-	settings := &defaults
+	settings := &EntireSettings{Enabled: true}
 
 	data, err := readConfined(filePath)
 	if err != nil {
@@ -1304,7 +1298,7 @@ func mergeScalarFields(settings *EntireSettings, raw map[string]json.RawMessage)
 	if err := mergeRawBool(raw, "external_agents", &settings.ExternalAgents); err != nil {
 		return err
 	}
-	if err := mergeRawBool(raw, "async_mirror_requests", &settings.AsyncMirrorRequests); err != nil {
+	if err := mergeRawBoolPtr(raw, "async_mirror_requests", &settings.AsyncMirrorRequests); err != nil {
 		return err
 	}
 	if err := mergeRawBool(raw, "vercel", &settings.Vercel); err != nil {
@@ -1936,6 +1930,11 @@ func IsExternalAgentsEnabled(ctx context.Context) bool {
 		return false
 	}
 	return s.ExternalAgents
+}
+
+// IsAsyncMirrorRequestsEnabled reports whether mirror creation uses the async request route.
+func (s *EntireSettings) IsAsyncMirrorRequestsEnabled() bool {
+	return s.AsyncMirrorRequests == nil || *s.AsyncMirrorRequests
 }
 
 // IsSignCheckpointCommitsEnabled returns true if checkpoint commits should be signed.

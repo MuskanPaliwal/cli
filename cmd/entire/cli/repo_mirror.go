@@ -495,7 +495,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := mirrorCreateOptions{noWait: noWait, timeout: waitTimeout}
 			if settings, err := LoadEntireSettings(cmd.Context()); err == nil {
-				opts.async = settings.AsyncMirrorRequests
+				opts.async = settings.IsAsyncMirrorRequestsEnabled()
 			}
 			if len(args) == 0 {
 				return runMirrorCreateWizard(cmd, opts)
