@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Mirror creation goes through the control plane's async request routes by default, reporting queued, placing, and cloning progress instead of holding one request open for the whole placement; the `async_mirror_requests` setting it shipped behind in 0.10.4 now defaults on. Opt out with `"async_mirror_requests": false`. In async mode `--wait-timeout` is one deadline across submission, placement, and clone readiness, not clone readiness alone ([#2246](https://github.com/entireio/cli/pull/2246))
 - Entire no longer installs a `Read(./.entire/metadata/**)` deny rule into Claude Code's or Factory Droid's permission config, so agents in auto mode stop prompting for permission on ordinary commands. A deny rule is a hard block auto mode's classifier cannot get past, and it matched on the path being named rather than on anything being read, so a recursive grep from the repo root needed hand approval. `entire enable` clears one an older CLI left behind and `entire doctor` repairs it ([#2258](https://github.com/entireio/cli/pull/2258))
 - `entire experts --repo <owner>/<repo>` takes the repo id from the placement lookup that already chose its cell, and now tells "not onboarded" apart from "processing placement failed or suspended" instead of guessing at three causes ([#2222](https://github.com/entireio/cli/pull/2222))
 
