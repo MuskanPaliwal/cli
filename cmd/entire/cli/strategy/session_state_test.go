@@ -1039,12 +1039,19 @@ func TestMutateSessionState_UnboundedByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	const holdFor = 400 * time.Millisecond
+	// start is captured BEFORE the holder goroutine launches, so it is always
+	// at or before the moment the sleep begins. Capturing it after the `go`
+	// statement made the assertion below depend on this goroutine reaching
+	// time.Now() before the new one reaches time.Sleep -- an ordering nothing
+	// guarantees. When it lost, the measured elapsed fell just under holdFor
+	// and the test failed with no real defect (seen on CI at 398.881573ms
+	// against a 400ms bound).
+	start := time.Now()
 	go func() {
 		time.Sleep(holdFor)
 		release()
 	}()
 
-	start := time.Now()
 	ran := false
 	// No WithSessionLockWait: must wait for the holder rather than time out.
 	err = MutateSessionState(ctx, sessionID, func(state *SessionState) error {
