@@ -40,9 +40,14 @@ Detected secrets are replaced with `REDACTED` before the data is ever written to
 
 **Every layer described above — all nine passes, including the opt-in PII and OpenAI Privacy Filter layers — operates only on transcript text. None of them ever inspect image content.**
 
-When you paste an image into an agent conversation (a screenshot of a terminal with a visible API key, a cloud console page showing a misconfigured resource, a photo of a document), Entire externalizes it out of the transcript and stores it as a **raw binary blob** under the checkpoint's `assets/` folder — completely unredacted, byte-for-byte identical to what you pasted. This blob is written to `entire/checkpoints/v1` (or the equivalent per-checkpoint ref on the `git-refs` backend) and pushed to your remote like any other checkpoint content.
+When you paste an image into an agent conversation (a screenshot of a terminal with a visible API key, a cloud console page showing a misconfigured resource, a photo of a document), it is stored **completely unredacted, byte-for-byte identical to what you pasted**. Where it is stored depends on one setting, but the exposure is the same either way:
 
-This is a **deliberate design choice, not a bug**: byte-level regex and entropy redaction cannot safely touch binary image data without corrupting the image, so Entire does not attempt it. There is currently no OCR pass, no vision-model PII/secret scan, and no gate that holds image assets back until reviewed — an image that enters a conversation ships to your checkpoint history exactly as pasted.
+- **By default**, the image stays inline in the stored transcript as base64. The text scanner skips it (see the `type: image` / `type: base64` skip rule below) rather than scanning it.
+- **With `redaction.externalize_images` enabled** (off by default; the `ENTIRE_EXTERNALIZE_IMAGES=1` environment variable is an equivalent override), the image is lifted out of the transcript and written as a raw binary blob under the checkpoint's `assets/` folder instead.
+
+Either way the bytes become part of checkpoint content on `entire/checkpoints/v1` (or the equivalent per-checkpoint ref on the `git-refs` backend). Like all checkpoint data, that is written locally at commit time and pushed separately — so an image reaches your remote when checkpoint data is pushed, not the instant you paste it. That gap is your window to inspect it — see the **Review before pushing** bullet under [Recommendations](#recommendations) below.
+
+This is a **deliberate design choice, not a bug**: byte-level regex and entropy redaction cannot safely touch binary image data without corrupting the image, so Entire does not attempt it. There is currently no OCR pass, no vision-model PII/secret scan, and no gate that holds an image back until reviewed — an image that enters a conversation lands in your checkpoint history exactly as pasted, in whichever of the two forms above applies.
 
 **If you would not commit an image to your repository unredacted, do not paste it into an agent conversation.** This applies equally to a private repository — anyone with read access to checkpoint data can see it — and especially to a public one.
 
