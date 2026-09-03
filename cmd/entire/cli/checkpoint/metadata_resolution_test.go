@@ -21,10 +21,17 @@ func TestCheckpointMetadataResolutionPreservesCallerPoliciesAndObservesRepair(t 
 	require.NoError(t, err)
 	defer repo.Close()
 
+	// A successful resolution first, so the breakage below also proves no
+	// memoized success is served once the metadata goes bad — the direction a
+	// per-worktree cache used to get wrong.
+	queue, err := PushQueueForRepo(context.Background(), repo)
+	require.NoError(t, err)
+	require.NotNil(t, queue)
+
 	commonFile := filepath.Join(repoRoot, ".git", "commondir")
 	require.NoError(t, os.WriteFile(commonFile, []byte("missing\n"), 0o600))
 
-	queue, err := PushQueueForRepo(context.Background(), repo)
+	queue, err = PushQueueForRepo(context.Background(), repo)
 	require.ErrorContains(t, err, "resolve git common dir for push queue")
 	require.Nil(t, queue, "required queue metadata must fail closed")
 	require.Nil(t, repoRedactCache(repo), "optional redaction cache must fail open")
@@ -33,6 +40,27 @@ func TestCheckpointMetadataResolutionPreservesCallerPoliciesAndObservesRepair(t 
 	queue, err = PushQueueForRepo(context.Background(), repo)
 	require.NoError(t, err, "a metadata repair must be observed without clearing a cache")
 	require.NotNil(t, queue)
+}
+
+func TestWriteCheckpointFailsClosedOnMetadataError(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	testutil.InitRepo(t, repoRoot)
+	repo, err := gitrepo.OpenPath(repoRoot)
+	require.NoError(t, err)
+	defer repo.Close()
+
+	commonFile := filepath.Join(repoRoot, ".git", "commondir")
+	require.NoError(t, os.WriteFile(commonFile, []byte("missing\n"), 0o600))
+
+	store := newEphemeralStore(repo, DefaultV1Refs())
+	_, err = store.writeCheckpoint(context.Background(), WriteEphemeralOptions{
+		SessionID:  "metadata-error-session",
+		BaseCommit: "0123456789abcdef",
+	})
+	require.ErrorContains(t, err, "failed to resolve repo dirs",
+		"the shadow-ref write path must fail closed on metadata errors")
 }
 
 func TestPushQueueForRepoUsesLinkedWorktreeCommonDir(t *testing.T) {
