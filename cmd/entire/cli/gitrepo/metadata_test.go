@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -528,6 +529,84 @@ func TestResolveWorktreeMetadata_RejectsBareRepository(t *testing.T) {
 	metadata, err := ResolveWorktreeMetadata(root)
 	require.ErrorIs(t, err, ErrWorktreeMetadataNotFound)
 	require.Equal(t, WorktreeMetadata{}, metadata)
+}
+
+// Git refuses an oversized .git file outright ("too large to be a .git file").
+// Reading one unbounded turns a sparse file of near-zero disk size into an
+// allocation the size of its apparent length, and echoing it into the error
+// doubles that, so the cap and the elision are tested together.
+func TestResolveWorktreeMetadata_BoundsPointerFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("oversized .git file", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeSparsePointerFile(t, filepath.Join(root, gitDir), 64<<20)
+
+		_, err := ResolveWorktreeMetadata(root)
+		require.ErrorContains(t, err, "too large to be a .git file")
+		require.Less(t, len(err.Error()), 4096, "error must not carry the payload")
+	})
+
+	t.Run("oversized commondir file", func(t *testing.T) {
+		t.Parallel()
+		root, perWorktree := malformedLinkedMetadata(t)
+		writeSparsePointerFile(t, filepath.Join(perWorktree, "commondir"), 64<<20)
+
+		_, err := ResolveWorktreeMetadata(root)
+		require.ErrorContains(t, err, "too large to be a commondir file")
+		require.Less(t, len(err.Error()), 4096, "error must not carry the payload")
+	})
+
+	t.Run("pointer at the cap is still parsed", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		pointer := "gitdir: " + strings.Repeat("a", maxMetadataPointerSize-len("gitdir: ")-1) + "\n"
+		require.Len(t, pointer, maxMetadataPointerSize)
+		writeMetadataFile(t, filepath.Join(root, gitDir), pointer)
+
+		_, err := ResolveWorktreeMetadata(root)
+		// The target does not exist, which is the point: the file was read and
+		// parsed rather than refused for its size.
+		require.ErrorContains(t, err, "inspect Git directory")
+		require.NotErrorIs(t, err, ErrWorktreeMetadataNotFound)
+	})
+
+	t.Run("long pointer path is elided in the error", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		writeMetadataFile(t, filepath.Join(root, gitDir), "gitdir: "+strings.Repeat("b", 2048)+"\n")
+
+		_, err := ResolveWorktreeMetadata(root)
+		require.ErrorContains(t, err, "bytes elided")
+		require.True(t, utf8.ValidString(err.Error()), "elided error must stay valid UTF-8")
+	})
+}
+
+func TestElideMetadataPath(t *testing.T) {
+	t.Parallel()
+
+	short := strings.Repeat("a", maxMetadataErrorPathLen)
+	require.Equal(t, short, elideMetadataPath(short))
+
+	// Cutting mid-rune would produce an invalid replacement character in the
+	// message, so elision backs up to a boundary.
+	multibyte := strings.Repeat("é", maxMetadataErrorPathLen)
+	elided := elideMetadataPath(multibyte)
+	require.NotEqual(t, multibyte, elided)
+	require.True(t, utf8.ValidString(elided))
+	require.Contains(t, elided, "bytes elided")
+}
+
+func writeSparsePointerFile(t *testing.T, path string, size int64) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, file.Close()) }()
+	_, err = file.WriteString("gitdir: ")
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(size))
 }
 
 func TestErrWorktreeMetadataNotFoundClassification(t *testing.T) {

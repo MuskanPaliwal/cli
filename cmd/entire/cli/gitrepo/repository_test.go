@@ -305,6 +305,20 @@ func TestOpenPath_SeparatesBareRepositoriesFromWorktreeMetadata(t *testing.T) {
 		require.NoError(t, repo.Close())
 	})
 
+	t.Run("bare repository without core.bare", func(t *testing.T) {
+		t.Parallel()
+		// git decides bareness from the directory's shape, not from core.bare,
+		// and leaves the key unset in ordinary bare clones. Requiring it here
+		// rejected repositories git opens without complaint.
+		root := filepath.Join(t.TempDir(), "bare.git")
+		runMetadataGit(t, filepath.Dir(root), "init", "--bare", root)
+		runMetadataGit(t, root, "config", "--unset", "core.bare")
+
+		repo, err := OpenPath(root)
+		require.NoError(t, err)
+		require.NoError(t, repo.Close())
+	})
+
 	t.Run("separate Git directory is not a bare repository", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()

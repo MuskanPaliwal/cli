@@ -138,6 +138,17 @@ func ResolveCommonGitPath(dotGitPath string) (string, error) {
 	return resolveCommonGitPath(dotGitPath)
 }
 
+// openBareRepository opens a path that carries no worktree metadata.
+//
+// Git never requires core.bare to call a directory bare, and `init --bare`
+// leaves the key unset, so requiring it to be present and true rejects ordinary
+// bare repositories. The case that must still be refused is a separate Git
+// directory, which is a worktree's storage rather than a repository to open on
+// its own, and git writes core.bare = false there explicitly. An explicit false
+// is therefore the discriminator; an absent key is not.
+//
+// PlainOpen supplies the shape check, reporting "repository does not exist" for
+// a directory that only looks like one.
 func openBareRepository(repoRoot string) (*git.Repository, error) {
 	repo, err := git.PlainOpen(repoRoot)
 	if err != nil {
@@ -148,7 +159,7 @@ func openBareRepository(repoRoot string) (*git.Repository, error) {
 		_ = repo.Close()
 		return nil, fmt.Errorf("validate bare repository config: %w", err)
 	}
-	if !config.Core.IsBare {
+	if config.Raw.Section("core").HasOption("bare") && !config.Core.IsBare {
 		_ = repo.Close()
 		return nil, fmt.Errorf("path %s has no worktree metadata and is not a bare repository", repoRoot)
 	}

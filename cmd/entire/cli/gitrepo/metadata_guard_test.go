@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,11 +102,11 @@ type gitMetadataGuardResult struct {
 }
 
 func scanGitMetadataSources(repoRoot string, policy gitMetadataGuardPolicy) (gitMetadataGuardResult, error) {
-	packageValues, err := collectGuardPackageStringValues(repoRoot)
-	if err != nil {
-		return gitMetadataGuardResult{}, fmt.Errorf("collect package string values: %w", err)
-	}
 	fset := token.NewFileSet()
+	packages, err := collectGuardPackages(fset, repoRoot)
+	if err != nil {
+		return gitMetadataGuardResult{}, fmt.Errorf("collect guard packages: %w", err)
+	}
 	result := gitMetadataGuardResult{
 		legacyOwnersSeen:        map[string]bool{},
 		policyInspectionsSeen:   map[string]bool{},
@@ -113,97 +114,79 @@ func scanGitMetadataSources(repoRoot string, policy gitMetadataGuardPolicy) (git
 		legacyResolverCallsSeen: map[string]bool{},
 	}
 
-	err = filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if !isGuardSourceFile(rel) {
-			return nil
-		}
+	for _, pkg := range packages {
+		valueResolver := newGuardValueResolver(fset, pkg)
+		for _, source := range pkg.files {
+			rel, file := source.rel, source.file
+			gitrepoImports, dotImportedGitrepo := gitrepoImportNames(file)
+			samePackage := filepath.ToSlash(filepath.Dir(rel)) == "cmd/entire/cli/gitrepo"
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				key := guardSourceKey(rel, fn.Name.Name)
+				canonicalOwner := guardSourcePath(rel) == "gitrepo/metadata.go"
+				_, legacyOwner := policy.legacyTraversalOwners[key]
+				_, policyInspection := policy.policyDotGitInspections[key]
 
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		values := packageValues[guardPackageKey(rel, file)]
-		valueResolver := newGuardValueResolver(fset, file, values)
-		gitrepoImports, dotImportedGitrepo := gitrepoImportNames(file)
-		samePackage := filepath.ToSlash(filepath.Dir(rel)) == "cmd/entire/cli/gitrepo"
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			key := guardSourceKey(rel, fn.Name.Name)
-			canonicalOwner := guardSourcePath(rel) == "gitrepo/metadata.go"
-			_, legacyOwner := policy.legacyTraversalOwners[key]
-			_, policyInspection := policy.policyDotGitInspections[key]
-
-			for _, value := range []string{"gitdir: ", "gitdir:", "commondir"} {
-				if !valueResolver.contains(fn.Body, value) {
-					continue
-				}
-				if canonicalOwner {
-					result.canonicalTokens++
-					continue
-				}
-				if legacyOwner {
-					result.legacyOwnersSeen[key] = true
-					continue
-				}
-				result.violations = append(result.violations, fmt.Sprintf("%s independently parses Git metadata token %q; use gitrepo.ResolveWorktreeMetadata", fset.Position(fn.Pos()), value))
-			}
-			if valueResolver.contains(fn.Body, "rev-parse") {
-				for _, flag := range []string{"--absolute-git-dir", "--git-common-dir", "--git-dir", "--show-toplevel"} {
-					if !valueResolver.contains(fn.Body, flag) {
+				for _, value := range []string{"gitdir: ", "gitdir:", "commondir"} {
+					if !valueResolver.contains(fn.Body, value) {
 						continue
 					}
-					query := guardMetadataQuery{source: key, flag: flag}
-					if _, allowed := policy.allowedMetadataQueries[query]; allowed {
-						result.metadataQueriesSeen[query] = true
-					} else {
-						result.violations = append(result.violations, fmt.Sprintf("%s runs an unaudited git rev-parse %s query; use gitrepo.ResolveWorktreeMetadata or document a semantic-query exception", fset.Position(fn.Pos()), flag))
+					if canonicalOwner {
+						result.canonicalTokens++
+						continue
+					}
+					if legacyOwner {
+						result.legacyOwnersSeen[key] = true
+						continue
+					}
+					result.violations = append(result.violations, fmt.Sprintf("%s independently parses Git metadata token %q; use gitrepo.ResolveWorktreeMetadata", fset.Position(fn.Pos()), value))
+				}
+				if valueResolver.contains(fn.Body, "rev-parse") {
+					for _, flag := range []string{"--absolute-git-dir", "--git-common-dir", "--git-dir", "--show-toplevel"} {
+						if !valueResolver.contains(fn.Body, flag) {
+							continue
+						}
+						query := guardMetadataQuery{source: key, flag: flag}
+						if _, allowed := policy.allowedMetadataQueries[query]; allowed {
+							result.metadataQueriesSeen[query] = true
+						} else {
+							result.violations = append(result.violations, fmt.Sprintf("%s runs an unaudited git rev-parse %s query; use gitrepo.ResolveWorktreeMetadata or document a semantic-query exception", fset.Position(fn.Pos()), flag))
+						}
 					}
 				}
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					if isLegacyMetadataResolverCall(call, gitrepoImports, dotImportedGitrepo, samePackage) {
+						if _, allowed := policy.allowedLegacyCalls[key]; allowed {
+							result.legacyResolverCallsSeen[key] = true
+						} else {
+							result.violations = append(result.violations, fmt.Sprintf("%s calls a legacy Git metadata resolver; use gitrepo.ResolveWorktreeMetadata or document the migration exception", fset.Position(call.Pos())))
+						}
+					}
+					if !valueResolver.contains(call, ".git") || !isFilesystemMetadataInspection(call) || canonicalOwner {
+						return true
+					}
+					if legacyOwner {
+						result.legacyOwnersSeen[key] = true
+						return true
+					}
+					if policyInspection {
+						result.policyInspectionsSeen[key] = true
+						return true
+					}
+					result.violations = append(result.violations, fmt.Sprintf("%s independently inspects a .git entry; use gitrepo.ResolveWorktreeMetadata or document a narrow policy exception", fset.Position(call.Pos())))
+					return true
+				})
 			}
-			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if isLegacyMetadataResolverCall(call, gitrepoImports, dotImportedGitrepo, samePackage) {
-					if _, allowed := policy.allowedLegacyCalls[key]; allowed {
-						result.legacyResolverCallsSeen[key] = true
-					} else {
-						result.violations = append(result.violations, fmt.Sprintf("%s calls a legacy Git metadata resolver; use gitrepo.ResolveWorktreeMetadata or document the migration exception", fset.Position(call.Pos())))
-					}
-				}
-				if !valueResolver.contains(call, ".git") || !isFilesystemMetadataInspection(call) || canonicalOwner {
-					return true
-				}
-				if legacyOwner {
-					result.legacyOwnersSeen[key] = true
-					return true
-				}
-				if policyInspection {
-					result.policyInspectionsSeen[key] = true
-					return true
-				}
-				result.violations = append(result.violations, fmt.Sprintf("%s independently inspects a .git entry; use gitrepo.ResolveWorktreeMetadata or document a narrow policy exception", fset.Position(call.Pos())))
-				return true
-			})
 		}
-		return nil
-	})
-	return result, err
+	}
+	return result, nil
 }
 
 func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
@@ -274,6 +257,18 @@ func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
 			kind:   "filesystem",
 			want:   false,
 		},
+		{
+			name:   "parameter shadowing a package constant is not metadata traversal",
+			source: `package probe; import "os"; const gitDir = ".git"; func inspect(gitDir string) { _, _ = os.Stat(gitDir) }`,
+			kind:   "filesystem",
+			want:   false,
+		},
+		{
+			name:   "struct field named after a package constant is not metadata traversal",
+			source: `package probe; import "os"; const gitDir = ".git"; type layout struct{ gitDir string }; func inspect(l layout) { _, _ = os.Stat(l.gitDir) }`,
+			kind:   "filesystem",
+			want:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -284,8 +279,8 @@ func TestGitMetadataGuardRecognizesBypassForms(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse probe: %v", err)
 			}
-			values := packageStringValues(file)
-			valueResolver := newGuardValueResolver(fset, file, values)
+			pkg := guardPackage{key: "probe", files: []guardSourceFile{{rel: "probe.go", file: file}}}
+			valueResolver := newGuardValueResolver(fset, pkg)
 			imports, dotImported := gitrepoImportNames(file)
 			found := false
 			for _, decl := range file.Decls {
@@ -325,11 +320,16 @@ func TestGitMetadataGuardScansCompleteRepository(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeGuardSource(t, repoRoot, "probe/tokens.go", `package probe; const dotGitName = ".git"`)
+	writeGuardSource(t, repoRoot, "probe/tokens.go", `package probe; const dotGitName = ".git"; const gitDir = ".git"`)
 	writeGuardSource(t, repoRoot, "probe/use.go", `package probe; import "os"; func crossFileConstant() { _, _ = os.Stat(dotGitName) }`)
 	writeGuardSource(t, repoRoot, "internal/probe/probe.go", `package probe; import "os"; func internalReadlink() { _, _ = os.Readlink(".git") }`)
 	writeGuardSource(t, repoRoot, "probe/shadow.go", `package probe; import "os"; func shadowed(gitDir string) { _, _ = os.Stat(gitDir) }`)
 	writeGuardSource(t, repoRoot, "probe/query.go", `package probe; import "os/exec"; func existingException() { _ = exec.Command("git", "rev-parse", "--show-toplevel", "--git-dir") }`)
+	// The field is declared in one file and read in another, while the package
+	// also declares a gitDir constant. A per-file check cannot resolve the
+	// selector, and resolving it by name instead reported this as a traversal.
+	writeGuardSource(t, repoRoot, "probe/layout.go", `package probe; type layout struct{ gitDir string }`)
+	writeGuardSource(t, repoRoot, "probe/method.go", `package probe; import "os"; func (l layout) crossFileField() { _, _ = os.Stat(l.gitDir) }`)
 
 	allowedQuery := guardMetadataQuery{source: "probe/query.go:existingException", flag: "--show-toplevel"}
 	result, err := scanGitMetadataSources(repoRoot, gitMetadataGuardPolicy{
@@ -350,7 +350,7 @@ func TestGitMetadataGuardScansCompleteRepository(t *testing.T) {
 			t.Errorf("violations do not contain %q:\n%s", want, violations)
 		}
 	}
-	for _, notWant := range []string{"probe/shadow.go", "--show-toplevel"} {
+	for _, notWant := range []string{"probe/shadow.go", "probe/method.go", "--show-toplevel"} {
 		if strings.Contains(violations, notWant) {
 			t.Errorf("violations unexpectedly contain %q:\n%s", notWant, violations)
 		}
@@ -381,9 +381,22 @@ func isFilesystemMetadataInspection(call *ast.CallExpr) bool {
 	}
 }
 
-func collectGuardPackageStringValues(repoRoot string) (map[string]map[string]string, error) {
-	values := map[string]map[string]string{}
-	fset := token.NewFileSet()
+type guardSourceFile struct {
+	rel  string
+	file *ast.File
+}
+
+type guardPackage struct {
+	key   string
+	files []guardSourceFile
+}
+
+// collectGuardPackages groups every scanned file by the package it belongs to,
+// so identifiers can later be resolved against the whole package rather than
+// against one file in isolation. Packages come back in key order so a scan
+// reports violations deterministically.
+func collectGuardPackages(fset *token.FileSet, repoRoot string) ([]guardPackage, error) {
+	byKey := map[string][]guardSourceFile{}
 	err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -404,42 +417,20 @@ func collectGuardPackageStringValues(repoRoot string) (map[string]map[string]str
 			return err
 		}
 		key := guardPackageKey(rel, file)
-		if values[key] == nil {
-			values[key] = map[string]string{}
-		}
-		for name, value := range packageStringValues(file) {
-			values[key][name] = value
-		}
+		byKey[key] = append(byKey[key], guardSourceFile{rel: rel, file: file})
 		return nil
 	})
-	return values, err
-}
-
-func packageStringValues(file *ast.File) map[string]string {
-	values := map[string]string{}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, expr := range valueSpec.Values {
-				literal, ok := expr.(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING || i >= len(valueSpec.Names) {
-					continue
-				}
-				unquoted, err := strconv.Unquote(literal.Value)
-				if err == nil {
-					values[valueSpec.Names[i].Name] = unquoted
-				}
-			}
-		}
+	if err != nil {
+		return nil, err
 	}
-	return values
+
+	packages := make([]guardPackage, 0, len(byKey))
+	for key, files := range byKey {
+		sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
+		packages = append(packages, guardPackage{key: key, files: files})
+	}
+	sort.Slice(packages, func(i, j int) bool { return packages[i].key < packages[j].key })
+	return packages, nil
 }
 
 func gitrepoImportNames(file *ast.File) (map[string]bool, bool) {
@@ -496,56 +487,73 @@ func assertMetadataQueryLedgerSeen(t *testing.T, ledger map[guardMetadataQuery]s
 }
 
 type guardValueResolver struct {
-	packageValues map[string]string
-	typeInfo      *types.Info
-	bindings      map[types.Object]ast.Expr
+	typeInfo *types.Info
+	bindings map[types.Object]ast.Expr
 }
 
-func newGuardValueResolver(fset *token.FileSet, file *ast.File, packageValues map[string]string) guardValueResolver {
+// newGuardValueResolver type-checks a whole package at once, so an identifier
+// declared in one file resolves from another, and a local name that shadows a
+// package-level constant resolves to the local declaration.
+//
+// Checking one file at a time cannot do either. The fallback that compensated
+// for it matched an unresolved identifier against package constants by name, so
+// any parameter, field, or local sharing a name with a constant elsewhere in the
+// package was reported as a violation. That fires on gitDir, which strategy
+// declares as a constant and several functions take as a parameter, failing the
+// build for code the guard is not looking for while naming neither cause nor
+// fix. An identifier that still does not resolve now matches nothing.
+func newGuardValueResolver(fset *token.FileSet, pkg guardPackage) guardValueResolver {
 	typeInfo := &types.Info{
 		Defs: map[*ast.Ident]types.Object{},
 		Uses: map[*ast.Ident]types.Object{},
 	}
-	config := types.Config{Error: func(error) {}}
-	_, typeErr := config.Check(file.Name.Name, fset, []*ast.File{file}, typeInfo)
-	// Files are checked in isolation, so unresolved cross-file imports are
-	// expected; local definitions collected before that error remain usable.
-	if typeErr != nil && len(typeInfo.Defs) == 0 && len(typeInfo.Uses) == 0 {
-		return guardValueResolver{packageValues: packageValues, typeInfo: typeInfo}
+	files := make([]*ast.File, 0, len(pkg.files))
+	for _, source := range pkg.files {
+		files = append(files, source.file)
 	}
+	name := "guard"
+	if len(files) > 0 {
+		name = files[0].Name.Name
+	}
+	// Imports are not resolved, so type errors are the expected outcome; the
+	// identifiers declared inside the package are recorded regardless, and
+	// those are all the resolver reads.
+	config := types.Config{Error: func(error) {}}
+	config.Check(name, fset, files, typeInfo) //nolint:errcheck // unresolved imports always error here.
 	return guardValueResolver{
-		packageValues: packageValues,
-		typeInfo:      typeInfo,
-		bindings:      guardValueBindings(file, typeInfo),
+		typeInfo: typeInfo,
+		bindings: guardValueBindings(files, typeInfo),
 	}
 }
 
-func guardValueBindings(file *ast.File, typeInfo *types.Info) map[types.Object]ast.Expr {
+func guardValueBindings(files []*ast.File, typeInfo *types.Info) map[types.Object]ast.Expr {
 	bindings := map[types.Object]ast.Expr{}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch decl := node.(type) {
-		case *ast.ValueSpec:
-			for i, name := range decl.Names {
-				if object := typeInfo.Defs[name]; object != nil {
-					bindings[object] = expressionAt(decl.Values, i)
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch decl := node.(type) {
+			case *ast.ValueSpec:
+				for i, name := range decl.Names {
+					if object := typeInfo.Defs[name]; object != nil {
+						bindings[object] = expressionAt(decl.Values, i)
+					}
+				}
+			case *ast.AssignStmt:
+				if decl.Tok != token.DEFINE {
+					return true
+				}
+				for i, lhs := range decl.Lhs {
+					name, ok := lhs.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					if object := typeInfo.Defs[name]; object != nil {
+						bindings[object] = expressionAt(decl.Rhs, i)
+					}
 				}
 			}
-		case *ast.AssignStmt:
-			if decl.Tok != token.DEFINE {
-				return true
-			}
-			for i, lhs := range decl.Lhs {
-				name, ok := lhs.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				if object := typeInfo.Defs[name]; object != nil {
-					bindings[object] = expressionAt(decl.Rhs, i)
-				}
-			}
-		}
-		return true
-	})
+			return true
+		})
+	}
 	return bindings
 }
 
@@ -582,9 +590,6 @@ func (r guardValueResolver) containsSeen(node ast.Node, want string, seen map[ty
 				object = r.typeInfo.Defs[value]
 			}
 			if object == nil {
-				if r.packageValues[value.Name] == want {
-					found = true
-				}
 				return false
 			}
 			if seen[object] {
