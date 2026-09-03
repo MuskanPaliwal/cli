@@ -11,3 +11,11 @@ we can consider the test issue. and also there is a plan.md or task.md which has
 ---
 
 do not commit under your name
+
+---
+
+no just push the commit unde my name.
+
+---
+
+continue
