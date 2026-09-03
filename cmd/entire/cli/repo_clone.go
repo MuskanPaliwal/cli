@@ -20,7 +20,7 @@ import (
 // leading slash. owner/repo reuse the GitHub identifier charsets from
 // parseGitHubURL so the same metacharacter vectors are closed at the boundary
 // (owner/repo flow unescaped into the synthesised entire:// clone URL).
-var mirrorCloneRefRe = regexp.MustCompile(`^/?` + mirrorCloneForge + `/` + gitHubOwnerPat + `/` + gitHubRepoPat + `$`)
+var mirrorCloneRefRe = regexp.MustCompile(`^/?` + mirrorCloneForge + `/` + gitHubOwnerRepoPat + `$`)
 
 // mirrorCloneForge is the path token of GitHub mirrors in entire:// clone URLs
 // (`/gh/<owner>/<repo>`), the counterpart of nativeCloneForge. Scoped to the
@@ -93,8 +93,12 @@ const nativeCloneForge = "et"
 // job — the 3-character project minimum was what made the removed
 // `<project>/<repo>` shorthand unambiguous against the two-character `gh`/`et`
 // forge tokens — but a native ref now has to name its token, so the grammar no
-// longer rests on them. What they still buy is a local error instead of a
-// control-plane round trip for a ref the server could never match.
+// longer rests on them.
+//
+// Drift is one-directional, which is why the messages above phrase a failure as
+// what the server accepts rather than as a rule of ours: if the server tightens
+// we are merely lax, but if it loosens (2-char projects, underscores) we refuse
+// a ref that would resolve, and only a ULID or a full entire:// URL gets past.
 var (
 	nativeProjectRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{1,30}[A-Za-z0-9]$`)
 	nativeRepoRe    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$`)
@@ -105,33 +109,30 @@ var (
 // required: the bare `<project>/<repo>` shorthand was removed because nothing
 // in it says which forge was meant, and both take that shape (#2252).
 //
-// A non-nil error is not necessarily user-facing. For a ref that never claimed
-// to be native (`/gh/foo/bar`, `git@github.com:foo/bar`) it only means "try the
-// mirror grammar", and the caller discards it; it reaches the user just for a
-// ref carrying the `et/` token, where they did say what they meant. That is
-// invalidCloneRefError's job, and it is what parseMirrorCloneRef's error gets
-// for `gh/`. Since the token check below IS that test, the two agree by
-// construction.
+// A non-nil error is not necessarily user-facing: for a ref that never named
+// `et/` it only means "try the mirror grammar", and the caller discards it (see
+// invalidCloneRefError, which decides when a parser's reason is shown).
 func parseNativeCloneRef(ref string) (project, repo string, err error) {
-	segs := strings.Split(strings.TrimPrefix(strings.TrimSpace(ref), "/"), "/")
+	segs := strings.Split(trimRefPrefix(ref), "/")
 	if segs[0] != nativeCloneForge {
 		return "", "", fmt.Errorf("not a native ref: expected the %s/ forge token", nativeCloneForge)
 	}
-	// The token is excluded from the count, so `/et/paul` reads as a missing
-	// <repo> rather than as a project named "et".
-	if len(segs) != 3 {
-		return "", "", fmt.Errorf("expected /%s/<project>/<repo> (2 names after the %s token, got %d)", nativeCloneForge, nativeCloneForge, len(segs)-1)
+	// Counting names rather than segments is what makes `/et/paul` read as a
+	// missing <repo> instead of a project named "et".
+	names := segs[1:]
+	if len(names) != 2 {
+		return "", "", fmt.Errorf("expected /%s/<project>/<repo> (2 names after the %s token, got %d)", nativeCloneForge, nativeCloneForge, len(names))
 	}
-	project, repo = segs[1], segs[2]
+	project, repo = names[0], names[1]
 	// Drop `.git` before the name is validated, not after: `.git` alone then
 	// fails the shape check as an empty name rather than passing as a dotted
 	// one. See gitDirSuffix for why the suffix is never part of a name.
 	repo = strings.TrimSuffix(repo, gitDirSuffix)
 	if !nativeProjectRe.MatchString(project) {
-		return "", "", fmt.Errorf("project %q must be 3-32 characters of letters, digits and '-', not starting or ending with '-'", project)
+		return "", "", fmt.Errorf("project %q is not a name the server accepts: 3-32 characters of letters, digits and '-', not starting or ending with '-'", project)
 	}
 	if !nativeRepoRe.MatchString(repo) || strings.Contains(repo, "..") {
-		return "", "", fmt.Errorf("repo %q must be 1-64 characters of letters, digits, '.' and '-', not starting or ending with '.' or '-', and with no consecutive dots", repo)
+		return "", "", fmt.Errorf("repo %q is not a name the server accepts: 1-64 characters of letters, digits, '.' and '-', not starting or ending with '.' or '-', and with no consecutive dots", repo)
 	}
 	return project, repo, nil
 }
@@ -141,8 +142,7 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 // then GetRepo — the one call that returns both clusterHost and path. The URL
 // is the server's own coordinates via repoRemoteURL, never synthesized from the
 // user's ref. repoName arrives with any `.git` suffix already dropped by the
-// parser (see gitDirSuffix), so a repo genuinely named "<name>.git" is not
-// reachable through this path — only by its ULID or a full entire:// URL.
+// parser (see gitDirSuffix).
 func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repoName string) (string, error) {
 	repoID, err := resolveRepoRef(ctx, c, repoName, project)
 	if err != nil {
@@ -167,7 +167,9 @@ func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repo
 
 // gitDirSuffix is the suffix git tools habitually append to a repo path, and
 // Entire treats it as never part of a repo name — on either backend. Every ref
-// parser drops it before the name is used.
+// parser in this package drops it before the name is used; `gitremote` trims
+// the same suffix independently, because it cannot import this package, so a
+// change here has to be mirrored at gitremote.splitOwnerRepo.
 //
 // It is unsupported rather than merely unusual. GitHub rejects a name ending in
 // `.git` outright, so for a mirror the suffix can only ever be decoration. A
@@ -183,12 +185,22 @@ func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repo
 // and the full `entire://` URL, which `repo clone` forwards to git verbatim.
 const gitDirSuffix = ".git"
 
+// trimRefPrefix normalizes a ref for segment work: surrounding space gone, one
+// optional leading slash gone. Every place that reads a ref's leading token
+// goes through it, so the parsers and invalidCloneRefError's dispatch cannot
+// disagree about what the first segment is — three near-copies of this, one of
+// them missing the TrimSpace, is what made "the token check IS the dispatch
+// test" true only because RunE happened to trim first.
+func trimRefPrefix(ref string) string {
+	return strings.TrimPrefix(strings.TrimSpace(ref), "/")
+}
+
 // declaresForge reports whether ref opens with a forge token (leading slash
 // optional). Declaring a token is what says the user meant that grammar, so a
 // malformed ref gets that parser's reason — the bad owner, project or repo name
 // — instead of a list of every shape `repo clone` accepts.
 func declaresForge(ref, token string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(ref, "/"), token+"/")
+	return strings.HasPrefix(trimRefPrefix(ref), token+"/")
 }
 
 // bareRefSuggestions returns the forge-qualified refs a bare `<a>/<b>` could
@@ -203,28 +215,20 @@ func declaresForge(ref, token string) bool {
 // whole grammar makes the reader do the substitution themselves. Re-running the
 // parsers rather than re-deriving their charsets is what keeps the two in step.
 func bareRefSuggestions(ref string) []string {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "/")
+	trimmed := trimRefPrefix(ref)
 	if strings.Count(trimmed, "/") != 1 {
 		return nil
 	}
 	var out []string
-	if native := "/" + nativeCloneForge + "/" + trimmed; nativeRefParses(native) {
+	native := "/" + nativeCloneForge + "/" + trimmed
+	if _, _, err := parseNativeCloneRef(native); err == nil {
 		out = append(out, native)
 	}
-	if mirror := "/" + mirrorCloneForge + "/" + trimmed; mirrorRefParses(mirror) {
+	mirror := "/" + mirrorCloneForge + "/" + trimmed
+	if _, _, _, err := parseMirrorCloneRef(mirror); err == nil {
 		out = append(out, mirror)
 	}
 	return out
-}
-
-func nativeRefParses(ref string) bool {
-	_, _, err := parseNativeCloneRef(ref)
-	return err == nil
-}
-
-func mirrorRefParses(ref string) bool {
-	_, _, _, err := parseMirrorCloneRef(ref)
-	return err == nil
 }
 
 // cloneRefShapes lists every ref shape `repo clone` accepts, for error text.

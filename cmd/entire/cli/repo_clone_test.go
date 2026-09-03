@@ -1,17 +1,15 @@
 package cli
 
 import (
-	"bytes"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/internal/coreapi"
 )
 
@@ -97,7 +95,6 @@ func TestParseNativeCloneRef(t *testing.T) {
 		// No forge token: not a native ref, whatever the names look like.
 		{name: "bare pair is not a shorthand", ref: "paul/dogbark", wantErr: true},
 		{name: "bare pair with leading slash", ref: "/paul/dogbark", wantErr: true},
-		{name: "bare dotted pair", ref: "/paul/entire-trails.el", wantErr: true},
 		{name: "ssh github url", ref: "git@github.com:foo/bar", wantErr: true},
 		{name: "ssh github url with .git", ref: "git@github.com:foo/bar.git", wantErr: true},
 		{name: "host-qualified pair", ref: "github.com/dogbark", wantErr: true},
@@ -184,35 +181,27 @@ func TestCloneRefAlwaysRequiresItsForgePrefix(t *testing.T) {
 	})
 
 	t.Run("the command refuses before the control plane or git", func(t *testing.T) {
-		var dialed atomic.Int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			dialed.Add(1)
+		// The server IS the assertion: any request at all means a forge-less
+		// ref reached resolution, so there is nothing to count afterwards.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("a ref without a forge prefix reached the control plane: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		t.Cleanup(srv.Close)
-		prev := activeCoreClient
-		activeCoreClient = func(context.Context) (*coreapi.Client, error) {
-			return coreapi.NewWithBearer(srv.URL, "tok")
-		}
-		t.Cleanup(func() { activeCoreClient = prev })
 
 		// A host-qualified pair is not a ref either: naming github.com says
 		// which forge, but `repo clone` still takes only the /gh/ form, so this
 		// must not become a second, laxer way in.
 		for _, ref := range append(bare, "github.com/acme/tool", "https://github.com/acme/tool") {
-			cmd := newRepoCloneCmd()
-			var out, errOut bytes.Buffer
-			cmd.SetOut(&out)
-			cmd.SetErr(&errOut)
-			cmd.SetArgs([]string{ref})
-			err := cmd.ExecuteContext(t.Context())
+			_, errOut, err := runCoreCmd(t, newRepoCloneCmd, srv.URL, ref)
 			require.Errorf(t, err, "repo clone %q must fail", ref)
 			// The parse error, specifically: it is what proves the refusal
 			// happened before any resolution rather than after a failed one.
 			require.ErrorContainsf(t, err, `invalid <repo> "`+ref+`"`, "repo clone %q", ref)
-			require.NotContainsf(t, errOut.String(), "Cloning", "repo clone %q must not reach git clone", ref)
+			// runGitClone announces itself on stderr before it execs, so its
+			// absence is what pins that no clone was attempted.
+			require.NotContainsf(t, errOut, "Cloning", "repo clone %q must not reach git clone", ref)
 		}
-		require.Zero(t, dialed.Load(), "a ref without a forge prefix must never reach the control plane")
 	})
 
 	t.Run("an ambiguous pair is never resolved to one forge", func(t *testing.T) {
@@ -224,6 +213,18 @@ func TestCloneRefAlwaysRequiresItsForgePrefix(t *testing.T) {
 		require.Contains(t, msg, "/et/acme/tool")
 		require.Contains(t, msg, "/gh/acme/tool")
 	})
+}
+
+// TestCloneForgeTokensAreGitremotePathTokens ties the two ends of the forge
+// token together. gitremote.pathForges decides which refs git-remote-entire
+// SUGGESTS (`entire repo clone /<token>/…`); these constants decide which
+// `repo clone` ACCEPTS. Nothing else relates the two packages, so a rename on
+// either side would silently start suggesting a command that fails — the very
+// thing pathForges' doc gives as the reason it excludes the legacy /git/ token.
+func TestCloneForgeTokensAreGitremotePathTokens(t *testing.T) {
+	t.Parallel()
+	require.True(t, gitremote.IsForgePathToken(nativeCloneForge), "native token %q must be a gitremote path token", nativeCloneForge)
+	require.True(t, gitremote.IsForgePathToken(mirrorCloneForge), "mirror token %q must be a gitremote path token", mirrorCloneForge)
 }
 
 // TestBareRefSuggestions covers the replacement for the removed shorthand: a
@@ -278,16 +279,16 @@ func TestInvalidCloneRefError(t *testing.T) {
 		{name: "bad owner keeps mirror reason", ref: "/gh/foo_bar/baz", want: "owner: letters, digits, '-'", dontWant: cloneRefShapes},
 		{name: "dot-only repo keeps mirror reason", ref: "/gh/foo/..", want: "repo cannot be dot-only", dontWant: cloneRefShapes},
 		{name: "missing repo keeps mirror reason", ref: "gh/foo", want: "expected gh/<owner>/<repo>", dontWant: cloneRefShapes},
-		{name: "bad project keeps native reason", ref: "/et/foo_bar/dogbark", want: `project "foo_bar" must be 3-32 characters`, dontWant: cloneRefShapes},
-		{name: "bad repo keeps native reason", ref: "/et/paul/dog_bark", want: `repo "dog_bark" must be 1-64 characters`, dontWant: cloneRefShapes},
+		{name: "bad project keeps native reason", ref: "/et/foo_bar/dogbark", want: `project "foo_bar" is not a name the server accepts`, dontWant: cloneRefShapes},
+		{name: "bad repo keeps native reason", ref: "/et/paul/dog_bark", want: `repo "dog_bark" is not a name the server accepts`, dontWant: cloneRefShapes},
 		{name: "dot-only native repo keeps native reason", ref: "/et/paul/..", want: "no consecutive dots", dontWant: cloneRefShapes},
-		{name: "empty native repo keeps native reason", ref: "/et/paul/", want: `repo "" must be`, dontWant: cloneRefShapes},
+		{name: "empty native repo keeps native reason", ref: "/et/paul/", want: `repo "" is not a name the server accepts`, dontWant: cloneRefShapes},
 		{name: "truncated et ref names the missing segment", ref: "/et/paul", want: "expected /et/<project>/<repo> (2 names after the et token, got 1)", dontWant: cloneRefShapes},
-		{name: "et ref without a leading slash keeps native reason", ref: "et/ab/cd", want: `project "ab" must be`, dontWant: cloneRefShapes},
+		{name: "et ref without a leading slash keeps native reason", ref: "et/ab/cd", want: `project "ab" is not a name the server accepts`, dontWant: cloneRefShapes},
 		// A bare pair declared no forge, so neither parser's reason describes
 		// anything the user did; it gets the readings that would parse instead.
 		{name: "bare pair is offered both forges", ref: "paul/dogbark", want: "did you mean /et/paul/dogbark or /gh/paul/dogbark?", dontWant: cloneRefShapes},
-		{name: "bare pair legal on one forge is offered that one", ref: "paul/.foo", want: "did you mean /gh/paul/.foo?", dontWant: "must be"},
+		{name: "bare pair legal on one forge is offered that one", ref: "paul/.foo", want: "did you mean /gh/paul/.foo?", dontWant: "is not a name the server accepts"},
 		{name: "host-qualified pair points at /gh/", ref: "github.com/acme/app", want: "pass GitHub mirrors as /gh/acme/app"},
 		{name: "unsuggestable bare pair lists all shapes", ref: "paul/dog bark", want: cloneRefShapes},
 		{name: "unknown shape lists all shapes", ref: "/gl/foo/bar", want: cloneRefShapes, dontWant: "expected gh/"},

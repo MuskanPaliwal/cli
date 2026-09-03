@@ -77,24 +77,28 @@ var pathForges = map[string]string{
 	"et": "<project>/<repo>",
 }
 
-// IsSupportedForge reports whether forge is one of the forge tokens Entire uses
+// IsForgePathToken reports whether forge is one of the forge tokens Entire uses
 // in an entire:// path ("gh", "et"). It rejects forge hostnames ("github.com")
 // and any other unrecognized value, so a caller parsing a bare
 // forge/owner/repo triple can fail clearly instead of forwarding a malformed
 // forge, and a caller holding a URL can tell a forge id typed in the
 // cluster-host slot apart from a real host.
 //
-// Being a path forge says nothing about which APIs can act on it: the trails
-// API, for one, accepts `et` in the path but resolves only `gh` (see
-// parseTrailRepoArg). Callers that need that distinction make it themselves.
-func IsSupportedForge(forge string) bool {
+// The name says syntax deliberately: this is NOT a capability check, and it
+// once was one (it read the upstream-host map, so it answered `{gh}`). Widening
+// it to the real path tokens is what a URL needs, but it means a caller after a
+// capability has to narrow afterwards — the trail API takes `et` in a path and
+// resolves only `gh`, so `entire trail` refuses it separately
+// (errTrailsNativeUnsupported). A caller that skips that step gets a token this
+// says yes to and an API that 404s.
+func IsForgePathToken(forge string) bool {
 	_, ok := pathForges[forge]
 	return ok
 }
 
 // ForgePathLabels returns the placeholder spelling of the two path segments
 // that follow forge in an entire:// URL, for error messages. Empty for a forge
-// IsSupportedForge rejects.
+// IsForgePathToken rejects.
 func ForgePathLabels(forge string) string {
 	return pathForges[forge]
 }

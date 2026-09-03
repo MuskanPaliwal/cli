@@ -91,7 +91,7 @@ func run(args []string) int {
 	case parsedURL.Scheme != "entire":
 		fmt.Fprintf(os.Stderr, "fatal: unsupported URL scheme %q (expected 'entire')\n", parsedURL.Scheme)
 		return 128
-	case parsedURL.Host == "" || gitremote.IsSupportedForge(parsedURL.Host):
+	case parsedURL.Host == "" || gitremote.IsForgePathToken(parsedURL.Host):
 		// Cluster host absent (empty, or a forge id in its slot);
 		// missingClusterHostMessage renders the actionable hint.
 		fmt.Fprint(os.Stderr, missingClusterHostMessage(parsedURL, rawURL))
@@ -290,7 +290,7 @@ func missingClusterHostMessage(parsedURL *url.URL, rawURL string) string {
 	// (the shape parseMirrorCloneRef accepts); anything shorter would relocate
 	// the failure into a clone command that rejects the ref.
 	seg := strings.Split(strings.Trim(shorthand, "/"), "/")
-	if len(seg) != 3 || seg[0] == "" || seg[1] == "" || seg[2] == "" || !gitremote.IsSupportedForge(seg[0]) {
+	if len(seg) != 3 || seg[0] == "" || seg[1] == "" || seg[2] == "" || !gitremote.IsForgePathToken(seg[0]) {
 		return fmt.Sprintf("fatal: missing host in URL %q\n", rawURL)
 	}
 	return fmt.Sprintf(

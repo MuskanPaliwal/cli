@@ -255,20 +255,20 @@ func TestResolveRemoteRepo_MissingRemote(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestIsSupportedForge pins the forge-token set and, more importantly, the two
+// TestIsForgePathToken pins the forge-token set and, more importantly, the two
 // deliberate boundaries around it. `et` belongs because it is a real entire://
 // path segment — leaving it out is what made a native URL try to dial a cluster
 // named "et" — while the legacy `git` prefix stays out because `entire repo
 // clone` cannot act on a /git/ ref, and hostnames stay out because a caller
 // parsing forge/owner/repo needs them to fail.
-func TestIsSupportedForge(t *testing.T) {
+func TestIsForgePathToken(t *testing.T) {
 	t.Parallel()
 	for _, forge := range []string{"gh", "et"} {
-		assert.True(t, IsSupportedForge(forge), "%q should be a path forge", forge)
+		assert.True(t, IsForgePathToken(forge), "%q should be a path forge", forge)
 		assert.NotEmpty(t, ForgePathLabels(forge), "%q should label its path segments", forge)
 	}
 	for _, forge := range []string{"git", "github.com", "gitlab.com", "gl", "GH", "", "/gh"} {
-		assert.False(t, IsSupportedForge(forge), "%q should not be a path forge", forge)
+		assert.False(t, IsForgePathToken(forge), "%q should not be a path forge", forge)
 		assert.Empty(t, ForgePathLabels(forge), "%q should have no labels", forge)
 	}
 }

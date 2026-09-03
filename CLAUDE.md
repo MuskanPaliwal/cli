@@ -91,70 +91,64 @@ the commands are always runnable in every build.
   forge**: the leading token alone decides which grammar is tried, and the bare
   `<project>/<repo>` shorthand was removed because both forges take that shape
   and nothing in it says which was meant (#2252).
-  Both native segments must match the server's whole name shape, not just its
-  charset — the rules `normalizeName` enforces in entiredb
-  `core/resource/project_name.go`: a project is 3–32 chars of letters, digits
-  and `-`, a repo 1–64 with interior `.` also allowed, neither starting or
-  ending with `-` (or `.`), and no consecutive dots. Uppercase is accepted
-  because both lookups fold case (project via `foldProjectName`, repo on
-  `lower(name)`). Those bounds are server parity only — they buy a local error
-  instead of a control-plane round trip. They used to carry a second job (the
-  3-char project minimum made the shorthand unambiguous against the two-char
-  forge tokens); with the token mandatory the grammar no longer rests on them.
-  A ref matching none of the grammars gets a targeted error
-  (`invalidCloneRefError`), in four descending degrees of confidence about what
-  was meant: a ref naming `github.com` is pointed at its `/gh/` form; a ref that
-  declared a forge token keeps its own parser's reason (`gh/` the mirror
-  parser's, `et/` the native parser's — the rule its project or repo name
-  broke); a bare pair is offered every forge-qualified reading that would
-  actually parse (`bareRefSuggestions` re-runs the parsers rather than
-  re-deriving their charsets, so a suggestion is never a ref that fails next,
-  and both are offered when both fit rather than guessing); anything left lists
-  the accepted shapes. `parseHostedGitHubURL` requires the host to be named for
-  the first branch, because an unqualified pair belongs to no forge — that is
-  the whole reason the third branch exists.
+  Requiring the prefix is a **namesquatting** guard, not tidiness: without it,
+  whichever namespace the CLI defaulted to could shadow the other, and
+  `TestCloneRefAlwaysRequiresItsForgePrefix` pins that no forge-less pair
+  resolves in either parser or in the command. It holds only for *intent* —
+  lookups are already unambiguous because native rows are stored prefixed in the
+  same `full_name` index (`et/<project>/<repo>`), which is why the bare-pair
+  `--repo` filters on `search`/`experts`/`explain` cannot cross namespaces
+  either.
+  Native names are validated client-side against the server's own rules
+  (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
+  `core/resource/project_name.go`); those bounds are server parity only and buy
+  a local error instead of a control-plane round trip, so a failure is phrased
+  as what the server accepts rather than as a rule of ours — drift is
+  one-directional and only a *looser* server would make us wrong. A ref matching
+  no grammar gets a targeted error (`invalidCloneRefError`) in descending
+  confidence: a ref naming `github.com` is pointed at its `/gh/` form, a ref
+  that declared a forge token keeps its own parser's reason, a bare pair is
+  offered the forge-qualified readings that would actually parse
+  (`bareRefSuggestions`), and anything left lists the accepted shapes.
   A native ref resolves project → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, and clones
   `entire://<clusterHost><path>` from the repo's home cluster (`--cluster` is
   rejected on native refs).
-  A trailing `.git` is never part of a repo name, on **either** backend: both
-  clone-ref parsers drop it before the name is used (`gitDirSuffix`), and `repo
-  create` refuses a name ending in it. On the mirror side it can only ever be
-  decoration, since GitHub rejects such a name outright. On the native side a
-  repo *can* be named `foo.git` server-side — the interior dot that also makes
-  `entire-trails.el` legal, and the server only strips the suffix for `/gh/`
-  paths (`authn.CanonicaliseMirrorPath` passes anything else through) — but
-  `gitremote.splitOwnerRepo` trims unconditionally when reading a remote back,
-  so such a repo is unaddressable by name once cloned anyway, in trails, `api`,
-  experts, recap and explain alike. Dropping it everywhere makes the whole CLI
-  agree rather than leaving `repo clone` as the one path that keeps it. The
-  escape hatches for a native `foo.git` that already exists are its ULID and a
-  full `entire://` URL, which `clone` forwards to git verbatim. Order matters in
-  both parsers: the trim runs *before* the name checks, so `.git` alone fails as
-  an empty name and `/gh/<owner>/..git` is caught by the dot-only guard.
+  A trailing `.git` is never part of a repo name, on **either** backend
+  (`gitDirSuffix` documents the mechanics): every ref parser drops it and `repo
+  create` refuses a name ending in it. This is a deliberate client-side
+  narrowing — GitHub rejects such a name outright, but the server accepts a
+  native `foo.git` (interior dot, same rule that makes `entire-trails.el` legal)
+  and strips the suffix for `/gh/` paths only. `gitremote.splitOwnerRepo` trims
+  unconditionally when reading a remote back, so such a repo is unaddressable by
+  name once cloned regardless; dropping it everywhere makes the CLI agree with
+  itself instead of leaving `repo clone` the one path that keeps it. Escape
+  hatches: the repo's ULID, or a full `entire://` URL. Two consequences worth
+  knowing — a `foo.git` created through the API or web UI *aliases* onto `foo`
+  in `resolveRepoRef`, and the durable fix is a server-side rule in
+  `normalizeName`, not this check.
 - `grant`: manage access grants and org membership — `org`, `project`, and `repo`
   each support `add` / `list` / `remove`
 
 Forge tokens (`gh`, `et`) are the path segments of an `entire://` URL, and
-`gitremote.pathForges` is the one place that knows them —
-`gitremote.IsSupportedForge` answers "is this a forge token", and
-`ForgePathLabels` gives the placeholder spelling of the two segments after it
-(`<owner>/<repo>` for a mirror, `<project>/<repo>` for a native repo) so error
-messages read correctly for both. It is deliberately **not** `hostToForge`,
-which maps an *upstream* git host to its id: a native repo has no upstream host,
-so `et` is absent there, and conflating the two made `entire://et/<project>/<repo>`
-try to dial a cluster named `et` while `entire://gh/...` got an actionable
-message. `CanonicalHost` still reads `forgeToHost`, so a native remote keeps
-falling back to its cluster host instead of inventing a forge host. The legacy
-`/git/` prefix is excluded because `repo clone` cannot act on such a ref.
+`gitremote.pathForges` owns the *set* — `IsForgePathToken` answers "is this a
+forge token", `ForgePathLabels` gives the placeholder spelling of the segments
+after it (`<owner>/<repo>` vs `<project>/<repo>`) so messages read correctly for
+both. The token strings are still spelled in a dozen call sites; only the set
+lives in one place. It is deliberately **not** `hostToForge`, which maps an
+*upstream* git host to its id: a native repo has no upstream host, so `et` is
+absent there, and conflating the two made `entire://et/<project>/<repo>` dial a
+cluster named `et` while `entire://gh/...` got an actionable message.
+`CanonicalHost` still reads `forgeToHost`, so a native remote falls back to its
+cluster host rather than inventing a forge host. The legacy `/git/` prefix is
+excluded because `repo clone` cannot act on such a ref.
 
-Being a forge token says nothing about which APIs accept it. Trails are the
-current example: entire-api admits `{gh, et}` (`validTrailsHosts`) but resolves
-only `{gh}` (`resolvableTrailsHosts`, because `full_name` rows carry no forge
-host and every resolvable row today is a GitHub mirror), so a native `--repo`
-would collapse into the existence-hiding 404. `parseTrailRepoArg` therefore
-refuses it locally with that reason — in both the bare and the URL spelling —
-and that check comes out when entire-api starts resolving native repos.
+**Being a forge token says nothing about which APIs accept it** — the name says
+syntax on purpose. Trails are the current example: entire-api takes `et` in the
+path but cannot resolve it, so `entire trail` refuses it locally with the real
+reason (`errTrailsNativeUnsupported`). That refusal has to cover *both* ways a
+forge reaches the API — named in `--repo` and inferred from the origin remote —
+and the inferred one is the common path.
 
 Experimental commands (gated by the build-time visibility flag above — visible
 and grouped under "Experimental commands:" in developer/nightly builds, hidden

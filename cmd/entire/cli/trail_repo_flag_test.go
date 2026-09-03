@@ -7,8 +7,46 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+// TestTrailForgeRefusalCoversBothEntryPoints is the F1 regression: a forge
+// reaches the trail API two ways — named in --repo, or inferred from origin —
+// and only the argument was gated, so a developer standing in a native clone
+// got the existence-hiding 404 the check exists to prevent. The inferred path
+// is the common one.
+//
+// Not parallel: chdirs into a temp repo.
+func TestTrailForgeRefusalCoversBothEntryPoints(t *testing.T) {
+	t.Run("named in --repo", func(t *testing.T) {
+		_, _, _, err := parseTrailRepoArg("et/paul/dogbark")
+		require.ErrorIs(t, err, errTrailsNativeUnsupported)
+	})
+
+	t.Run("inferred from a native origin remote", func(t *testing.T) {
+		dir := t.TempDir()
+		testutil.InitRepo(t, dir)
+		testutil.RunGit(t, dir, "remote", "add", "origin", "entire://aws-us-east-2.entire.io/et/paul/dogbark")
+		t.Chdir(dir)
+		_, _, _, err := resolveTrailRemote(t.Context())
+		require.ErrorIs(t, err, errTrailsNativeUnsupported)
+	})
+
+	t.Run("a mirror origin remote still resolves", func(t *testing.T) {
+		dir := t.TempDir()
+		testutil.InitRepo(t, dir)
+		testutil.RunGit(t, dir, "remote", "add", "origin", "https://github.com/entireio/cli.git")
+		t.Chdir(dir)
+		forge, owner, repo, err := resolveTrailRemote(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, "gh", forge)
+		require.Equal(t, "entireio", owner)
+		require.Equal(t, "cli", repo)
+	})
+}
 
 // TestParseTrailRepoArg_NativeForgeReason pins WHY a native ref is refused.
 // Before this, `et` fell into the unknown-forge branch and was answered with
@@ -64,7 +102,7 @@ func TestParseTrailRepoArg(t *testing.T) {
 		{name: "bare host instead of forge id", raw: "github.com/acme/app", wantErr: true},
 		{name: "bare unsupported forge host", raw: "gitlab.com/acme/app", wantErr: true},
 		{name: "unknown short forge id", raw: "zz/acme/app", wantErr: true},
-		// `et` IS a forge token (gitremote.IsSupportedForge) and entire-api's
+		// `et` IS a forge token (gitremote.IsForgePathToken) and entire-api's
 		// validTrailsHosts admits it, but resolvableTrailsHosts is {gh} alone,
 		// so it can only ever 404 — both spellings are refused locally instead.
 		{name: "native forge is refused", raw: "et/paul/dogbark", wantErr: true},
