@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1KTZQS5ZPGKCPN2HHG1JCTM",
+  "session_id": "01a06778-55e2-7161-b14f-914efdb56086",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-03T14:32:56.846594Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/persistent_ref_update.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "6d46cb8f7bda",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 170806,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7470976,
+    "output_tokens": 26366,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-03T14:32:56.69612Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 26,
+    "total_committed": 0,
+    "total_lines_changed": 26,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 39,
+      "user_lines_removed": 26,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_ref_update.go": 22,
+        "cmd/entire/cli/checkpoint/persistent_ref_update_test.go": 17
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/checkpoint/persistent_ref_update.go": 14,
+        "cmd/entire/cli/checkpoint/persistent_ref_update_test.go": 12
+      }
+    }
+  ]
+}
