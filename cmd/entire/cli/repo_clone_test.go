@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +28,14 @@ func TestParseMirrorCloneRef(t *testing.T) {
 		{name: "missing repo", ref: "/gh/entirehq", wantErr: true},
 		{name: "extra segment", ref: "/gh/entirehq/entire-api/extra", wantErr: true},
 		{name: "dot-only repo", ref: "/gh/entirehq/..", wantErr: true},
+		// Same policy as the native side (see gitDirSuffix): GitHub cannot hold
+		// a name ending in .git, so the suffix is only ever decoration.
+		{name: "git suffix is dropped", ref: "/gh/entirehq/entire-api.git", wantOwner: "entirehq", wantRepo: "entire-api"},
+		{name: "git suffix dropped from a dotted name", ref: "/gh/entirehq/trails.el.git", wantOwner: "entirehq", wantRepo: "trails.el"},
+		// `..git` is not dot-only as typed; it becomes so once the suffix goes,
+		// which is why the trim has to run first.
+		{name: "dot-only once the suffix is dropped", ref: "/gh/entirehq/..git", wantErr: true},
+		{name: "git suffix alone leaves no name", ref: "/gh/entirehq/.git", wantErr: true},
 		{name: "metachar in repo", ref: "/gh/entirehq/repo?x=1", wantErr: true},
 		{name: "empty", ref: "", wantErr: true},
 	}
@@ -71,9 +78,12 @@ func TestParseNativeCloneRef(t *testing.T) {
 		{name: "shorthand leading slash", ref: "/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
 		{name: "uppercase folds server-side", ref: "Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark"},
 		{name: "dotted repo", ref: "paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el"},
-		// A .git suffix is a legal repo name (interior dot), so it parses and
-		// resolves as typed rather than being stripped — see gitDirSuffix.
-		{name: "git suffix is a name, not a suffix to strip", ref: "paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		// `.git` is never part of a name on either backend (see gitDirSuffix),
+		// so it is dropped before the name is validated.
+		{name: "git suffix is dropped", ref: "paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "git suffix dropped from a dotted name", ref: "paul/entire-trails.el.git", wantProject: "paul", wantRepo: "entire-trails.el"},
+		{name: "only the last git suffix is dropped", ref: "paul/dogbark.git.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		{name: "git suffix alone leaves no name", ref: "paul/.git", wantErr: true},
 		{name: "single-char repo", ref: "paul/x", wantProject: "paul", wantRepo: "x"},
 		{name: "shortest project", ref: "abc/dogbark", wantProject: "abc", wantRepo: "dogbark"},
 		{name: "longest project", ref: maxProject + "/dogbark", wantProject: maxProject, wantRepo: "dogbark"},
@@ -198,10 +208,8 @@ const testNativeRepoULID = "01ARZ3NDEKTSV4RRFFQ69G5FBB"
 
 // serveNativeRepo fakes the three-call native resolution chain: project by
 // name, repo by name within the project, then the single-repo GET (the one
-// response that carries clusterHost + path). A nil repo serves a repo-name
-// miss instead — the project resolves and the repo lookup answers with no
-// repo, which is what the control plane returns for a name nothing matches.
-func serveNativeRepo(t *testing.T, repo *coreapi.Repo) *coreapi.Client {
+// response that carries clusterHost + path).
+func serveNativeRepo(t *testing.T, repo coreapi.Repo) *coreapi.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -212,15 +220,11 @@ func serveNativeRepo(t *testing.T, repo *coreapi.Repo) *coreapi.Client {
 				ID: testProjectULID, Name: "paul", OwnerId: testProjectULID, OwnerType: coreapi.ProjectOwnerTypeOrg,
 			})}
 		case "/api/v1/projects/" + testProjectULID + "/repos":
-			out := &coreapi.ListProjectReposOutputBody{}
-			if repo != nil {
-				out.Repo = coreapi.NewOptRepo(coreapi.Repo{
-					ID: testNativeRepoULID, Name: repo.Name, OwningProjectId: testProjectULID,
-				})
-			}
-			body = out
+			body = &coreapi.ListProjectReposOutputBody{Repo: coreapi.NewOptRepo(coreapi.Repo{
+				ID: testNativeRepoULID, Name: repo.Name, OwningProjectId: testProjectULID,
+			})}
 		case "/api/v1/repos/" + testNativeRepoULID:
-			body = repo
+			body = &repo
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -239,8 +243,8 @@ func serveNativeRepo(t *testing.T, repo *coreapi.Repo) *coreapi.Client {
 func TestResolveNativeCloneURL(t *testing.T) {
 	t.Parallel()
 
-	native := func(host, path string) *coreapi.Repo {
-		r := &coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark", OwningProjectId: testProjectULID}
+	native := func(host, path string) coreapi.Repo {
+		r := coreapi.Repo{ID: testNativeRepoULID, Name: "dogbark", OwningProjectId: testProjectULID}
 		if host != "" {
 			r.ClusterHost = coreapi.NewOptString(host)
 		}
@@ -281,45 +285,6 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid cluster host")
 	})
-}
-
-// TestResolveNativeCloneURL_GitSuffixHint covers the one thing a native ref
-// carrying `.git` can be told: not at parse time (the name is legal, so the
-// suffix cannot be stripped or refused without risking the wrong repo), but on
-// the lookup miss, where it is provably why nothing matched.
-func TestResolveNativeCloneURL_GitSuffixHint(t *testing.T) {
-	t.Parallel()
-
-	t.Run("a missing .git-suffixed repo suggests dropping the suffix", func(t *testing.T) {
-		t.Parallel()
-		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepo(t, nil), "paul", "dogbark.git")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), `no repo named "dogbark.git"`)
-		require.Contains(t, err.Error(), "retry as /et/paul/dogbark")
-	})
-
-	t.Run("a missing repo without the suffix gets no hint", func(t *testing.T) {
-		t.Parallel()
-		_, err := resolveNativeCloneURL(t.Context(), serveNativeRepo(t, nil), "paul", "dogbark")
-		require.Error(t, err)
-		require.Contains(t, err.Error(), `no repo named "dogbark"`)
-		require.NotContains(t, err.Error(), "retry as")
-	})
-}
-
-// TestHintDroppedGitSuffix pins the hint to the repo-name miss. Any other
-// failure carrying the same suffix — auth, transport, a project that does not
-// exist — is not the suffix's fault, and advice about it would send the user
-// after the wrong problem.
-func TestHintDroppedGitSuffix(t *testing.T) {
-	t.Parallel()
-	other := errors.New("Post \"https://core\": dial tcp: connection refused")
-	require.Equal(t, other, hintDroppedGitSuffix(other, "paul", "dogbark.git"))
-
-	miss := noRepoNamedErr("dogbark.git")
-	got := hintDroppedGitSuffix(miss, "paul", "dogbark.git")
-	require.ErrorIs(t, got, errNoRepoNamed)
-	require.Contains(t, got.Error(), "retry as /et/paul/dogbark")
 }
 
 // TestRepoClone_NativeRefRejectsClusterFlag locks in that --cluster (a mirror

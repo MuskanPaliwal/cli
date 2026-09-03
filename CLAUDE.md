@@ -108,15 +108,22 @@ the commands are always runnable in every build.
   A native ref resolves project → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, and clones
   `entire://<clusterHost><path>` from the repo's home cluster (`--cluster` is
-  rejected on native refs). The server strips a `.git` suffix for `/gh/` paths
-  only, and `foo.git` is a legal native repo name, so the suffix is never
-  stripped or refused while parsing — a `/et/` ref keeps it, and the advice to
-  drop it is attached where it is provably the cause: the repo-name lookup miss
-  (`hintDroppedGitSuffix`, keyed on the `errNoRepoNamed` sentinel). A full
-  `entire://` URL gets no equivalent hint, deliberately — `clone` performs no
-  lookup on that branch, so it could only guess at a failed clone's cause;
-  git-remote-entire's `fatalMessage` holds both the parsed URL and the
-  classified transfer error, and is where the unhedged version belongs.
+  rejected on native refs).
+  A trailing `.git` is never part of a repo name, on **either** backend: both
+  clone-ref parsers drop it before the name is used (`gitDirSuffix`), and `repo
+  create` refuses a name ending in it. On the mirror side it can only ever be
+  decoration, since GitHub rejects such a name outright. On the native side a
+  repo *can* be named `foo.git` server-side — the interior dot that also makes
+  `entire-trails.el` legal, and the server only strips the suffix for `/gh/`
+  paths (`authn.CanonicaliseMirrorPath` passes anything else through) — but
+  `gitremote.splitOwnerRepo` trims unconditionally when reading a remote back,
+  so such a repo is unaddressable by name once cloned anyway, in trails, `api`,
+  experts, recap and explain alike. Dropping it everywhere makes the whole CLI
+  agree rather than leaving `repo clone` as the one path that keeps it. The
+  escape hatches for a native `foo.git` that already exists are its ULID and a
+  full `entire://` URL, which `clone` forwards to git verbatim. Order matters in
+  both parsers: the trim runs *before* the name checks, so `.git` alone fails as
+  an empty name and `/gh/<owner>/..git` is caught by the dot-only guard.
 - `grant`: manage access grants and org membership — `org`, `project`, and `repo`
   each support `add` / `list` / `remove`
 

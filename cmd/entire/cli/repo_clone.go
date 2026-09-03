@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -122,6 +121,10 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 		return "", "", fmt.Errorf("expected /%s/<project>/<repo> or <project>/<repo> (2 names, got %d)", nativeCloneForge, len(segs))
 	}
 	project, repo = segs[0], segs[1]
+	// Drop `.git` before the name is validated, not after: `.git` alone then
+	// fails the shape check as an empty name rather than passing as a dotted
+	// one. See gitDirSuffix for why the suffix is never part of a name.
+	repo = strings.TrimSuffix(repo, gitDirSuffix)
 	if !nativeProjectRe.MatchString(project) {
 		return "", "", fmt.Errorf("project %q must be 3-32 characters of letters, digits and '-', not starting or ending with '-'", project)
 	}
@@ -135,16 +138,13 @@ func parseNativeCloneRef(ref string) (project, repo string, err error) {
 // name) to its entire:// clone URL: name → ULID via the project-scoped lookup,
 // then GetRepo — the one call that returns both clusterHost and path. The URL
 // is the server's own coordinates via repoRemoteURL, never synthesized from the
-// user's ref, so it ends in `.git` exactly when the repo is genuinely named
-// that — a legal name, which is why the suffix is never stripped while parsing
-// (see gitDirSuffix). A suffix the USER appended is the other case and not this
-// function's to fix: the server strips `.git` for /gh/ paths only, so on a
-// native ref it stays part of the name looked up here, and the miss carries
-// hintDroppedGitSuffix's advice.
+// user's ref. repoName arrives with any `.git` suffix already dropped by the
+// parser (see gitDirSuffix), so a repo genuinely named "<name>.git" is not
+// reachable through this path — only by its ULID or a full entire:// URL.
 func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repoName string) (string, error) {
 	repoID, err := resolveRepoRef(ctx, c, repoName, project)
 	if err != nil {
-		return "", hintDroppedGitSuffix(err, project, repoName)
+		return "", err
 	}
 	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
 	if err != nil {
@@ -163,34 +163,23 @@ func resolveNativeCloneURL(ctx context.Context, c *coreapi.Client, project, repo
 	return cloneURL, nil
 }
 
-// gitDirSuffix is the suffix git tools habitually append to a repo path. The
-// server strips it from `/gh/` paths only, so a native ref keeps it and asks
-// for a repo literally named "<name>.git" — which the name rules permit (an
-// interior dot), so it can be neither stripped nor rejected while parsing
-// without risking a clone of the wrong repo. `entire-trails.el` is the same
-// shape; there is no telling the two apart from the ref alone.
+// gitDirSuffix is the suffix git tools habitually append to a repo path, and
+// Entire treats it as never part of a repo name — on either backend. Every ref
+// parser drops it before the name is used.
 //
-// A full `entire://` URL carrying the suffix gets no equivalent hint here, and
-// deliberately so: `repo clone` performs no lookup on that branch, so it could
-// only guess at a failed clone's cause. git-remote-entire's fatalMessage is the
-// layer that holds both the parsed URL and the classified transfer error — it
-// already rewrites the URL for the wrong-cluster case — so that is where the
-// unhedged version belongs.
+// It is unsupported rather than merely unusual. GitHub rejects a name ending in
+// `.git` outright, so for a mirror the suffix can only ever be decoration. A
+// native repo genuinely CAN be named "foo.git" server-side (an interior dot,
+// which is also what makes `entire-trails.el` legal), but the CLI reads every
+// remote back through gitremote.splitOwnerRepo, which trims the suffix
+// unconditionally — so such a repo is unaddressable by name after cloning it
+// anyway, in trails, `api`, experts, recap and explain alike. Rather than have
+// `repo clone` be the one path that keeps the suffix, the whole CLI drops it,
+// and `repo create` refuses to mint a name that ends in it.
+//
+// The escape hatches for a native "foo.git" that already exists are its ULID
+// and the full `entire://` URL, which `repo clone` forwards to git verbatim.
 const gitDirSuffix = ".git"
-
-// hintDroppedGitSuffix adds retry-without-the-suffix advice to a repo-name
-// lookup miss for a name carrying `.git`. The miss is the first moment the
-// suffix is provably the problem, which is why the advice lives here rather
-// than at the parse: see gitDirSuffix. Any other failure — a project miss,
-// auth, transport — is returned untouched, since the suffix is not why it
-// failed.
-func hintDroppedGitSuffix(err error, project, repoName string) error {
-	if !errors.Is(err, errNoRepoNamed) || !strings.HasSuffix(repoName, gitDirSuffix) {
-		return err
-	}
-	return fmt.Errorf("%w; a native ref keeps the %s suffix (it is stripped for /gh/ paths only) — retry as /%s/%s/%s",
-		err, gitDirSuffix, nativeCloneForge, project, strings.TrimSuffix(repoName, gitDirSuffix))
-}
 
 // declaresForge reports whether ref opens with a forge token (leading slash
 // optional). Declaring a token is what says the user meant that grammar, so a
@@ -238,6 +227,12 @@ func parseMirrorCloneRef(ref string) (provider, owner, repo string, err error) {
 		return "", "", "", fmt.Errorf("expected gh/<owner>/<repo> (leading slash optional; owner: letters, digits, '-'; repo: letters, digits, '.', '_', '-'), got %q", ref)
 	}
 	owner, repo = strings.ToLower(m[1]), strings.ToLower(m[2])
+	// Drop `.git` (see gitDirSuffix) BEFORE the dot-only guard, which is what
+	// keeps `..git` — not dot-only as typed — from resolving to a "." repo.
+	repo = strings.TrimSuffix(repo, gitDirSuffix)
+	if repo == "" {
+		return "", "", "", fmt.Errorf("repo name is empty once the %s suffix is dropped: %s", gitDirSuffix, ref)
+	}
 	if gitHubDotOnlyRe.MatchString(repo) {
 		return "", "", "", fmt.Errorf("repo cannot be dot-only: %s", ref)
 	}

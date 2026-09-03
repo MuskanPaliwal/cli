@@ -216,15 +216,8 @@ func noProjectNamedErr(name string) error {
 	return fmt.Errorf("no project named %q (run `entire project list` to see names, or pass a ULID)", name)
 }
 
-// errNoRepoNamed heads the repo-name lookup miss, wrapped rather than only
-// formatted so a caller holding context the resolver does not — `repo clone`'s
-// dropped-`.git` hint — can recognise the miss without matching on the text.
-// A sentinel rather than a typed error because classifying is all any caller
-// needs: the name is already in hand wherever the advice is added.
-var errNoRepoNamed = errors.New("no repo named")
-
 func noRepoNamedErr(name string) error {
-	return fmt.Errorf("%w %q in that project (run `entire repo list <project>` to see names, or pass a ULID)", errNoRepoNamed, name)
+	return fmt.Errorf("no repo named %q in that project (run `entire repo list <project>` to see names, or pass a ULID)", name)
 }
 
 // resolvedRefLabel formats a reference for a success message so it always
