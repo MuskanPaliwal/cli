@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- A session's `full.jsonl` is released from `.entire/metadata` once its content has been condensed into a checkpoint. Nothing ever emptied that staging buffer, so transcripts accumulated in the worktree forever after being committed and pushed — 460 MB across 392 session directories in one checkout. Existing files are not reclaimed ([#2258](https://github.com/entireio/cli/pull/2258))
+- A session's `full.jsonl` is released from `.entire/metadata` once its content has been condensed into a checkpoint. Nothing ever emptied that staging buffer, so transcripts accumulated in the worktree forever after being committed and pushed — 460 MB across 392 session directories in one checkout. Existing files are not reclaimed automatically ([#2258](https://github.com/entireio/cli/pull/2258))
 - `git clone entire://<cluster>/…` works again when your active login is on a different federation and exactly one saved login can authenticate that cluster; the CLI uses it and names it on stderr. `--context` and `$ENTIRE_CONTEXT` are unchanged ([#2248](https://github.com/entireio/cli/pull/2248))
 - `entire doctor` says it is waiting for a session lock instead of stalling with no output ([#2232](https://github.com/entireio/cli/pull/2232))
 
