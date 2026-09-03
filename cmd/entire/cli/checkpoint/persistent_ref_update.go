@@ -19,14 +19,22 @@ import (
 
 type persistentRefBuilder func() (newHash, expectedHash plumbing.Hash, err error)
 
-func repositoryDirs(ctx context.Context, repo *git.Repository) (worktreeRoot, commonDir string, err error) {
+func repositoryRoot(repo *git.Repository) (string, error) {
 	wt, err := repo.Worktree()
 	if err != nil {
-		return "", "", fmt.Errorf("open worktree: %w", err)
+		return "", fmt.Errorf("open worktree: %w", err)
 	}
-	worktreeRoot = wt.Filesystem().Root()
+	worktreeRoot := wt.Filesystem().Root()
 	if worktreeRoot == "" {
-		return "", "", errors.New("repository worktree filesystem has no root path")
+		return "", errors.New("repository worktree filesystem has no root path")
+	}
+	return worktreeRoot, nil
+}
+
+func repositoryDirs(ctx context.Context, repo *git.Repository) (worktreeRoot, commonDir string, err error) {
+	worktreeRoot, err = repositoryRoot(repo)
+	if err != nil {
+		return "", "", err
 	}
 	commonDir, err = resolveGitCommonDir(ctx, repo)
 	if err != nil {
@@ -85,24 +93,24 @@ func withLockedPersistentRef(
 	})
 }
 
-// CASPersistentRef serializes with Entire's persistent ref writers and updates
-// refName through native Git's cross-process compare-and-swap protocol. Native
-// lock contention is retried without rebuilding because the expected ref has
-// not moved; a compare-and-swap conflict remains terminal for the stale write.
+// CASPersistentRef updates refName through native Git's cross-process
+// compare-and-swap protocol. It deliberately does not acquire the persistent
+// writer flock: the expected value predates this call, so native Git provides
+// the safety boundary without making deadline-free pre-push contexts wait
+// indefinitely. Native lock contention is retried without rebuilding because
+// the expected ref has not moved; a CAS conflict remains terminal.
 func CASPersistentRef(
 	ctx context.Context,
 	repo *git.Repository,
 	refName plumbing.ReferenceName,
 	newHash, expectedHash plumbing.Hash,
 ) error {
-	repoRoot, commonDir, err := repositoryDirs(ctx, repo)
+	repoRoot, err := repositoryRoot(repo)
 	if err != nil {
-		return fmt.Errorf("resolve repository directories: %w", err)
+		return fmt.Errorf("resolve repository root: %w", err)
 	}
-	return withPersistentRefFlock(ctx, commonDir, refName, func() error {
-		return retryPersistentRefLockContention(ctx, refName, func() error {
-			return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
-		})
+	return retryPersistentRefLockContention(ctx, refName, func() error {
+		return gitrepo.CompareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash)
 	})
 }
 

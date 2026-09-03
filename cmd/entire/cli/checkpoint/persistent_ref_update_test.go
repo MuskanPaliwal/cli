@@ -51,11 +51,17 @@ func TestCASPersistentRef_StopsWaitingWhenContextDeadlineExpires(t *testing.T) {
 	require.Equal(t, initial, ref.Hash())
 }
 
-func TestCASPersistentRef_WaitsForHeldFlockWithoutCallerDeadline(t *testing.T) {
+func TestCASPersistentRef_DoesNotWaitForPersistentRefFlock(t *testing.T) {
 	t.Parallel()
 	repo, initial := setupBranchTestRepo(t)
 	refName := plumbing.ReferenceName("refs/entire/test-cas-wait")
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
+	initialCommit, err := repo.CommitObject(initial)
+	require.NoError(t, err)
+	replacement, err := CreateCommit(
+		t.Context(), repo, initialCommit.TreeHash, initial, "replacement", "Test", "test@test.com",
+	)
+	require.NoError(t, err)
 	_, commonDir, err := repositoryDirs(context.Background(), repo)
 	require.NoError(t, err)
 	lockPath, err := persistentRefLockPath(commonDir, refName)
@@ -71,25 +77,24 @@ func TestCASPersistentRef_WaitsForHeldFlockWithoutCallerDeadline(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		result <- CASPersistentRef(context.Background(), repo, refName, initial, initial)
+		result <- CASPersistentRef(context.Background(), repo, refName, replacement, initial)
 	}()
 
-	// A deadline-free caller must keep its place in the lock queue instead of
-	// turning a busy checkpoint writer into a failed user push.
 	select {
 	case err := <-result:
-		t.Fatalf("CAS returned while another Entire writer still held the flock: %v", err)
-	case <-time.After(2250 * time.Millisecond):
-	}
-
-	releaseHolder()
-	released = true
-	select {
-	case err = <-result:
 		require.NoError(t, err)
 	case <-time.After(2 * time.Second):
-		t.Fatal("CAS did not continue after the persistent ref flock was released")
+		releaseHolder()
+		released = true
+		err := <-result
+		t.Fatalf("CAS waited for the persistent writer flock: %v", err)
 	}
+
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	require.Equal(t, replacement, ref.Hash())
+	releaseHolder()
+	released = true
 }
 
 func TestCASPersistentRef_RejectsSymbolicRef(t *testing.T) {
