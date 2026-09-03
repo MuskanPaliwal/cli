@@ -105,9 +105,12 @@ Fires when Claude finishes responding. Does **not** fire on user interrupt (Ctrl
 
 2.  **Extract and Save Metadata** (to `.entire/metadata/<session-id>/`):
 
-    - `full.jsonl` - Copy of the complete transcript.
-    - `prompt.txt` - Checkpoint-scoped user prompts, separated by `---`.
-    - `summary.txt` - The last assistant message (used as checkpoint summary).
+    - `full.jsonl` - Sanitized copy of the complete transcript (see `agent.TranscriptSanitizer`). Removed once the session's work is condensed into a checkpoint; the next Stop rewrites it from the agent's own transcript.
+    - `prompt.txt` - Checkpoint-scoped user prompts, separated by `---`. Removed at condensation by `clearFilesystemPrompt`.
+
+    Both files are a staging buffer for the checkpoint writer, not the durable
+    copy. The durable copy lives in the checkpoint tree on the shadow branch
+    and on `entire/checkpoints/v1`.
 
 3.  **Compute File Changes**:
 
