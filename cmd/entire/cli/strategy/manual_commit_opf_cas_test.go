@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -53,6 +55,26 @@ func TestAtomicSetV1Ref_ReportsActualCASConflictAsMoved(t *testing.T) {
 	require.ErrorAs(t, err, &movedErr)
 	require.Equal(t, &V1RefMovedError{Expected: oldTip, Actual: externalTip}, movedErr)
 	require.NotErrorIs(t, err, gitrepo.ErrRefLocked)
+}
+
+func TestAtomicSetV1Ref_DoesNotReportUnverifiedConflictAsMoved(t *testing.T) {
+	t.Parallel()
+	repoRoot, repo, oldTip := setupV1RepoInDir(t)
+	tree := emptyTreeHash(t, repo)
+	newTip := makeOrphanCommit(t, repo, tree, []plumbing.Hash{oldTip}, "OPF rewrite")
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	require.NoError(t, repo.Storer.RemoveReference(refName))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(repoRoot, ".git", filepath.FromSlash(refName.String())),
+		0o755,
+	))
+
+	err := atomicSetV1Ref(t.Context(), repo, oldTip, newTip)
+
+	var movedErr *V1RefMovedError
+	require.NotErrorAs(t, err, &movedErr,
+		"an unreadable current value does not prove that the ref moved")
+	require.ErrorIs(t, err, gitrepo.ErrRefCASConflict)
 }
 
 func TestOPFCheckpointRefRewriteDoesNotLoseConcurrentCheckpointUpdate(t *testing.T) {

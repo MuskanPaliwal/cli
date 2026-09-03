@@ -238,6 +238,14 @@ func TestRefCASErrorClassification(t *testing.T) {
 			wantConflict: true,
 		},
 		{
+			name:   "expected ref is corrupt",
+			stderr: "cannot lock ref 'refs/heads/main': unable to resolve reference 'refs/heads/main': reference broken",
+		},
+		{
+			name:   "expected ref is unreadable",
+			stderr: "cannot lock ref 'refs/heads/main': unable to resolve reference 'refs/heads/main': Permission denied",
+		},
+		{
 			name:         "create if absent conflict",
 			stderr:       "cannot lock ref 'refs/heads/main': reference already exists",
 			wantConflict: true,
@@ -266,7 +274,7 @@ func TestRefCASErrorClassification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			stderr := []byte(tt.stderr)
-			require.Equal(t, tt.wantConflict, isRefCASConflict(stderr))
+			require.Equal(t, tt.wantConflict, isRefCASConflict(plumbing.NewBranchReferenceName("main"), stderr))
 			require.Equal(t, tt.wantLocked, isRefLockContention(stderr))
 		})
 	}

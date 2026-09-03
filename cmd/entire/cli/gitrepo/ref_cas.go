@@ -194,7 +194,7 @@ func classifyRefCASError(ctx context.Context, refName plumbing.ReferenceName, st
 	}
 	detail := strings.TrimSpace(string(stderr))
 	switch {
-	case isRefCASConflict(stderr):
+	case isRefCASConflict(refName, stderr):
 		return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, ErrRefCASConflict)
 	case isRefLockContention(stderr):
 		return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, ErrRefLocked)
@@ -231,10 +231,11 @@ func symbolicRefTarget(ctx context.Context, repoRoot string, refName plumbing.Re
 
 // isRefCASConflict reports that git rejected the expected old value, including
 // the cases where a required ref disappeared or a create-only ref appeared.
-func isRefCASConflict(stderr []byte) bool {
-	msg := strings.ToLower(string(stderr))
+func isRefCASConflict(refName plumbing.ReferenceName, stderr []byte) bool {
+	msg := strings.ToLower(strings.TrimSpace(string(stderr)))
+	unresolved := fmt.Sprintf("unable to resolve reference '%s'", strings.ToLower(refName.String()))
 	return strings.Contains(msg, "but expected") ||
-		strings.Contains(msg, "unable to resolve reference") ||
+		strings.HasSuffix(msg, unresolved) ||
 		strings.Contains(msg, "reference already exists")
 }
 

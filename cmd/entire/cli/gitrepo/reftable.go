@@ -236,7 +236,7 @@ func (s *reftableStorer) CheckAndSetReference(newRef, old *plumbing.Reference) e
 	if err == nil {
 		return nil
 	}
-	if isRefCASConflict(stderr) {
+	if isRefCASConflict(newRef.Name(), stderr) {
 		return gogitstorage.ErrReferenceHasChanged
 	}
 	return fmt.Errorf("reftable CAS ref %s: %s: %w", newRef.Name(), strings.TrimSpace(string(stderr)), err)
