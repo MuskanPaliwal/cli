@@ -3,11 +3,23 @@ package gitrepo
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
+
+// maxMetadataPointerSize matches git's own refusal threshold for .git pointer
+// files (setup.c caps at 4*PATH_MAX with "too large to be a .git file").
+// Anything larger is not repository metadata, and reading it unbounded turns a
+// sparse pointer file of near-zero disk size into gigabytes of allocation.
+const maxMetadataPointerSize = 4 * 4096
+
+// maxMetadataErrorPathLen bounds how much of a pointer-derived path an error
+// message echoes; a hostile pointer must not become a multi-kilobyte error.
+const maxMetadataErrorPathLen = 256
 
 // ErrWorktreeMetadataNotFound reports that an explicit worktree root has no
 // .git entry. Repository opening uses it to distinguish a possible bare
@@ -84,11 +96,11 @@ func resolveWorktreeGitDir(worktreeRoot string) (string, error) {
 		return "", fmt.Errorf(".git entry at %s is neither a directory nor a regular file", gitEntry)
 	}
 
-	content, err := os.ReadFile(gitEntry) //nolint:gosec // path is anchored at the explicit worktree root.
+	content, err := readMetadataPointerFile(".git", gitEntry)
 	if err != nil {
-		return "", fmt.Errorf("read .git file at %s: %w", gitEntry, err)
+		return "", err
 	}
-	pointer, ok := strings.CutPrefix(strings.TrimRight(string(content), "\r\n"), "gitdir: ")
+	pointer, ok := strings.CutPrefix(strings.TrimRight(content, "\r\n"), "gitdir: ")
 	if !ok {
 		return "", fmt.Errorf("parse .git file at %s: missing gitdir prefix", gitEntry)
 	}
@@ -116,11 +128,11 @@ func resolveWorktreeCommonDir(gitDirPath string) (string, error) {
 		return "", fmt.Errorf("commondir entry at %s is not a regular file", commonFile)
 	}
 
-	content, err := os.ReadFile(commonFile) //nolint:gosec // path is inside the validated per-worktree Git directory.
+	content, err := readMetadataPointerFile("commondir", commonFile)
 	if err != nil {
-		return "", fmt.Errorf("read commondir file at %s: %w", commonFile, err)
+		return "", err
 	}
-	pointer := strings.TrimRight(string(content), "\r\n")
+	pointer := strings.TrimRight(content, "\r\n")
 	if pointer == "" {
 		return "", fmt.Errorf("parse commondir file at %s: empty value", commonFile)
 	}
@@ -161,6 +173,38 @@ func resolveWorktreeID(gitDirPath, commonDir string) (string, error) {
 	return id, nil
 }
 
+// readMetadataPointerFile reads a .git or commondir pointer file with git's own
+// size cap, so a hostile pointer file cannot force an unbounded allocation.
+func readMetadataPointerFile(kind, path string) (string, error) {
+	file, err := os.Open(path) //nolint:gosec // path is anchored at validated repository metadata.
+	if err != nil {
+		return "", fmt.Errorf("read %s file at %s: %w", kind, path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	content, err := io.ReadAll(io.LimitReader(file, maxMetadataPointerSize+1))
+	if err != nil {
+		return "", fmt.Errorf("read %s file at %s: %w", kind, path, err)
+	}
+	if len(content) > maxMetadataPointerSize {
+		return "", fmt.Errorf("parse %s file at %s: too large to be a %s file", kind, path, kind)
+	}
+	return string(content), nil
+}
+
+// elideMetadataPath bounds a pointer-derived path for error display. Elision
+// backs up to a rune boundary so the message stays valid UTF-8.
+func elideMetadataPath(path string) string {
+	if len(path) <= maxMetadataErrorPathLen {
+		return path
+	}
+	cut := maxMetadataErrorPathLen
+	for cut > 0 && !utf8.RuneStart(path[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s… (%d bytes elided)", path[:cut], len(path)-cut)
+}
+
 // Preserve the pointer spelling until validation so a missing component cannot
 // disappear through lexical cleaning before the filesystem sees it.
 func resolveMetadataPath(base, value string) string {
@@ -188,24 +232,27 @@ func resolveMetadataDirectory(label, base, value string) (string, error) {
 
 	physical, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s at %s: %w", label, resolved, err)
+		return "", fmt.Errorf("resolve %s at %s: %w", label, elideMetadataPath(resolved), err)
 	}
 	return filepath.Clean(physical), nil
 }
 
+// The path may carry a pointer file's contents verbatim. The pointer size cap
+// is what bounds the message; eliding here keeps the readable part readable
+// instead of burying it under a padded path.
 func requireMetadataDirectory(label, path string) error {
-	info, err := os.Stat(path) //nolint:gosec // the explicit-root API resolves caller-selected repository metadata.
+	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("inspect %s at %s: %w", label, path, err)
+		return fmt.Errorf("inspect %s at %s: %w", label, elideMetadataPath(path), err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("%s at %s is not a directory", label, path)
+		return fmt.Errorf("%s at %s is not a directory", label, elideMetadataPath(path))
 	}
 	return nil
 }
 
 func metadataDirectoriesIdentifySameFile(a, b string) (bool, error) {
-	aInfo, err := os.Stat(a) //nolint:gosec // explicit-root metadata paths are validated before identity comparison.
+	aInfo, err := os.Stat(a)
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w", a, err)
 	}
