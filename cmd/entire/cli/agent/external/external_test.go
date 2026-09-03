@@ -1062,3 +1062,25 @@ func TestAgentRun_RefusesRelativeBinaryPath(t *testing.T) {
 		t.Errorf("planted binary was executed (marker stat err = %v), want it never spawned", statErr)
 	}
 }
+
+// TestAgentRun_NoArgs pins that run reports the caller's mistake instead of
+// panicking on it. run is variadic and every error path it takes labels the
+// message with args[0], so a zero-arg call indexes an empty slice before any
+// of those paths can return. New is exported, so the reachable set is not
+// limited to this package's own call sites.
+func TestAgentRun_NoArgs(t *testing.T) {
+	t.Parallel()
+
+	// An absolute path, so the empty-args check is what has to fire rather
+	// than the absoluteness refusal above it.
+	ea := &Agent{binaryPath: filepath.Join(t.TempDir(), binaryPrefix+"noargs")}
+
+	out, err := ea.run(context.Background(), nil)
+
+	if err == nil {
+		t.Fatal("run with no args succeeded, want an error")
+	}
+	if out != nil {
+		t.Errorf("run returned %q alongside an error, want nil", out)
+	}
+}

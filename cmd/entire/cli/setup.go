@@ -229,19 +229,13 @@ func updateSummaryGenerationSettings(ctx context.Context, w io.Writer, provider,
 		s.SummaryGeneration = &settings.SummaryGenerationSettings{}
 	}
 
+	grantExternalAgents := false
 	if provider != "" {
 		if err := validateSummaryProvider(provider); err != nil {
 			return err
 		}
 		if ag, getErr := getSummaryAgent(types.AgentName(provider)); getErr == nil && external.IsExternal(ag) {
-			// Written to the local file rather than into s, which may be
-			// headed for the project file. See enableExternalAgentsLocally.
-			if !settings.IsExternalAgentsEnabled(ctx) {
-				if err := enableExternalAgentsLocally(ctx); err != nil {
-					return err
-				}
-				fmt.Fprintln(w, externalAgentsAutoEnabledNotice)
-			}
+			grantExternalAgents = !settings.IsExternalAgentsEnabled(ctx)
 		}
 	}
 	if model != "" && provider == "" && s.SummaryGeneration.Provider == "" {
@@ -264,6 +258,22 @@ func updateSummaryGenerationSettings(ctx context.Context, w io.Writer, provider,
 		if err := SaveEntireSettings(ctx, s); err != nil {
 			return fmt.Errorf("failed to save settings: %w", err)
 		}
+	}
+
+	// After the save above, never before, and never onto s. The grant is a raw
+	// read-modify-write of the local file, because the loader honors it only
+	// from there (see enableExternalAgentsLocally) and s may be headed for the
+	// project file. When the target IS the local file, the two writes touch the
+	// same file: granting first meant the struct save rewrote it from an s
+	// whose ExternalAgents is still false, and the field is omitempty, so the
+	// key was dropped rather than written back. The user was told external
+	// agents were on while the next load did not honor them. The other three
+	// grant sites in this file order it this way for the same reason.
+	if grantExternalAgents {
+		if err := enableExternalAgentsLocally(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintln(w, externalAgentsAutoEnabledNotice)
 	}
 
 	fmt.Fprintf(w, "✓ Settings updated (%s)\n", configDisplay)

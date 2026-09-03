@@ -5116,3 +5116,92 @@ func TestPluginUninstallCommand_QuotesRepoRoot(t *testing.T) {
 		t.Errorf("a single quote in the path must be escaped, got:\n%s", got)
 	}
 }
+
+// TestConfigureCmd_SummarizeProvider_ExternalLocalTarget_GrantSurvives covers
+// the case where the summary settings and the external_agents grant land in
+// the SAME file. The grant is a raw read-modify-write of the local file, so a
+// struct save that happens afterwards rewrites that file from a struct whose
+// ExternalAgents is still false — and the field is omitempty, so the key is
+// dropped rather than written as false. The user is told external agents were
+// enabled, and the very next load does not honor the setting.
+func TestConfigureCmd_SummarizeProvider_ExternalLocalTarget_GrantSurvives(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	const provider = "external-summary-local-target"
+	externalDir := t.TempDir()
+	writeExternalSummaryAgentBinary(t, externalDir, provider)
+	t.Setenv("PATH", externalDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--local", "--summarize-provider", provider})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --local --summarize-provider external failed: %v", err)
+	}
+
+	local, err := settings.LoadFromFile(EntireSettingsLocalFile)
+	if err != nil {
+		t.Fatalf("failed to load local settings: %v", err)
+	}
+	if local.SummaryGeneration == nil || local.SummaryGeneration.Provider != provider {
+		t.Fatalf("local summary provider = %+v, want %q", local.SummaryGeneration, provider)
+	}
+
+	effective, err := settings.Load(t.Context())
+	if err != nil {
+		t.Fatalf("failed to load merged settings: %v", err)
+	}
+	if !effective.ExternalAgents {
+		reason, _ := effective.ExternalAgentsRejection()
+		t.Fatalf("external_agents grant did not survive the settings save (rejection: %q); stdout:\n%s",
+			reason, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), externalAgentsAutoEnabledNotice) {
+		t.Fatalf("expected notice surfacing the external_agents flip, got stdout:\n%s", stdout.String())
+	}
+}
+
+// TestConfigureCmd_SummarizeProvider_ExternalLocalOnlyRepo_GrantSurvives is the
+// same collision reached without --local: in a repo that has only
+// settings.local.json, settingsTargetFile resolves there on its own.
+func TestConfigureCmd_SummarizeProvider_ExternalLocalOnlyRepo_GrantSurvives(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	setupTestRepo(t)
+	writeLocalSettings(t, testSettingsEnabled)
+
+	const provider = "external-summary-local-only"
+	externalDir := t.TempDir()
+	writeExternalSummaryAgentBinary(t, externalDir, provider)
+	t.Setenv("PATH", externalDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", provider})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-provider external failed: %v", err)
+	}
+
+	effective, err := settings.Load(t.Context())
+	if err != nil {
+		t.Fatalf("failed to load merged settings: %v", err)
+	}
+	if !effective.ExternalAgents {
+		reason, _ := effective.ExternalAgentsRejection()
+		t.Fatalf("external_agents grant did not survive the settings save (rejection: %q); stdout:\n%s",
+			reason, stdout.String())
+	}
+}

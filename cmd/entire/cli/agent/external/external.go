@@ -436,6 +436,14 @@ func (e *Agent) CalculateTotalTokenUsage(transcriptData []byte, fromOffset int, 
 // If stdin is non-nil it is piped to the process. On non-zero exit, stderr is
 // included in the returned error.
 func (e *Agent) run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+	// Every error below labels its message with the subcommand, args[0], so an
+	// empty slice panics on the way to reporting the real failure rather than
+	// returning it. run is variadic and New is exported, so the callers are not
+	// only this package's own.
+	if len(args) == 0 {
+		return nil, fmt.Errorf("refusing to run external agent binary %q: no subcommand given", e.binaryPath)
+	}
+
 	// binaryPath must be absolute, and the check belongs here rather than at
 	// the caller. run sets cmd.Dir to the worktree root below, and os/exec
 	// resolves a relative Path against Dir — so the file registerExternalAgent
