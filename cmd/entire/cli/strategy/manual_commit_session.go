@@ -583,12 +583,6 @@ func (s *ManualCommitStrategy) FindSessionsForCommit(ctx context.Context, baseCo
 	return s.findSessionsForCommit(ctx, baseCommitSHA)
 }
 
-// ClearSessionState is the exported version of clearSessionState.
-// Used by `entire doctor` to clean up session state files.
-func (s *ManualCommitStrategy) ClearSessionState(ctx context.Context, sessionID string) error {
-	return s.clearSessionState(ctx, sessionID)
-}
-
 // CountOtherActiveSessionsWithCheckpoints counts how many other active sessions
 // from the SAME worktree (different from currentSessionID) have created checkpoints
 // on the SAME base commit (current HEAD). This is used to show an informational message

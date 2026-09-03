@@ -1,4 +1,4 @@
-package cli
+package strategy
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
@@ -40,19 +39,19 @@ func (b *syncBuffer) Len() int {
 }
 
 // TestClearSessionStateWithProgress_AnnouncesLockWait covers the UX half of
-// gating doctor's clear: the wait is correct (deleting the state file out from
+// gating the clear: the wait is correct (deleting the state file out from
 // under an in-flight write destroys it) but unbounded, and a condensation can
 // hold the lock ~30s, so a silent wait reads as a hang. This drives a real
 // held lock -- a writer parked inside MutateSessionState -- and asserts the
-// notice is printed and the clear still completes once the lock frees.
+// notice is printed while the clear is still blocked.
 func TestClearSessionStateWithProgress_AnnouncesLockWait(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
 
 	ctx := context.Background()
-	const sessionID = "doctor-lock-notice"
-	if err := strategy.SaveSessionState(ctx, &strategy.SessionState{
+	const sessionID = "lock-notice-session"
+	if err := SaveSessionState(ctx, &SessionState{
 		SessionID:  sessionID,
 		BaseCommit: "abc123",
 		StartedAt:  time.Now(),
@@ -65,7 +64,7 @@ func TestClearSessionStateWithProgress_AnnouncesLockWait(t *testing.T) {
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
-		if err := strategy.MutateSessionState(ctx, sessionID, func(*strategy.SessionState) error {
+		if err := MutateSessionState(ctx, sessionID, func(*SessionState) error {
 			close(writerHolding)
 			<-writerMayFinish
 			return nil
@@ -73,17 +72,23 @@ func TestClearSessionStateWithProgress_AnnouncesLockWait(t *testing.T) {
 			t.Errorf("MutateSessionState: %v", err)
 		}
 	}()
-	<-writerHolding // the lock is genuinely held now
+	// Bounded: a setup failure should report the writer's own error rather
+	// than hanging to the package timeout with nothing printed.
+	select {
+	case <-writerHolding:
+	case <-time.After(10 * time.Second):
+		t.Fatal("writer never acquired the gate; setup failed")
+	}
 
 	var errBuf syncBuffer
 	cleared := make(chan error, 1)
 	go func() {
-		cleared <- clearSessionStateWithProgress(ctx, sessionID, &errBuf, 20*time.Millisecond)
+		cleared <- ClearSessionStateWithProgress(ctx, sessionID, &errBuf, 20*time.Millisecond)
 	}()
 
 	// The notice must appear while the clear is still blocked, which is the
 	// whole point -- it is useless if it only prints after the wait ends.
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(5 * time.Second)
 	for !strings.Contains(errBuf.String(), "release its state lock") {
 		select {
 		case <-deadline:
@@ -106,15 +111,15 @@ func TestClearSessionStateWithProgress_AnnouncesLockWait(t *testing.T) {
 }
 
 // The uncontended case must stay silent: an unconditional notice would fire on
-// every doctor run and train the user to ignore it.
+// every run and train the user to ignore it.
 func TestClearSessionStateWithProgress_SilentWhenUncontended(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
 
 	ctx := context.Background()
-	const sessionID = "doctor-lock-quiet"
-	if err := strategy.SaveSessionState(ctx, &strategy.SessionState{
+	const sessionID = "lock-quiet-session"
+	if err := SaveSessionState(ctx, &SessionState{
 		SessionID:  sessionID,
 		BaseCommit: "abc123",
 		StartedAt:  time.Now(),
@@ -123,10 +128,59 @@ func TestClearSessionStateWithProgress_SilentWhenUncontended(t *testing.T) {
 	}
 
 	var errBuf syncBuffer
-	if err := clearSessionStateWithProgress(ctx, sessionID, &errBuf, time.Second); err != nil {
+	if err := ClearSessionStateWithProgress(ctx, sessionID, &errBuf, time.Second); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if errBuf.Len() != 0 {
 		t.Errorf("expected no output when the lock is free, got %q", errBuf.String())
+	}
+}
+
+// A reentrant clear must be refused, not silently undone. Holding the gate
+// makes the delete safe but not effective: the frame's save writes the state
+// straight back, so before this was refused the caller got a nil error and a
+// live state file -- doctor would report a session discarded and it would
+// reappear.
+func TestClearSessionState_RefusesReentrantClear(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	ctx := context.Background()
+	const sessionID = "reentrant-clear"
+	if err := SaveSessionState(ctx, &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveSessionState: %v", err)
+	}
+
+	var clearErr error
+	if err := MutateSessionState(ctx, sessionID, func(state *SessionState) error {
+		clearErr = ClearSessionState(ctx, sessionID)
+		state.StepCount = 42
+		return nil
+	}); err != nil {
+		t.Fatalf("MutateSessionState: %v", err)
+	}
+
+	if clearErr == nil {
+		t.Fatal("a reentrant clear must return an error, not a nil that the frame's save then undoes")
+	}
+	if !strings.Contains(clearErr.Error(), "clearSessionStateLocked") {
+		t.Errorf("the error should name the correct alternative, got: %v", clearErr)
+	}
+
+	// And the state must still be there, consistent with the refusal.
+	after, err := LoadSessionState(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadSessionState: %v", err)
+	}
+	if after == nil {
+		t.Fatal("state should survive a refused clear")
+	}
+	if after.StepCount != 42 {
+		t.Errorf("the frame's own write should have landed; StepCount = %d, want 42", after.StepCount)
 	}
 }

@@ -1700,6 +1700,14 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 			// for this same session) landing in an unlocked gap between
 			// this decision and the actual delete would otherwise be
 			// silently destroyed. See clearSessionState's doc comment.
+			//
+			// This is the ONLY correct way to clear from inside a frame, and
+			// it works only because of the ErrMutationSkip below: the delete
+			// sticks because the frame does not save. The gate alone would
+			// not be enough -- a saving frame writes the state back out and
+			// the clear vanishes, which is why the exported
+			// ClearSessionState refuses to run reentrantly rather than
+			// appearing to succeed.
 			if clearErr := s.clearSessionStateLocked(ctx, sessionID); clearErr != nil {
 				return fmt.Errorf("failed to clear session state: %w", clearErr)
 			}
