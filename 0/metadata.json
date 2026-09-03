@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1KWM9PJRDZ783TW64KYH3WP",
+  "session_id": "01a06778-55e2-7161-b14f-914efdb56086",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-03T15:01:39.282077Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/ref_cas.go",
+    "cmd/entire/cli/gitrepo/ref_cas_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "15a953b9d001",
+  "checkpoint_transcript_start": 773,
+  "transcript_lines_at_start": 773,
+  "compact_transcript_start": 106,
+  "token_usage": {
+    "input_tokens": 41839,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2348544,
+    "output_tokens": 6082,
+    "api_call_count": 26
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-03T15:01:39.09742Z",
+    "agent_lines": 7,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 7,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 7,
+      "agent_lines_removed": 0
+    }
+  ]
+}
