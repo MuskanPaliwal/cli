@@ -285,9 +285,11 @@ type repoCellPlacement struct {
 // resolveRepoCellTarget's owner/repo path delegates to this function and
 // discards RepoID, rather than the two duplicating the same resolution body:
 // the two functions exist separately only because their callers need
-// different return shapes for the same lookup — this one also needs the
-// placement id (repo_id), which resolveRepoCellTarget has no caller for and
-// so doesn't return — not because the resolution logic itself differs.
+// different return shapes for the same lookup. Some owner/repo callers only
+// need the cell (resolveRepoCellTarget's own callers) and go through that
+// thinner wrapper; others — explain --repo, experts --repo — also need the
+// placement id (repo_id) and call this one directly instead of re-deriving it
+// a second way.
 func resolveRepoCellPlacement(ctx context.Context, owner, repo string) (repoCellPlacement, error) {
 	ctx, cancel := context.WithTimeout(ctx, requiredCellResolveTimeout)
 	defer cancel()
