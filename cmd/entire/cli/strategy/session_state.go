@@ -889,11 +889,31 @@ func stateLockInCommonDir(commonDir, sessionID string) (stateLock, error) {
 }
 
 // ClearSessionState removes the session state file for the given session ID.
+//
+// It takes sessionID's gate first, for the same reason
+// (*ManualCommitStrategy).clearSessionState does: this deletes the file that
+// every other mutation of this state writes under MutateSessionState's
+// per-session lock, so an unlocked delete landing mid-mutation destroys the
+// write that was in flight, with nothing surfacing the loss. This is the
+// implementation `entire doctor` reaches (doctor.go's discardSession) -- a
+// separate one from the strategy method, and the command most likely to be
+// run while other sessions are live -- so gating the strategy method alone
+// left the race open exactly where it mattered most.
+//
+// The acquire is reentrancy-tolerant on purpose, unlike the strategy method's:
+// this is exported, and a caller already inside a MutateSessionState frame for
+// the same session already holds the gate, so proceeding is correct there too.
 func ClearSessionState(ctx context.Context, sessionID string) error {
 	// Validate session ID to prevent path traversal
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return fmt.Errorf("invalid session ID: %w", err)
 	}
+
+	_, _, release, err := acquireSessionGate(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	root, err := openSessionStateRootForRead(ctx)
 	if err != nil {

@@ -456,20 +456,31 @@ func TestClearSessionState_SerializesAgainstConcurrentMutation(t *testing.T) {
 	writerFinished := make(chan struct{})
 	go func() {
 		defer close(writerFinished)
-		_ = MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
+		if err := MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
 			close(writerStarted)
 			<-writerMayFinish
 			state.StepCount = 1
 			return nil
-		})
+		}); err != nil {
+			t.Errorf("MutateSessionState: %v", err)
+		}
 	}()
 	<-writerStarted // writer holds the gate now, mid-mutation
 
+	clearStarted := make(chan struct{})
 	clearReturned := make(chan struct{})
 	go func() {
 		defer close(clearReturned)
-		_ = s.clearSessionState(context.Background(), sessionID)
+		close(clearStarted)
+		if err := s.clearSessionState(context.Background(), sessionID); err != nil {
+			t.Errorf("clearSessionState: %v", err)
+		}
 	}()
+	// Wait until the goroutine is genuinely running before timing anything.
+	// Without this, "clearReturned is not closed" is also satisfied by a
+	// goroutine the scheduler never started, so the assertion below could
+	// pass without the gate doing any work at all.
+	<-clearStarted
 
 	// clearSessionState must be blocked waiting for the writer's gate right
 	// now. Before the fix (no locking at all in clearSessionState) it would
