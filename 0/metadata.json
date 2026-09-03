@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1KNSXKZQVACN37FEYZEHE53",
+  "session_id": "01a06739-c445-77e0-8c22-05e987abc247",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-03T13:02:21.845474Z",
+  "branch": "refactor-git-metadata-owner",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/repository.go",
+    "cmd/entire/cli/gitrepo/repository_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "46f7e945ee29",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 138372,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4231552,
+    "output_tokens": 15452,
+    "api_call_count": 55
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-03T13:02:21.785423Z",
+    "agent_lines": 26,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 26,
+    "total_lines_changed": 27,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
