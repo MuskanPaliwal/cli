@@ -169,9 +169,18 @@ func TestDoctorMigrateCheckpoints_ReadOnlyPathsIgnoreScannerConfig(t *testing.T)
 	assert.Contains(t, out.String(), "nothing to migrate")
 }
 
-// setupMigratePushRepo builds a repo with the given .entire/settings.json, a
-// bare remote, and one queued checkpoint ref, and returns the open repo plus
-// the remote path.
+// setupMigratePushRepo builds a repo with the given .entire/settings.json and a
+// bare remote, and returns the open repo plus the remote path.
+//
+// It queues no checkpoint refs, deliberately. The caller asserts that the push
+// path configures redaction before it gates, which happens before the flush and
+// so does not depend on the queue holding anything. Queuing one would tie the
+// test to whether the fixture's content reaches the OPF runtime at all:
+// redact.BatchBytesWithPrivacyFilter only shells out for leaves containing a
+// space, so this fixture ("init") sends none and passes without `opf` installed
+// — until someone puts a space in it, at which point the test needs a real OPF
+// binary. Real queued refs scanned by a fake runtime are covered by
+// TestPushQueuedCheckpointRefs_OPFAppliedBeforePush.
 func setupMigratePushRepo(t *testing.T, settingsJSON string) (*git.Repository, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
