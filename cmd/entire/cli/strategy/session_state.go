@@ -690,6 +690,16 @@ func MutateSessionStateOnSaved(ctx context.Context, sessionID string, fn func(*S
 // acquireSessionGate takes the per-process gate (in-memory) and, on the
 // outermost call, the cross-process flock. Returns isOuter=true on the
 // outermost call so MutateSessionState knows whether to load/save.
+//
+// Reentrancy is keyed on the GOROUTINE, via goroutineID(): the gate counts as
+// held only for the goroutine that took it. That makes ownership implicit, so
+// moving a gated operation onto another goroutine silently defeats every
+// reentrancy check built on isOuter -- the new goroutine sees an unheld gate,
+// takes the isOuter path, and blocks in flock.AcquireIn on the flock its own
+// parent holds. If the parent is waiting for it, that is a permanent deadlock
+// rather than a slow path. withLockWaitNotice shipped exactly that bug and is
+// why it now runs its callback on the caller's goroutine and gives the timer
+// the new one. Wrap the WAITING, never the locking.
 func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGate, isOuter bool, release func(), err error) {
 	val, _ := sessionMutationGate.LoadOrStore(sessionID, &sessionGate{})
 	gate, ok := val.(*sessionGate)
