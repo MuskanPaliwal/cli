@@ -1,0 +1,25 @@
+run it in backhround and we move to next comment?
+
+---
+
+what is suggested in the comment?
+
+---
+
+right so what is fina fix?
+
+---
+
+yupp go on.
+
+---
+
+yupp
+
+---
+
+exactly do as we are asked to in the comment
+
+---
+
+commit the changes, run the tests etc in background

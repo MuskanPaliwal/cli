@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1KW38BVK4FNR6N8J0H6SM82",
+  "session_id": "01a06778-55e2-7161-b14f-914efdb56086",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-03T14:52:20.71701Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 6,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/ref_cas.go",
+    "cmd/entire/cli/gitrepo/ref_cas_test.go",
+    "cmd/entire/cli/gitrepo/reftable.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_cas_test.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "9e5eaeea9d36",
+  "checkpoint_transcript_start": 535,
+  "transcript_lines_at_start": 535,
+  "compact_transcript_start": 71,
+  "token_usage": {
+    "input_tokens": 32750,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4588032,
+    "output_tokens": 15777,
+    "api_call_count": 25
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-03T14:52:20.550597Z",
+    "agent_lines": 20,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 9,
+    "human_removed": 1,
+    "total_committed": 29,
+    "total_lines_changed": 30,
+    "agent_percentage": 66.66666666666666,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 9,
+      "user_lines_removed": 10,
+      "agent_lines_added": 30,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/gitrepo/ref_cas.go": 5,
+        "cmd/entire/cli/gitrepo/ref_cas_test.go": 1,
+        "cmd/entire/cli/gitrepo/reftable.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go": 2
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/ref_cas.go": 4,
+        "cmd/entire/cli/gitrepo/ref_cas_test.go": 1,
+        "cmd/entire/cli/gitrepo/reftable.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go": 4
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 39,
+      "agent_lines_removed": 10
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 39,
+      "agent_lines_removed": 10
+    }
+  ]
+}
