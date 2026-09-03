@@ -276,7 +276,7 @@ func TestResolve_ContextWithoutCoreURLIsNeverEligible(t *testing.T) {
 		CurrentContext: "blank",
 		Contexts:       []*contexts.Context{{Name: "blank", Handle: "paul", KeychainService: "kc:blank"}},
 	}
-	_, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{coreURLs: []string{""}}, t.Logf)
+	_, err := selectLoginContext(f, "cluster c.entire.io", "c.entire.io", loginTargets{coreURLs: []string{""}}, t.Logf)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "These saved logins can authenticate it",
 		"a context rejected by the accept check must not be offered as a candidate")
@@ -292,7 +292,7 @@ func TestResolve_EligibilityIgnoresWhitespaceAndTrailingSlash(t *testing.T) {
 		CurrentContext: "eu",
 		Contexts:       []*contexts.Context{{Name: "eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:eu"}},
 	}
-	c, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{coreURLs: []string{" https://eu.auth.entire.io/ "}}, t.Logf)
+	c, err := selectLoginContext(f, "cluster c.entire.io", "c.entire.io", loginTargets{coreURLs: []string{" https://eu.auth.entire.io/ "}}, t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "eu", c.Name)
 }
@@ -696,12 +696,12 @@ func TestResolve_NilStoredContextDoesNotPanic(t *testing.T) {
 	}
 
 	// Empty coreURLs is the case the old loop shape never dereferenced at all.
-	_, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{}, t.Logf)
+	_, err := selectLoginContext(f, "cluster c.entire.io", "c.entire.io", loginTargets{}, t.Logf)
 	require.Error(t, err)
 
 	// And with a matching core, the nil entry must be skipped while the real one
 	// is auto-selected.
-	c, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{coreURLs: []string{"https://eu.auth.entire.io"}}, t.Logf)
+	c, err := selectLoginContext(f, "cluster c.entire.io", "c.entire.io", loginTargets{coreURLs: []string{"https://eu.auth.entire.io"}}, t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "prod-eu", c.Name, "the valid entry is still the sole candidate")
 }
@@ -717,7 +717,7 @@ func TestResolve_NilStoredContextIsSelectable(t *testing.T) {
 			{Name: "prod-eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod"},
 		},
 	}
-	c, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{coreURLs: []string{"https://eu.auth.entire.io"}}, t.Logf)
+	c, err := selectLoginContext(f, "cluster c.entire.io", "c.entire.io", loginTargets{coreURLs: []string{"https://eu.auth.entire.io"}}, t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "prod-eu", c.Name)
 }
@@ -837,5 +837,91 @@ func TestAutoSelectNoticeWriter_DefaultsToStderr(t *testing.T) {
 	f, ok := autoSelectNoticeW.(*os.File)
 	if !ok || f.Fd() != uintptr(syscall.Stderr) {
 		t.Fatalf("autoSelectNoticeW default = %T, want the process stderr", autoSelectNoticeW)
+	}
+}
+
+// TestResolve_AutoSelectionOnlyForEntireSites: a self-hosted cluster passes the
+// same-site gate (auth.acme.com is acme.com's own), and a single saved acme.com
+// login is eligible — but acme.com is not a site we choose credentials for
+// unasked. The user is told which login works and switches explicitly; the
+// stored default and --context are unaffected.
+//
+// Swaps the process-wide override and the package-global writer, so no
+// t.Parallel.
+func TestResolve_AutoSelectionOnlyForEntireSites(t *testing.T) {
+	srv := httptest.NewServer(coresHandler(t, nil, "https://auth.acme.com"))
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "prod",
+		Contexts: []*contexts.Context{
+			{Name: "prod", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod"},
+			{Name: "acme", CoreURL: "https://auth.acme.com", Handle: "paul", KeychainService: "kc:acme"},
+		},
+	}))
+
+	buf := captureAutoSelectNotice(t)
+	_, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "git.acme.com", hostPinningClient(t, srv), t.Logf)
+	require.Error(t, err, "acme is the sole eligible login, and must still not be chosen unasked")
+	assert.Contains(t, err.Error(), `cluster git.acme.com does not accept your active login "prod"`)
+	assert.Contains(t, err.Error(), "These saved logins can authenticate it: acme")
+	assert.Contains(t, err.Error(), "entire auth use")
+	assert.Empty(t, buf.String(), "nothing was selected, so nothing is announced")
+
+	// Named explicitly, the same login works — the allowlist gates only the
+	// choice made for the user, never the one they made.
+	contexts.SetFlagOverrideForTest(t, "acme")
+	c, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "git.acme.com", hostPinningClient(t, srv), t.Logf)
+	require.NoError(t, err)
+	assert.Equal(t, "acme", c.Name)
+	assert.Empty(t, buf.String())
+}
+
+// TestResolve_AutoSelectionFiresForEachEntireSite: the three federations on the
+// allowlist, including the motivating case (active login on entire.io, cluster
+// on partial.to) and local dev on a port.
+//
+// Swaps the package-global writer, so no t.Parallel.
+func TestResolve_AutoSelectionFiresForEachEntireSite(t *testing.T) {
+	cases := []struct {
+		clusterHost, core, want string
+	}{
+		{"royalcanin.partial.to", "https://eu.auth.partial.to", "eu-staging"},
+		{"aws-eu-central-1.entire.io", "https://eu.auth.entire.io", "prod-eu"},
+		{"localhost:8080", "http://localhost:9000", "dev"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.clusterHost, func(t *testing.T) {
+			srv := httptest.NewServer(coresHandler(t, nil, tc.core))
+			defer srv.Close()
+
+			configDir := t.TempDir()
+			require.NoError(t, contexts.Save(configDir, &contexts.File{
+				CurrentContext: "au",
+				Contexts: []*contexts.Context{
+					{Name: "au", CoreURL: "https://au.auth.entire.io", Handle: "paul", KeychainService: "kc:au"},
+					{Name: "eu-staging", CoreURL: "https://eu.auth.partial.to", Handle: "paul", KeychainService: "kc:eu-staging"},
+					{Name: "prod-eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod-eu"},
+					{Name: "dev", CoreURL: "http://localhost:9000", Handle: "paul", KeychainService: "kc:dev"},
+				},
+			}))
+
+			buf := captureAutoSelectNotice(t)
+			c, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), tc.clusterHost, hostPinningClient(t, srv), t.Logf)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, c.Name)
+			assert.Equal(t, "Using context '"+tc.want+"'.\n", buf.String())
+		})
+	}
+}
+
+func TestAutoSelectAllowed(t *testing.T) {
+	t.Parallel()
+	for _, host := range []string{"aws-eu-central-1.entire.io", "royalcanin.partial.to", "localhost", "localhost:8080", "Entire.IO"} {
+		assert.True(t, autoSelectAllowed(host), host)
+	}
+	for _, host := range []string{"git.acme.com", "entire.io.evil.com", "127.0.0.1", "notentire.io", "partial.to.attacker.net"} {
+		assert.False(t, autoSelectAllowed(host), host)
 	}
 }

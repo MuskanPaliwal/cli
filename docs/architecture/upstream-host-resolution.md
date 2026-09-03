@@ -200,13 +200,20 @@ would end one session server-side while deleting another's local credentials.
 Two tiers sit underneath, in `clusterdiscovery.selectLoginContext`, and they
 apply only when the identity came from `current_context` (or there is none):
 
-- exactly one saved login is eligible → **use it**, and say so on stderr
-  (`Using context 'foo'.`, via `clusterdiscovery.autoSelectNoticeW`). Someone
-  with logins in two federations can clone from either without retargeting
-  every shell on the machine, and acting as a login they did not choose is
-  never silent. Stderr, never stdout: this resolves inside
-  `git-remote-entire`, where stdout is the remote-helper protocol. Nothing is
-  printed when the selected identity acts, nor on any error.
+- exactly one saved login is eligible **and the host is under `entire.io`,
+  `partial.to`, or `localhost`** (`clusterdiscovery.autoSelectSites` — prod,
+  staging, local dev; hardcoded, no setting or env override) → **use it**, and
+  say so on stderr (`Using context 'foo'.`, via
+  `clusterdiscovery.autoSelectNoticeW`). Someone with logins in two federations
+  can clone from either without retargeting every shell on the machine, and
+  acting as a login they did not choose is never silent. Stderr, never stdout:
+  this resolves inside `git-remote-entire`, where stdout is the remote-helper
+  protocol. Nothing is printed when the selected identity acts, nor on any
+  error. For any other host — a self-hosted `git.acme.com` advertising
+  `auth.acme.com` — the sole eligible login is *named*, not used: the "does not
+  accept your active login … These saved logins can authenticate it" error
+  below, so the user selects it with `auth use` or `--context`. The allowlist
+  gates only the choice made *for* the user, never one they made.
 - several are eligible → an ambiguity error naming them, sorted
   (`clusterdiscovery.ambiguousContextError`). Picking one would make the acting
   identity depend on what else happens to be stored.

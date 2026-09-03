@@ -91,7 +91,7 @@ func resolveClusterAuth(ctx context.Context, configDir, cacheDir, clusterHost st
 		return nil, err
 	}
 
-	selected, err := selectLoginContext(f, "cluster "+clusterHost,
+	selected, err := selectLoginContext(f, "cluster "+clusterHost, clusterHost,
 		loginTargets{coreURLs: entry.CoreURLs, loginURL: entry.LoginURL}, debugf)
 	if err != nil {
 		return nil, err
@@ -270,16 +270,22 @@ func (e *noAuthContextError) Unwrap() error { return ErrNoAuthContext }
 //  2. The stored current_context, when the resource accepts it. `entire auth
 //     use <name>` is the lever for every resource that context's core fronts.
 //  3. Otherwise the sole saved login the resource accepts, announced on
-//     autoSelectNoticeW. Someone holding logins in two federations should be
-//     able to clone from either without first retargeting every shell on the
-//     machine.
+//     autoSelectNoticeW — for a host under autoSelectSites only. Someone
+//     holding logins in two federations should be able to clone from either
+//     without first retargeting every shell on the machine.
 //  4. Otherwise, when several fit, ambiguousContextError — we refuse to guess
 //     which account acts.
 //
-// Anything left over is a failure renderUnusableActiveContext explains.
+// Anything left over is a failure renderUnusableActiveContext explains — which
+// for a host outside autoSelectSites names the login that would work, so the
+// user selects it explicitly.
+//
+// host is the resource's own hostname (the cluster or API host the well-known
+// document came from), which tier 3 checks against autoSelectSites; subject is
+// the noun phrase built from it for messages.
 //
 // See docs/architecture/upstream-host-resolution.md#account-selection.
-func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf DebugFunc) (*contexts.Context, error) {
+func selectLoginContext(f *contexts.File, subject, host string, t loginTargets, debugf DebugFunc) (*contexts.Context, error) {
 	// An explicit --context/$ENTIRE_CONTEXT naming no saved login fails here,
 	// before any eligibility talk: "that context doesn't exist" and "that context
 	// isn't trusted here" are different mistakes with different fixes.
@@ -299,7 +305,10 @@ func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf
 	// override the resource rejects falls straight through to the message that
 	// blames the flag.
 	if !sel.Explicit() {
-		if len(eligible) == 1 {
+		if len(eligible) == 1 && !autoSelectAllowed(host) {
+			debugf("%s -> sole eligible context %s not auto-selected: %s is not an Entire site", subject, eligible[0].Name, host)
+		}
+		if len(eligible) == 1 && autoSelectAllowed(host) {
 			debugf("%s -> sole eligible context %s", subject, eligible[0].Name)
 			// Tier 2 already returned if the stored default fit, so the login
 			// acting here is never the one the user set. Say which it is.
@@ -315,6 +324,25 @@ func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf
 		return nil, &noAuthContextError{message: message}
 	}
 	return nil, errors.New(message)
+}
+
+// autoSelectSites are the registrable domains whose hosts may have a login
+// chosen FOR the user (tier 3 of selectLoginContext): Entire's own production,
+// staging, and local-dev federations. Hardcoded on purpose — no setting, no
+// environment override — because the list is the answer to "which operators
+// do we trust enough to pick a credential for without being asked?", and a
+// knob that widened it would be set by exactly the party that benefits.
+//
+// Any other host — a self-hosted git.acme.com advertising auth.acme.com, say —
+// still passes requireSameSiteIssuers and still works when its login is the
+// stored default or named with --context/$ENTIRE_CONTEXT. It just never
+// auto-selects: the user is told which saved login would work and switches
+// explicitly.
+var autoSelectSites = []string{"entire.io", "partial.to", "localhost"}
+
+// autoSelectAllowed reports whether host is under one of autoSelectSites.
+func autoSelectAllowed(host string) bool {
+	return slices.Contains(autoSelectSites, registrableDomain(host))
 }
 
 // autoSelectNoticeW receives the line naming the login selectLoginContext

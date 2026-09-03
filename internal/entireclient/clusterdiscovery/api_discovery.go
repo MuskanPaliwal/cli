@@ -116,5 +116,5 @@ func ResolveContextForAPI(ctx context.Context, configDir, cacheDir, apiHost stri
 	}
 	// The data-API well-known advertises no login server, so the hint falls
 	// back to naming the issuers it trusts.
-	return selectLoginContext(f, "API host "+apiHost, loginTargets{coreURLs: trustedIssuers}, debugf)
+	return selectLoginContext(f, "API host "+apiHost, apiHost, loginTargets{coreURLs: trustedIssuers}, debugf)
 }
