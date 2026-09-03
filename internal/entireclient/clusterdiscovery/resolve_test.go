@@ -1,10 +1,13 @@
 package clusterdiscovery
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -717,4 +720,122 @@ func TestResolve_NilStoredContextIsSelectable(t *testing.T) {
 	c, err := selectLoginContext(f, "cluster c.entire.io", loginTargets{coreURLs: []string{"https://eu.auth.entire.io"}}, t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "prod-eu", c.Name)
+}
+
+// captureAutoSelectNotice redirects the auto-selection notice into a buffer for
+// one test. Callers MUST NOT call t.Parallel: the writer is package-global.
+func captureAutoSelectNotice(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := autoSelectNoticeW
+	autoSelectNoticeW = &buf
+	t.Cleanup(func() { autoSelectNoticeW = prev })
+	return &buf
+}
+
+// TestResolve_AutoSelectionIsAnnounced: acting as a login the user did not
+// choose is exactly the surprise the tier was removed over, so it is never
+// silent. The identity the user did choose is not announced — that is the
+// expected case, and a line on every command would be noise.
+//
+// Swaps the package-global writer, so no t.Parallel.
+func TestResolve_AutoSelectionIsAnnounced(t *testing.T) {
+	srv := httptest.NewServer(coresHandler(t, nil, "https://eu.auth.entire.io"))
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "paul@unrelated",
+		Contexts: []*contexts.Context{
+			{Name: "paul@unrelated", CoreURL: "https://eu.auth.partial.to", Handle: "paul", KeychainService: "kc:unrelated"},
+			{Name: "prod-eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod"},
+		},
+	}))
+
+	buf := captureAutoSelectNotice(t)
+	c, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
+	require.NoError(t, err)
+	assert.Equal(t, "prod-eu", c.Name)
+	assert.Equal(t, "Using context 'prod-eu'.\n", buf.String())
+
+	// The stored default now fits, so nothing is auto-selected and nothing is said.
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "prod-eu",
+		Contexts: []*contexts.Context{
+			{Name: "paul@unrelated", CoreURL: "https://eu.auth.partial.to", Handle: "paul", KeychainService: "kc:unrelated"},
+			{Name: "prod-eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod"},
+		},
+	}))
+	buf.Reset()
+	_, err = ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
+	require.NoError(t, err)
+	assert.Empty(t, buf.String(), "the active context acting is not news")
+}
+
+// TestResolve_ExplicitSelectionIsNotAnnounced: the user named the identity on
+// this very command, so repeating it back is noise — and nothing was chosen for
+// them, which is the only thing the notice reports.
+//
+// Swaps the process-wide override and the package-global writer, so no t.Parallel.
+func TestResolve_ExplicitSelectionIsNotAnnounced(t *testing.T) {
+	srv := httptest.NewServer(coresHandler(t, nil, "https://eu.auth.entire.io"))
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "paul@unrelated",
+		Contexts: []*contexts.Context{
+			{Name: "paul@unrelated", CoreURL: "https://eu.auth.partial.to", Handle: "paul", KeychainService: "kc:unrelated"},
+			{Name: "prod-eu", CoreURL: "https://eu.auth.entire.io", Handle: "paul", KeychainService: "kc:prod"},
+		},
+	}))
+
+	buf := captureAutoSelectNotice(t)
+	contexts.SetFlagOverrideForTest(t, "prod-eu")
+	c, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
+	require.NoError(t, err)
+	assert.Equal(t, "prod-eu", c.Name)
+	assert.Empty(t, buf.String())
+}
+
+// TestResolve_NoNoticeOnFailure: an error already explains itself, and a
+// "Using context" line above one would name a login that never acted.
+//
+// Swaps the package-global writer, so no t.Parallel.
+func TestResolve_NoNoticeOnFailure(t *testing.T) {
+	srv := httptest.NewServer(coresHandler(t, nil, "https://core-us.entire.io"))
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "paul@unrelated",
+		Contexts: []*contexts.Context{
+			{Name: "alice@core-us", CoreURL: "https://core-us.entire.io", Handle: "alice", KeychainService: "kc:alice"},
+			{Name: "admin@core-us", CoreURL: "https://core-us.entire.io", Handle: "admin", KeychainService: "kc:admin"},
+			{Name: "paul@unrelated", CoreURL: "https://eu.auth.partial.to", Handle: "paul", KeychainService: "kc:unrelated"},
+		},
+	}))
+
+	buf := captureAutoSelectNotice(t)
+	_, err := ResolveContextForCluster(t.Context(), configDir, t.TempDir(), "cluster1.entire.io", hostPinningClient(t, srv), t.Logf)
+	require.Error(t, err)
+	assert.Empty(t, buf.String())
+}
+
+// TestAutoSelectNoticeWriter_DefaultsToStderr: the notice must never reach
+// stdout, which carries the git remote-helper protocol inside
+// git-remote-entire. Changing the default to io.Discard would delete the
+// feature in production while the suite above stays green.
+//
+// Pinned by descriptor rather than pointer equality with os.Stderr: under
+// `go test -json` the testing package replaces the os.Stderr variable after
+// package init, so the value captured at init no longer compares equal even
+// though it is the process's real stderr. A buffer still fails this.
+//
+// Not parallel: reads the package-global writer that the tests above swap.
+func TestAutoSelectNoticeWriter_DefaultsToStderr(t *testing.T) {
+	f, ok := autoSelectNoticeW.(*os.File)
+	if !ok || f.Fd() != uintptr(syscall.Stderr) {
+		t.Fatalf("autoSelectNoticeW default = %T, want the process stderr", autoSelectNoticeW)
+	}
 }

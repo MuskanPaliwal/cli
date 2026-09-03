@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 
@@ -247,9 +249,10 @@ func (e *noAuthContextError) Unwrap() error { return ErrNoAuthContext }
 //     the very failure the override exists to prevent.
 //  2. The stored current_context, when the resource accepts it. `entire auth
 //     use <name>` is the lever for every resource that context's core fronts.
-//  3. Otherwise the sole saved login the resource accepts. Someone holding
-//     logins in two federations should be able to clone from either without
-//     first retargeting every shell on the machine.
+//  3. Otherwise the sole saved login the resource accepts, announced on
+//     autoSelectNoticeW. Someone holding logins in two federations should be
+//     able to clone from either without first retargeting every shell on the
+//     machine.
 //  4. Otherwise, when several fit, ambiguousContextError — we refuse to guess
 //     which account acts.
 //
@@ -278,6 +281,9 @@ func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf
 	if !sel.Explicit() {
 		if len(eligible) == 1 {
 			debugf("%s -> sole eligible context %s", subject, eligible[0].Name)
+			// Tier 2 already returned if the stored default fit, so the login
+			// acting here is never the one the user set. Say which it is.
+			fmt.Fprintf(autoSelectNoticeW, "Using context '%s'.\n", eligible[0].Name)
 			return eligible[0], nil
 		}
 		if len(eligible) > 1 {
@@ -290,6 +296,16 @@ func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf
 	}
 	return nil, errors.New(message)
 }
+
+// autoSelectNoticeW receives the line naming the login selectLoginContext
+// auto-selected. Package-level so tests can capture it, matching
+// tokenstore.loosePermsWarnW; production always writes to stderr.
+//
+// Stderr, never stdout: this resolves inside git-remote-entire, where stdout
+// carries the git remote-helper protocol and one stray line breaks the
+// transfer, and inside git hooks. Errors are ignored for the same reason the
+// other stderr notices ignore them — a failed notice must not fail the command.
+var autoSelectNoticeW io.Writer = os.Stderr
 
 // ambiguousContextError reports that several saved logins fit and none was
 // chosen. Auto-selection settles a single candidate only: picking among several
