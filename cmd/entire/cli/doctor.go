@@ -417,7 +417,7 @@ func promptSessionAction(ss stuckSession) (string, error) {
 // discardSession removes session state and cleans up the shadow branch.
 func discardSession(ctx context.Context, ss stuckSession, _ *git.Repository, errW io.Writer) error {
 	// Clear session state file
-	if err := strategy.ClearSessionState(ctx, ss.State.SessionID); err != nil {
+	if err := strategy.ClearSessionStateWithProgress(ctx, ss.State.SessionID, errW, strategy.SessionLockNoticeDelay); err != nil {
 		return fmt.Errorf("failed to clear session state: %w", err)
 	}
 
