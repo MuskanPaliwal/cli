@@ -20,7 +20,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
-	"github.com/entireio/cli/internal/entireclient/httputil"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
@@ -187,7 +186,7 @@ func JurisdictionToken(ctx context.Context, insecureHTTP bool, jurisdiction stri
 	}
 
 	audience := jurisdictionAudience(j, subject.dataOrigin, subject.discoveredCore)
-	token, err := exchangeJurisdictionToken(ctx, coreURL, subject.loginJWT, audience, subject.httpClient)
+	token, err := exchangeJurisdictionToken(ctx, coreURL, subject.loginJWT, audience, subject.httpClient.Transport)
 	if err != nil {
 		return "", fmt.Errorf("exchange jurisdictional identity token: %w", err)
 	}
@@ -681,29 +680,23 @@ func resolveCellAPIBaseURL(ctx context.Context, coreURL, loginJWT, jurisdiction 
 // exchangeJurisdictionToken mints the jurisdictional identity token for a
 // cell, trading the login JWT for one pinned to audience.
 //
-// It runs through auth-go's sts client rather than a hand-rolled POST so the
-// CLI has exactly one RFC 8693 implementation: the cross-jurisdiction
-// transport in internal/coreapi already uses it, and the duplicate this
-// replaced had drifted — it never picked up auth-go's terminal-escape
-// sanitisation of the server-supplied error code and description, and it was
-// the CLI's only exchange whose cross-host redirect guard lived in the CLI
-// rather than in the library.
+// Through auth-go's sts client rather than a hand-rolled POST, so the CLI has
+// one RFC 8693 implementation: the duplicate this replaced had drifted, losing
+// auth-go's terminal-escape sanitisation of server error text and keeping its
+// own redirect guard in the CLI rather than the library.
 //
-// Only httpClient's Transport carries over. Its Client.Timeout does not:
-// sts applies the same budget through context.WithTimeout, which (unlike
-// Client.Timeout) does not cancel the body read that happens after the
-// response returns.
+// Takes the transport, not the caller's *http.Client: only the transport (and
+// so the connection pool) carries over. The Timeout deliberately does not —
+// sts applies the same budget via context.WithTimeout, which unlike
+// Client.Timeout does not cancel the post-response body read. Note sts also
+// narrows plain HTTP to loopback on top of AllowInsecureHTTP, so that is the
+// effective policy here regardless of --insecure-http-auth.
 //
-// subject_token_type is access_token, not JWT — the login token is presented
-// to entire-core as an access token, which is what the form this replaced
-// sent and what the server matches on.
-func exchangeJurisdictionToken(ctx context.Context, coreURL, loginJWT, audience string, httpClient *http.Client) (string, error) {
+// subject_token_type stays access_token, not JWT — what the replaced form sent
+// and what entire-core matches on.
+func exchangeJurisdictionToken(ctx context.Context, coreURL, loginJWT, audience string, transport http.RoundTripper) (string, error) {
 	if coreURL == "" {
 		return "", errors.New("no entire-core URL configured for jurisdiction token exchange")
-	}
-	var transport http.RoundTripper
-	if httpClient != nil {
-		transport = httpClient.Transport
 	}
 	client := &sts.Client{
 		Transport:         transport,
@@ -718,7 +711,7 @@ func exchangeJurisdictionToken(ctx context.Context, coreURL, loginJWT, audience 
 		RequestedTokenType: sts.SubjectTokenTypeAccessToken,
 		Audience:           audience,
 		Scope:              JurisdictionIdentityScope,
-		ClientID:           httputil.OAuthClientID,
+		ClientID:           oauthClientID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("post token exchange: %w", err)
