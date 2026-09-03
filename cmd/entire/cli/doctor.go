@@ -409,10 +409,42 @@ func promptSessionAction(ss stuckSession) (string, error) {
 	return action, nil
 }
 
+// sessionLockNoticeDelay is how long discardSession waits before telling the
+// user it is blocked on a session's state lock. Short enough that a real stall
+// is announced promptly, long enough that the uncontended case (the common
+// one) stays silent.
+const sessionLockNoticeDelay = time.Second
+
+// clearSessionStateWithProgress clears sessionID's state, announcing the wait
+// on errW if the per-session state lock is not free within notifyAfter.
+//
+// The wait itself is deliberate and must not be shortened here:
+// strategy.ClearSessionState takes the same gate every mutation of that state
+// uses, because deleting the file out from under an in-flight write destroys
+// it. But the acquire is unbounded -- only the TurnStart hook opts into a
+// deadline, via strategy.WithSessionLockWait -- and a checkpoint condensation
+// holds that lock while it rewrites a multi-MB transcript, observed at ~30s on
+// large sessions (see strategy/session_state.go's note on the lock). `entire
+// doctor` is interactive and runs precisely when other sessions are live, so
+// without this notice a correct 30-second wait is indistinguishable from a
+// hang, and the natural user response is to kill it.
+func clearSessionStateWithProgress(ctx context.Context, sessionID string, errW io.Writer, notifyAfter time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- strategy.ClearSessionState(ctx, sessionID) }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(notifyAfter):
+	}
+	fmt.Fprintf(errW, "Waiting for session %s to release its state lock (a checkpoint condensation can hold it for ~30s)...\n", sessionID)
+	return <-done
+}
+
 // discardSession removes session state and cleans up the shadow branch.
 func discardSession(ctx context.Context, ss stuckSession, _ *git.Repository, errW io.Writer) error {
 	// Clear session state file
-	if err := strategy.ClearSessionState(ctx, ss.State.SessionID); err != nil {
+	if err := clearSessionStateWithProgress(ctx, ss.State.SessionID, errW, sessionLockNoticeDelay); err != nil {
 		return fmt.Errorf("failed to clear session state: %w", err)
 	}
 
