@@ -59,9 +59,14 @@ func HasMetadataDenyRule(rawPermissions map[string]json.RawMessage) bool {
 // rawPermissions, mutating it in place, and reports whether anything changed.
 //
 // Only the exact MetadataDenyRule string is removed, so every other deny rule —
-// including one a user wrote — is preserved. An empty `deny` array is deleted
-// rather than left behind, so a config Entire fully owned goes back to holding
-// no permissions block at all instead of an empty one.
+// including one a user wrote — is preserved. A `deny` array left empty is
+// deleted rather than written back as [].
+//
+// Emptying the surrounding `permissions` object is the CALLER's to clean up:
+// this function is handed only that object and cannot delete its own key. Every
+// caller does — the two InstallHooks write paths, both UninstallHooks, and
+// RepairRetiredMetadataDenyRule — so a config Entire fully owned ends up with no
+// permissions block rather than an empty one.
 //
 // A `deny` value that will not parse as a string array is left untouched: it is
 // not ours, and rewriting what we cannot read is worse than leaving it.

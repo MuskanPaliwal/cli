@@ -1646,9 +1646,10 @@ func clearFilesystemStagedFiles(ctx context.Context, sessionID string) {
 	if err != nil {
 		return
 	}
-	// One directory walk for all of them: RemoveNoSymlinks resolves the path
-	// components itself, so a call per file re-walks .entire/metadata and the
-	// session directory each time, on the PostCommit hook path.
+	// Open the session directory once and remove leaves from it. The obvious
+	// osroot.RemoveNoSymlinks(root, <full path>) per file would re-resolve
+	// .entire/metadata and the session directory on every call, three times over
+	// on the PostCommit hook path.
 	dir, closeDir, err := osroot.OpenDirNoSymlinks(root, entiredir.MustName(paths.SessionMetadataDirFromSessionID(sessionID)))
 	if err != nil {
 		return

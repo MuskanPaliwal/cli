@@ -221,12 +221,17 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, force bool) (int
 	}
 	rawSettings["hooks"] = hooksJSON
 
-	// Marshal permissions and update raw settings
-	permJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal permissions: %w", err)
+	// An emptied permissions block is deleted, not written back as {} — see the
+	// same branch in claudecode's writeClaudeSettingsFile.
+	if len(rawPermissions) == 0 {
+		delete(rawSettings, "permissions")
+	} else {
+		permJSON, permErr := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
+		if permErr != nil {
+			return 0, fmt.Errorf("failed to marshal permissions: %w", permErr)
+		}
+		rawSettings["permissions"] = permJSON
 	}
-	rawSettings["permissions"] = permJSON
 
 	// Write back to file
 	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")

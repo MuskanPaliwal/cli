@@ -266,11 +266,19 @@ func writeClaudeSettingsFile(cfg *agent.HookConfigFile, rawSettings, rawHooks, r
 	}
 	rawSettings["hooks"] = hooksJSON
 
-	permJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
-	if err != nil {
-		return fmt.Errorf("failed to marshal permissions: %w", err)
+	// An emptied permissions block is deleted, not written back as {}. Removing
+	// the retired deny rule can empty it, and leaving "permissions": {} behind
+	// in a tracked settings file is noise Entire put there. UninstallHooks and
+	// agent.RepairRetiredMetadataDenyRule both do the same.
+	if len(rawPermissions) == 0 {
+		delete(rawSettings, "permissions")
+	} else {
+		permJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
+		if err != nil {
+			return fmt.Errorf("failed to marshal permissions: %w", err)
+		}
+		rawSettings["permissions"] = permJSON
 	}
-	rawSettings["permissions"] = permJSON
 
 	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
 	if err != nil {
