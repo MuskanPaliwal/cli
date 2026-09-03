@@ -218,6 +218,34 @@ the failure the override exists to prevent.
 Multiple saved logins are fully supported — `auth contexts`, `auth use`, and
 `logout --all-contexts` are unchanged.
 
+### The advertised issuers must be the host's own
+
+Eligibility is decided by the host's `/.well-known` document, and the eligible
+login's JWT is then handed to that host: `git-remote-entire` sends it as the
+bearer (`cmd/git-remote-entire/main.go`, `resolveCreds`), and the data-API path
+presents the refreshed login token the same way. Nothing else asks whether the
+host is *entitled* to that token. So a hostile cluster `evil.com` that advertises
+`https://foo.auth.entire.io` in `core_urls` would be handed a real entire.io
+login token — through every tier above, explicit or automatic, and through
+`ENTIRE_TOKEN`, whose `aud` is compared against that same list.
+
+`clusterdiscovery.requireSameSiteIssuers` closes this: every entry in `core_urls`
+(git) or `trusted_issuers` (data API) must share the host's registrable domain
+(eTLD+1, via `registrableDomain` — `foo.auth.entire.io` and `git.entire.io` are
+both `entire.io`; `evil.co.uk` is not `acme.co.uk`; IP literals and `localhost`
+match only themselves). It runs in `resolveCachedCores` on **every entry handed
+out** — fresh cache, stale fallback, and a live fetch *before* it is cached — so
+one check covers all three callers and a cores entry planted in the on-disk cache
+is refused on read rather than trusted for a TTL.
+
+A mismatch is a hard error naming both sides
+(`cluster evil.com advertises login server https://foo.auth.entire.io outside
+evil.com; refusing`), never a silent filter: an emptied list would fall through to
+the `entire login --server …` hint and send the user to log in against the host
+that lied. `login_url` is outside the gate — it is display-only and never
+eligible (`clusterdiscovery.Response.LoginURL`); `jurisdiction_core_url` is
+carried but dialled by no caller today, so it is not gated either.
+
 Because "not logged in" is actively misleading for a user who *is* logged in,
 just to another federation, the error distinguishes what the user can do about
 it. Two independent facts pick the message

@@ -135,7 +135,18 @@ func normalizeClusterHost(clusterHost string) string {
 // live fetch fails, so a brief outage doesn't break a host whose cores we
 // already knew. load/modify select the cache file; discover wraps the
 // host-specific /.well-known fetch (and any host-specific error formatting);
-// label names the resource in debug output ("cluster" / "api host").
+// label names the resource in debug output and in the same-site refusal
+// ("cluster" / "API host").
+//
+// Every entry handed out — fresh from the cache, the stale fallback, or just
+// fetched — first passes requireSameSiteIssuers, and a fetched one passes it
+// BEFORE it is cached. Gating here rather than at the fetch is what makes one
+// check cover the git-cluster, data-API, and ENTIRE_TOKEN paths, and it is
+// why a cores entry poisoned on disk (a hand-edited or planted cache file) is
+// rejected on read instead of trusted for a TTL. Gating the fetch as well
+// keeps a hostile document from ever landing in the cache. Only CoreURLs is
+// gated: LoginURL is display-only and never eligible (see Response.LoginURL),
+// and JurisdictionCoreURL is carried but dialled by no caller today.
 //
 // requireAudience marks callers that cannot proceed without the entry's
 // jurisdiction audience (both git auth paths). For them, an entry
@@ -173,6 +184,9 @@ func resolveCachedCores(
 			preAudience := requireAudience && entry.JurisdictionAudience == ""
 			outdated := entry.SchemaVersion < discovery.CoresSchemaVersion
 			if fresh && !preAudience && !outdated {
+				if err := requireSameSiteIssuers(label, host, entry.CoreURLs); err != nil {
+					return nil, err
+				}
 				debugf("%s %s cores from cache: %v", label, host, entry.CoreURLs)
 				return entry, nil
 			}
@@ -185,9 +199,15 @@ func resolveCachedCores(
 	fetched, err := discover()
 	if err != nil {
 		if stale != nil && (!requireAudience || stale.JurisdictionAudience != "") {
+			if gateErr := requireSameSiteIssuers(label, host, stale.CoreURLs); gateErr != nil {
+				return nil, gateErr
+			}
 			debugf("%s discovery for %s failed (%v); falling back to stale cached cores %v", label, host, err, stale.CoreURLs)
 			return stale, nil
 		}
+		return nil, err
+	}
+	if err := requireSameSiteIssuers(label, host, fetched.CoreURLs); err != nil {
 		return nil, err
 	}
 
