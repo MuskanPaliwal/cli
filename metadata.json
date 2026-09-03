@@ -3,7 +3,7 @@
   "checkpoint_id": "01M1K7FYZQF3PG1NGKWA6TR9PT",
   "strategy": "manual-commit",
   "branch": "refactor-checkpoint-metadata-resolution",
-  "checkpoints_count": 4,
+  "checkpoints_count": 5,
   "files_touched": [
     "CLAUDE.md",
     "cmd/entire/cli/checkpoint/redact_cache.go"
@@ -15,13 +15,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 367664,
+    "input_tokens": 390001,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 18482688,
-    "output_tokens": 28323,
-    "api_call_count": 121
+    "cache_read_tokens": 18611200,
+    "output_tokens": 29218,
+    "api_call_count": 126
   }
 }
