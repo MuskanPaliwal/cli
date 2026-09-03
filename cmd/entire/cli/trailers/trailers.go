@@ -6,6 +6,7 @@ package trailers
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	checkpointID "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -235,40 +236,34 @@ func IsTrailerLine(line string) bool {
 }
 
 // appendTrailerLine appends a single pre-formatted trailer line (e.g. "Key: value")
-// to message in trailer-block-aware format. If the message already ends with a
-// trailer paragraph the line is joined directly to it; otherwise a blank line is
-// inserted first to start a new trailer block.
+// to message in trailer-block-aware format. If the message's final paragraph is a
+// trailer block by the same grammar finalTrailerBlock reads with, the line is
+// joined directly to it; otherwise a blank line is inserted first to start a new
+// trailer block. Sharing the grammar is the contract: a paragraph the writer joins
+// must be one the strict readers accept, or the appended trailer disappears with it.
 func appendTrailerLine(message, trailerLine string) string {
 	trimmed := strings.TrimRight(message, "\n")
 
+	// Collect the final paragraph, skipping git comment lines. Joining also
+	// requires a blank line above the paragraph so a trailer-shaped subject
+	// line (e.g. "fix: bug") never has the trailer glued onto it.
 	lines := strings.Split(trimmed, "\n")
-	i := len(lines) - 1
-	for i >= 0 && strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-		i--
-	}
-
-	hasTrailerBlock := false
-	if i >= 0 {
-		last := strings.TrimSpace(lines[i])
-		if last != "" && IsTrailerLine(last) {
-			for i > 0 {
-				i--
-				above := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(above, "#") {
-					continue
-				}
-				if above == "" {
-					hasTrailerBlock = true
-					break
-				}
-				if !IsTrailerLine(above) {
-					break
-				}
-			}
+	var para []string
+	separated := false
+	for i := len(lines) - 1; i >= 0; i-- {
+		stripped := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(stripped, "#") {
+			continue
 		}
+		if stripped == "" {
+			separated = true
+			break
+		}
+		para = append(para, lines[i])
 	}
+	slices.Reverse(para)
 
-	if hasTrailerBlock {
+	if separated && isTrailerBlock(para) {
 		return trimmed + "\n" + trailerLine + "\n"
 	}
 	return trimmed + "\n\n" + trailerLine + "\n"
@@ -317,12 +312,19 @@ func finalTrailerBlock(message string) []string {
 		i--
 	}
 	start := i + 1
-	if start == end {
+	if !isTrailerBlock(lines[start:end]) {
 		return nil
 	}
+	return lines[start:end]
+}
 
+// isTrailerBlock reports whether lines form a trailer block: at least one
+// trailer line, with every line either a trailer or an indented continuation
+// of a preceding trailer's value. Both finalTrailerBlock and appendTrailerLine
+// classify with this so the writer never joins onto a paragraph the readers reject.
+func isTrailerBlock(lines []string) bool {
 	seenTrailer := false
-	for _, line := range lines[start:end] {
+	for _, line := range lines {
 		switch {
 		case IsTrailerLine(line):
 			seenTrailer = true
@@ -330,10 +332,10 @@ func finalTrailerBlock(message string) []string {
 			// Git treats an indented line after a trailer as a continuation
 			// of that trailer's value, never as a new trailer.
 		default:
-			return nil
+			return false
 		}
 	}
-	return lines[start:end]
+	return seenTrailer
 }
 
 // AppendOPFAppliedTrailer appends `Entire-OPF-Applied: true` in
