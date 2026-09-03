@@ -27,9 +27,10 @@ import (
 //
 //   - Which of the user's accounts to use — whichever the user selected, via
 //     `--context`/$ENTIRE_CONTEXT for one invocation or the stored
-//     current_context otherwise, and nothing else. The cluster's cores only
-//     decide whether that identity is accepted; see requireActiveContext for
-//     the policy and why it has no fallback tiers.
+//     current_context otherwise, else the sole saved login the cluster's cores
+//     accept. Recomputed every call from the live contexts, never persisted,
+//     so a user with several accounts is never silently pinned to one. See
+//     selectLoginContext for the tiers.
 //
 // In particular we never fall back to an active context whose core does NOT
 // front the cluster: the cluster would reject the exchanged token as "unknown
@@ -88,7 +89,7 @@ func resolveClusterAuth(ctx context.Context, configDir, cacheDir, clusterHost st
 		return nil, err
 	}
 
-	selected, err := requireActiveContext(f, "cluster "+clusterHost,
+	selected, err := selectLoginContext(f, "cluster "+clusterHost,
 		loginTargets{coreURLs: entry.CoreURLs, loginURL: entry.LoginURL}, debugf)
 	if err != nil {
 		return nil, err
@@ -232,28 +233,30 @@ type noAuthContextError struct {
 func (e *noAuthContextError) Error() string { return e.message }
 func (e *noAuthContextError) Unwrap() error { return ErrNoAuthContext }
 
-// requireActiveContext resolves the login context for a resource from the ACTIVE
-// context alone, and is the one place the CLI's account-selection policy lives.
-// subject is a noun phrase identifying the resource ("cluster nyc.entire.io" /
-// "API host partial.to") used in messages, so the same rule serves the
-// git-cluster, data-API, and cell resolvers.
+// selectLoginContext resolves the login context for a resource, and is the one
+// place the CLI's account-selection policy lives. subject is a noun phrase
+// identifying the resource ("cluster nyc.entire.io" / "API host partial.to")
+// used in messages, so the same rule serves the git-cluster, data-API, and cell
+// resolvers.
 //
-// The policy: the user decides which identity acts — `--context` or
-// $ENTIRE_CONTEXT for one invocation, else `entire auth use` for the stored
-// default. A resource's advertised issuers decide only whether that identity is
-// *accepted*, never which one is *chosen*. So this validates, it does not
-// choose — hence the name.
+// The tiers, in order:
 //
-// Two implicit tiers used to sit underneath: "the sole eligible context", and an
-// ambiguity error when several were eligible. Both are gone, because they made
-// the acting identity depend on what *else* happened to be stored — adding a
-// second login could silently change which account a command ran as, and the
-// same command could act as different identities on two machines. For a question
-// as consequential as "whose credentials is this running under?", a predictable
-// error beats a convenient guess.
+//  1. An explicit `--context`/$ENTIRE_CONTEXT selection, when the resource
+//     accepts it. A saved-but-untrusted one is a hard error that never falls
+//     through: the user named that identity, so quietly acting as another is
+//     the very failure the override exists to prevent.
+//  2. The stored current_context, when the resource accepts it. `entire auth
+//     use <name>` is the lever for every resource that context's core fronts.
+//  3. Otherwise the sole saved login the resource accepts. Someone holding
+//     logins in two federations should be able to clone from either without
+//     first retargeting every shell on the machine.
+//  4. Otherwise, when several fit, ambiguousContextError — we refuse to guess
+//     which account acts.
+//
+// Anything left over is a failure renderUnusableActiveContext explains.
 //
 // See docs/architecture/upstream-host-resolution.md#account-selection.
-func requireActiveContext(f *contexts.File, subject string, t loginTargets, debugf DebugFunc) (*contexts.Context, error) {
+func selectLoginContext(f *contexts.File, subject string, t loginTargets, debugf DebugFunc) (*contexts.Context, error) {
 	// An explicit --context/$ENTIRE_CONTEXT naming no saved login fails here,
 	// before any eligibility talk: "that context doesn't exist" and "that context
 	// isn't trusted here" are different mistakes with different fixes.
@@ -269,11 +272,32 @@ func requireActiveContext(f *contexts.File, subject string, t loginTargets, debu
 		debugf("%s -> %s (%s) is not trusted here", subject, describeSelection(sel), sel.Context.CoreURL)
 	}
 	eligible := eligibleContexts(f, t.coreURLs)
+	// Auto-selection is for an identity the user did not name. An explicit
+	// override the resource rejects falls straight through to the message that
+	// blames the flag.
+	if !sel.Explicit() {
+		if len(eligible) == 1 {
+			debugf("%s -> sole eligible context %s", subject, eligible[0].Name)
+			return eligible[0], nil
+		}
+		if len(eligible) > 1 {
+			return nil, ambiguousContextError(subject, eligible)
+		}
+	}
 	message := renderUnusableActiveContext(subject, sel, eligible, t)
 	if sel.Context == nil && len(eligible) == 0 {
 		return nil, &noAuthContextError{message: message}
 	}
 	return nil, errors.New(message)
+}
+
+// ambiguousContextError reports that several saved logins fit and none was
+// chosen. Auto-selection settles a single candidate only: picking among several
+// would make the acting identity depend on what else happens to be stored, so
+// the user picks. Names are sorted, so the message is stable across saves.
+func ambiguousContextError(subject string, eligible []*contexts.Context) error {
+	return fmt.Errorf("multiple login contexts can authenticate against %s (%s); choose one with `entire auth use <context>` and re-run",
+		subject, strings.Join(contextNames(eligible), ", "))
 }
 
 // describeSelection labels a resolved identity for debug output, naming the
@@ -323,11 +347,11 @@ func normalizeCoreURL(coreURL string) string {
 	return strings.TrimRight(strings.TrimSpace(coreURL), "/")
 }
 
-// eligibleContexts returns the saved contexts this resource would accept, for
-// reporting only — requireActiveContext never picks from it. Filtering f.Contexts
-// once (rather than iterating coreURLs and collecting per-issuer matches) makes
-// duplicates structurally impossible, so no de-duplication is needed even when a
-// resource advertises the same core twice.
+// eligibleContexts returns the saved contexts this resource would accept: the
+// auto-selection candidates, and the set reported when selection fails.
+// Filtering f.Contexts once (rather than iterating coreURLs and collecting
+// per-issuer matches) makes duplicates structurally impossible, so no
+// de-duplication is needed even when a resource advertises the same core twice.
 func eligibleContexts(f *contexts.File, coreURLs []string) []*contexts.Context {
 	var out []*contexts.Context
 	for _, c := range f.Contexts {
@@ -353,6 +377,11 @@ func eligibleContexts(f *contexts.File, coreURLs []string) []*contexts.Context {
 // The remedy also tracks where the identity came from: someone who passed
 // `--context` needs to change that argument, not run `auth use`, which would
 // leave the flag still overriding it on the next run.
+//
+// selectLoginContext reaches this only where auto-selection cannot apply: an
+// explicit override the resource rejected, or no eligible saved login at all.
+// The rest of the matrix stays because this renders "no identity is available"
+// as a whole, and it is exercised directly.
 //
 // Returns a string, matching renderLoginHint and leaving the single errors.New
 // to the caller.
