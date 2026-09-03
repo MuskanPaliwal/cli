@@ -511,8 +511,8 @@ func RedactTranscriptCached(
 	treePath := transcriptCacheKey(sessionID)
 
 	// Resolve the cache only for content that could actually use it: a small or
-	// non-line-delimited payload would otherwise pay the git-common-dir lookup
-	// (a subprocess on first call in the process) for nothing.
+	// non-line-delimited payload should not pay even the filesystem metadata
+	// lookup.
 	if !incrementalRedactionCandidate(content, treePath) {
 		return redactor(ctx, content)
 	}
