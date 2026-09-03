@@ -86,25 +86,33 @@ the commands are always runnable in every build.
   (preserving the old URL under `--upstream`) or add a separate one;
   non-interactively it repoints `--remote` directly. Both `use` and `clone`
   choose a placement through the shared `selectPlacement` picker. `clone`
-  accepts a native `/et/<project>/<repo>` ref (or the `<project>/<repo>`
-  shorthand), a mirror `/gh/<owner>/<repo>` ref, or a full `entire://` URL
-  passed through verbatim.
+  accepts a native `/et/<project>/<repo>` ref, a mirror `/gh/<owner>/<repo>`
+  ref, or a full `entire://` URL passed through verbatim. **Every ref names its
+  forge**: the leading token alone decides which grammar is tried, and the bare
+  `<project>/<repo>` shorthand was removed because both forges take that shape
+  and nothing in it says which was meant (#2252).
   Both native segments must match the server's whole name shape, not just its
   charset — the rules `normalizeName` enforces in entiredb
   `core/resource/project_name.go`: a project is 3–32 chars of letters, digits
   and `-`, a repo 1–64 with interior `.` also allowed, neither starting or
   ending with `-` (or `.`), and no consecutive dots. Uppercase is accepted
   because both lookups fold case (project via `foldProjectName`, repo on
-  `lower(name)`). Two consequences: `git@github.com:foo/bar` is not a
-  shorthand, and the 3-char project minimum is what makes the shorthand
-  unambiguous, since the two-char `gh`/`et` forge tokens can never be project
-  names — a future forge token of 3+ chars would need a guard of its own.
+  `lower(name)`). Those bounds are server parity only — they buy a local error
+  instead of a control-plane round trip. They used to carry a second job (the
+  3-char project minimum made the shorthand unambiguous against the two-char
+  forge tokens); with the token mandatory the grammar no longer rests on them.
   A ref matching none of the grammars gets a targeted error
-  (`invalidCloneRefError`): a GitHub URL is pointed at its `/gh/` form; a ref
-  that declared a forge token keeps its own parser's reason (`gh/` the mirror
+  (`invalidCloneRefError`), in four descending degrees of confidence about what
+  was meant: a ref naming `github.com` is pointed at its `/gh/` form; a ref that
+  declared a forge token keeps its own parser's reason (`gh/` the mirror
   parser's, `et/` the native parser's — the rule its project or repo name
-  broke); anything else, a bare two-segment ref included, lists the accepted
-  shapes, because a ref that declared nothing is equally a mangled URL.
+  broke); a bare pair is offered every forge-qualified reading that would
+  actually parse (`bareRefSuggestions` re-runs the parsers rather than
+  re-deriving their charsets, so a suggestion is never a ref that fails next,
+  and both are offered when both fit rather than guessing); anything left lists
+  the accepted shapes. `parseHostedGitHubURL` requires the host to be named for
+  the first branch, because an unqualified pair belongs to no forge — that is
+  the whole reason the third branch exists.
   A native ref resolves project → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, and clones
   `entire://<clusterHost><path>` from the repo's home cluster (`--cluster` is

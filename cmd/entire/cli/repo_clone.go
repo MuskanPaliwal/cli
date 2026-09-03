@@ -89,38 +89,40 @@ const nativeCloneForge = "et"
 // a ref the server can never match from costing a control-plane round trip:
 // `paul/..`, `paul/.foo`, `paul/foo.` and `paul/-x` are all refused locally.
 //
-// The project minimum is load-bearing beyond validation — it is what makes the
-// `<project>/<repo>` shorthand unambiguous, since the two-character `gh`/`et`
-// forge tokens can never be project names. A future forge token of three or
-// more characters would reintroduce that ambiguity and need a guard of its own.
+// The bounds are server parity and nothing more. They used to carry a second
+// job — the 3-character project minimum was what made the removed
+// `<project>/<repo>` shorthand unambiguous against the two-character `gh`/`et`
+// forge tokens — but a native ref now has to name its token, so the grammar no
+// longer rests on them. What they still buy is a local error instead of a
+// control-plane round trip for a ref the server could never match.
 var (
 	nativeProjectRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{1,30}[A-Za-z0-9]$`)
 	nativeRepoRe    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$`)
 )
 
-// parseNativeCloneRef turns a native clone ref — `/et/<project>/<repo>` or the
-// `<project>/<repo>` shorthand, leading slash optional — into its project and
-// repo names.
+// parseNativeCloneRef turns a native clone ref — `/et/<project>/<repo>`,
+// leading slash optional — into its project and repo names. The `et/` token is
+// required: the bare `<project>/<repo>` shorthand was removed because nothing
+// in it says which forge was meant, and both take that shape (#2252).
 //
 // A non-nil error is not necessarily user-facing. For a ref that never claimed
 // to be native (`/gh/foo/bar`, `git@github.com:foo/bar`) it only means "try the
 // mirror grammar", and the caller discards it; it reaches the user just for a
-// ref carrying the `et/` forge token, where they did say what they meant. That
-// is invalidCloneRefError's job, and it is what parseMirrorCloneRef's error gets
-// for `gh/`.
+// ref carrying the `et/` token, where they did say what they meant. That is
+// invalidCloneRefError's job, and it is what parseMirrorCloneRef's error gets
+// for `gh/`. Since the token check below IS that test, the two agree by
+// construction.
 func parseNativeCloneRef(ref string) (project, repo string, err error) {
 	segs := strings.Split(strings.TrimPrefix(strings.TrimSpace(ref), "/"), "/")
-	// An explicit `et/` token means everything after it is the project/repo
-	// pair, however many segments that turns out to be: keeping the token out
-	// of the count is what lets `/et/paul` be diagnosed as a missing <repo>
-	// rather than as a project named "et".
-	if len(segs) > 1 && segs[0] == nativeCloneForge {
-		segs = segs[1:]
+	if segs[0] != nativeCloneForge {
+		return "", "", fmt.Errorf("not a native ref: expected the %s/ forge token", nativeCloneForge)
 	}
-	if len(segs) != 2 {
-		return "", "", fmt.Errorf("expected /%s/<project>/<repo> or <project>/<repo> (2 names, got %d)", nativeCloneForge, len(segs))
+	// The token is excluded from the count, so `/et/paul` reads as a missing
+	// <repo> rather than as a project named "et".
+	if len(segs) != 3 {
+		return "", "", fmt.Errorf("expected /%s/<project>/<repo> (2 names after the %s token, got %d)", nativeCloneForge, nativeCloneForge, len(segs)-1)
 	}
-	project, repo = segs[0], segs[1]
+	project, repo = segs[1], segs[2]
 	// Drop `.git` before the name is validated, not after: `.git` alone then
 	// fails the shape check as an empty name rather than passing as a dotted
 	// one. See gitDirSuffix for why the suffix is never part of a name.
@@ -189,22 +191,61 @@ func declaresForge(ref, token string) bool {
 	return strings.HasPrefix(strings.TrimPrefix(ref, "/"), token+"/")
 }
 
-// cloneRefShapes lists every ref shape `repo clone` accepts, for error text.
-const cloneRefShapes = "/et/<project>/<repo>, <project>/<repo>, /gh/<owner>/<repo>, or a full entire:// URL"
+// bareRefSuggestions returns the forge-qualified refs a bare `<a>/<b>` could
+// have meant — one per grammar that would actually accept it, so a suggestion
+// is never itself a ref that would fail next. Nil unless ref is exactly two
+// slash-separated segments.
+//
+// This is the input the removed `<project>/<repo>` shorthand used to take
+// (#2252), so it is what arrives from habit, and both forges take that shape.
+// Naming both candidates is the honest answer: the ambiguity is precisely why
+// the shorthand went, so guessing one would reintroduce it, and printing the
+// whole grammar makes the reader do the substitution themselves. Re-running the
+// parsers rather than re-deriving their charsets is what keeps the two in step.
+func bareRefSuggestions(ref string) []string {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(ref), "/")
+	if strings.Count(trimmed, "/") != 1 {
+		return nil
+	}
+	var out []string
+	if native := "/" + nativeCloneForge + "/" + trimmed; nativeRefParses(native) {
+		out = append(out, native)
+	}
+	if mirror := "/" + mirrorCloneForge + "/" + trimmed; mirrorRefParses(mirror) {
+		out = append(out, mirror)
+	}
+	return out
+}
 
-// invalidCloneRefError explains why ref matched none of the clone grammars.
-// A GitHub URL gets pointed at the `/gh/` form it should have been; a ref that
-// declared a forge token keeps the reason its own parser gave (a bad owner,
-// project or repo name, a dot-only repo, a missing segment), and anything else
+func nativeRefParses(ref string) bool {
+	_, _, err := parseNativeCloneRef(ref)
+	return err == nil
+}
+
+func mirrorRefParses(ref string) bool {
+	_, _, _, err := parseMirrorCloneRef(ref)
+	return err == nil
+}
+
+// cloneRefShapes lists every ref shape `repo clone` accepts, for error text.
+const cloneRefShapes = "/et/<project>/<repo>, /gh/<owner>/<repo>, or a full entire:// URL"
+
+// invalidCloneRefError explains why ref matched none of the clone grammars, in
+// four descending degrees of confidence about what the user meant: a ref that
+// names github.com is pointed at the `/gh/` form it should have been; a ref
+// that declared a forge token keeps the reason its own parser gave (a bad
+// owner, project or repo name, a dot-only repo, a missing segment); a bare pair
+// that either grammar would accept is offered both readings; and anything left
 // gets the list of accepted shapes.
 //
 // Declaring a token is the whole test for showing a parser's reason: for every
 // other ref both parsers failed only because it was not their grammar, so
 // neither reason describes anything the user did.
 func invalidCloneRefError(ref string, nativeErr, mirrorErr error) error {
-	// Hosted forms only: bare `x/y` is what the native shorthand already
-	// rejected, and a truncated `gh/foo` would otherwise read as owner "gh".
-	// The parser's dot-only guard also keeps `foo/..` out of the hint.
+	// Host-qualified forms only — an unqualified `x/y` names no forge, and the
+	// suggestion branch below handles it without guessing one. A truncated
+	// `gh/foo` would otherwise read as owner "gh", and the parser's dot-only
+	// guard keeps `github.com/foo/..` out of the hint.
 	if owner, repo, err := parseHostedGitHubURL(ref); err == nil {
 		return fmt.Errorf("invalid <repo> %q: pass GitHub mirrors as /gh/%s/%s", ref, owner, repo)
 	}
@@ -213,6 +254,9 @@ func invalidCloneRefError(ref string, nativeErr, mirrorErr error) error {
 	}
 	if declaresForge(ref, nativeCloneForge) {
 		return fmt.Errorf("invalid <repo> %q: %w", ref, nativeErr)
+	}
+	if s := bareRefSuggestions(ref); len(s) > 0 {
+		return fmt.Errorf("invalid <repo> %q: a ref must name its forge — did you mean %s?", ref, strings.Join(s, " or "))
 	}
 	return fmt.Errorf("invalid <repo> %q: expected %s", ref, cloneRefShapes)
 }
@@ -244,9 +288,9 @@ func newRepoCloneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clone <repo> [target-dir]",
 		Short: "Clone an Entire repository",
-		Long: "Clone an Entire-native repo by its `/et/<project>/<repo>` ref (or the " +
-			"`<project>/<repo>` shorthand), a GitHub mirror by its `/gh/<owner>/<repo>` " +
-			"ref, or a full `entire://` clone URL.\n\n" +
+		Long: "Clone an Entire-native repo by its `/et/<project>/<repo>` ref, a " +
+			"GitHub mirror by its `/gh/<owner>/<repo>` ref, or a full `entire://` " +
+			"clone URL.\n\n" +
 			"A native ref resolves the repo's home cluster and clones from there " +
 			"(--cluster doesn't apply).\n\n" +
 			"With a `/gh/<owner>/<repo>` ref, looks up where the repo is mirrored: if " +
@@ -257,7 +301,6 @@ func newRepoCloneCmd() *cobra.Command {
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
 		Example: "  entire repo clone /et/project/example\n" +
-			"  entire repo clone project/example\n" +
 			"  entire repo clone /gh/entirehq/entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api ./entire-api\n" +
 			"  entire repo clone /gh/entirehq/entire-api --cluster aws-us-east-2.entire.io\n" +

@@ -42,6 +42,13 @@ var (
 	gitHubSSHRe   = regexp.MustCompile(`^git@github\.com:` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
 	gitHubBareRe  = regexp.MustCompile(`^(?:github\.com/)?` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
 
+	// gitHubHostedBareRe is gitHubBareRe with the host REQUIRED. The optional
+	// `github.com/` in gitHubBareRe is what keeps it out of
+	// parseHostedGitHubURL: it also matches a bare `owner/repo`, which names no
+	// forge at all. Anchoring the host makes the shape unambiguous, so a caller
+	// that must not guess a forge can still recognise `github.com/owner/repo`.
+	gitHubHostedBareRe = regexp.MustCompile(`^github\.com/` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
+
 	// gitHubDotOnlyRe matches repo segments that are entirely dots
 	// (".", "..", ...). The tightened owner charset already excludes
 	// dots, but gitHubRepoPat allows ".", and a dot-only repo name would
@@ -54,11 +61,14 @@ func parseGitHubURL(rawURL string) (owner, repo string, err error) {
 	return matchGitHubURL(rawURL, gitHubHTTPSRe, gitHubSSHRe, gitHubBareRe)
 }
 
-// parseHostedGitHubURL accepts only the github.com-hosted shapes (https, ssh),
-// not the bare `owner/repo` one, for callers where a bare pair means something
-// else (the native clone shorthand). Same dot-only guard as parseGitHubURL.
+// parseHostedGitHubURL accepts the shapes that name github.com explicitly —
+// https, ssh, and the host-qualified bare form — but never an unqualified
+// `owner/repo`, which names no forge and so cannot be attributed to one. Its
+// caller uses that to point a GitHub URL at the `/gh/` ref it should have been;
+// guessing a forge for a bare pair is exactly what `repo clone`'s grammar
+// refuses to do. Same dot-only guard as parseGitHubURL.
 func parseHostedGitHubURL(rawURL string) (owner, repo string, err error) {
-	return matchGitHubURL(rawURL, gitHubHTTPSRe, gitHubSSHRe)
+	return matchGitHubURL(rawURL, gitHubHTTPSRe, gitHubSSHRe, gitHubHostedBareRe)
 }
 
 func matchGitHubURL(rawURL string, res ...*regexp.Regexp) (owner, repo string, err error) {

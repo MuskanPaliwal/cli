@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -55,11 +58,11 @@ func TestParseMirrorCloneRef(t *testing.T) {
 	}
 }
 
-// TestParseNativeCloneRef pins the accepted shape against the server's own
-// name rules (entiredb core/resource/project_name.go): every accepted case here
-// is a name the server can hold, and every rejected one is a name it would
-// refuse — a ref the CLI cannot resolve should cost a shape error, not a
-// control-plane round trip.
+// TestParseNativeCloneRef pins two things: that the `et/` token is required —
+// the bare `<project>/<repo>` shorthand was removed because nothing in it says
+// which forge was meant (#2252) — and that the names are checked against the
+// server's own rules (entiredb core/resource/project_name.go), so a ref the
+// control plane could never match costs a shape error rather than a round trip.
 func TestParseNativeCloneRef(t *testing.T) {
 	t.Parallel()
 	// Bounds are the server's: projects 3-32 chars, repos 1-64.
@@ -74,52 +77,60 @@ func TestParseNativeCloneRef(t *testing.T) {
 	}{
 		{name: "full et ref", ref: "/et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
 		{name: "no leading slash", ref: "et/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
-		{name: "shorthand", ref: "paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
-		{name: "shorthand leading slash", ref: "/paul/dogbark", wantProject: "paul", wantRepo: "dogbark"},
-		{name: "uppercase folds server-side", ref: "Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark"},
-		{name: "dotted repo", ref: "paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el"},
+		{name: "uppercase folds server-side", ref: "/et/Paul/DogBark", wantProject: "Paul", wantRepo: "DogBark"},
+		{name: "dotted repo", ref: "/et/paul/entire-trails.el", wantProject: "paul", wantRepo: "entire-trails.el"},
 		// `.git` is never part of a name on either backend (see gitDirSuffix),
 		// so it is dropped before the name is validated.
-		{name: "git suffix is dropped", ref: "paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark"},
-		{name: "git suffix dropped from a dotted name", ref: "paul/entire-trails.el.git", wantProject: "paul", wantRepo: "entire-trails.el"},
-		{name: "only the last git suffix is dropped", ref: "paul/dogbark.git.git", wantProject: "paul", wantRepo: "dogbark.git"},
-		{name: "git suffix alone leaves no name", ref: "paul/.git", wantErr: true},
-		{name: "single-char repo", ref: "paul/x", wantProject: "paul", wantRepo: "x"},
-		{name: "shortest project", ref: "abc/dogbark", wantProject: "abc", wantRepo: "dogbark"},
-		{name: "longest project", ref: maxProject + "/dogbark", wantProject: maxProject, wantRepo: "dogbark"},
-		{name: "longest repo", ref: "paul/" + maxRepo, wantProject: "paul", wantRepo: maxRepo},
+		{name: "git suffix is dropped", ref: "/et/paul/dogbark.git", wantProject: "paul", wantRepo: "dogbark"},
+		{name: "git suffix dropped from a dotted name", ref: "/et/paul/entire-trails.el.git", wantProject: "paul", wantRepo: "entire-trails.el"},
+		{name: "only the last git suffix is dropped", ref: "/et/paul/dogbark.git.git", wantProject: "paul", wantRepo: "dogbark.git"},
+		{name: "single-char repo", ref: "/et/paul/x", wantProject: "paul", wantRepo: "x"},
+		{name: "shortest project", ref: "/et/abc/dogbark", wantProject: "abc", wantRepo: "dogbark"},
+		{name: "longest project", ref: "/et/" + maxProject + "/dogbark", wantProject: maxProject, wantRepo: "dogbark"},
+		{name: "longest repo", ref: "/et/paul/" + maxRepo, wantProject: "paul", wantRepo: maxRepo},
 		// Hyphens and dots are only constrained at the edges and by the ".."
 		// ban, so these interior runs are names the server accepts: a
 		// per-segment regex would wrongly refuse them.
-		{name: "consecutive hyphens", ref: "paul/dog--bark", wantProject: "paul", wantRepo: "dog--bark"},
-		{name: "hyphen beside a dot", ref: "paul/dog-.bark", wantProject: "paul", wantRepo: "dog-.bark"},
-		{name: "ssh github url is not a shorthand", ref: "git@github.com:foo/bar", wantErr: true},
+		{name: "consecutive hyphens", ref: "/et/paul/dog--bark", wantProject: "paul", wantRepo: "dog--bark"},
+		{name: "hyphen beside a dot", ref: "/et/paul/dog-.bark", wantProject: "paul", wantRepo: "dog-.bark"},
+
+		// No forge token: not a native ref, whatever the names look like.
+		{name: "bare pair is not a shorthand", ref: "paul/dogbark", wantErr: true},
+		{name: "bare pair with leading slash", ref: "/paul/dogbark", wantErr: true},
+		{name: "bare dotted pair", ref: "/paul/entire-trails.el", wantErr: true},
+		{name: "ssh github url", ref: "git@github.com:foo/bar", wantErr: true},
 		{name: "ssh github url with .git", ref: "git@github.com:foo/bar.git", wantErr: true},
-		{name: "dotted project", ref: "github.com/dogbark", wantErr: true},
-		{name: "underscore in project", ref: "foo_bar/dogbark", wantErr: true},
-		{name: "underscore in repo", ref: "paul/dog_bark", wantErr: true},
-		{name: "space in repo", ref: "paul/dog bark", wantErr: true},
-		{name: "two-char project cannot exist server-side", ref: "ab/dogbark", wantErr: true},
-		{name: "over-long project", ref: maxProject + "d/dogbark", wantErr: true},
-		{name: "over-long repo", ref: "paul/" + maxRepo + "d", wantErr: true},
-		{name: "leading hyphen in project", ref: "-paul/dogbark", wantErr: true},
-		{name: "trailing hyphen in project", ref: "paul-/dogbark", wantErr: true},
-		{name: "leading hyphen in repo", ref: "paul/-dogbark", wantErr: true},
-		{name: "trailing hyphen in repo", ref: "paul/dogbark-", wantErr: true},
-		{name: "leading dot in repo", ref: "paul/.dogbark", wantErr: true},
-		{name: "trailing dot in repo", ref: "paul/dogbark.", wantErr: true},
-		{name: "consecutive dots in repo", ref: "paul/dog..bark", wantErr: true},
-		{name: "dot-only repo", ref: "paul/..", wantErr: true},
+		{name: "host-qualified pair", ref: "github.com/dogbark", wantErr: true},
 		{name: "gh ref is not native", ref: "/gh/entirehq/entire-api", wantErr: true},
-		{name: "truncated gh ref is not a shorthand", ref: "/gh/entirehq", wantErr: true},
-		{name: "truncated et ref", ref: "/et/paul", wantErr: true},
-		{name: "et token alone", ref: "/et/", wantErr: true},
-		{name: "forge token in the project position", ref: "/et/gh/foo", wantErr: true},
+		{name: "truncated gh ref", ref: "/gh/entirehq", wantErr: true},
 		{name: "single segment", ref: "dogbark", wantErr: true},
-		{name: "too many segments", ref: "/et/paul/dogbark/extra", wantErr: true},
-		{name: "empty project", ref: "/et//dogbark", wantErr: true},
-		{name: "empty repo", ref: "paul/", wantErr: true},
 		{name: "empty", ref: "", wantErr: true},
+		{name: "double leading slash hides the token", ref: "//et/paul/dogbark", wantErr: true},
+
+		// Token present, wrong number of names.
+		{name: "token and project only", ref: "/et/paul", wantErr: true},
+		{name: "token alone", ref: "/et/", wantErr: true},
+		{name: "too many segments", ref: "/et/paul/dogbark/extra", wantErr: true},
+
+		// Token present, names refused.
+		{name: "empty project", ref: "/et//dogbark", wantErr: true},
+		{name: "empty repo", ref: "/et/paul/", wantErr: true},
+		{name: "forge token in the project position", ref: "/et/gh/foo", wantErr: true},
+		{name: "underscore in project", ref: "/et/foo_bar/dogbark", wantErr: true},
+		{name: "underscore in repo", ref: "/et/paul/dog_bark", wantErr: true},
+		{name: "space in repo", ref: "/et/paul/dog bark", wantErr: true},
+		{name: "two-char project cannot exist server-side", ref: "/et/ab/dogbark", wantErr: true},
+		{name: "over-long project", ref: "/et/" + maxProject + "d/dogbark", wantErr: true},
+		{name: "over-long repo", ref: "/et/paul/" + maxRepo + "d", wantErr: true},
+		{name: "leading hyphen in project", ref: "/et/-paul/dogbark", wantErr: true},
+		{name: "trailing hyphen in project", ref: "/et/paul-/dogbark", wantErr: true},
+		{name: "leading hyphen in repo", ref: "/et/paul/-dogbark", wantErr: true},
+		{name: "trailing hyphen in repo", ref: "/et/paul/dogbark-", wantErr: true},
+		{name: "leading dot in repo", ref: "/et/paul/.dogbark", wantErr: true},
+		{name: "trailing dot in repo", ref: "/et/paul/dogbark.", wantErr: true},
+		{name: "consecutive dots in repo", ref: "/et/paul/dog..bark", wantErr: true},
+		{name: "dot-only repo", ref: "/et/paul/..", wantErr: true},
+		{name: "git suffix alone leaves no name", ref: "/et/paul/.git", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,22 +147,115 @@ func TestParseNativeCloneRef(t *testing.T) {
 	}
 }
 
-// TestForgeTokensCannotBeProjectNames enforces the fact that makes the
-// `<project>/<repo>` shorthand unambiguous. Dropping the explicit
-// `segs[0] == "gh" || segs[0] == "et"` guard was only safe because the project
-// minimum already excludes both tokens, and that is an inference from a server
-// constant rather than a local rule — so pin it. This fails the day a forge
-// token is added that a project could legally be named, which is exactly when
-// the grammar needs a guard of its own back.
-func TestForgeTokensCannotBeProjectNames(t *testing.T) {
+// TestCloneRefAlwaysRequiresItsForgePrefix is a security test, not a parser
+// test. `<owner>/<repo>` and `<project>/<repo>` are the SAME shape, so any
+// default forge would let one namespace shadow the other: register `acme/tool`
+// in whichever namespace the CLI happens to prefer, and a ref the user believes
+// names the other one silently resolves — and then gets cloned and run. There
+// is no safe default, so there is none.
+//
+// What this pins is that the requirement holds at every layer, not just in the
+// parser a future refactor might route around: neither grammar accepts a bare
+// pair, the command refuses one without reaching the control plane or `git
+// clone`, and where a bare pair could legitimately mean either forge the error
+// names BOTH — never resolving, and never quietly choosing one.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestCloneRefAlwaysRequiresItsForgePrefix(t *testing.T) {
+	// Shapes an attacker would rely on: a plausible mirror pair, a plausible
+	// native pair, and the spellings a user might paste or a script might build.
+	bare := []string{
+		"entireio/cli",
+		"paul/dogbark",
+		"/paul/dogbark",
+		"paul/dogbark/",
+		"Paul/DogBark",
+		"paul/dogbark.git",
+		"acme/tool",
+	}
+
+	t.Run("neither grammar accepts a bare pair", func(t *testing.T) {
+		for _, ref := range bare {
+			_, _, nativeErr := parseNativeCloneRef(ref)
+			require.Errorf(t, nativeErr, "parseNativeCloneRef(%q) must not accept a forge-less pair", ref)
+			_, _, _, mirrorErr := parseMirrorCloneRef(ref)
+			require.Errorf(t, mirrorErr, "parseMirrorCloneRef(%q) must not accept a forge-less pair", ref)
+		}
+	})
+
+	t.Run("the command refuses before the control plane or git", func(t *testing.T) {
+		var dialed atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			dialed.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		prev := activeCoreClient
+		activeCoreClient = func(context.Context) (*coreapi.Client, error) {
+			return coreapi.NewWithBearer(srv.URL, "tok")
+		}
+		t.Cleanup(func() { activeCoreClient = prev })
+
+		// A host-qualified pair is not a ref either: naming github.com says
+		// which forge, but `repo clone` still takes only the /gh/ form, so this
+		// must not become a second, laxer way in.
+		for _, ref := range append(bare, "github.com/acme/tool", "https://github.com/acme/tool") {
+			cmd := newRepoCloneCmd()
+			var out, errOut bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errOut)
+			cmd.SetArgs([]string{ref})
+			err := cmd.ExecuteContext(t.Context())
+			require.Errorf(t, err, "repo clone %q must fail", ref)
+			// The parse error, specifically: it is what proves the refusal
+			// happened before any resolution rather than after a failed one.
+			require.ErrorContainsf(t, err, `invalid <repo> "`+ref+`"`, "repo clone %q", ref)
+			require.NotContainsf(t, errOut.String(), "Cloning", "repo clone %q must not reach git clone", ref)
+		}
+		require.Zero(t, dialed.Load(), "a ref without a forge prefix must never reach the control plane")
+	})
+
+	t.Run("an ambiguous pair is never resolved to one forge", func(t *testing.T) {
+		// Both readings parse, so both must be offered. A message naming one
+		// would be the namesquatting default this grammar exists to avoid.
+		_, _, nativeErr := parseNativeCloneRef("acme/tool")
+		_, _, _, mirrorErr := parseMirrorCloneRef("acme/tool")
+		msg := invalidCloneRefError("acme/tool", nativeErr, mirrorErr).Error()
+		require.Contains(t, msg, "/et/acme/tool")
+		require.Contains(t, msg, "/gh/acme/tool")
+	})
+}
+
+// TestBareRefSuggestions covers the replacement for the removed shorthand: a
+// bare pair is offered every forge-qualified reading that would actually parse,
+// and nothing else. Offering a candidate that fails in turn, or guessing a
+// single forge when both fit, would each defeat the point.
+func TestBareRefSuggestions(t *testing.T) {
 	t.Parallel()
-	for _, token := range []string{nativeCloneForge, mirrorCloneForge} {
-		t.Run(token, func(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want []string
+	}{
+		{name: "legal on both", ref: "paul/dogbark", want: []string{"/et/paul/dogbark", "/gh/paul/dogbark"}},
+		{name: "leading slash", ref: "/paul/dogbark", want: []string{"/et/paul/dogbark", "/gh/paul/dogbark"}},
+		// Each of these is a legal GitHub name and an illegal native one, so
+		// only the mirror reading is possible.
+		{name: "underscore is GitHub-only", ref: "paul/dog_bark", want: []string{"/gh/paul/dog_bark"}},
+		{name: "leading dot is GitHub-only", ref: "paul/.foo", want: []string{"/gh/paul/.foo"}},
+		{name: "two-char project is GitHub-only", ref: "ab/dogbark", want: []string{"/gh/ab/dogbark"}},
+		// Neither grammar can take these, so there is nothing to suggest.
+		{name: "dot-only repo", ref: "paul/..", want: nil},
+		{name: "space", ref: "paul/dog bark", want: nil},
+		{name: "single segment", ref: "dogbark", want: nil},
+		{name: "three segments", ref: "gh/paul/dogbark", want: nil},
+		{name: "empty segment", ref: "paul//dogbark", want: nil},
+		{name: "empty", ref: "", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.False(t, nativeProjectRe.MatchString(token),
-				"forge token %q is a legal project name, so %q is ambiguous between a forge ref and a shorthand", token, token+"/<repo>")
-			_, _, err := parseNativeCloneRef(token + "/dogbark")
-			require.Error(t, err)
+			require.Equal(t, tt.want, bareRefSuggestions(tt.ref))
 		})
 	}
 }
@@ -178,12 +282,14 @@ func TestInvalidCloneRefError(t *testing.T) {
 		{name: "bad repo keeps native reason", ref: "/et/paul/dog_bark", want: `repo "dog_bark" must be 1-64 characters`, dontWant: cloneRefShapes},
 		{name: "dot-only native repo keeps native reason", ref: "/et/paul/..", want: "no consecutive dots", dontWant: cloneRefShapes},
 		{name: "empty native repo keeps native reason", ref: "/et/paul/", want: `repo "" must be`, dontWant: cloneRefShapes},
-		{name: "truncated et ref names the missing segment", ref: "/et/paul", want: "expected /et/<project>/<repo> or <project>/<repo> (2 names, got 1)", dontWant: cloneRefShapes},
+		{name: "truncated et ref names the missing segment", ref: "/et/paul", want: "expected /et/<project>/<repo> (2 names after the et token, got 1)", dontWant: cloneRefShapes},
 		{name: "et ref without a leading slash keeps native reason", ref: "et/ab/cd", want: `project "ab" must be`, dontWant: cloneRefShapes},
-		// A bare two-segment ref declared nothing, so the native reason is
-		// withheld: it is equally a mangled URL, and #2223's `git@github.com:foo/bar`
-		// case is exactly a bad "project" name under the shorthand grammar.
-		{name: "bare shorthand lists all shapes", ref: "paul/.foo", want: cloneRefShapes, dontWant: "must be"},
+		// A bare pair declared no forge, so neither parser's reason describes
+		// anything the user did; it gets the readings that would parse instead.
+		{name: "bare pair is offered both forges", ref: "paul/dogbark", want: "did you mean /et/paul/dogbark or /gh/paul/dogbark?", dontWant: cloneRefShapes},
+		{name: "bare pair legal on one forge is offered that one", ref: "paul/.foo", want: "did you mean /gh/paul/.foo?", dontWant: "must be"},
+		{name: "host-qualified pair points at /gh/", ref: "github.com/acme/app", want: "pass GitHub mirrors as /gh/acme/app"},
+		{name: "unsuggestable bare pair lists all shapes", ref: "paul/dog bark", want: cloneRefShapes},
 		{name: "unknown shape lists all shapes", ref: "/gl/foo/bar", want: cloneRefShapes, dontWant: "expected gh/"},
 		{name: "single segment lists all shapes", ref: "dogbark", want: cloneRefShapes},
 	}
