@@ -123,7 +123,7 @@ func TestRunAuthenticatedTrailAPIRoutesByForgeQualifiedRepo(t *testing.T) {
 	t.Cleanup(func() { newTrailAPIClient = previous })
 
 	called := false
-	err := runAuthenticatedTrailAPIWithRepoID(t.Context(), io.Discard, false, "entire://cell.example/et/acme/app", func(_ context.Context, _ *api.Client, repoID string) error {
+	err := runAuthenticatedTrailAPI(t.Context(), io.Discard, false, "entire://cell.example/et/acme/app", func(_ context.Context, _ *api.Client, repoID string) error {
 		called = true
 		if repoID != trailTestRepoID {
 			t.Fatalf("repoID=%q, want %s", repoID, trailTestRepoID)
