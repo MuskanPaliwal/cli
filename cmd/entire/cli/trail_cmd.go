@@ -2253,23 +2253,17 @@ func trailBodyPathForBase(basePath string, number int) string {
 	return trailNumberPathForBase(basePath, number) + "/body"
 }
 
-// resolveTrailRemote resolves the origin remote and ensures the forge is
-// known to the trails API. Without this guard, an unmapped host (e.g.
-// gitlab.com, or a misconfigured entire:// URL with no forge prefix)
-// produces a malformed `/api/v1/trails//owner/repo` path that the server
-// rejects with an opaque error instead of a clear "unsupported forge" one.
-// A native (`et`) remote is refused for a different reason — the API takes the
-// token but cannot resolve it; see errTrailsNativeUnsupported.
+// resolveTrailRemote resolves the origin remote and ensures the forge is known
+// to the trails API. Without this guard, an unmapped host (e.g. gitlab.com, or
+// a misconfigured entire:// URL with no forge prefix) cannot select a valid
+// repo-scoped trail route and would fail later with an opaque API error.
 func resolveTrailRemote(ctx context.Context) (forge, owner, repo string, err error) {
 	forge, owner, repo, err = gitremote.ResolveRemoteRepo(ctx, "origin")
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to resolve repository: %w", err)
 	}
 	if forge == "" {
-		return "", "", "", errors.New("origin remote is not on a forge supported by Entire trails (supported: github.com)")
-	}
-	if forge == nativeCloneForge {
-		return "", "", "", fmt.Errorf("origin remote is the Entire-native repo %s/%s: %w", owner, repo, errTrailsNativeUnsupported)
+		return "", "", "", errors.New("origin remote is not on a forge supported by Entire trails (supported: github.com and Entire-native remotes)")
 	}
 	return forge, owner, repo, nil
 }
@@ -2338,29 +2332,8 @@ func resolveTrailPushRemote(ctx context.Context, branch string) (string, error) 
 // triple. It accepts the canonical "forge/owner/repo" form (e.g. gh/acme/app)
 // as well as a full clone URL (https://, git@, or entire://) that gitremote
 // can parse. A trailing ".git" on the repo is stripped.
-// errTrailsNativeUnsupported is why the trail API cannot serve a native repo.
-// entire-api admits {gh, et} in the path (validTrailsHosts) but resolves {gh}
-// alone (resolvableTrailsHosts), because full_name rows carry no forge host and
-// every resolvable row today is a GitHub mirror — so a native ref collapses
-// into the same existence-hiding 404 as a permission denial, and refusing
-// locally is the only way the user hears the real reason.
-//
-// It is a shared sentinel because a forge reaches the trail API two ways —
-// named in --repo, or inferred from the origin remote — and the inferred one is
-// the common path: gating only the argument left a developer standing in a
-// native clone getting the 404 this exists to prevent. Both wrappers below must
-// go together when entire-api gains forge-scoped naming.
-var errTrailsNativeUnsupported = errors.New("trails are not available for Entire-native repos yet; they need a GitHub mirror (gh/<owner>/<repo>)")
-
 func parseTrailRepoArg(raw string) (forge, owner, repo string, err error) {
-	forge, owner, repo, err = parseTrailRepoShape(raw)
-	if err != nil {
-		return "", "", "", err
-	}
-	if forge == nativeCloneForge {
-		return "", "", "", fmt.Errorf("invalid --repo %q: %w", raw, errTrailsNativeUnsupported)
-	}
-	return forge, owner, repo, nil
+	return parseTrailRepoShape(raw)
 }
 
 // parseTrailRepoShape parses the two spellings --repo accepts — a bare
@@ -2391,7 +2364,7 @@ func parseTrailRepoShape(raw string) (forge, owner, repo string, err error) {
 		return "", "", "", fmt.Errorf("invalid --repo %q: %w", raw, perr)
 	}
 	if info.Forge == "" {
-		return "", "", "", fmt.Errorf("invalid --repo %q: unsupported forge host (supported: github.com)", raw)
+		return "", "", "", fmt.Errorf("invalid --repo %q: unsupported forge host (supported: github.com and Entire-native remotes)", raw)
 	}
 	return info.Forge, info.Owner, info.Repo, nil
 }
