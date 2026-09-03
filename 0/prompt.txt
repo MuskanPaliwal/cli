@@ -1,0 +1,13 @@
+so we will split up the pr, https://github.com/entireio/cli/pull/2190#issuecomment-5497182310 this comments says thye merge discussion and then the next comment says https://github.com/entireio/cli/pull/2190#issuecomment-5499945525 how we should split up. I would want us to create a proper plan based on what we are suggested for splitting up. create seperate worktrees from main and implement the refactoring
+
+---
+
+i need the plan first. no implementation
+
+---
+
+re evaulate the plan and make sure we don't miss anything important and then we add the plan in  a plan.md and create worktrees for each from current main
+
+---
+
+re evaulate the plan and make sure we don't miss anything important and then we add the plan in  a plan.md and create worktrees for each from current main and does it mean we can implement all the splitting in parallel?
