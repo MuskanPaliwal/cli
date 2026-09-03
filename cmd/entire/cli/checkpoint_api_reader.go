@@ -390,25 +390,37 @@ func (r *apiCheckpointReader) loadDetail(ctx context.Context, checkpointID id.Ch
 // "successful" read of foreign private transcript/session data silently
 // labeled as belonging to the repo the caller asked about.
 func (r *apiCheckpointReader) verifyResponseIdentity(checkpointID id.CheckpointID, env apiCheckpointEnvelope) error {
-	// EqualFold on both comparisons below is defensive, not a live fix:
-	// id.Validate accepts only the canonical uppercase ULID alphabet
-	// ([0-9ABCDEFGHJKMNPQRSTVWXYZ]), so a lowercase id never reaches here
-	// and the cell returns canonical case today. Folding costs nothing and
-	// cannot weaken the check -- two distinct valid IDs stay distinct under
-	// it -- while a strict compare would fail closed on a server-side
-	// casing change, breaking `explain --repo` rather than protecting it.
-	if got := env.Checkpoint.CheckpointID; !strings.EqualFold(got, checkpointID.String()) {
+	// Byte equality, NOT EqualFold. Case is load-bearing for a checkpoint
+	// ID because the two kinds have opposite canonical spellings: a legacy
+	// ID is 12 LOWERCASE hex (id.Pattern) and a ULID is canonical
+	// UPPERCASE (isULID requires ulid.ParseStrict(s).String() == s). So a
+	// fold would accept a non-canonical spelling of a real ID and then --
+	// because CheckpointID below is sourced from the server's value -- mint
+	// an id.CheckpointID that id.Validate itself rejects. An honest server
+	// echoes the ID it was asked for, byte for byte; anything else is the
+	// mismatch this function exists to catch.
+	if got := env.Checkpoint.CheckpointID; got != checkpointID.String() {
 		return fmt.Errorf("checkpoint identity mismatch: requested checkpoint %s from %s, but the server returned checkpoint %q; refusing to display possibly-mismatched data (this looks like a server-side bug, please report it)",
 			checkpointID, r.ownerRepo, got)
 	}
-	// repo_full_name is normally the "owner/repo" display name, but entire-api
-	// (repoFullNameOr) legitimately falls back to echoing the bare repo ID when
-	// that repo's metadata hasn't resolved a display name yet — so either form
-	// is an honest claim to be the requested repo. An outright empty value is
-	// tolerated (never observed from a real 200, but some minimal test/legacy
-	// payloads omit it) rather than treated as a mismatch, since there is
-	// nothing to disagree with the request in that case.
-	if got := env.RepoFullName; got != "" && !strings.EqualFold(got, r.ownerRepo) && !strings.EqualFold(got, r.repoID) {
+	// repo_full_name is REQUIRED, not best-effort. It is the only field that
+	// ties the response to the repo that was asked about: checkpointId alone
+	// proves nothing, since any response -- including one carrying another
+	// repo's private transcripts -- satisfies it by echoing the ID it was
+	// handed. Tolerating an empty value therefore let the verified party opt
+	// out of its own verification, which is not verification. Every 200 from
+	// a real cell carries it (checked against aws-us-east-2: "entireio/cli").
+	if env.RepoFullName == "" {
+		return fmt.Errorf("checkpoint identity unverifiable: requested checkpoint %s from %s, but the server returned no repo_full_name to confirm which repo answered; refusing to display possibly-mismatched data (this looks like a server-side bug, please report it)",
+			checkpointID, r.ownerRepo)
+	}
+	// entire-api (repoFullNameOr) legitimately falls back to echoing the bare
+	// repo ULID when the repo's metadata has not resolved a display name yet,
+	// so either form is an honest claim to be the requested repo. EqualFold is
+	// right for ownerRepo -- forge owner/repo names are case-insensitive -- and
+	// the repo ULID is compared byte-for-byte, canonical uppercase like any
+	// other ULID.
+	if got := env.RepoFullName; !strings.EqualFold(got, r.ownerRepo) && got != r.repoID {
 		return fmt.Errorf("checkpoint identity mismatch: requested checkpoint %s from %s, but the server returned data for repo %q; refusing to display possibly-mismatched data (this looks like a server-side bug, please report it)",
 			checkpointID, r.ownerRepo, got)
 	}

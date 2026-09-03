@@ -350,7 +350,7 @@ func TestAPICheckpointReader_NoSessionsIsAnError(t *testing.T) {
 	t.Parallel()
 
 	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"checkpoint": {"checkpointId":"01KXGTTNGCEACC83QZEJ5YAF0D","sessions":[]}}`)
+		fmt.Fprint(w, `{"repo_full_name":"acme/widgets","checkpoint": {"checkpointId":"01KXGTTNGCEACC83QZEJ5YAF0D","sessions":[]}}`)
 	})
 	_, err := reader.Read(context.Background(), testAPICheckpointID)
 	require.ErrorContains(t, err, "no sessions to explain")
@@ -376,32 +376,55 @@ func TestAPICheckpointReader_IdentityCheckedBeforeContentGuards(t *testing.T) {
 		"a foreign response must not be described as a property of the requested checkpoint")
 }
 
-// The identity comparisons fold case, so a cell that returned a
-// differently-cased spelling of the very checkpoint that was requested is
-// accepted rather than failing closed. id.Validate only admits the canonical
-// uppercase ULID alphabet, so this cannot arise from user input today -- the
-// test pins the tolerance so a later "tighten it to ==" does not silently
-// make a server-side casing change break `explain --repo`.
-func TestAPICheckpointReader_IdentityComparisonFoldsCase(t *testing.T) {
+// repo_full_name is required, not best-effort. A response that simply omits
+// it used to skip the repo check entirely, leaving only checkpointId -- which
+// any wrong-repo response satisfies by echoing the ID it was handed. That made
+// the guard something the verified party could opt out of: this exact payload
+// rendered as acme/widgets data before the fix.
+func TestAPICheckpointReader_MissingRepoFullNameIsRejected(t *testing.T) {
 	t.Parallel()
 
-	lower := strings.ToLower(testAPICheckpointID.String())
 	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
 			fmt.Fprint(w, `{"type":"user"}`)
 			return
 		}
-		body := strings.Replace(checkpointEnvelopeJSON,
-			`"checkpointId": "01KXGTTNGCEACC83QZEJ5YAF0D"`, `"checkpointId": "`+lower+`"`, 1)
-		body = strings.Replace(body,
-			`"repo_full_name": "acme/widgets"`, `"repo_full_name": "ACME/WIDGETS"`, 1)
-		fmt.Fprint(w, body)
+		fmt.Fprint(w, strings.Replace(checkpointEnvelopeJSON,
+			`"repo_full_name": "acme/widgets"`, `"repo_full_name": ""`, 1))
 	})
 
-	summary, err := reader.Read(context.Background(), testAPICheckpointID)
-	require.NoError(t, err, "a differently-cased spelling of the requested identity must not be a mismatch")
-	assert.Equal(t, id.CheckpointID(lower), summary.CheckpointID,
-		"CheckpointID is sourced from the verified server response, so it carries the server's spelling")
+	_, err := reader.Read(context.Background(), testAPICheckpointID)
+	require.Error(t, err, "a response that does not say which repo it answered for must not render as the requested repo's data")
+	assert.Contains(t, err.Error(), "identity unverifiable")
+}
+
+// The checkpoint-ID comparison is byte equality, deliberately. The two ID
+// kinds have opposite canonical spellings -- a legacy ID is 12 lowercase hex
+// (id.Pattern), a ULID is canonical uppercase (isULID requires
+// ParseStrict(s).String() == s) -- so folding case would accept a
+// non-canonical spelling and, because CheckpointID is sourced from the
+// server's value, mint an id.CheckpointID that id.Validate itself rejects.
+// This pins the legacy-hex case, the one a fold actually breaks.
+func TestAPICheckpointReader_LegacyHexIDIsCaseSensitive(t *testing.T) {
+	t.Parallel()
+
+	const legacyID = "abc123def456"
+	require.NoError(t, id.Validate(legacyID), "fixture must be a valid legacy ID")
+	upper := strings.ToUpper(legacyID)
+	require.Error(t, id.Validate(upper), "the uppercased form must itself be invalid, which is the point")
+
+	reader, _ := newTestAPIReader(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/transcript/raw") {
+			fmt.Fprint(w, `{"type":"user"}`)
+			return
+		}
+		fmt.Fprint(w, strings.Replace(checkpointEnvelopeJSON,
+			`"checkpointId": "01KXGTTNGCEACC83QZEJ5YAF0D"`, `"checkpointId": "`+upper+`"`, 1))
+	})
+
+	_, err := reader.Read(context.Background(), id.CheckpointID(legacyID))
+	require.Error(t, err, "an uppercased legacy ID is not the ID that was requested")
+	assert.Contains(t, err.Error(), "identity mismatch")
 }
 
 // A transcript larger than the read cap must fail loudly. Truncating it would
