@@ -912,20 +912,37 @@ const SessionLockNoticeDelay = time.Second
 // It lives here, next to the lock, rather than at one command's call site, so
 // every user-facing clear gets it: `entire doctor`, `entire reset`, and
 // `entire reset <session>`.
+//
+// doClear runs on the CALLER's goroutine and the timer gets the new one --
+// never the other way around. acquireSessionGate keys reentrancy on goroutine
+// ID, so running doClear on a child would make the gate look unheld: the
+// reentrancy refusal in ClearSessionState would not fire, and the child would
+// instead block in flock.AcquireIn on the flock its own parent holds while the
+// parent blocked waiting for the child. That deadlocked after printing the
+// notice below, pointing the user at a condensation that does not exist.
 func withLockWaitNotice(sessionID string, errW io.Writer, notifyAfter time.Duration, doClear func() error) error {
-	done := make(chan error, 1)
-	go func() { done <- doClear() }()
+	stop := make(chan struct{})
+	noticed := make(chan struct{})
+	go func() {
+		defer close(noticed)
+		select {
+		case <-stop:
+		case <-time.After(notifyAfter):
+			if errW != nil {
+				fmt.Fprintf(errW, "Waiting for session %s to release its state lock "+
+					"(a checkpoint condensation can hold it for ~30s; Ctrl-C twice to force quit)...\n", sessionID)
+			}
+		}
+	}()
 
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(notifyAfter):
-	}
-	if errW != nil {
-		fmt.Fprintf(errW, "Waiting for session %s to release its state lock "+
-			"(a checkpoint condensation can hold it for ~30s; Ctrl-C twice to force quit)...\n", sessionID)
-	}
-	return <-done
+	err := doClear()
+
+	// Stop the timer and wait for it to finish before returning, so the
+	// notice can never land on errW after the caller has moved on to its own
+	// output (Reset prints a per-session line straight after this returns).
+	close(stop)
+	<-noticed
+	return err
 }
 
 // ClearSessionStateWithProgress is ClearSessionState with the shared lock-wait

@@ -184,3 +184,58 @@ func TestClearSessionState_RefusesReentrantClear(t *testing.T) {
 		t.Errorf("the frame's own write should have landed; StepCount = %d, want 42", after.StepCount)
 	}
 }
+
+// TestClearSessionStateWithProgress_RefusesReentrantClear is the regression
+// for a deadlock the progress wrapper introduced: it ran the clear on a fresh
+// goroutine, and acquireSessionGate keys reentrancy on goroutine ID, so on the
+// child the gate looked unheld. The refusal in ClearSessionState never fired
+// and the child blocked in flock.AcquireIn on the flock its own parent held,
+// while the parent waited for the child -- a permanent hang, printed after the
+// lock-wait notice so it named a condensation that did not exist.
+//
+// This matters more than the bare ClearSessionState case: the doc comment
+// points user-facing commands at THIS entry point, so the guard has to hold
+// here or it protects only the path nobody is told to use.
+func TestClearSessionStateWithProgress_RefusesReentrantClear(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	ctx := context.Background()
+	const sessionID = "reentrant-progress-clear"
+	if err := SaveSessionState(ctx, &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveSessionState: %v", err)
+	}
+
+	var errBuf syncBuffer
+	returned := make(chan error, 1)
+	go func() {
+		if err := MutateSessionState(ctx, sessionID, func(*SessionState) error {
+			returned <- ClearSessionStateWithProgress(ctx, sessionID, &errBuf, 20*time.Millisecond)
+			return nil
+		}); err != nil {
+			t.Errorf("MutateSessionState: %v", err)
+		}
+	}()
+
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Fatal("a reentrant clear must be refused, not silently undone by the frame's save")
+		}
+		if !strings.Contains(err.Error(), "clearSessionStateLocked") {
+			t.Errorf("the error should name the correct alternative, got: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("deadlock: the clear ran on a goroutine that did not hold the gate, so it blocked on its own parent's flock")
+	}
+
+	// And it must not have claimed someone else held the lock.
+	if strings.Contains(errBuf.String(), "release its state lock") {
+		t.Errorf("a reentrant refusal must not print the lock-wait notice; got %q", errBuf.String())
+	}
+}
