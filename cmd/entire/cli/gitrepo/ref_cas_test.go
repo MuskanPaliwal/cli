@@ -143,6 +143,7 @@ func TestPreparedRefCASCancellationReleasesGitLock(t *testing.T) {
 				plumbing.NewHash(initial),
 			)
 			require.NoError(t, err)
+			require.Equal(t, refCASWaitDelay, tx.cmd.WaitDelay)
 
 			cancel()
 			require.ErrorIs(t, tx.wait(), context.Canceled)

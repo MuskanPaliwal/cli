@@ -10,9 +10,12 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
+
+const refCASWaitDelay = 3 * time.Second
 
 var (
 	// ErrRefCASConflict means the ref no longer has the expected old value.
@@ -99,6 +102,9 @@ func prepareRefCAS(
 		_ = stdin.Close()
 		return nil
 	}
+	// Closing stdin gives Git a chance to abort cleanly; bound hooks or inherited
+	// pipes that prevent the process from finishing after cancellation.
+	cmd.WaitDelay = refCASWaitDelay
 	cmd.Stderr = &tx.stderr
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
