@@ -1,0 +1,5 @@
+https://github.com/entireio/cli/pull/2241#issuecomment-5525400136 waht does this comment says?
+
+---
+
+we already have fixed in place, needs the testing
