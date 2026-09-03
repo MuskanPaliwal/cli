@@ -1,0 +1,36 @@
+You are finishing a confirmed bug fix already applied as uncommitted changes in this worktree. Do not redesign it — your job is verification and one commit.
+▎
+▎ Branch fix-trailer-writer-grammar is stacked on fix-checkpoint-trailer-block (PR #2253). It fixes issue #2256: appendTrailerLine applied strings.TrimSpace before IsTrailerLine, while finalTrailerBlock deliberately does not (git treats an indented line as a continuation of a preceding trailer, never as a new one). So a message ending in an indented pseudo-trailer got the new trailer joined onto it with no blank line, producing a paragraph that git interpret-trailers --parse and the strict readers both reject — attach printed "Amended commit … with Entire-Checkpoint: B" while PostCommit saw no trailer and skipped linkage, and attach's dedup check couldn't see it either, so re-running appended it again.
+▎
+▎ The applied fix: finalTrailerBlock's classification loop was extracted into a shared isTrailerBlock(lines []string) bool; appendTrailerLine now classifies the final non-comment paragraph with it on raw lines, joining only when it is a trailer block and a blank line separates it from content above (that guard keeps a trailer-shaped subject like fix: bug from having the trailer glued on). Tests added: 3 TestAppendCheckpointTrailer cases plus a TestAppendCheckpointTrailerRecognizedByFinalBlockParser writer→reader roundtrip. Preserve the contract: whole-message occurrences stay discovery candidates (squash resume keeps working); only final-block placement authorizes mutation. Do not touch ParseCheckpoint/ParseAllCheckpoints.
+▎
+▎ Already verified: red state proven here (5 failing subtests without the fix), focused tests green, mise run fmt clean, mise run lint pass.
+▎
+▎ Do this:
+▎ 1. Confirm git status shows only the two cmd/entire/cli/trailers/ files. If .entire/settings.json reappears (harmless reordering from entire agent add), git checkout it — don't commit it.
+▎ 2. Run and report exact output: mise run fmt && mise run lint, then mise run test, mise run test:integration, mise run test:e2e:canary. Do not run mise run test:e2e (paid real-agent E2E).
+▎ 3. If green, commit exactly those two files with:
+▎
+▎ fix(trailers): align the trailer writer with the final-block grammar
+▎
+▎ appendTrailerLine trimmed leading whitespace before classifying the final
+▎ paragraph, while finalTrailerBlock deliberately does not — git treats an
+▎ indented line as a continuation of a preceding trailer, never as a new one.
+▎ A message ending in an indented pseudo-trailer therefore had the new trailer
+▎ joined onto it with no blank line, producing a paragraph that git and the
+▎ strict readers both reject: attach reported the amend while PostCommit saw no
+▎ trailer and skipped linkage, and attach's dedup check could not see it either,
+▎ so re-running appended it again.
+▎
+▎ Extract the classification into a shared isTrailerBlock and have the writer use
+▎ it on raw lines, still requiring a blank line above the paragraph so a
+▎ trailer-shaped subject never has the trailer glued onto it. Whole-message
+▎ discovery is untouched.
+▎
+▎ Fixes #2256
+▎
+▎ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+▎ Claude-Session: https://claude.ai/code/session_01UeHps2C4DdPKXSUzN7mdgD
+▎
+▎ 4. Do not push and do not open a PR unless asked. When opened, the PR targets base fix-checkpoint-trailer-block (retarget to main after #2253 merges).
+▎ 5. If a test fails, stop and report it rather than adjusting the fix to make it pass.
