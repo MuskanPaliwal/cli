@@ -1,0 +1,13 @@
+review this pr https://github.com/entireio/cli/pull/2254 it has 2241 pr's commits too but you only review it's commits . run-playbook
+
+---
+
+we are already in the pr worktree
+
+---
+
+we can consider the test issue. and also there is a plan.md or task.md which has the scope. you did account that right?
+
+---
+
+do not commit under your name

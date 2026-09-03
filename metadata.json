@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1KFE3CP44XEH0AV7W9D8T61",
+  "strategy": "manual-commit",
+  "branch": "refactor-checkpoint-metadata-resolution",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/metadata_resolution_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 171240,
+    "cache_read_tokens": 8040263,
+    "output_tokens": 39932,
+    "api_call_count": 54
+  }
+}
