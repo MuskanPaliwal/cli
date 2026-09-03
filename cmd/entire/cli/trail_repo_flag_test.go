@@ -10,6 +10,35 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 
+// TestParseTrailRepoArg_NativeForgeReason pins WHY a native ref is refused.
+// Before this, `et` fell into the unknown-forge branch and was answered with
+// `"et" is not a supported forge id` plus a suggested github.com URL for a
+// repo that does not live on GitHub — two false statements. The reason is the
+// trails API's, not the forge token's.
+func TestParseTrailRepoArg_NativeForgeReason(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"et/paul/dogbark", "entire://host/et/paul/dogbark"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			_, _, _, err := parseTrailRepoArg(raw)
+			if err == nil {
+				t.Fatalf("parseTrailRepoArg(%q): want error", raw)
+			}
+			msg := err.Error()
+			for _, want := range []string{"Entire-native", "gh/<owner>/<repo>"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("parseTrailRepoArg(%q) = %q, missing %q", raw, msg, want)
+				}
+			}
+			for _, unwanted := range []string{"not a supported forge id", "https://github.com/paul/dogbark"} {
+				if strings.Contains(msg, unwanted) {
+					t.Errorf("parseTrailRepoArg(%q) = %q, should not contain %q", raw, msg, unwanted)
+				}
+			}
+		})
+	}
+}
+
 func TestParseTrailRepoArg(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +64,11 @@ func TestParseTrailRepoArg(t *testing.T) {
 		{name: "bare host instead of forge id", raw: "github.com/acme/app", wantErr: true},
 		{name: "bare unsupported forge host", raw: "gitlab.com/acme/app", wantErr: true},
 		{name: "unknown short forge id", raw: "zz/acme/app", wantErr: true},
+		// `et` IS a forge token (gitremote.IsSupportedForge) and entire-api's
+		// validTrailsHosts admits it, but resolvableTrailsHosts is {gh} alone,
+		// so it can only ever 404 — both spellings are refused locally instead.
+		{name: "native forge is refused", raw: "et/paul/dogbark", wantErr: true},
+		{name: "native forge in a URL is refused too", raw: "entire://host/et/paul/dogbark", wantErr: true},
 	}
 
 	for _, tt := range tests {

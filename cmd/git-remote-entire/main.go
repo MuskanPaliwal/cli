@@ -267,10 +267,17 @@ func fatalMessage(err error, parsedURL *url.URL) string {
 // where the host belongs (entire://gh/owner/repo, Host="gh") and an empty host
 // (entire:///gh/owner/repo, Host=""). When the reconstructed shorthand is a
 // complete forge/owner/repo triple that `entire repo clone` can resolve, it
-// points at the interactive picker; a partial path (entire://gh,
-// entire://gh/owner) or a non-forge segment falls back to the plain
-// missing-host error rather than suggesting a clone command that would reject
-// the ref. Kept pure so it's unit-testable.
+// points at that command; a partial path (entire://gh, entire://gh/owner) or a
+// non-forge segment falls back to the plain missing-host error rather than
+// suggesting a clone command that would reject the ref. Kept pure so it's
+// unit-testable.
+//
+// The trailing segments are labelled per forge (gitremote.ForgePathLabels), so
+// a native path reads <project>/<repo> rather than a mirror's <owner>/<repo>.
+// The suggestion stays neutral about what `repo clone` will then do — it
+// prompts between clusters for a multi-cluster mirror, and goes straight to the
+// home cluster for a native ref — because naming the mirror picker here was
+// wrong for half the forges.
 func missingClusterHostMessage(parsedURL *url.URL, rawURL string) string {
 	// Reconstruct the forge/owner/repo shorthand the user likely intended: a
 	// forge id in the host slot sits in front of the path; an empty host
@@ -288,9 +295,9 @@ func missingClusterHostMessage(parsedURL *url.URL, rawURL string) string {
 	}
 	return fmt.Sprintf(
 		"fatal: entire:// URL is missing its cluster host (%q is a forge id, not a host).\n"+
-			"The full form is entire://<cluster-host>/%s/<owner>/<repo>.\n"+
-			"To pick a mirror interactively, run:\n\n    entire repo clone /%s\n",
-		seg[0], seg[0], strings.Join(seg, "/"))
+			"The full form is entire://<cluster-host>/%s/%s.\n"+
+			"To clone it, run:\n\n    entire repo clone /%s\n",
+		seg[0], seg[0], gitremote.ForgePathLabels(seg[0]), strings.Join(seg, "/"))
 }
 
 // loadedVersion populates the build info and returns the resolved version.

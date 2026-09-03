@@ -2276,6 +2276,28 @@ func resolveTrailPushRemote(ctx context.Context, branch string) (string, error) 
 // as well as a full clone URL (https://, git@, or entire://) that gitremote
 // can parse. A trailing ".git" on the repo is stripped.
 func parseTrailRepoArg(raw string) (forge, owner, repo string, err error) {
+	forge, owner, repo, err = parseTrailRepoShape(raw)
+	if err != nil {
+		return "", "", "", err
+	}
+	// The trails API takes `et` in its path but cannot resolve it to a repo:
+	// entire-api admits {gh, et} (validTrailsHosts) and resolves {gh} alone
+	// (resolvableTrailsHosts), because full_name rows carry no forge host and
+	// every resolvable row today is a GitHub mirror — so a native ref collapses
+	// into the same existence-hiding 404 as a permission denial. Refusing it
+	// here is the only way the user hears the real reason, and it covers both
+	// spellings, since the URL form reaches the same API. Drop this when
+	// entire-api gains forge-scoped naming and starts resolving native repos.
+	if forge == nativeCloneForge {
+		return "", "", "", fmt.Errorf("invalid --repo %q: trails are not available for Entire-native repos yet; pass a GitHub mirror as gh/<owner>/<repo> or a github.com clone URL", raw)
+	}
+	return forge, owner, repo, nil
+}
+
+// parseTrailRepoShape parses the two spellings --repo accepts — a bare
+// forge/owner/repo triple, or a clone URL — without judging whether trails can
+// act on the forge it found.
+func parseTrailRepoShape(raw string) (forge, owner, repo string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", "", "", errors.New("empty --repo value")

@@ -127,6 +127,27 @@ the commands are always runnable in every build.
 - `grant`: manage access grants and org membership — `org`, `project`, and `repo`
   each support `add` / `list` / `remove`
 
+Forge tokens (`gh`, `et`) are the path segments of an `entire://` URL, and
+`gitremote.pathForges` is the one place that knows them —
+`gitremote.IsSupportedForge` answers "is this a forge token", and
+`ForgePathLabels` gives the placeholder spelling of the two segments after it
+(`<owner>/<repo>` for a mirror, `<project>/<repo>` for a native repo) so error
+messages read correctly for both. It is deliberately **not** `hostToForge`,
+which maps an *upstream* git host to its id: a native repo has no upstream host,
+so `et` is absent there, and conflating the two made `entire://et/<project>/<repo>`
+try to dial a cluster named `et` while `entire://gh/...` got an actionable
+message. `CanonicalHost` still reads `forgeToHost`, so a native remote keeps
+falling back to its cluster host instead of inventing a forge host. The legacy
+`/git/` prefix is excluded because `repo clone` cannot act on such a ref.
+
+Being a forge token says nothing about which APIs accept it. Trails are the
+current example: entire-api admits `{gh, et}` (`validTrailsHosts`) but resolves
+only `{gh}` (`resolvableTrailsHosts`, because `full_name` rows carry no forge
+host and every resolvable row today is a GitHub mirror), so a native `--repo`
+would collapse into the existence-hiding 404. `parseTrailRepoArg` therefore
+refuses it locally with that reason — in both the bare and the URL spelling —
+and that check comes out when entire-api starts resolving native repos.
+
 Experimental commands (gated by the build-time visibility flag above — visible
 and grouped under "Experimental commands:" in developer/nightly builds, hidden
 in stable releases, always runnable): `tokens`, `import`, `review`,
