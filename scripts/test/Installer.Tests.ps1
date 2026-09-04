@@ -70,6 +70,14 @@ Describe 'install.ps1' {
             $output = @(& $installer -Channel nightly -Help 6>&1 | ForEach-Object { "$_" })
             $output[0] | Should -BeLike 'Usage: install.ps1*'
         }
+
+        It 'loads functions without installing when dot-sourced' {
+            $run = Invoke-InstallerChild -Body ". '$(Get-InstallerPath)'; 'INSTALL-ENTIRE:' + [bool](Get-Command Install-Entire -CommandType Function -ErrorAction SilentlyContinue); 'ALIVE'; exit 7"
+            $run.Output | Should -Contain 'INSTALL-ENTIRE:True'
+            $run.Output | Should -Not -Contain '==> Installing Entire CLI...'
+            $run.Output | Should -Contain 'ALIVE'
+            $run.ExitCode | Should -Be 7
+        }
     }
 
     Context 'error path' {
