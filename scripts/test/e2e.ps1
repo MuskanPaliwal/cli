@@ -69,6 +69,22 @@ function Get-ExpectedKind {
     return [Microsoft.Win32.RegistryValueKind]::String
 }
 
+# The machine PATH as stored, for the phase that plants a copy on it.
+function Get-MachinePathKey {
+    (Get-Item -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager').OpenSubKey('Environment', $true)
+}
+
+function Get-MachinePath {
+    (Get-MachinePathKey).GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+}
+
+# Runs $Body in a child of the same shell, so each CI leg tests its own host.
+function Invoke-ChildShell {
+    param([string] $Body)
+    $shell = (Get-Process -Id $PID).Path
+    @(& $shell -NoProfile -NonInteractive -Command $Body 2>&1 | ForEach-Object { "$_" })
+}
+
 function Invoke-Installer {
     # A hashtable splat binds by name; an array splat would bind positionally.
     param([hashtable] $Arguments = @{})
@@ -87,6 +103,12 @@ function Get-EntireVersion {
 $snapshot = Get-UserEnvironmentValue -Name 'Path'
 $snapshotKind = Get-UserPathKind
 $snapshotEntries = Get-PathEntry $snapshot
+# This process's PATH before any install: what a terminal opened before the
+# first install would inherit.
+$processPathBefore = $env:Path
+$machineSnapshot = Get-MachinePath
+$machineSnapshotKind = (Get-MachinePathKey).GetValueKind('Path')
+$stubDir = Join-Path $env:TEMP 'entire-machine-stub'
 $stableDir = Join-Path $env:USERPROFILE '.local\bin'
 $nightlyDir = Join-Path $env:USERPROFILE 'entire-nightly'
 $running = $null
@@ -150,15 +172,27 @@ try {
     Assert-Equal -Phase $phase -What 'stale .old files after the old image exited' -Expected 0 -Actual $stale.Count
     Assert-Equal -Phase $phase -What 'raw PATH after the third install' -Expected $afterStable -Actual (Get-UserEnvironmentValue -Name 'Path')
 
-    # ---- Phase 3: nightly into a second directory -------------------------
-    $phase = 'phase 3: nightly to a custom dir'
+    # ---- Phase 3: nightly into a second directory, from a stale shell ------
+    # The installer tells the user to restart the terminal between installs.
+    # A terminal opened before phase 1 wrote the registry has a PATH without
+    # the stable directory, so this install runs in a child given exactly that
+    # PATH; the stable copy must then be reported from the stored PATH alone.
+    $phase = 'phase 3: nightly to a custom dir from a stale shell'
     Write-Host "==> $phase"
-    $report = Invoke-Installer -Arguments @{ Channel = 'nightly'; InstallDir = $nightlyDir } | Out-String
+    $childBody = @(
+        "`$env:Path = '$processPathBefore'"
+        "if (@(`$env:Path -split ';' | Where-Object { `$_ -eq '$stableDir' }).Count -eq 0) { 'PRECONDITION: stable dir absent from this shell' }"
+        "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installerPath'))) -Channel nightly -InstallDir '$nightlyDir' 6>&1 | ForEach-Object { `"`$_`" }"
+    ) -join '; '
+    $reportLines = Invoke-ChildShell -Body $childBody
+    $report = $reportLines -join "`n"
     # The assertions below judge this text; show it so a failure is diagnosable from the log.
     Write-Host $report
 
+    Assert-True -Phase $phase -What 'child shell PATH lacked the stable dir (precondition)' -Condition ($reportLines -contains 'PRECONDITION: stable dir absent from this shell')
     Assert-True -Phase $phase -What 'conflict warning printed' -Condition ($report -match '! WARNING: PATH conflict detected')
-    Assert-True -Phase $phase -What 'stable install named as the other copy' -Condition ($report.Contains("! Also found:   $(Join-Path $stableDir 'entire.exe')"))
+    Assert-True -Phase $phase -What 'stored-PATH group printed' -Condition ($reportLines -contains '! Also on your saved PATH, not active in this shell:')
+    Assert-True -Phase $phase -What 'stable install named under the stored-PATH group' -Condition ($reportLines -contains "!   $(Join-Path $stableDir 'entire.exe')")
     Assert-True -Phase $phase -What 'nightly install reported as taking priority' -Condition ($report -match 'The installed version takes priority')
 
     $afterNightly = Get-UserEnvironmentValue -Name 'Path'
@@ -172,6 +206,28 @@ try {
     Assert-True -Phase $phase -What 'nightly binary reports a nightly version' -Condition ($nightlyVersion -match 'nightly')
     Assert-True -Phase $phase -What 'nightly and stable versions differ' -Condition ($nightlyVersion -ne $stableVersion)
 
+    # ---- Phase 4: a copy on the machine-wide PATH ---------------------------
+    # Windows composes a new session as machine PATH then user PATH, so a copy
+    # in a machine-PATH directory outranks anything the installer writes; the
+    # report has a paragraph for that. The runner is elevated, so plant one.
+    $phase = 'phase 4: copy on the machine PATH'
+    Write-Host "==> $phase"
+    [IO.Directory]::CreateDirectory($stubDir) | Out-Null
+    Copy-Item -LiteralPath $env:ComSpec -Destination (Join-Path $stubDir 'entire.exe')
+    (Get-MachinePathKey).SetValue('Path', "$machineSnapshot;$stubDir", $machineSnapshotKind)
+    $report = Invoke-Installer | Out-String
+    Write-Host $report
+
+    Assert-True -Phase $phase -What 'machine-PATH paragraph printed' -Condition ($report -match 'is on the machine-wide PATH')
+    Assert-True -Phase $phase -What 'machine-PATH copy named' -Condition ($report.Contains("$(Join-Path $stubDir 'entire.exe') is on the machine-wide PATH"))
+    Assert-True -Phase $phase -What 'install-over remedy names the machine-PATH directory' -Condition ($report.Contains("!   -InstallDir $stubDir"))
+    # Reinstalling stable puts its directory first again; the nightly entry
+    # moves down by one and nothing else changes.
+    $entries = Get-PathEntry (Get-UserEnvironmentValue -Name 'Path')
+    Assert-Equal -Phase $phase -What 'first raw PATH entry' -Expected $stableDir -Actual $entries[0]
+    Assert-Equal -Phase $phase -What 'second raw PATH entry' -Expected $nightlyDir -Actual $entries[1]
+    Assert-Equal -Phase $phase -What 'remaining raw PATH entries' -Expected ($snapshotEntries -join ';') -Actual (($entries | Select-Object -Skip 2) -join ';')
+
     Write-Host '==> all phases passed'
 }
 finally {
@@ -181,6 +237,10 @@ finally {
     }
     # The runner is ephemeral; restoring anyway records that this script
     # knows it mutated shared state.
+    if ($null -ne $machineSnapshot) {
+        (Get-MachinePathKey).SetValue('Path', $machineSnapshot, $machineSnapshotKind)
+    }
+    Remove-Item -LiteralPath $stubDir -Recurse -Force -ErrorAction SilentlyContinue
     $key = (Get-Item -LiteralPath 'HKCU:').CreateSubKey('Environment')
     if ($null -eq $snapshot) {
         $key.DeleteValue('Path', $false)
