@@ -19,7 +19,7 @@ import (
 // test still pays opencode's ~61MB per-directory install (run 33865617639).
 func TestOpenCodeSeedRepoPlantsDeps(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("opencode"); err != nil {
+	if _, err := exec.LookPath(openCodeBinary); err != nil {
 		t.Skip("opencode not installed")
 	}
 	if _, err := exec.LookPath("npm"); err != nil {
@@ -42,8 +42,12 @@ func TestOpenCodeSeedRepoPlantsDeps(t *testing.T) {
 		t.Fatalf("linked tree does not contain %s: %v", openCodePluginPkg, err)
 	}
 
-	for _, name := range []string{"package.json", "package-lock.json", ".gitignore"} {
-		if _, err := os.Stat(filepath.Join(dir, ".opencode", name)); err != nil {
+	for _, name := range []string{"package.json", "package-lock.json", "opencode.json"} {
+		at := filepath.Join(dir, ".opencode", name)
+		if name == "opencode.json" {
+			at = filepath.Join(dir, name) // opencode's config sits at the root
+		}
+		if _, err := os.Stat(at); err != nil {
 			t.Errorf("seeded %s missing: %v", name, err)
 		}
 	}
@@ -56,8 +60,9 @@ func TestOpenCodeSeedRepoPlantsDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded .gitignore: %v", err)
 	}
+	lines := strings.Split(string(ignored), "\n")
 	for _, want := range []string{"node_modules", "package.json", "package-lock.json", ".gitignore"} {
-		if !slices.Contains(strings.Split(string(ignored), "\n"), want) {
+		if !slices.Contains(lines, want) {
 			t.Errorf("seeded .gitignore does not ignore %q:\n%s", want, ignored)
 		}
 	}

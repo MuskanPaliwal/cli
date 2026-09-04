@@ -22,7 +22,7 @@ func init() {
 	if env := os.Getenv("E2E_AGENT"); env != "" && env != "opencode" {
 		return
 	}
-	if _, err := exec.LookPath("opencode"); err != nil {
+	if _, err := exec.LookPath(openCodeBinary); err != nil {
 		return
 	}
 	model := os.Getenv("E2E_OPENCODE_MODEL")
@@ -65,6 +65,13 @@ const (
 	// attempt part-way leaves that work half-done for every test that follows.
 	openCodeWarmupBudget = 90 * time.Second
 
+	// openCodeWarmupRetryBudget bounds attempts after the first. Only attempt 1
+	// can be paying opencode's genuine first-run costs, so retrying at the full
+	// budget just multiplies the wait before we give up and let the tests run
+	// anyway: 3 x 90s is over four minutes of blocked CI on the exact path this
+	// warmup exists to survive.
+	openCodeWarmupRetryBudget = 30 * time.Second
+
 	// openCodeDepsBudget bounds the plugin dependency install. It is generous
 	// against a measured ~3s because a cold npm cache on a CI runner is a very
 	// different machine from a developer's, and the cost of overrunning it is
@@ -76,8 +83,10 @@ const (
 	// range, so the tree has to be rebuilt on every opencode upgrade.
 	openCodePluginPkg = "@opencode-ai/plugin"
 
-	// openCodeBinary is the executable name, also used before an agent instance
-	// exists (the dependency tree is resolved from package scope).
+	// openCodeBinary is the executable name. It is a constant because the
+	// dependency tree is resolved from package scope, before any agent instance
+	// exists. Name()/EntireAgent() return the agent id and keep their own
+	// literals — the two happen to coincide.
 	openCodeBinary = "opencode"
 
 	// openCodeSeedGitignore mirrors the .gitignore opencode writes into
@@ -139,13 +148,11 @@ func (a *openCodeAgent) Bootstrap() error {
 	// yield* config.waitForDependencies()`). So a repo pays it once it has both
 	// a project-local .opencode directory and a plugin configured anywhere,
 	// global or project — and `entire enable` supplies both.
-	if deps, err := openCodePluginDeps(); err != nil {
-		fmt.Fprintf(os.Stderr, "opencode: could not pre-build plugin deps (%v)\n"+
-			"opencode: tests will pay the per-directory install themselves\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "opencode: plugin deps ready at %s\n", deps)
-	}
-
+	//
+	// The build is triggered by the SeedRepo call below rather than here:
+	// buildPluginDeps reports the build and SeedRepo reports a failure, so an
+	// explicit call would only print a third message about the same event.
+	//
 	// opencode also has a first-run DB migration that races with parallel test
 	// execution (upstream issue #6935). Run a trivial prompt to force the rest
 	// of initialization before tests. It runs in a seeded scratch directory so
@@ -164,20 +171,23 @@ func (a *openCodeAgent) Bootstrap() error {
 	}
 
 	for i := range 3 {
+		budget := openCodeWarmupBudget
+		if i > 0 {
+			budget = openCodeWarmupRetryBudget
+		}
 		start := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), openCodeWarmupBudget)
-		cmd := exec.CommandContext(ctx, a.Binary(), "run", "--model", a.model, "say hi")
-		cmd.Dir = warmDir
-		cmd.Env = openCodePromptEnv(os.Environ(), warmDir)
-		out, err := cmd.CombinedOutput()
-		cancel()
+		// Through RunPrompt so the warmup child is set up exactly like a test's.
+		// The difference is not cosmetic: openCodePromptEnv forces PWD, without
+		// which opencode resolves a different project root and never loads the
+		// plugin — a warmup that skipped it would warm the wrong directory.
+		out, err := a.RunPrompt(context.Background(), warmDir, "say hi", WithPromptTimeout(budget))
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err == nil {
 			fmt.Fprintf(os.Stderr, "opencode warmup succeeded on attempt %d in %s\n", i+1, elapsed)
 			return nil
 		}
 		if i < 2 {
-			fmt.Fprintf(os.Stderr, "opencode warmup attempt %d failed after %s: %s\n%s\n", i+1, elapsed, err, out)
+			fmt.Fprintf(os.Stderr, "opencode warmup attempt %d failed after %s: %s\n%s%s\n", i+1, elapsed, err, out.Stdout, out.Stderr)
 			time.Sleep(5 * time.Second)
 		}
 	}
@@ -252,9 +262,23 @@ func openCodeVersion() (string, error) {
 	return version, nil
 }
 
-// SeedRepo plants the pre-built dependency tree in a fresh test repo so
-// opencode's own blocking install never runs there.
+// SeedRepo prepares a directory opencode is about to run in: its config file,
+// plus the pre-built dependency tree so opencode's own blocking install never
+// runs there.
 func (a *openCodeAgent) SeedRepo(dir string) error {
+	// Written before the tree is resolved, so a repo still gets a usable config
+	// when the pre-build failed and opencode falls back to installing for itself.
+	//
+	// opencode's non-interactive mode auto-rejects the external_directory
+	// permission, since there is no user to prompt.
+	cfg := `{"$schema": "https://opencode.ai/config.json", "permission": {"external_directory": "allow"}}`
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		cfg = fmt.Sprintf(`{"$schema": "https://opencode.ai/config.json", "permission": {"external_directory": "allow"}, "provider": {"anthropic": {"options": {"apiKey": %q}}}}`, key)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(cfg+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write opencode.json: %w", err)
+	}
+
 	deps, err := openCodePluginDeps()
 	if err != nil {
 		// Leave the repo alone and let opencode install for itself.
@@ -282,10 +306,11 @@ func (a *openCodeAgent) SeedRepo(dir string) error {
 	// cost about what the install we are avoiding costs. opencode reads through
 	// the link and leaves it in place.
 	link := filepath.Join(target, "node_modules")
-	if err := os.Symlink(filepath.Join(deps, "node_modules"), link); err != nil {
-		// Degrade to opencode installing for itself rather than failing setup —
-		// symlinks are not available unprivileged on every platform.
-		fmt.Fprintf(os.Stderr, "opencode: could not link seeded node_modules (%v); this repo pays the install\n", err)
+	if err := linkFile(filepath.Join(deps, "node_modules"), link); err != nil {
+		// Degrade to opencode installing for itself rather than failing setup.
+		// linkFile copies on Windows, which cannot copy a directory, so that
+		// platform lands here by design.
+		fmt.Fprintf(os.Stderr, "opencode: could not link seeded node_modules (%v); %s pays the install\n", err, dir)
 		return nil
 	}
 	return nil
