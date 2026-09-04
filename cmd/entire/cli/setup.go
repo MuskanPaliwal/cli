@@ -270,10 +270,11 @@ func updateSummaryGenerationSettings(ctx context.Context, w io.Writer, provider,
 	// agents were on while the next load did not honor them. The other three
 	// grant sites in this file order it this way for the same reason.
 	if grantExternalAgents {
-		if err := enableExternalAgentsLocally(ctx); err != nil {
+		grant, err := enableExternalAgentsLocally(ctx)
+		if err != nil {
 			return err
 		}
-		fmt.Fprintln(w, externalAgentsAutoEnabledNotice)
+		reportExternalAgentsGrant(w, grant)
 	}
 
 	fmt.Fprintf(w, "✓ Settings updated (%s)\n", configDisplay)
@@ -666,8 +667,11 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 	for _, ag := range append(successfullyAddedAgents, successfullyReinstalledAgents...) {
 		if external.IsExternal(ag) {
 			if !settings.IsExternalAgentsEnabled(ctx) {
-				if saveErr := enableExternalAgentsLocally(ctx); saveErr != nil {
+				grant, saveErr := enableExternalAgentsLocally(ctx)
+				if saveErr != nil {
 					errs = append(errs, saveErr)
+				} else {
+					warnIneffectiveExternalAgentsGrant(w, grant)
 				}
 			}
 			break
@@ -1342,9 +1346,11 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 	// Written separately from the target above: the grant is honored only
 	// from the local file, and the target here may be the project one.
 	if externalAgentSelected {
-		if err := enableExternalAgentsLocally(ctx); err != nil {
+		grant, err := enableExternalAgentsLocally(ctx)
+		if err != nil {
 			return err
 		}
+		warnIneffectiveExternalAgentsGrant(w, grant)
 	}
 
 	// Use settings values (merged from existing config + flags) for hook installation
@@ -2036,9 +2042,11 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	// honors the grant only from the local file and this target may be the
 	// project one. See enableExternalAgentsLocally.
 	if external.IsExternal(ag) {
-		if err := enableExternalAgentsLocally(ctx); err != nil {
+		grant, err := enableExternalAgentsLocally(ctx)
+		if err != nil {
 			return err
 		}
+		warnIneffectiveExternalAgentsGrant(w, grant)
 	}
 
 	// Hook installation decisions need the merged view across both settings
