@@ -277,6 +277,51 @@ function Assert-Checksum {
     }
 }
 
+# Windows lets a running executable be renamed but not overwritten or
+# deleted, so an existing binary is moved aside, the verified file copied in,
+# and the old image removed if nothing holds it. A .old that is itself still
+# running gets out of the way under a unique name, and stale *.old files
+# left by a previous run are removed first. The copy failing puts the old
+# binary back before the error propagates.
+function Install-BinaryFile {
+    param(
+        [string] $Source,
+        [string] $Destination
+    )
+
+    $leaf = Split-Path -Leaf $Destination
+    Get-ChildItem -LiteralPath (Split-Path -Parent $Destination) -Filter "$leaf*.old" -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    $retired = $null
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        $retired = "$Destination.old"
+        if (Test-Path -LiteralPath $retired) {
+            $retired = "$Destination.$([guid]::NewGuid().ToString('N')).old"
+        }
+        try {
+            Move-Item -LiteralPath $Destination -Destination $retired -ErrorAction Stop
+        }
+        catch {
+            throw "Cannot replace $Destination because another program holds it open. Close entire (including any running 'entire mcp') and any tool that has the file open, then rerun the installer. ($($_.Exception.Message))"
+        }
+    }
+
+    try {
+        Copy-Item -LiteralPath $Source -Destination $Destination -ErrorAction Stop
+    }
+    catch {
+        if ($null -ne $retired) {
+            Move-Item -LiteralPath $retired -Destination $Destination -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+
+    if ($null -ne $retired) {
+        Remove-Item -LiteralPath $retired -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-NormalizedPath {
     param([string] $Path)
 
@@ -588,7 +633,7 @@ function Install-Entire {
     $checksumsUrl = "$releaseBaseUrl/checksums.txt"
 
     $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("entire-install-" + [guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $tempDir | Out-Null
+    [IO.Directory]::CreateDirectory($tempDir) | Out-Null
 
     try {
         $archivePath = Join-Path $tempDir $archiveName
@@ -615,12 +660,14 @@ function Install-Entire {
         }
 
         Write-Info "Installing to $resolvedInstallDir..."
-        New-Item -ItemType Directory -Path $resolvedInstallDir -Force | Out-Null
+        # New-Item has no -LiteralPath; CreateDirectory takes the path as
+        # written, creates parents, and is a no-op when it exists.
+        [IO.Directory]::CreateDirectory($resolvedInstallDir) | Out-Null
 
-        Copy-Item -LiteralPath $sourceBinary -Destination $installPath -Force
+        Install-BinaryFile -Source $sourceBinary -Destination $installPath
 
         if (Test-Path -LiteralPath $sourceHelper -PathType Leaf) {
-            Copy-Item -LiteralPath $sourceHelper -Destination (Join-Path $resolvedInstallDir "git-remote-entire.exe") -Force
+            Install-BinaryFile -Source $sourceHelper -Destination (Join-Path $resolvedInstallDir "git-remote-entire.exe")
         }
         else {
             Write-InstallerWarning "git-remote-entire.exe was not found in the archive; entire:// clones will not work until the next release includes it."

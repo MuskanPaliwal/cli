@@ -283,3 +283,131 @@ Describe 'User environment registry' -Skip:($env:OS -ne 'Windows_NT') {
         { Publish-EnvironmentChange } | Should -Not -Throw
     }
 }
+
+Describe 'Install-BinaryFile' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+
+        function Write-TestBinary {
+            param([string] $Path, [string] $Content)
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
+            Set-Content -LiteralPath $Path -Value $Content -NoNewline
+        }
+
+        function Get-OldFile {
+            param([string] $Directory)
+            @(Get-ChildItem -LiteralPath $Directory -Filter '*.old' -File -ErrorAction SilentlyContinue)
+        }
+    }
+
+    It 'copies into place when no binary exists yet' {
+        $dir = Join-Path $TestDrive 'fresh'
+        Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+        Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination (Join-Path $dir 'entire.exe')
+        Get-Content -LiteralPath (Join-Path $dir 'entire.exe') -Raw | Should -Be 'new'
+        Get-OldFile -Directory $dir | Should -HaveCount 0
+    }
+
+    It 'puts the old binary back when the copy fails' {
+        $dir = Join-Path $TestDrive 'rollback'
+        $target = Join-Path $dir 'entire.exe'
+        Write-TestBinary -Path $target -Content 'old'
+        { Install-BinaryFile -Source (Join-Path $dir 'missing.bin') -Destination $target } | Should -Throw
+        Get-Content -LiteralPath $target -Raw | Should -Be 'old'
+        Get-OldFile -Directory $dir | Should -HaveCount 0
+    }
+
+    It 'removes stale .old files before writing' {
+        $dir = Join-Path $TestDrive 'sweep'
+        Write-TestBinary -Path (Join-Path $dir 'entire.exe.old') -Content 'stale'
+        Write-TestBinary -Path (Join-Path $dir 'git-remote-entire.exe.old') -Content 'stale'
+        Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+        Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination (Join-Path $dir 'entire.exe')
+        Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination (Join-Path $dir 'git-remote-entire.exe')
+        Get-OldFile -Directory $dir | Should -HaveCount 0
+    }
+
+    It 'treats brackets in the install directory literally' {
+        $dir = Join-Path (Join-Path $TestDrive '[x]') 'bin'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+        Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination (Join-Path $dir 'entire.exe')
+        Test-Path -LiteralPath (Join-Path $dir 'entire.exe') -PathType Leaf | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $TestDrive 'x') | Should -BeFalse
+    }
+
+    # Windows will not overwrite or delete a mapped executable image but will
+    # rename it; Unix allows all three, so these cases have no meaning there.
+    Context 'on Windows' -Skip:($env:OS -ne 'Windows_NT') {
+        BeforeAll {
+            function Invoke-RunningCopy {
+                param([string] $Path)
+                Copy-Item -LiteralPath $env:ComSpec -Destination $Path
+                Start-Process -FilePath $Path -ArgumentList '/c', 'timeout', '/t', '120', '/nobreak' -WindowStyle Hidden -PassThru
+            }
+
+            function Close-RunningCopy {
+                param($Process)
+                if ($null -ne $Process -and -not $Process.HasExited) {
+                    Stop-Process -Id $Process.Id -Force
+                    $Process.WaitForExit()
+                }
+            }
+        }
+
+        It 'replaces a running binary and clears the old image once it exits' {
+            $dir = Join-Path $TestDrive 'running'
+            $target = Join-Path $dir 'entire.exe'
+            [IO.Directory]::CreateDirectory($dir) | Out-Null
+            Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+            $process = Invoke-RunningCopy -Path $target
+            try {
+                { Copy-Item -LiteralPath (Join-Path $dir 'src.bin') -Destination $target -Force -ErrorAction Stop } | Should -Throw
+                Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target
+                Get-Content -LiteralPath $target -Raw | Should -Be 'new'
+                Test-Path -LiteralPath "$target.old" -PathType Leaf | Should -BeTrue
+            }
+            finally {
+                Close-RunningCopy -Process $process
+            }
+            Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target
+            Get-OldFile -Directory $dir | Should -HaveCount 0
+        }
+
+        It 'names the remedy when another program holds the binary open' {
+            $dir = Join-Path $TestDrive 'held'
+            $target = Join-Path $dir 'entire.exe'
+            Write-TestBinary -Path $target -Content 'old'
+            Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+            $handle = [IO.File]::Open($target, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+            try {
+                { Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target } | Should -Throw -ExpectedMessage '*another program holds it open*'
+            }
+            finally {
+                $handle.Dispose()
+            }
+            Get-Content -LiteralPath $target -Raw | Should -Be 'old'
+            Get-OldFile -Directory $dir | Should -HaveCount 0
+        }
+
+        It 'moves aside under a unique name when the previous .old is still running' {
+            $dir = Join-Path $TestDrive 'twice'
+            $target = Join-Path $dir 'entire.exe'
+            [IO.Directory]::CreateDirectory($dir) | Out-Null
+            Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
+            $old = Invoke-RunningCopy -Path "$target.old"
+            $current = Invoke-RunningCopy -Path $target
+            try {
+                Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target
+                Get-Content -LiteralPath $target -Raw | Should -Be 'new'
+                Get-OldFile -Directory $dir | Should -HaveCount 2
+            }
+            finally {
+                Close-RunningCopy -Process $current
+                Close-RunningCopy -Process $old
+            }
+            Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target
+            Get-OldFile -Directory $dir | Should -HaveCount 0
+        }
+    }
+}
