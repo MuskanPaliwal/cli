@@ -21,7 +21,10 @@ param(
 
 $GitHubRepo = "entireio/cli"
 $ScoopBucketUrl = "https://github.com/entireio/scoop-bucket.git"
-$WebTimeoutSec = 60
+# Two limits, deliberately not one: the API calls get a whole-request cap,
+# the archive download gets only a stall guard. See Save-RemoteFile.
+$ApiTimeoutSec = 60
+$DownloadStallTimeoutSec = 60
 
 function Write-Info {
     param([string] $Message)
@@ -210,7 +213,7 @@ function Invoke-GitHubApi {
     # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
     # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
     try {
-        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec -UseBasicParsing
+        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $ApiTimeoutSec -UseBasicParsing
     }
     catch {
         # Only WebException (5.1) and HttpResponseException (pwsh) carry a
@@ -274,9 +277,24 @@ function Save-RemoteFile {
         [string] $Destination
     )
 
+    # No -TimeoutSec on the download. What it means depends on the host:
+    # Windows PowerShell 5.1 applies it to the response headers only (the body
+    # read has its own 5-minute stall default); PowerShell 7.0-7.3 applied it
+    # to the whole transfer, so a 21 MB archive on a link below ~3 Mbit/s was
+    # cancelled at 60 s with "The operation was canceled."; PowerShell 7.4+
+    # made it an alias of -ConnectionTimeoutSeconds, which caps the connection
+    # only. Instead, where the host has -OperationTimeoutSeconds (7.4+), the
+    # download is cut when no data arrives for $DownloadStallTimeoutSec: a slow
+    # link finishes, a dead connection is reported instead of hanging, since
+    # the host has no stall detector of its own.
+    #
     # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
     # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing -TimeoutSec $WebTimeoutSec
+    $stallGuard = @{}
+    if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey('OperationTimeoutSeconds')) {
+        $stallGuard['OperationTimeoutSeconds'] = $DownloadStallTimeoutSec
+    }
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing @stallGuard
 }
 
 function Assert-Checksum {

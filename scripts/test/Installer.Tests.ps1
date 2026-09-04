@@ -502,3 +502,28 @@ Describe 'Invoke-GitHubApi' {
         { Invoke-GitHubApi -Uri 'https://api.github.com/x' } | Should -Throw -ExpectedMessage '*Could not reach GitHub*The operation was canceled.*'
     }
 }
+
+Describe 'Web timeouts' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    # Pester exposes a mocked call's arguments to the filter as variables, with
+    # alias names filled in too, so $TimeoutSec is set whether the host binds
+    # it as TimeoutSec (5.1) or ConnectionTimeoutSeconds (7.4+).
+    It 'caps the GitHub API calls at 60 seconds' {
+        Mock Invoke-RestMethod { @{} }
+        Invoke-GitHubApi -Uri 'https://api.github.com/x'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $TimeoutSec -eq 60 }
+    }
+
+    It 'downloads with a stall guard where the host has one and no whole-transfer cap' {
+        $hostHasStallGuard = (Get-Command Invoke-WebRequest).Parameters.ContainsKey('OperationTimeoutSeconds')
+        Mock Invoke-WebRequest {}
+        Save-RemoteFile -Uri 'https://example.invalid/a.zip' -Destination (Join-Path $TestDrive 'a.zip')
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter {
+            $null -eq $TimeoutSec -and $null -eq $ConnectionTimeoutSeconds -and
+            $(if ($hostHasStallGuard) { $OperationTimeoutSeconds -eq 60 } else { $null -eq $OperationTimeoutSeconds })
+        }
+    }
+}
