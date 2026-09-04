@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -33,13 +34,25 @@ func TestOpenCodeSeedRepoPlantsDeps(t *testing.T) {
 	}
 
 	// node_modules is the one that matters: opencode reinstalls without it.
+	//
+	// Windows asserts the documented degradation instead. linkFile copies there
+	// rather than linking, and a copy cannot be a 61MB directory, so SeedRepo
+	// warns and leaves the repo to opencode. Everything else it plants is
+	// platform-independent, which is why this branches instead of excluding the
+	// whole test — the cross-process resolution above is what it exists to pin.
 	link := filepath.Join(dir, ".opencode", "node_modules")
-	target, err := os.Readlink(link)
-	if err != nil {
-		t.Fatalf("node_modules is not a symlink into the shared tree: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(target, "@opencode-ai", "plugin")); err != nil {
-		t.Fatalf("linked tree does not contain %s: %v", openCodePluginPkg, err)
+	if runtime.GOOS == "windows" {
+		if _, err := os.Lstat(link); !os.IsNotExist(err) {
+			t.Errorf("expected SeedRepo to degrade without node_modules on windows, got err=%v", err)
+		}
+	} else {
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("node_modules is not a symlink into the shared tree: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(target, "@opencode-ai", "plugin")); err != nil {
+			t.Fatalf("linked tree does not contain %s: %v", openCodePluginPkg, err)
+		}
 	}
 
 	for _, name := range []string{"package.json", "package-lock.json", "opencode.json"} {

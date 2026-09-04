@@ -78,6 +78,10 @@ const (
 	// only that we fall back to opencode installing per-directory itself.
 	openCodeDepsBudget = 5 * time.Minute
 
+	// openCodeDepsAttempts caps how many times a process will try to build the
+	// tree. See openCodePluginDeps for why it is neither 1 nor unbounded.
+	openCodeDepsAttempts = 2
+
 	// openCodePluginPkg is the package opencode pins into a project's generated
 	// .opencode/package.json. It pins the version of the RUNNING BINARY, not a
 	// range, so the tree has to be rebuilt on every opencode upgrade.
@@ -101,8 +105,8 @@ const (
 // a directory, so it is validated rather than trusted.
 var openCodeVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]*$`)
 
-// openCodePluginDeps resolves the pre-built dependency tree, building it at most
-// once per process.
+// openCodePluginDeps resolves the pre-built dependency tree, building it on
+// first use.
 //
 // It resolves rather than reading something Bootstrap stashed, because Bootstrap
 // and SetupRepo run in DIFFERENT PROCESSES: `go run ./e2e/bootstrap`, then
@@ -110,7 +114,35 @@ var openCodeVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]*$`)
 // test process, and because seeding degrades quietly that failure looks like
 // success — bootstrap reports a fast warmup while every test still pays the
 // install. That is exactly what run 33865617639 did.
-var openCodePluginDeps = sync.OnceValues(buildPluginDeps)
+//
+// A success is cached for the life of the process; a failure is retried, but at
+// most openCodeDepsAttempts times in total. Both bounds matter. Caching the
+// error — which is what sync.OnceValues does — lets one transient npm blip on
+// the very first call disable seeding for every repo in the run, reinstating the
+// concurrent-install storm this exists to prevent, for the whole run rather than
+// one attempt. Retrying without a cap is the opposite failure: ~40 installs when
+// npm is simply absent. The mutex is held across the build, so attempts are
+// serial and callers queue behind the one in flight either way.
+func openCodePluginDeps() (string, error) {
+	openCodeDeps.mu.Lock()
+	defer openCodeDeps.mu.Unlock()
+	if openCodeDeps.dir != "" {
+		return openCodeDeps.dir, nil
+	}
+	if openCodeDeps.attempts >= openCodeDepsAttempts {
+		return "", openCodeDeps.err
+	}
+	openCodeDeps.attempts++
+	openCodeDeps.dir, openCodeDeps.err = buildPluginDeps()
+	return openCodeDeps.dir, openCodeDeps.err
+}
+
+var openCodeDeps struct {
+	mu       sync.Mutex
+	dir      string
+	err      error
+	attempts int
+}
 
 // openCodeDepsDir names the shared tree for one opencode version.
 //
