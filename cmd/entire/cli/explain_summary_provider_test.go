@@ -803,8 +803,14 @@ func TestResolveCheckpointSummaryProvider_ConfiguredExternalProvider(t *testing.
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755); err != nil {
 		t.Fatalf("mkdir .entire: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled":true,"external_agents":true,"summary_generation":{"provider":"`+providerName+`","model":"external-model"}}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled":true,"summary_generation":{"provider":"`+providerName+`","model":"external-model"}}`), 0o644); err != nil {
 		t.Fatalf("write settings: %v", err)
+	}
+	// The grant lives in the untracked local layer, which is the only one
+	// settings.enforceExternalAgentsTrust honors — and the only one that lets
+	// the configured name reach discovery at all.
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.local.json"), []byte(`{"external_agents":true}`), 0o644); err != nil {
+		t.Fatalf("write local settings: %v", err)
 	}
 	externalDir := t.TempDir()
 	writeExternalSummaryAgentBinary(t, externalDir, providerName)
@@ -956,6 +962,7 @@ func TestPersistSummaryProviderSelection_ExternalAlreadyEnabledNoSignal(t *testi
 func TestResolveCheckpointSummaryProvider_ConfiguredProviderUsesNamedDiscovery(t *testing.T) {
 	// Cannot use t.Parallel(): mutates package-level resolution seams.
 	ctx := context.Background()
+	grantExternalAgentsLocally(t)
 	const configuredName = types.AgentName("external-configured-provider")
 	stub := &stubTextAgent{name: configuredName, kind: agent.AgentTypeClaudeCode}
 
@@ -1065,5 +1072,113 @@ func TestPersistSummaryProviderSelection_AutoSelectDoesNotGrantExternalAgents(t 
 	// the next run from re-deciding, and it grants nothing on its own.
 	if s.SummaryGeneration == nil || s.SummaryGeneration.Provider != providerName {
 		t.Fatalf("provider not persisted; got %+v", s.SummaryGeneration)
+	}
+}
+
+// grantExternalAgentsLocally puts the test in a repository whose UNTRACKED
+// .entire/settings.local.json enables external agents, which is the only layer
+// settings.enforceExternalAgentsTrust honors.
+func grantExternalAgentsLocally(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".entire"), 0o750); err != nil {
+		t.Fatalf("mkdir .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".entire", "settings.local.json"), []byte(`{"external_agents":true}`), 0o600); err != nil {
+		t.Fatalf("write local settings: %v", err)
+	}
+}
+
+// summary_generation.provider is honored from the COMMITTED
+// .entire/settings.json, so the name deciding which binary to execute can
+// arrive in a pull request. Naming one binary rather than sweeping $PATH is not
+// enough on its own: without the external_agents grant, that one line would run
+// `entire-agent-<name> info` on everyone who pulls it.
+func TestDiscoverSummaryProviderIfMissing_ExternalNeedsTheGrant(t *testing.T) {
+	// Cannot use t.Parallel(): mutates package-level resolution seams.
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	originalGet := getSummaryAgent
+	originalNamed := discoverNamedSummaryProvider
+	t.Cleanup(func() {
+		getSummaryAgent = originalGet
+		discoverNamedSummaryProvider = originalNamed
+	})
+
+	getSummaryAgent = func(name types.AgentName) (agent.Agent, error) {
+		return nil, fmt.Errorf("agent %q not registered", name)
+	}
+	discoverNamedSummaryProvider = func(context.Context, types.AgentName) error {
+		t.Fatal("a committed provider name must not execute a plugin binary without the external_agents grant")
+		return nil
+	}
+
+	if blocked := discoverSummaryProviderIfMissing(context.Background(), "external-ungranted"); !blocked {
+		t.Fatal("discoverSummaryProviderIfMissing() should report that it declined for want of the grant")
+	}
+}
+
+// The gate must land only on the external case. A committed
+// `"provider": "claude-code"` is the ordinary configuration and has nothing to
+// do with plugins, so it must keep working with external agents off.
+func TestDiscoverSummaryProviderIfMissing_RegisteredProviderIsUnaffected(t *testing.T) {
+	// Cannot use t.Parallel(): mutates package-level resolution seams.
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	originalGet := getSummaryAgent
+	originalNamed := discoverNamedSummaryProvider
+	t.Cleanup(func() {
+		getSummaryAgent = originalGet
+		discoverNamedSummaryProvider = originalNamed
+	})
+
+	getSummaryAgent = func(types.AgentName) (agent.Agent, error) {
+		return &stubTextAgent{name: "claude-code", kind: agent.AgentTypeClaudeCode}, nil
+	}
+	discoverNamedSummaryProvider = func(context.Context, types.AgentName) error {
+		t.Fatal("a registered provider must not reach discovery at all")
+		return nil
+	}
+
+	if blocked := discoverSummaryProviderIfMissing(context.Background(), "claude-code"); blocked {
+		t.Fatal("a registered provider must resolve regardless of the external_agents grant")
+	}
+}
+
+// Once granted, the named lookup runs as before.
+func TestDiscoverSummaryProviderIfMissing_GrantedExternalIsDiscovered(t *testing.T) {
+	// Cannot use t.Parallel(): mutates package-level resolution seams.
+	grantExternalAgentsLocally(t)
+
+	originalGet := getSummaryAgent
+	originalNamed := discoverNamedSummaryProvider
+	t.Cleanup(func() {
+		getSummaryAgent = originalGet
+		discoverNamedSummaryProvider = originalNamed
+	})
+
+	getSummaryAgent = func(name types.AgentName) (agent.Agent, error) {
+		return nil, fmt.Errorf("agent %q not registered", name)
+	}
+	calls := 0
+	discoverNamedSummaryProvider = func(_ context.Context, name types.AgentName) error {
+		calls++
+		if name != "external-granted" {
+			t.Fatalf("named discovery for %q, want %q", name, "external-granted")
+		}
+		return nil
+	}
+
+	if blocked := discoverSummaryProviderIfMissing(context.Background(), "external-granted"); blocked {
+		t.Fatal("discoverSummaryProviderIfMissing() should not report a block once the grant is in place")
+	}
+	if calls != 1 {
+		t.Fatalf("named discovery called %d times, want exactly 1", calls)
 	}
 }

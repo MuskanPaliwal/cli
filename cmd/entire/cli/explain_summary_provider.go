@@ -88,8 +88,11 @@ func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkp
 
 	if s.SummaryGeneration != nil && s.SummaryGeneration.Provider != "" {
 		providerName := types.AgentName(s.SummaryGeneration.Provider)
-		discoverSummaryProviderIfMissing(ctx, providerName)
+		blocked := discoverSummaryProviderIfMissing(ctx, providerName)
 		if err := ensureSummaryProviderPresent(ctx, providerName); err != nil {
+			if blocked {
+				return nil, fmt.Errorf("%w\nIf %s is an external plugin, enable external agents first: `entire agent` and pick it, or set \"external_agents\": true in .entire/settings.local.json", err, providerName)
+			}
 			return nil, err
 		}
 		return buildCheckpointSummaryProvider(providerName, s.SummaryGeneration.Model)
@@ -129,7 +132,9 @@ func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkp
 }
 
 // discoverSummaryProviderIfMissing resolves a configured provider name that is
-// not registered yet.
+// not registered yet. It reports whether it declined to look because external
+// agents are not enabled, so the caller can say so rather than leaving the user
+// with "unknown summary provider" about a plugin that is installed.
 //
 // Named, never the sweep. The name arrives from summary_generation.provider,
 // which is honored from the COMMITTED .entire/settings.json, so routing it
@@ -139,15 +144,41 @@ func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkp
 // lookup returns immediately for a built-in and touches exactly one binary
 // otherwise, so the ordinary case costs nothing either.
 //
-// The error is dropped for the reason discoverNamedExternalAgent gives: the
-// caller reports an unresolvable provider a few lines later, in terms of the
-// provider the user named rather than of the plugin protocol.
-func discoverSummaryProviderIfMissing(ctx context.Context, name types.AgentName) {
+// Named is not sufficient on its own, though, which is what the
+// external_agents check adds: one binary is still one binary, and the name
+// deciding WHICH one still came out of a tracked file. `{"summary_generation":
+// {"provider": "evil"}}` in a pull request is then enough to run
+// `entire-agent-evil info` on everyone who pulls it and runs `entire explain`,
+// with no prompt and no grant — the exact thing enforceExternalAgentsTrust
+// exists to prevent, reached by a path that never consults it.
+//
+// The gate lands only on the external case: the early return above covers every
+// registered agent, so a committed `"provider": "claude-code"` keeps working
+// with external agents off, as it must.
+//
+// The lighter gate rather than a third trust gate beside enforceOPFCommandTrust
+// and enforceExternalAgentsTrust. An enforceSummaryProviderTrust would let a
+// developer name an external provider in their own untracked
+// settings.local.json without granting the $PATH sweep, which is a real if
+// narrow want; it costs another settings-layer classification, another
+// rejection channel for `entire status` to surface, and another gate to keep in
+// step. It becomes worth writing when someone actually asks for that
+// combination -- until then, `entire agent` already offers the plugin, and
+// picking it there is what flips the grant.
+//
+// The discovery error is dropped for the reason discoverNamedExternalAgent
+// gives: the caller reports an unresolvable provider a few lines later, in
+// terms of the provider the user named rather than of the plugin protocol.
+func discoverSummaryProviderIfMissing(ctx context.Context, name types.AgentName) (blockedByExternalAgents bool) {
 	if _, err := getSummaryAgent(name); err == nil {
-		return
+		return false
+	}
+	if !settings.IsExternalAgentsEnabled(ctx) {
+		return true
 	}
 	//nolint:errcheck,gosec // see doc comment: ensureSummaryProviderPresent reports it
 	discoverNamedSummaryProvider(ctx, name)
+	return false
 }
 
 // autoSelectSummaryProvider builds a provider for an auto-selected candidate

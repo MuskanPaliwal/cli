@@ -1469,6 +1469,22 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
   which raw-writes the single key to the local file whatever `--local`/`--project`
   said about the rest — writing it into the project file produces a setting the
   user can read back and that never takes effect.
+  **The grant also gates `summary_generation.provider`**, which is the other
+  place a tracked file names a binary to execute: `discoverSummaryProviderIfMissing`
+  resolves an unregistered provider by name, so `{"summary_generation":
+  {"provider": "evil"}}` in a pull request was enough to run
+  `entire-agent-evil info` on whoever pulled it and ran `entire explain`.
+  Resolving by name rather than sweeping `$PATH` bounds the blast radius to one
+  binary; it does not make it zero. The check sits *after* the
+  already-registered early return, so a committed `"provider": "claude-code"`
+  is unaffected — the gate lands only on the external case — and the
+  unresolvable-provider error gains a line naming the grant, since "unknown
+  summary provider" about a plugin that is plainly installed is not actionable.
+  A dedicated `enforceSummaryProviderTrust` beside the other two gates would let
+  a developer name an external provider in their own `settings.local.json`
+  without granting the `$PATH` sweep; that is a real want, but it costs a third
+  settings-layer classification and a third rejection channel, so it waits until
+  someone asks for the combination.
 - **A tracked `.entire/settings.local.json` is ignored wholesale**: the local layer's premise is that it is per-clone and per-developer (it is gitignored, `entire enable --local` writes it, and `CheckpointRemoteIsLocalOnly` treats presence there as proof the developer chose it). `.gitignore` does not apply to an already-tracked path, so a committed one arrives by cloning and would override project settings for everyone. `loadMergedSettings` drops the layer when the file is **proven** tracked, records `EntireSettings.LocalLayerRejection()`, and the redaction consumer prints it with the `git rm --cached` fix. It never errors — one committed file must not brick `status`/`doctor`. Two deliberately opposite failure directions, expressed as the three-state `localTrust` (`localUnverifiable` is the zero value so a forgotten assignment fails safe): an *unverifiable* repo keeps the layer (losing all local settings is worse than the risk) but still drops the exec-bearing settings, OPF `command` and `external_agents` (being wrong there means running someone else's binary); *no* repository counts as proof of locality. `CheckpointRemoteIsLocalOnly` reads the raw file outside the loader, so it repeats the check itself.
 - Safe to use on main/master since it never modifies commit history
 
