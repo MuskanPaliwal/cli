@@ -1208,6 +1208,49 @@ relPath := paths.ToRelativePath("/repo/api/file.ts", repoRoot)  // returns "api/
 
 Test case in `state_test.go`: `TestFilterAndNormalizePaths_SiblingDirectories` documents this bug pattern.
 
+#### Executable Resolution - Absolute Paths Only
+
+Two rules, each with exactly one implementation, because Go's own protections
+do not reach far enough on their own.
+
+**Every `$PATH` scanner goes through `execx.PathScanDirs()`** (`execx/pathscan.go`),
+which returns only absolute entries. `exec.LookPath` reports `ErrDot` for a
+match found through a "." entry and `exec.Command` re-checks a separator-free
+`Path`, but neither protection reaches a scanner that resolves by
+`filepath.Glob`: a globbed match never passes through `LookPath`, and it arrives
+with separators in it. The external-agent scanner
+(`agent/external/discovery.go`) is exactly that shape and *executes* what it
+finds, so a relative entry would make a file committed to the caller's
+repository a binary Entire runs. `findInaccessiblePlugin` (`plugin.go`) carries
+the same rule; they are one helper because two copies is how they drifted.
+
+**`external.Agent.run` refuses a non-absolute `binaryPath` before spawning.**
+`run` sets `cmd.Dir` to the worktree root and `os/exec` resolves a relative
+`Path` against `Dir`, so the file `registerExternalAgent` statted is not
+necessarily the file that executes. The check lives at the exec, not at the
+caller, so it also covers the exported `New`.
+
+`pluginParentDir` (`plugin_store.go`) applies the same absoluteness rule to
+every directory override it reads — `ENTIRE_PLUGIN_DIR`, `XDG_DATA_HOME`,
+`LOCALAPPDATA` — via `requireAbsPluginParent`, rather than leaving the platform
+two to `osroot` and to `main.go`'s `PATH` restore. Those backstops hold, but
+they state the invariant two layers from where it is decided.
+
+**The OPF `command` is the deliberate exception, and stays one.**
+`redaction.openai_privacy_filter.command` becomes `argv[0]` of an
+`exec.CommandContext` in `redact/opf.go` with no `cmd.Dir` and no absoluteness
+check, so `"command": "./tools/opf"` resolves against the pre-push process's
+working directory. That is allowed because the field is not repo-supplied: the
+ownership gate above honors it only from an untracked, index-and-HEAD-verified
+`.entire/settings.local.json`, so a relative path there is the developer's own
+choice about their own machine, and a bare name is still covered by
+`exec.Command`'s `ErrDot` re-check. The scanners are the opposite case — they
+resolve names nobody chose, out of a `$PATH` the repository can reach — which
+is why the rule is theirs and not this field's. Do not "finish the job" by
+rejecting a relative OPF `command`: it would break the GUI-git-client setups
+the explicit `command` exists to serve, without closing anything the trust gate
+leaves open.
+
 #### Invoking Commands on Windows - Never Put a Dynamic Value on a cmd.exe Line
 
 **When Entire performs the exec itself, do not go through `cmd.exe`.** Pass the
@@ -1372,7 +1415,25 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Scanner engine selection is a settings-only, fail-closed choice**: `redaction.betterleaks.enabled` (default `true`) and `redaction.goredact.enabled` (default `false`) pick which pattern-matching engine(s) feed layer 2 of `detectAllLayers` (`redact.ConfigureScanners`, `redact/scanners.go`). Both keys are honored from committed `.entire/settings.json` only — a `settings.local.json` copy is ignored with a logged warning, because the choice affects everyone who reads the repo's checkpoints, not just the developer who set it. `validateScannerSettings` fails settings load with `settings.ErrScannerConfig` when both engines are disabled. If goredact is the sole enabled engine and its scan fails at runtime, `redact.ErrScannerDegraded` propagates out of `JSONLBytes`/`JSONLBytesWithPrivacyFilter`; every checkpoint-write call site (`checkpoint/ephemeral.go`, `checkpoint/persistent.go`, `strategy/manual_commit_hooks.go`) must `errors.Is` for it and fail the write rather than fall back to under-scanned content. See `docs/security-and-privacy.md` for user-facing details.
 - **OPF (OpenAI Privacy Filter) runs at pre-push, not post-commit**: when `redaction.openai_privacy_filter.enabled` is true, the PrePush hook re-redacts unpushed commits with the OPF 9th layer, builds new commits carrying an `Entire-OPF-Applied: true` trailer, and updates the local refs before pushing. Per-commit condensation stays on the fast 8-layer pipeline. **Both backends are covered, by two rewrites sharing one policy**: `manual_commit_opf_rewrite.go` walks unpushed `entire/checkpoints/v1` commits bounded by the remote tip and CAS-updates the branch; `manual_commit_opf_refs.go` walks the push queue and, per queued ref, rewrites every unpushed commit — stopping at the first commit already carrying the trailer, which makes the trailer its own watermark (steady state stops at the tip's parent) and is bounded by the shared `BootstrapTooLargeError` cap for repos that enable OPF late. Blob policy, byte caps, the single batched shell-out, and the error taxonomy are shared; only discovery and ref update differ. **Fail-closed differs by backend on purpose**: git-branch aborts the user's push, while git-refs withholds the (separately-pushed) checkpoint refs and leaves them queued, so nothing under-redacted ships without blocking the user's own push. See `docs/security-and-privacy.md` for the full flow, including divergence detection, bootstrap caps, and CAS-on-conflict semantics.
 - **OPF's `command` is a trust boundary, not a setting**: `redaction.openai_privacy_filter.command` becomes `argv[0]` of an exec during pre-push, and `.entire/settings.json` is version-controlled — so reading it from the project file would let a pull request execute code on every developer who pushes (the prompt is no defense: it never names the command, `prompt_default: "always"` skips it, and non-TTY pushes auto-run). `settings.enforceOPFCommandTrust` (`settings/opf_command_trust.go`) honors `command` only from `.entire/settings.local.json`, and only when that file is untracked in **both** the index and `HEAD` — the filename is not the check, because `.gitignore` does not apply to an already-tracked path. The probe goes through go-git (`gitrepo.OpenPath`), not the git CLI, and is memoized per process: shelling out cost ~15 subprocesses per hook (`settings.Load` is uncached and runs several times per hook) and would fail verification wherever `git` is off `$PATH` — the GUI-git-client population that most needs an explicit `command`. **Two depths**: the layer check reads the index only, because a PR-delivered file is always in the index of a clone that checks it out, and checkout cannot produce a file absent from the index; the `command` check also reads HEAD. That split matters because HEAD is the expensive half — measured 8.3ms → 2.5ms per hook process in this repo, and 39ms → 11ms on reftable, where `gitrepo` routes reference reads back through the git CLI. The cost falls on everyone with a `settings.local.json`, not just OPF users, so keep it off the HEAD path. Rejection is a downgrade to the documented `$PATH` default plus a warning, never a hard error; verification failure (no repo, git missing) counts as untrusted. Do not add other exec-bearing fields to the project settings file without the same gate.
-- **A tracked `.entire/settings.local.json` is ignored wholesale**: the local layer's premise is that it is per-clone and per-developer (it is gitignored, `entire enable --local` writes it, and `CheckpointRemoteIsLocalOnly` treats presence there as proof the developer chose it). `.gitignore` does not apply to an already-tracked path, so a committed one arrives by cloning and would override project settings for everyone. `loadMergedSettings` drops the layer when the file is **proven** tracked, records `EntireSettings.LocalLayerRejection()`, and the redaction consumer prints it with the `git rm --cached` fix. It never errors — one committed file must not brick `status`/`doctor`. Two deliberately opposite failure directions, expressed as the three-state `localTrust` (`localUnverifiable` is the zero value so a forgotten assignment fails safe): an *unverifiable* repo keeps the layer (losing all local settings is worse than the risk) but still drops the exec-bearing OPF `command` (being wrong means running someone else's binary); *no* repository counts as proof of locality. `CheckpointRemoteIsLocalOnly` reads the raw file outside the loader, so it repeats the check itself.
+- **`external_agents` is the second exec-bearing setting, gated the same way**:
+  it enables the `$PATH` scan that globs for `entire-agent-*` binaries and runs
+  each one's `info` subcommand, so a committed `{"external_agents": true}` would
+  let a pull request turn on execution of whatever binary it could get onto a
+  developer's `$PATH` — the `enforceOPFCommandTrust` rationale verbatim, minus
+  even a prompt. `settings.enforceExternalAgentsTrust`
+  (`settings/external_agents_trust.go`) honors it only from a
+  `classifyLocalSettingsDeep`-verified `.entire/settings.local.json`, reusing
+  the OPF gate's helpers; only a `true` value is gated, since `false` grants
+  nothing. Rejection is a downgrade recorded on
+  `EntireSettings.ExternalAgentsRejection()`, surfaced by `entire status` and by
+  `external.DiscoverAndRegister` — without it, a refused grant and a setting the
+  user never wrote look identical (no agent appears). **Consequence for every
+  write site**: the auto-enable that fires when a user picks an external agent
+  must go through `enableExternalAgentsLocally` (`setup_external_agents.go`),
+  which raw-writes the single key to the local file whatever `--local`/`--project`
+  said about the rest — writing it into the project file produces a setting the
+  user can read back and that never takes effect.
+- **A tracked `.entire/settings.local.json` is ignored wholesale**: the local layer's premise is that it is per-clone and per-developer (it is gitignored, `entire enable --local` writes it, and `CheckpointRemoteIsLocalOnly` treats presence there as proof the developer chose it). `.gitignore` does not apply to an already-tracked path, so a committed one arrives by cloning and would override project settings for everyone. `loadMergedSettings` drops the layer when the file is **proven** tracked, records `EntireSettings.LocalLayerRejection()`, and the redaction consumer prints it with the `git rm --cached` fix. It never errors — one committed file must not brick `status`/`doctor`. Two deliberately opposite failure directions, expressed as the three-state `localTrust` (`localUnverifiable` is the zero value so a forgotten assignment fails safe): an *unverifiable* repo keeps the layer (losing all local settings is worse than the risk) but still drops the exec-bearing settings, OPF `command` and `external_agents` (being wrong there means running someone else's binary); *no* repository counts as proof of locality. `CheckpointRemoteIsLocalOnly` reads the raw file outside the loader, so it repeats the check itself.
 - Safe to use on main/master since it never modifies commit history
 
 #### Key Files

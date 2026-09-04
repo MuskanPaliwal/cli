@@ -90,12 +90,29 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 
 	// External agents need external_agents enabled in settings before enable,
 	// so the CLI can discover the agent binary via PATH during DiscoverAndRegister.
+	//
+	// The grant goes in settings.local.json: it enables execution of
+	// entire-agent-* binaries found on $PATH, so the loader honors it only
+	// from an untracked local file. Nothing commits this one — the repo has
+	// its initial commit already — so it verifies as this clone's own.
+	//
+	// An empty settings.json goes alongside it, and is load-bearing rather
+	// than decorative. `entire enable` picks its target file by asking
+	// whether project settings already exist, so a repo carrying only a local
+	// file would send enable's own write there too and never create
+	// settings.json — which PatchSettings below then cannot find. Creating
+	// both keeps the target resolution exactly where it was when this fixture
+	// wrote the grant into settings.json.
 	if ea, ok := agent.(agents.ExternalAgent); ok && ea.IsExternalAgent() {
 		entireDir := filepath.Join(dir, ".entire")
 		if err := os.MkdirAll(entireDir, 0o755); err != nil {
 			t.Fatalf("create .entire for external agent: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("write project settings: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(entireDir, "settings.local.json"),
 			[]byte("{\"external_agents\": true}\n"), 0o644); err != nil {
 			t.Fatalf("write external_agents setting: %v", err)
 		}
