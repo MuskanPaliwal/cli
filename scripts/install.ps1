@@ -307,6 +307,10 @@ function Save-RemoteFile {
     Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing @stallGuard
 }
 
+# Verifies the archive against checksums.txt from the same release. That
+# guards against a corrupted transfer and against installing the wrong asset
+# (another architecture or version). It does not guard against a compromised
+# release origin or TLS path: the checksum and the archive share a trust root.
 function Assert-Checksum {
     param(
         [string] $ArchivePath,
@@ -655,8 +659,10 @@ function Add-ToUserPath {
 function Get-EntireOnPath {
     # -All is required: without it Get-Command returns only the first
     # Application, so a later Scoop shim is never seen.
-    # Write-Output with the unary comma prevents PowerShell from unrolling
-    # a single-element array, which would lose .Count under StrictMode 2.0.
+    # -NoEnumerate returns the array itself, so a single element keeps its
+    # .Count under StrictMode 2.0. Callers must assign the result before
+    # piping it: a -NoEnumerate array reaches a pipeline as one object on
+    # pwsh and as its items on Windows PowerShell 5.1.
     $results = @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
     Write-Output -NoEnumerate -InputObject $results
 }
@@ -704,6 +710,7 @@ function Get-EntireCopy {
             }
         }
     }
+    # Same contract as Get-EntireOnPath: assign before piping.
     Write-Output -NoEnumerate -InputObject $found
 }
 

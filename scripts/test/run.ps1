@@ -11,13 +11,21 @@
 # `exit` code come back as 0, so a failing suite would pass CI. Import-Module
 # also selects the highest satisfying version, which matters on Windows where
 # the OS-bundled Pester 3.4.0 sits next to the modern one.
+#
+# The exit code keys on the run's overall Result, not on FailedCount: a test
+# file that fails to parse, or a BeforeAll that throws, leaves FailedCount at
+# 0 (the tests never existed to fail) while Result is Failed.
+#
+# -Path exists so a test can run this against a directory of its own.
+param([string] $Path = $PSScriptRoot)
+
 $ErrorActionPreference = 'Stop'
 Import-Module Pester -MinimumVersion 5.2.0
 Import-Module PSScriptAnalyzer -MinimumVersion 1.17.1
 
 $pesterConfig = New-PesterConfiguration -Hashtable @{
     Run    = @{
-        Path     = $PSScriptRoot
+        Path     = $Path
         PassThru = $true
     }
     Output = @{
@@ -26,4 +34,7 @@ $pesterConfig = New-PesterConfiguration -Hashtable @{
 }
 
 $result = Invoke-Pester -Configuration $pesterConfig
-exit $result.FailedCount
+if ($result.Result -ne 'Passed') {
+    exit 1
+}
+exit 0
