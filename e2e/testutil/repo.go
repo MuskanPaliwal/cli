@@ -144,6 +144,16 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 		}
 	}
 
+	// Agents that need files planted before their first run in a repo get them
+	// here — after `entire enable` has written the agent's own config, so a
+	// seed can sit alongside it. opencode uses this to receive a pre-built
+	// .opencode dependency tree instead of installing one itself on the clock.
+	if seeder, ok := agent.(agents.RepoSeeder); ok {
+		if err := seeder.SeedRepo(dir); err != nil {
+			t.Fatalf("seed repo for %s: %v", agent.Name(), err)
+		}
+	}
+
 	// Create artifact dir eagerly so console.log is written to disk
 	// incrementally. Even if the test is killed by a global timeout,
 	// partial output survives.
