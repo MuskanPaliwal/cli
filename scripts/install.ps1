@@ -737,7 +737,11 @@ function Install-Entire {
         $scoopRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scoopPrefix))
         $scoopShim = Join-Path $scoopRoot "shims\entire.exe"
 
+        # The verdict is about what this shell runs; the list is about every
+        # copy the user has, including ones this shell cannot see yet. Both
+        # are assigned before being piped (see the archive branch).
         $pathCommands = Get-EntireOnPath
+        $copies = Get-EntireCopy
         $first = $pathCommands | Select-Object -First 1
         if ($null -eq $first -or -not (Test-SamePath -Left $first.Source -Right $scoopShim)) {
             Write-Host ""
@@ -756,7 +760,7 @@ function Install-Entire {
             throw "Scoop installed Entire CLI, but its shim does not take priority on PATH."
         }
 
-        $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $scoopShim) })
+        $conflicting = @($copies | Where-Object { -not (Test-SamePath -Left $_.Source -Right $scoopShim) })
         if ($conflicting.Count -gt 0) {
             Write-Host ""
             Write-Host "! WARNING: Other Entire CLI installations remain on PATH" -ForegroundColor Yellow

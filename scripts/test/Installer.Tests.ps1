@@ -559,6 +559,33 @@ Describe 'Scoop or archive selection' {
         Should -Invoke Get-ReleaseVersion -Times 1 -Exactly
     }
 
+    It 'reports a copy that is only on the stored PATH after a Scoop install' {
+        function scoop {}
+        Set-Variable -Name Channel -Value 'stable'
+        Set-Variable -Name InstallDirExplicit -Value $false
+        $shim = Join-Path (Join-Path $TestDrive 'scoop') 'shims\entire.exe'
+        $otherDir = Join-Path $TestDrive 'elsewhere'
+        [IO.Directory]::CreateDirectory($otherDir) | Out-Null
+        Set-Content -LiteralPath (Join-Path $otherDir 'entire.exe') -Value 'x' -NoNewline
+        Mock Invoke-Scoop { @{ ExitCode = 0; Output = @((Join-Path (Join-Path (Join-Path $TestDrive 'scoop') 'apps\entire') 'current')) } } -ParameterFilter { $ScoopArgs[0] -eq 'prefix' }
+        Mock Get-EntireOnPath { @([pscustomobject]@{ Source = $shim }) }
+        Mock Get-UserEnvironmentValue { $otherDir }
+        $report = @(Install-Entire 6>&1 | ForEach-Object { "$_" })
+        $report | Should -Contain "! Also found: $(Join-Path $otherDir 'entire.exe')"
+    }
+
+    It 'reports nothing extra when the stored PATH holds no other copy' {
+        function scoop {}
+        Set-Variable -Name Channel -Value 'stable'
+        Set-Variable -Name InstallDirExplicit -Value $false
+        $shim = Join-Path (Join-Path $TestDrive 'scoop') 'shims\entire.exe'
+        Mock Invoke-Scoop { @{ ExitCode = 0; Output = @((Join-Path (Join-Path (Join-Path $TestDrive 'scoop') 'apps\entire') 'current')) } } -ParameterFilter { $ScoopArgs[0] -eq 'prefix' }
+        Mock Get-EntireOnPath { @([pscustomobject]@{ Source = $shim }) }
+        Mock Get-UserEnvironmentValue { Join-Path $TestDrive 'nothing-here' }
+        $report = @(Install-Entire 6>&1 | ForEach-Object { "$_" })
+        @($report | Where-Object { $_ -like '! Also found:*' }) | Should -HaveCount 0
+    }
+
     It 'uses Scoop on stable when -InstallDir was not given' {
         function scoop {}
         # Set-Variable, not assignment: these are read by Install-Entire through
