@@ -77,22 +77,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Windows PowerShell 5 installer tests
-        shell: powershell
-        run: |
-          if ($PSVersionTable.PSVersion.Major -ne 5) {
-            throw "Expected Windows PowerShell 5.x, got $($PSVersionTable.PSVersion)"
-          }
-          .\scripts\install.ps1 -Help
-          .\scripts\test\run.ps1
-      - name: PowerShell 7 installer tests
-        shell: pwsh
-        run: |
-          if ($PSVersionTable.PSVersion.Major -lt 7) {
-            throw "Expected PowerShell 7 or later, got $($PSVersionTable.PSVersion)"
-          }
-          .\scripts\install.ps1 -Help
-          .\scripts\test\run.ps1
+      # install.ps1 and its tests run in install-ps1-e2e.yml, which is gated
+      # to the files that can affect them.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

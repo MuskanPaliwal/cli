@@ -1,9 +1,14 @@
-name: install.ps1 E2E
+name: install.ps1 tests
 
-# Runs scripts/install.ps1 for real against GitHub Releases on a Windows
-# runner, in both shells, and checks what the installer leaves behind: the
-# binaries, the raw user PATH, the replace-while-running path and the
-# nightly install. The offline suite stays in ci.yml; this is the network job.
+# All testing of scripts/install.ps1 lives here, gated to the files that can
+# affect it: the offline suite first (PSScriptAnalyzer plus the Pester tests,
+# in both Windows PowerShell 5.1 and pwsh), then, only if that passes, a real
+# install against GitHub Releases that checks what the installer leaves
+# behind: the binaries, the raw user PATH, the replace-while-running path,
+# the nightly install and the machine-PATH report.
+#
+# There is deliberately no schedule; workflow_dispatch runs it against the
+# current releases on demand.
 #
 # Scoop is deliberately not installed here: the Scoop branch's exit-code
 # contract is pinned by the unit tests, and get.scoop.sh plus a bucket clone
@@ -23,18 +28,41 @@ on:
       - scripts/install.ps1
       - scripts/test/**
       - .github/workflows/install-ps1-e2e.yml
-  schedule:
-    # Weekly, an hour after nightly.yml's 06:00 UTC daily build, so the
-    # nightly phase installs a release that is at most a day old. The
-    # releases side can drift under the installer between changes to it.
-    - cron: "0 7 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Not named `test`: that context is a required check owned by ci.yml, and a
+  # second workflow reporting the same name could satisfy it.
+  suite:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Installer suite
+        run: |
+          if ('${{ matrix.shell }}' -eq 'powershell' -and $PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.x, got $($PSVersionTable.PSVersion)"
+          }
+          if ('${{ matrix.shell }}' -eq 'pwsh' -and $PSVersionTable.PSVersion.Major -lt 7) {
+            throw "Expected PowerShell 7 or later, got $($PSVersionTable.PSVersion)"
+          }
+          .\scripts\install.ps1 -Help
+          .\scripts\test\run.ps1
+
   install:
+    needs: suite
     runs-on: windows-latest
     timeout-minutes: 15
     strategy:
