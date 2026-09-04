@@ -11,8 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const goosWindows = "windows"
@@ -1866,4 +1869,118 @@ func TestResolveHookExePath(t *testing.T) {
 			t.Errorf("error should mention symlink resolution, got: %v", err)
 		}
 	})
+}
+
+// A symlinked hook belongs to the user or another tool — Entire never installs
+// one — so it is treated as a foreign hook: backed up and chained to, not read
+// through and not overwritten in place. The link itself becomes the backup, so
+// whatever it pointed at is untouched and still runs.
+func TestInstallGitHook_SymlinkedHookIsBackedUpNotFollowed(t *testing.T) {
+	_, hooksDir := initHooksTestRepo(t)
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "shared-pre-push")
+	const targetContent = "#!/bin/sh\necho shared\n"
+	require.NoError(t, os.WriteFile(target, []byte(targetContent), 0o700))
+
+	hookPath := filepath.Join(hooksDir, "pre-push")
+	if err := os.Symlink(target, hookPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.NoError(t, err)
+
+	after, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, targetContent, string(after), "the link's target must not be written through")
+
+	backupInfo, err := os.Lstat(hookPath + backupSuffix)
+	require.NoError(t, err, "the link must be preserved as the backup")
+	assert.NotZero(t, backupInfo.Mode()&os.ModeSymlink, "the backup should still be the link itself")
+
+	installed, err := os.Lstat(hookPath)
+	require.NoError(t, err)
+	assert.Zero(t, installed.Mode()&os.ModeSymlink, "the installed hook must be a real file")
+
+	content, err := os.ReadFile(hookPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), entireHookMarker)
+	assert.Contains(t, string(content), "pre-push"+backupSuffix, "the chain call should invoke the preserved link")
+}
+
+// The hooks directory is git's answer to core.hooksPath, and Entire will not
+// write its hooks through a link to somewhere it cannot verify. The error has to
+// name the setting, because nothing else in the message would tell the user
+// where the path came from.
+func TestInstallGitHook_SymlinkedHooksDirIsRefused(t *testing.T) {
+	tmpDir, _ := initHooksTestRepo(t)
+
+	realHooks := filepath.Join(tmpDir, "real-hooks")
+	require.NoError(t, os.MkdirAll(realHooks, 0o750))
+	link := filepath.Join(tmpDir, "linked-hooks")
+	if err := os.Symlink(realHooks, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	testutil.RunGit(t, tmpDir, "config", "core.hooksPath", link)
+	ClearHooksDirCache()
+	t.Cleanup(ClearHooksDirCache)
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.Error(t, err)
+	require.ErrorIs(t, err, osroot.ErrSymlinkedPath)
+	assert.Contains(t, err.Error(), "core.hooksPath", "the remedy must name the setting that produced the path")
+
+	entries, readErr := os.ReadDir(realHooks)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "nothing should have been written through the link")
+}
+
+// Absent rather than Current: a symlinked hook is not one we wrote, so reporting
+// it as installed would leave it in place forever. Absent is what sends
+// EnsureSetup to InstallGitHook, which backs it up and chains to it.
+func TestCheckGitHookState_SymlinkedHookIsNotOurs(t *testing.T) {
+	_, hooksDir := initHooksTestRepo(t)
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.NoError(t, err)
+	require.Equal(t, GitHooksCurrent, CheckGitHookState(context.Background()))
+
+	hookPath := filepath.Join(hooksDir, "post-commit")
+	ours, err := os.ReadFile(hookPath)
+	require.NoError(t, err)
+	elsewhere := filepath.Join(t.TempDir(), "post-commit")
+	require.NoError(t, os.WriteFile(elsewhere, ours, 0o700))
+	require.NoError(t, os.Remove(hookPath))
+	if err := os.Symlink(elsewhere, hookPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	assert.Equal(t, GitHooksAbsent, CheckGitHookState(context.Background()),
+		"a link to a file carrying our marker is still not a hook we installed")
+}
+
+// Removal must not follow a link either: the hook at that path is not ours, so
+// it stays, and it blocks a backup from being restored over it.
+func TestRemoveGitHook_LeavesSymlinkedForeignHook(t *testing.T) {
+	_, hooksDir := initHooksTestRepo(t)
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.NoError(t, err)
+
+	hookPath := filepath.Join(hooksDir, "post-commit")
+	require.NoError(t, os.Remove(hookPath))
+	elsewhere := filepath.Join(t.TempDir(), "post-commit")
+	require.NoError(t, os.WriteFile(elsewhere, []byte("#!/bin/sh\n"), 0o700))
+	if err := os.Symlink(elsewhere, hookPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	_, err = RemoveGitHook(context.Background())
+	require.NoError(t, err)
+
+	info, err := os.Lstat(hookPath)
+	require.NoError(t, err, "a foreign hook must survive removal")
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
 }

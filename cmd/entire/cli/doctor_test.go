@@ -1811,3 +1811,81 @@ func TestComponentHasExpectedShape(t *testing.T) {
 		}
 	}
 }
+
+// A symlinked hooks directory stops installation, and nothing else says so:
+// every other command reports the hooks as absent. Naming core.hooksPath in the
+// remedy matters because git, not Entire, chose the path.
+func TestCheckGitHookSymlinks_ReportsSymlinkedHooksDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	realHooks := filepath.Join(dir, "real-hooks")
+	require.NoError(t, os.MkdirAll(realHooks, 0o750))
+	link := filepath.Join(dir, "linked-hooks")
+	if err := os.Symlink(realHooks, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	testutil.RunGit(t, dir, "config", "core.hooksPath", link)
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Git hooks directory: SYMLINK")
+	assert.Contains(t, output, realHooks, "the report must say where the link points")
+	assert.Contains(t, output, "core.hooksPath", "and how to point git at the target instead")
+}
+
+// A symlinked hook file is not an error — Entire backs it up and chains to it —
+// but the user should hear that the path they set up is no longer what git runs
+// first.
+func TestCheckGitHookSymlinks_ReportsSymlinkedHookFile(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	testutil.RunGit(t, dir, "config", "core.hooksPath", hooksDir)
+
+	elsewhere := filepath.Join(t.TempDir(), "shared-pre-push")
+	require.NoError(t, os.WriteFile(elsewhere, []byte("#!/bin/sh\n"), 0o700))
+	if err := os.Symlink(elsewhere, filepath.Join(hooksDir, "pre-push")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Git hooks: SYMLINKS PRESENT")
+	assert.Contains(t, output, elsewhere)
+	assert.Contains(t, output, strategy.GitHookBackupSuffix, "the note must name where the link will end up")
+}
+
+// The common case must stay silent: a doctor section that fires on every healthy
+// repo is one users learn to scroll past.
+func TestCheckGitHookSymlinks_SilentOnAPlainHooksDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	testutil.RunGit(t, dir, "config", "core.hooksPath", hooksDir)
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	assert.Empty(t, stdout.String())
+}

@@ -788,7 +788,7 @@ Don't use `fmt.Print*` for operational messages (checkpoint saves, hook invocati
 
 ### The Root Anchors
 
-Entire does filesystem I/O in seven trees, and each has one package that owns a
+Entire does filesystem I/O in eight trees, and each has one package that owns a
 shared `*os.Root` over it. **Never assemble a path into one of these and hand it
 to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 
@@ -799,6 +799,7 @@ to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 | the working tree | `worktreedir` | worktree root |
 | an agent's hook config | `agent.HookConfigFile` | worktree root (`.claude/`, `.cursor/`, `.gemini/`, `.github/hooks/`, `.factory/`, `.codex/`, `.opencode/plugins/`, `.pi/extensions/entire/`) |
 | an agent's session store | `agent.SessionStore` | the agent's own `GetSessionDir` |
+| the active git hooks dir | `strategy.hooksRoot` | `git rev-parse --git-path hooks`, absolutized |
 | per-user config / cache | `userdirs.ConfigRoot` / `CacheRoot` | `$ENTIRE_CONFIG_DIR` else `~/.config/entire`; `$XDG_CACHE_HOME/entire` else `~/.cache/entire` |
 | managed plugin tree | `pluginRoot` (`plugin_store.go`) | `pluginParentDir()` — `$ENTIRE_PLUGIN_DIR`, `%LOCALAPPDATA%`, or `$XDG_DATA_HOME` |
 
@@ -897,6 +898,25 @@ comments at each site say which case applies:
 - An agent's session store is where a hook payload's session ID becomes a path,
   via the agent's own `ResolveSessionFile`. `SessionStore.SessionFile` converts
   the result back to a name inside the store and **rejects** an ID that left it.
+- The git hooks directory holds no untrusted *name* — the five hook filenames are
+  compile-time constants — so it is anchored for the opposite reason: what is at
+  those names arrived from somewhere else. It was the last tree Entire wrote to
+  with bare `os.ReadFile`/`os.WriteFile` on a joined path, so a symlink at
+  `.git/hooks/pre-push` was read through and then *written* through, replacing
+  whatever the link named with a shell script. `hooksRoot` refuses a link at the
+  directory (git's own `--git-path hooks` answer, which `core.hooksPath` can put
+  anywhere, which is why no other anchor reaches it); the four reads go through
+  `osroot.ReadFileNoFollow`; and the write is `jsonutil.WriteFileAtomicIn`,
+  whose rename **replaces** a leaf link rather than following it.
+  `osroot.OpenFileNoFollow` is not the tool for that write — it rejects
+  `O_TRUNC` by design, precisely to push truncating writes onto the rename.
+  A symlinked hook is then classified as *foreign* rather than as absent, so it
+  is backed up to `<hook>.pre-entire` and chained to exactly as a foreign script
+  would be: refusing to read through someone's link must not mean silently
+  discarding it. `doctor`'s `checkGitHookSymlinks` reports both conditions, and
+  it is a separate function from `checkAgentDirSymlinks` because that one scans
+  worktree-relative paths through the worktree root and `core.hooksPath` can
+  name a directory outside the worktree entirely.
 
 **Rules that are load-bearing rather than stylistic:**
 
@@ -992,9 +1012,6 @@ comments at each site say which case applies:
 
 **Deliberately not rooted**, with the reason:
 
-- **`.git/hooks`** — `GetHooksDir` honours `core.hooksPath`, so the directory is
-  often not `.git`-resident at all, and the hook filenames are compile-time
-  constants. No untrusted name to contain.
 - **Global/system git config** — `checkpoint/configloader.go` installs a
   *symlink-following* `billy.Basic` on purpose. `os.Root` documents that
   "symbolic links must not be absolute" unconditionally, so go-git's default

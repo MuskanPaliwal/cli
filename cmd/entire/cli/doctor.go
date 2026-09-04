@@ -137,6 +137,10 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 	ctx := cmd.Context()
 
+	// Ahead of checkGitHooks, which is the check a symlinked hooks directory
+	// makes fail: the cause should be on screen before the failure it explains.
+	checkGitHookSymlinks(cmd)
+
 	// The git hook surface. Checked before the agent hook checks because it is
 	// the more fundamental one: if git hooks are broken, commits are not captured
 	// at all and agent-config drift is noise by comparison.
@@ -865,6 +869,80 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		fmt.Fprintln(w, "  cannot say whether hooks and skills can be installed under them.")
 		fmt.Fprintln(w, "  Fix: check the ownership and permissions of each path above.")
 	}
+}
+
+// checkGitHookSymlinks reports a symlink at the active git hooks directory, or
+// at one of the hooks Entire manages inside it.
+//
+// This needs its own function rather than an agentSymlinkCheckPaths entry, and
+// the reason is the path itself: that list is worktree-relative and scanned
+// through the worktree root, while core.hooksPath can name any directory at all
+// — a shared hooks directory in $HOME is a common setup — and a linked
+// worktree's hooks live in the common dir. Git resolves where the hooks are;
+// this only reports what is sitting there.
+//
+// The two findings differ in severity and so in remedy. A symlinked DIRECTORY
+// stops installation outright: Entire refuses to write hooks through a link, so
+// `entire status` reports them absent with nothing to say why — the same
+// invisible-after-the-fact condition checkAgentDirSymlinks exists for. A
+// symlinked HOOK FILE is not an error at all; it is simply not Entire's, so the
+// next install backs it up and chains to it, and the note is there so the user
+// is not surprised that the path they set up is no longer what git runs first.
+//
+// Read-only in both cases. Replacing a link means deciding what to do with its
+// target, which is not doctor's call.
+func checkGitHookSymlinks(cmd *cobra.Command) {
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
+
+	hooksDir, err := strategy.GetHooksDir(ctx)
+	if err != nil {
+		return // no repository: nothing to check
+	}
+	info, err := os.Lstat(hooksDir)
+	if err != nil {
+		return // absent or unreadable: checkGitHooks reports what that costs
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target := readlinkOrUnknown(hooksDir)
+		fmt.Fprintln(w, "Git hooks directory: SYMLINK")
+		fmt.Fprintf(w, "  %s -> %s\n", hooksDir, target)
+		fmt.Fprintln(w, "  Entire will not install hooks through a link, so its git hooks are not")
+		fmt.Fprintln(w, "  installed and other commands report them as absent rather than blocked.")
+		fmt.Fprintln(w, "  Fix: point git at the target directly, which says the same thing without")
+		fmt.Fprintln(w, "  the indirection:")
+		fmt.Fprintf(w, "    git config core.hooksPath %s\n", target)
+		fmt.Fprintln(w, "  or replace the link with a real directory.")
+		return
+	}
+	if !info.IsDir() {
+		return // InstallGitHook's own error covers core.hooksPath=/dev/null
+	}
+
+	var links []string
+	for _, name := range strategy.ManagedGitHookNames() {
+		hookInfo, lerr := os.Lstat(filepath.Join(hooksDir, name))
+		if lerr == nil && hookInfo.Mode()&os.ModeSymlink != 0 {
+			links = append(links, name)
+		}
+	}
+	if len(links) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w, "Git hooks: SYMLINKS PRESENT")
+	for i, name := range links {
+		if i == symlinkReportLimit {
+			fmt.Fprintf(w, "  ... and %d more\n", len(links)-symlinkReportLimit)
+			break
+		}
+		full := filepath.Join(hooksDir, name)
+		fmt.Fprintf(w, "  %s -> %s\n", full, readlinkOrUnknown(full))
+	}
+	fmt.Fprintf(w, "  Entire never installs a hook as a symlink, so these belong to you or to\n"+
+		"  another tool. It does not read or write through them: the next install\n"+
+		"  moves each one to <hook>%s and chains to it, so it still runs, but\n"+
+		"  after Entire's rather than instead of it.\n", strategy.GitHookBackupSuffix)
 }
 
 // componentScanOutcome is what scanForSymlinkedComponent found.
