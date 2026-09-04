@@ -1,0 +1,56 @@
+name: install.ps1 E2E
+
+# Runs scripts/install.ps1 for real against GitHub Releases on a Windows
+# runner, in both shells, and checks what the installer leaves behind: the
+# binaries, the raw user PATH, the replace-while-running path and the
+# nightly install. The offline suite stays in ci.yml; this is the network job.
+#
+# Scoop is deliberately not installed here: the Scoop branch's exit-code
+# contract is pinned by the unit tests, and get.scoop.sh plus a bucket clone
+# would add two third-party network dependencies to every installer PR. If
+# real-Scoop coverage is ever wanted it belongs in the weekly schedule run,
+# as a separate job with continue-on-error.
+on:
+  pull_request:
+    paths:
+      - scripts/install.ps1
+      - scripts/test/**
+      - .github/workflows/install-ps1-e2e.yml
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/install.ps1
+      - scripts/test/**
+      - .github/workflows/install-ps1-e2e.yml
+  schedule:
+    # Weekly, an hour after nightly.yml's 06:00 UTC daily build, so the
+    # nightly phase installs a release that is at most a day old. The
+    # releases side can drift under the installer between changes to it.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      # Invoke-GitHubApi sends this as a bearer; runners share egress IPs
+      # and the unauthenticated GitHub API limit is 60 requests an hour.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install, reinstall while running, install nightly
+        run: ./scripts/test/e2e.ps1
