@@ -77,6 +77,7 @@ Describe 'install.ps1' {
             $installer = [scriptblock]::Create((Get-Content -Raw (Get-InstallerPath)))
             $output = @(& $installer -Help 6>&1 | ForEach-Object { "$_" })
             $output[0] | Should -BeLike 'Usage: install.ps1*'
+            ($output -join "`n") | Should -BeLike '*manages its own PATH entry.*An explicit -InstallDir selects a release-archive install*'
         }
 
         It 'binds -Channel nightly through the scriptblock form' {

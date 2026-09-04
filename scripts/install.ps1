@@ -59,7 +59,7 @@ Options:
 Stable installs use Scoop when it is available. Nightly installs use the
 verified release archive because the Scoop bucket only publishes stable builds.
 
-Scoop chooses its own install location and manages its own PATH entry, so
+Scoop chooses its own install location and manages its own PATH entry.
 An explicit -InstallDir selects a release-archive install even when Scoop
 is available; -NoPathUpdate applies only to release-archive installs.
 "@
