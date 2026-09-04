@@ -1,0 +1,315 @@
+## Summary
+
+  PR #2253 establishes one central rule:
+
+  > Checkpoint IDs found anywhere in a commit message may be used for historical discovery, but only IDs in Git’s final trailer block may authorize checkpoint creation, reuse, reconciliation, or
+  > mutation.
+
+  Previously, a body paragraph containing Entire-Checkpoint: <existing-id> could redirect operations toward an unrelated checkpoint. That affected PostCommit condensation, attach, generated
+  explanations, and legacy session reconciliation.
+
+  There are no new CLI commands, flags, or storage formats. This is a parsing and authorization-boundary change.
+
+  A concrete example:
+
+  Implement feature
+
+  Entire-Checkpoint: A
+
+  Additional body text
+
+  Signed-off-by: Developer <dev@example.com>
+
+  - Read-only historical discovery still finds A, preserving squash-merge history.
+  - Mutation paths do not accept A, because the final trailer block contains only Signed-off-by.
+
+  If the message instead ends with:
+
+  Signed-off-by: Developer <dev@example.com>
+  Entire-Checkpoint: B
+
+  then B is the mutation-authorizing checkpoint.
+
+  ## Semantic changes
+
+   Area                         Before                                                                            After
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Checkpoint parsing           One permissive parser searched the whole message                                  Separate discovery and mutation parsers
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   PostCommit                   Body text could select the condensation target                                    Only a final-block checkpoint triggers condensation
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Attach                       Body text could select an existing checkpoint and receive the attached session    Attach reuses only a final-block ID; otherwise it creates a fresh checkpoint
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Commit preparation           Body text could suppress stamping a real trailer                                  A fresh final trailer is added unless one genuinely exists
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Amend                        Body text could be mistaken for an existing trailer                               Only an effective final trailer is preserved
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Explain generation           --generate could write a summary to a body-selected checkpoint                    Generation requires final-block authority
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Read-only explain/history    Could discover embedded squash trailers                                           Unchanged
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Legacy migration             A matching body ID could realign attribution state                                Reconciliation requires a final-block match
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Trailer grammar              Indented pseudo-trailers were accepted                                            Leading whitespace disqualifies them as trailers
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Continuations                Multiline Git trailers could invalidate the block                                 Indented lines after a real trailer are accepted as continuations
+  ───────────────────────────  ────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────────────────────────
+   Commit comments              Assumed # and stripped it indiscriminately                                        Follows core.commentString, core.commentChar, and auto, with source-aware cleanup
+
+  ## Why the parser was split instead of globally tightened
+
+  The checkpoint transcripts record that making ParseCheckpoint globally strict was deliberately rejected.
+
+  Squash merges commonly embed original commit messages like this:
+
+  Squashed commit:
+
+  First change
+
+  Entire-Checkpoint: A
+
+  Second change
+
+  Entire-Checkpoint: B
+
+  Those checkpoint lines are body paragraphs in the resulting squash commit. Resume and read-only history discovery need to find both.
+
+  Unfortunately, a legitimate embedded squash trailer and malicious checkpoint-shaped body text can be byte-for-byte identical. Looking up whether the checkpoint exists does not authenticate it—an
+  attacker can name an existing ID.
+
+  Therefore the implementation uses two levels of evidence:
+
+  - Whole-message occurrence: sufficient for discovery.
+  - Final-trailer-block placement: sufficient for local mutation decisions.
+
+  “Final-block authority” is intentionally not described as cryptographic trust; a user can still deliberately author a final trailer.
+
+  ## File-by-file explanation
+
+  ### Production changes
+
+  1. cmd/entire/cli/trailers/trailers.go:152
+
+  Introduces:
+
+  - ParseCheckpointFromFinalTrailerBlock
+  - ParseAllCheckpointsFromFinalTrailerBlock
+
+  The existing ParseCheckpoint and ParseAllCheckpoints remain permissive, but their contracts now explicitly describe their results as discovery candidates rather than mutation authority.
+
+  The strict parser:
+
+  - Inspects only the last non-empty paragraph.
+  - Requires unindented Key: value lines.
+  - Allows whitespace-leading continuation lines only after a genuine trailer.
+  - Never interprets a continuation as a new checkpoint.
+  - Validates checkpoint IDs.
+  - Deduplicates multiple IDs while preserving order.
+  - Returns the first ID from the singular API.
+
+  finalTrailerBlock was also corrected not to TrimSpace before classifying a line. Otherwise:
+
+    Entire-Checkpoint: A
+
+  would incorrectly become a valid trailer even though Git treats it as body/continuation text.
+
+  HasOPFApplied now follows the same unindented semantics, preventing an indented Entire-OPF-Applied: true from being accepted.
+
+  2. cmd/entire/cli/strategy/manual_commit_hooks.go:145
+
+  All commit lifecycle mutation decisions move to final-block parsing:
+
+  - PrepareCommitMsg no longer lets a body ID suppress creation of the session’s real checkpoint trailer.
+  - handleAmendCommitMsg preserves only a genuine final trailer; otherwise it may restore the session’s recorded ID.
+  - The agent-commit fast path applies the same rule.
+  - CommitMsg checks only the effective final trailer before deciding whether an otherwise empty commit should have Entire’s trailer removed.
+  - PostCommit condenses session data only when HEAD has a final-block checkpoint.
+
+  The file also gains source-aware commit-message cleanup:
+
+  - Editor/template flows remove lines Git will treat as comments before locating the final trailer block.
+  - -m and -F flows preserve comment-prefixed lines because they are user-supplied content, not editor boilerplate.
+
+  That distinction prevents this -m message from being misread:
+
+  Subject
+
+  Entire-Checkpoint: A
+  # actual user content
+
+  Stripping # actual user content would falsely promote A into the final block.
+
+  Comment handling now reads Git configuration in this precedence order:
+
+  1. core.commentString
+  2. core.commentChar
+  3. Default #
+
+  For auto, it chooses the first candidate not already starting a message line. Entire’s explanatory comments are emitted using that same prefix.
+
+  CommitMsg strips comments for validation only when Entire’s own “Remove the Entire-Checkpoint…” marker is present. That avoids treating arbitrary user-authored comment-looking lines as disposable.
+
+  3. cmd/entire/cli/attach.go:651
+
+  Two decisions are hardened:
+
+  - resolveCheckpointID reuses only IDs from HEAD’s final trailer block.
+  - promptAmendCommit considers a checkpoint already attached only if that exact ID is in the final block.
+
+  Consequently, a body reference cannot make attach append a transcript to an unrelated existing checkpoint or avoid adding the real trailer.
+
+  When several final checkpoint trailers exist, attach preserves the previous policy of selecting the last one.
+
+  4. cmd/entire/cli/explain.go:3012
+
+  Adds parseCheckpointForExplainCommit, which chooses parsing policy according to the operation:
+
+  - Read-only explanation uses whole-message discovery.
+  - --generate uses final-block parsing because it eventually calls store.Write.
+
+  This is applied to both:
+
+  - Explicit checkpoint explain --commit <ref>
+  - Positional target resolution that falls back from checkpoint lookup to a commit
+
+  This preserves squash-history explanation while stopping generated summaries from being written to a checkpoint named only in commit-body text.
+
+  5. cmd/entire/cli/strategy/manual_commit_migration.go:33
+
+  Legacy states may lack LastCheckpointCommitHash. Previously, a whole-message match against LastCheckpointID could select the reconciliation path and realign both BaseCommit and
+  AttributionBaseCommit.
+
+  Now the ID must appear in the final trailer block. A body-only match falls through to ordinary migration, leaving the attribution base pinned.
+
+  The recorded rationale is that backward compatibility should not allow weaker evidence to mutate future attribution.
+
+  ### Test changes
+
+  6. cmd/entire/cli/trailers/trailers_test.go:346
+
+  Covers the parser contract:
+
+  - Body checkpoint followed by a different final block
+  - Final versus embedded IDs
+  - Multiple and duplicate final IDs
+  - Checkpoint text inside another trailer’s value
+  - Space- and tab-indented pseudo-trailers
+  - Valid continuation lines
+  - A continuation containing checkpoint-shaped text
+  - Singular parser returning the first final ID
+
+  It also adds t.Parallel() to the existing checkpoint parser test; that has no product semantic effect.
+
+  7. cmd/entire/cli/strategy/manual_commit_test.go:872
+
+  Updates existing helper calls for the new comment-prefix parameter and verifies:
+
+  - Custom core.commentChar
+  - core.commentString precedence
+  - auto avoiding an already-used prefix
+  - Editor comments being cleaned
+  - -m/-F comment-looking user content being preserved
+  - Entire’s explanatory comments using the configured prefix
+
+  8. cmd/entire/cli/strategy/manual_commit_worktree_session_test.go:46
+
+  Extracts shared setup and adds a hook-level regression:
+
+  - Input contains forged checkpoint-shaped body text.
+  - PrepareCommitMsg stamps a new final checkpoint.
+  - Whole-message discovery still returns both IDs.
+
+  This directly demonstrates the discovery/authorization split.
+
+  9. cmd/entire/cli/strategy/phase_postcommit_test.go:75
+
+  Proves an indented pseudo-trailer does not authorize condensation:
+
+  - Session StepCount remains unchanged.
+  - No persistent checkpoint branch is created.
+
+  10. cmd/entire/cli/attach_test.go:2021
+
+  Exercises the durable attach boundary rather than just parser helpers:
+
+  - Creates an existing checkpoint containing an unrelated session.
+  - Creates HEAD with either a body checkpoint or indented pseudo-trailer naming that checkpoint.
+  - Runs real attach logic.
+  - Verifies the unrelated checkpoint remains untouched.
+  - Verifies the attached transcript is written under a newly generated checkpoint.
+
+  11. cmd/entire/cli/explain_test.go:445
+
+  Verifies both explicit and positional --generate paths reject a body-selected ID, while a separate test confirms read-only explain still discovers it.
+
+  12. cmd/entire/cli/strategy/manual_commit_migration_test.go:212
+
+  Creates legacy state without LastCheckpointCommitHash and a commit containing:
+
+  - The session’s ID in the body
+  - A different ID in the final trailer block
+
+  It verifies normal migration occurs and AttributionBaseCommit is not realigned.
+
+  ## How the two commits evolved
+
+  - 2d16b3666 introduced the discovery-versus-mutation parser split and applied it to hooks and attach.
+  - ba2a0d923 completed the boundary after review found four gaps:
+      - Explain generation
+      - Legacy migration
+      - Indented pseudo-trailers
+      - Incorrect hard-coded comment cleanup
+
+  The second commit also added Git-style continuation support and upgraded attach testing to inspect persistent storage.
+
+  One review concern—hasUserContent treating checkpoint-shaped-only content specially—was dismissed because that behavior predates this branch and is not a regression introduced here.
+
+  ## Current branch and PR state
+
+  - HEAD: ba2a0d923
+  - Two commits over the merge base fce049cd3
+  - Diff: 12 files, 530 additions, 43 deletions
+  - Local-only untracked files: progress.md and review.md
+  - Local main is behind upstream/main, but both three-dot comparisons produce the same 12-file PR change set.
+  - The PR is currently a mergeable draft, blocked from merging by draft/review state. No GitHub reviews or comments are currently recorded.
+  - GitHub currently reports a neutral Entire Gates check.
+
+  The PR records successful lint, unit, integration, CI canary, and diff-check runs. Checkpoint history confirms no paid real-agent E2E was run. During this read-only analysis I independently reran
+  only git diff --check, which passed.
+
+─ Worked for 6m 28s ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› no, walk me through each piece one thing at a time walk methrough this one piece at a time
+
+---
+
+now
+
+---
+
+what is the issue?. help me understand in simple terms. like why is this a bug?
+
+---
+
+what does authorise checkpoint update mean?
+
+---
+
+nice so don't you think it's an assumption. where are more such assumptions lying in the codebase?
+
+---
+
+so does mean the bug exist? also can you craete a handoff session?
+
+---
+
+nice we can continue our walkthrough one by one
+
+---
+
+what is a trailer and I'm not getting anything. Can you just make me understand in simple terms like the problem and the solution that we came up with?
+
+---
+
+and how do we know if it's a sqaush merge?
