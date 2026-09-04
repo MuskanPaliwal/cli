@@ -149,15 +149,15 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 		}
 	}
 
-	// OpenCode's non-interactive mode auto-rejects external_directory permission
-	// since there's no user to prompt. Write a config to allow it.
-	if agent.Name() == "opencode" {
-		cfg := `{"$schema": "https://opencode.ai/config.json", "permission": {"external_directory": "allow"}}`
-		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-			cfg = fmt.Sprintf(`{"$schema": "https://opencode.ai/config.json", "permission": {"external_directory": "allow"}, "provider": {"anthropic": {"options": {"apiKey": %q}}}}`, key)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(cfg+"\n"), 0o644); err != nil {
-			t.Fatalf("write opencode.json: %v", err)
+	// Agents that need files planted before their first run in a repo get them
+	// here — after `entire enable` has written the agent's own config, so a
+	// seed can sit alongside it. opencode uses this for its config file and for
+	// a pre-built .opencode dependency tree it would otherwise install on the
+	// clock; keeping both in the agent is why this is an interface rather than
+	// another arm of the name switch above.
+	if seeder, ok := agent.(agents.RepoSeeder); ok {
+		if err := seeder.SeedRepo(dir); err != nil {
+			t.Fatalf("seed repo for %s: %v", agent.Name(), err)
 		}
 	}
 
