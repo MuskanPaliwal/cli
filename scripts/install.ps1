@@ -1,4 +1,11 @@
 [CmdletBinding()]
+# The wrapper scriptblock's parameters are read inside its nested functions,
+# which PSScriptAnalyzer does not follow when deciding whether a parameter is
+# used. One suppression per parameter, so a new unused parameter still reports.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectedChannel')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectedInstallDir')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SkipPathUpdate')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ShowHelp')]
 param(
     [ValidateSet("stable", "nightly")]
     [string] $Channel = "stable",
@@ -297,6 +304,8 @@ Scoop chooses its own install location and manages its own PATH entry, so
     }
 
     function Test-PathContains {
+        # "Contains" is a verb form, not a plural noun.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
         param(
             [AllowNull()]
             [string] $PathValue,
@@ -388,7 +397,7 @@ Scoop chooses its own install location and manages its own PATH entry, so
         # Write-Output with the unary comma prevents PowerShell from unrolling
         # a single-element array, which would lose .Count under StrictMode 2.0.
         $results = @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
-        Write-Output -NoEnumerate $results
+        Write-Output -NoEnumerate -InputObject $results
     }
 
     function Install-Entire {
@@ -604,7 +613,7 @@ Scoop chooses its own install location and manages its own PATH entry, so
             exit 1
         }
         # irm | iex: throw without Write-Host so the message appears once, and
-        # do not exit 1 — that would close the user's interactive shell.
+        # do not exit 1 -- that would close the user's interactive shell.
         throw $message
     }
 } $Channel $InstallDir $NoPathUpdate.IsPresent $Help.IsPresent (-not [string]::IsNullOrEmpty($MyInvocation.MyCommand.Path))
