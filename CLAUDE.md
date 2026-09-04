@@ -249,6 +249,18 @@ mise run test
 mise run test:integration
 ```
 
+### Running the Windows Installer Tests
+
+`scripts/install.ps1` has its own Pester suite and PSScriptAnalyzer pass under
+`scripts/test/`; `.github/workflows/install-ps1-e2e.yml` runs it in both
+Windows PowerShell 5.1 and pwsh on PRs that touch the installer or its tests,
+followed by a real install on a Windows runner, and `mise run test:ps1` runs
+the suite locally when `pwsh` is installed (it skips cleanly otherwise; it is
+not part of `check`). On a fresh machine run
+`scripts/test/init.ps1` once first: it installs Pester and PSScriptAnalyzer for
+the current user and, on Windows PowerShell 5.1, the NuGet package provider
+that `Install-Module` needs there.
+
 ### Running All Tests (CI)
 
 ```bash
