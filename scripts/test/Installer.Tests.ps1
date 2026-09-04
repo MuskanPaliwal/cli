@@ -396,7 +396,11 @@ Describe 'Install-BinaryFile' {
             $target = Join-Path $dir 'entire.exe'
             [IO.Directory]::CreateDirectory($dir) | Out-Null
             Write-TestBinary -Path (Join-Path $dir 'src.bin') -Content 'new'
-            $old = Invoke-RunningCopy -Path "$target.old"
+            # A running .old arises the way the installer makes it: the image
+            # is started as entire.exe and then renamed while running. Windows
+            # will not start a process from a file named entire.exe.old.
+            $old = Invoke-RunningCopy -Path $target
+            Move-Item -LiteralPath $target -Destination "$target.old"
             $current = Invoke-RunningCopy -Path $target
             try {
                 Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target

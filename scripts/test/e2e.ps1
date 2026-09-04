@@ -72,6 +72,11 @@ function Get-ExpectedKind {
 function Invoke-Installer {
     param([string[]] $Arguments)
     $installer = [scriptblock]::Create((Get-Content -Raw -LiteralPath $installerPath))
+    # Splatting an absent [string[]] passes one empty string, which binds
+    # positionally to -Channel and fails its ValidateSet.
+    if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
+        $Arguments = @()
+    }
     # Write-Host is the information stream; merge it so the report can be asserted.
     & $installer @Arguments 6>&1 | ForEach-Object { "$_" }
 }
