@@ -20,12 +20,13 @@ import (
 // Hook marker used to identify Entire CLI hooks
 const entireHookMarker = "Entire CLI hooks"
 
-const backupSuffix = ".pre-entire"
+// GitHookBackupSuffix is what InstallGitHook moves a pre-existing hook to
+// before writing its own. Exported so diagnostics elsewhere can name the file
+// the user will find rather than spelling it a second time; backupSuffix is the
+// in-package shorthand for it.
+const GitHookBackupSuffix = ".pre-entire"
 
-// GitHookBackupSuffix is the suffix InstallGitHook moves a pre-existing hook to
-// before writing its own, exported so diagnostics can name the file the user
-// will find rather than spelling it a second time.
-const GitHookBackupSuffix = backupSuffix
+const backupSuffix = GitHookBackupSuffix
 const chainComment = "# Chain: run pre-existing hook"
 const missingEntireGitHookWarning = "[entire] Entire CLI is enabled but not installed or not on PATH. Skipping Entire Git hook; continuing. Installation guide: https://docs.entire.io/cli/installation#installation-methods"
 

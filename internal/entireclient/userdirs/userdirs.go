@@ -23,9 +23,7 @@ import (
 	"github.com/entireio/cli/internal/testdirs"
 )
 
-// The environment variables that override these directories. Named rather than
-// spelled at each use, because RequireAbsoluteOverride reports them back to the
-// user and the string in the error must be the one they can set.
+// The environment variables that override these directories.
 const (
 	// EnvConfigDir overrides the per-user config directory.
 	EnvConfigDir = "ENTIRE_CONFIG_DIR"
@@ -54,6 +52,11 @@ const (
 // the config directory the platform default is the developer's REAL
 // ~/.config/entire — quietly substituting it for a test harness's mistyped
 // override is the one outcome worse than an error.
+// name is whatever the message should call the directory. Pass the environment
+// variable where the value plainly came from one, so the reader knows what to
+// change; callers a level down from the variable (contexts, discovery) pass the
+// role instead, because by then the value may equally have come from the
+// platform default.
 func RequireAbsoluteOverride(name, value string) error {
 	if !filepath.IsAbs(value) {
 		return fmt.Errorf("%s must be an absolute path, got %q", name, value)

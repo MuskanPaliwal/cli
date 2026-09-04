@@ -930,12 +930,10 @@ func checkGitHookSymlinks(cmd *cobra.Command) {
 		return
 	}
 
+	// No symlinkReportLimit here: the candidates are the five managed hook
+	// names, so the list cannot run away the way a walk of .entire can.
 	fmt.Fprintln(w, "Git hooks: SYMLINKS PRESENT")
-	for i, name := range links {
-		if i == symlinkReportLimit {
-			fmt.Fprintf(w, "  ... and %d more\n", len(links)-symlinkReportLimit)
-			break
-		}
+	for _, name := range links {
 		full := filepath.Join(hooksDir, name)
 		fmt.Fprintf(w, "  %s -> %s\n", full, readlinkOrUnknown(full))
 	}
