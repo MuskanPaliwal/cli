@@ -1038,6 +1038,15 @@ comments at each site say which case applies:
   it by anchoring a root on `filepath.Dir(sessionRef)` — that is the derived
   base the rule above refuses, and it would contain nothing while looking like
   it did.
+
+  `TestTranscriptReadsOnlyShrink` (`agent/transcript_read_guard_test.go`) is a
+  **ratchet** over that set: it pins the per-file count of
+  `os.ReadFile(sessionRef)`-shaped reads and fails the build when one grows or a
+  new file appears, and equally when a listed one goes away without its entry
+  following. Growth is the regression it exists to stop — a new agent
+  integration copies the nearest existing one, so the shape spreads by
+  imitation — and a stale entry is the slower failure, since the count is the
+  only record of how much of the gap is left.
 - **Global/system git config** — see the config-loader bullet above; that is the
   one place rooting is actively wrong.
 - **A directory the caller is about to create, replace, or delete** — creating,
