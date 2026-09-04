@@ -220,10 +220,11 @@ function Invoke-GitHubApi {
         $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
     }
 
-    # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
-    # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
+    # No -UseBasicParsing here: only Invoke-WebRequest runs the Internet
+    # Explorer HTML parser on Windows PowerShell 5.1; Invoke-RestMethod
+    # decodes the body itself. See Save-RemoteFile for the one that needs it.
     try {
-        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $ApiTimeoutSec -UseBasicParsing
+        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $ApiTimeoutSec
     }
     catch {
         # Only WebException (5.1) and HttpResponseException (pwsh) carry a

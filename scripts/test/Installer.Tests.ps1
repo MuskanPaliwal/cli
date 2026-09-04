@@ -1,3 +1,8 @@
+# One case runs the installer through the documented `iex "& {...}"` shape,
+# which is the point of that case.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingInvokeExpression', '', Justification = 'Pins the documented iex one-liner shape')]
+param()
+
 Describe 'install.ps1' {
     BeforeAll {
         function Get-InstallerPath {
@@ -83,6 +88,14 @@ Describe 'install.ps1' {
         It 'binds -Channel nightly through the scriptblock form' {
             $installer = [scriptblock]::Create((Get-Content -Raw (Get-InstallerPath)))
             $output = @(& $installer -Channel nightly -Help 6>&1 | ForEach-Object { "$_" })
+            $output[0] | Should -BeLike 'Usage: install.ps1*'
+        }
+
+        # The README's nightly one-liner, with the download replaced by a file
+        # read: the fetched text is wrapped in braces and called with arguments.
+        It 'binds arguments through the documented iex "& {...}" form' {
+            $path = Get-InstallerPath
+            $output = @(Invoke-Expression "& {$(Get-Content -Raw $path)} -Channel nightly -Help" 6>&1 | ForEach-Object { "$_" })
             $output[0] | Should -BeLike 'Usage: install.ps1*'
         }
 
