@@ -658,10 +658,13 @@ Describe 'Get-EntireCopy' {
         Mock Get-EntireOnPath { @([pscustomobject]@{ Source = (Join-Path $processDir 'entire.exe') }) }
         Mock Get-UserEnvironmentValue { "$storedDir;$processDir" }
 
-        $sources = @(Get-EntireCopy | ForEach-Object { $_.Source })
-        $sources[0] | Should -Be (Join-Path $processDir 'entire.exe')
-        $sources | Should -Contain (Join-Path $storedDir 'entire.exe')
-        @($sources | Where-Object { $_ -eq (Join-Path $processDir 'entire.exe') }) | Should -HaveCount 1
+        # Assigned, then indexed: piping the -NoEnumerate result straight into
+        # ForEach-Object would member-enumerate .Source over the whole array on
+        # pwsh and hide a wrong element count.
+        $copies = Get-EntireCopy
+        @($copies) | Should -HaveCount 2
+        $copies[0].Source | Should -Be (Join-Path $processDir 'entire.exe')
+        $copies[1].Source | Should -Be (Join-Path $storedDir 'entire.exe')
     }
 
     It 'ignores stored PATH directories without an entire.exe' {
@@ -671,6 +674,7 @@ Describe 'Get-EntireCopy' {
         Mock Get-EntireOnPath { @([pscustomobject]@{ Source = (Join-Path $processDir 'entire.exe') }) }
         Mock Get-UserEnvironmentValue { (Join-Path $TestDrive 'empty') + ';;' }
 
-        @(Get-EntireCopy | Where-Object { $_.Source -like "*$TestDrive*" }) | Should -HaveCount 1
+        $copies = Get-EntireCopy
+        @($copies | Where-Object { $_.Source -like "*$TestDrive*" }) | Should -HaveCount 1
     }
 }

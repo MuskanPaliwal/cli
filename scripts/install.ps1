@@ -849,9 +849,12 @@ function Install-Entire {
         }
 
         # The verdict is about what this shell runs; the list is about every
-        # copy the user has, including ones this shell cannot see yet.
+        # copy the user has, including ones this shell cannot see yet. Both
+        # are assigned before being piped: their -NoEnumerate output reaches a
+        # pipeline as one array on pwsh, and as its items on 5.1.
         $pathCommands = Get-EntireOnPath
-        $conflicting = @(Get-EntireCopy | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
+        $copies = Get-EntireCopy
+        $conflicting = @($copies | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
         if ($conflicting.Count -gt 0) {
             # $first can be empty: with -NoPathUpdate nothing put the new
             # install on this shell's PATH, while stored copies still list.
