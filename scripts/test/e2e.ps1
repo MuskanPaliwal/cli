@@ -70,13 +70,9 @@ function Get-ExpectedKind {
 }
 
 function Invoke-Installer {
-    param([string[]] $Arguments)
+    # A hashtable splat binds by name; an array splat would bind positionally.
+    param([hashtable] $Arguments = @{})
     $installer = [scriptblock]::Create((Get-Content -Raw -LiteralPath $installerPath))
-    # Splatting an absent [string[]] passes one empty string, which binds
-    # positionally to -Channel and fails its ValidateSet.
-    if ($null -eq $Arguments -or $Arguments.Count -eq 0) {
-        $Arguments = @()
-    }
     # Write-Host is the information stream; merge it so the report can be asserted.
     & $installer @Arguments 6>&1 | ForEach-Object { "$_" }
 }
@@ -157,7 +153,7 @@ try {
     # ---- Phase 3: nightly into a second directory -------------------------
     $phase = 'phase 3: nightly to a custom dir'
     Write-Host "==> $phase"
-    $report = Invoke-Installer -Arguments @('-Channel', 'nightly', '-InstallDir', $nightlyDir) | Out-String
+    $report = Invoke-Installer -Arguments @{ Channel = 'nightly'; InstallDir = $nightlyDir } | Out-String
 
     Assert-True -Phase $phase -What 'conflict warning printed' -Condition ($report -match '! WARNING: PATH conflict detected')
     Assert-True -Phase $phase -What 'stable install named as the other copy' -Condition ($report.Contains("! Also found:   $(Join-Path $stableDir 'entire.exe')"))
