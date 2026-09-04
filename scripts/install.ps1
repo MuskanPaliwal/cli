@@ -56,6 +56,40 @@ Scoop chooses its own install location and manages its own PATH entry, so
 "@
 }
 
+# $env:OS is "Windows_NT" in both Windows PowerShell and pwsh on Windows and
+# unset elsewhere; $IsWindows does not exist in Windows PowerShell 5.1.
+function Test-IsWindows {
+    $env:OS -eq 'Windows_NT'
+}
+
+# A runtime check, not `#Requires -Version`: that line is honoured when the
+# script runs from its file and ignored when the text arrives through
+# irm | iex or [scriptblock]::Create.
+function Test-MinimumPowerShell {
+    $PSVersionTable.PSVersion -ge [version]'5.1'
+}
+
+function Test-FullLanguageMode {
+    $ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage'
+}
+
+function Assert-Prerequisite {
+    if (-not (Test-IsWindows)) {
+        throw "install.ps1 supports Windows only. On macOS and Linux, run: curl -fsSL https://entire.io/install.sh | bash"
+    }
+    # No TLS 1.2 check follows: Windows PowerShell 5.1 needs .NET Framework
+    # 4.5.2 or later, which has had Tls12 since 4.5, so a host that passes this
+    # check always has it.
+    if (-not (Test-MinimumPowerShell)) {
+        throw "Windows PowerShell 5.1 or later is required; this is $($PSVersionTable.PSVersion). Get a newer PowerShell at https://aka.ms/powershell"
+    }
+    # Later steps use registry types and Add-Type, which ConstrainedLanguage
+    # rejects with errors that do not name the cause.
+    if (-not (Test-FullLanguageMode)) {
+        throw "PowerShell FullLanguage mode is required; this session is in $($ExecutionContext.SessionState.LanguageMode) mode (usually set by an AppLocker or WDAC policy)."
+    }
+}
+
 function Invoke-Scoop {
     param(
         [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)]
@@ -396,6 +430,8 @@ function Install-Entire {
         Write-Usage
         return
     }
+
+    Assert-Prerequisite
 
     Write-Info "Installing Entire CLI..."
 

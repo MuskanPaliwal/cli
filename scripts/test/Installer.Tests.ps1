@@ -30,10 +30,25 @@ Describe 'install.ps1' {
             [pscustomobject]@{ Output = $output; ExitCode = $LASTEXITCODE }
         }
 
+        # On Windows the run reaches the direct-install branch and fails at the
+        # stubbed network call; elsewhere the OS guard refuses first, so the
+        # message that proves the installer ran is the guard's.
         function Assert-DirectInstallBranch {
             param([pscustomobject] $Run)
             $Run.Output | Should -Contain 'SCOOP:False'
-            $Run.Output | Should -Contain '==> Installing Entire CLI...'
+            if ($env:OS -eq 'Windows_NT') {
+                $Run.Output | Should -Contain '==> Installing Entire CLI...'
+            }
+        }
+
+        function Assert-ExpectedFailure {
+            param([string[]] $Output, [string] $Prefix)
+            if ($env:OS -eq 'Windows_NT') {
+                $Output | Should -Contain "${Prefix}Error: entire-test: network blocked"
+            }
+            else {
+                @($Output | Where-Object { $_ -like "${Prefix}Error: install.ps1 supports Windows only.*" }) | Should -HaveCount 1
+            }
         }
 
         # The installer's own `exit 1` must not be reached when it runs inside
@@ -44,9 +59,7 @@ Describe 'install.ps1' {
             Assert-DirectInstallBranch -Run $Run
             @($Run.Output | Where-Object { $_ -like 'CAUGHT:Error: *' }) | Should -HaveCount 1
             @($Run.Output | Where-Object { $_ -like 'Error: *' }) | Should -HaveCount 0
-            if ($env:OS -eq 'Windows_NT') {
-                $Run.Output | Should -Contain 'CAUGHT:Error: entire-test: network blocked'
-            }
+            Assert-ExpectedFailure -Output $Run.Output -Prefix 'CAUGHT:'
             $Run.Output | Should -Contain 'ALIVE'
             $Run.ExitCode | Should -Be 7
         }
@@ -97,9 +110,7 @@ Describe 'install.ps1' {
             $run = Invoke-InstallerChild -Body "& '$(Get-InstallerPath)' -InstallDir '$installDir'; exit `$LASTEXITCODE"
             Assert-DirectInstallBranch -Run $run
             Assert-NoExceptionFormatting -Output $run.Output
-            if ($env:OS -eq 'Windows_NT') {
-                $run.Output | Should -Contain 'Error: entire-test: network blocked'
-            }
+            Assert-ExpectedFailure -Output $run.Output -Prefix ''
             $run.ExitCode | Should -Be 1
         }
 
@@ -107,15 +118,58 @@ Describe 'install.ps1' {
         # inherits the cut-down PATH, but it is a fresh process, so the
         # Invoke-RestMethod stub cannot reach it. A drive that does not exist
         # fails in Get-NormalizedPath, which runs before the registry read and
-        # the first network call on every OS, so this case asserts the provider
-        # message instead of the sentinel.
+        # the first network call, so on Windows this case asserts the provider
+        # message instead of the sentinel. Elsewhere the OS guard refuses first.
         It 'exits the process with 1 when run with -File' {
             $shell = (Get-Process -Id $PID).Path
             $run = Invoke-InstallerChild -Body "& '$shell' -NoProfile -NonInteractive -File '$(Get-InstallerPath)' -InstallDir 'entiretestnodrive:\bin'; exit `$LASTEXITCODE"
             Assert-DirectInstallBranch -Run $run
             Assert-NoExceptionFormatting -Output $run.Output
-            @($run.Output | Where-Object { $_ -like 'Error: *Cannot find drive*entiretestnodrive*' }) | Should -HaveCount 1
+            if ($env:OS -eq 'Windows_NT') {
+                @($run.Output | Where-Object { $_ -like 'Error: *Cannot find drive*entiretestnodrive*' }) | Should -HaveCount 1
+            }
+            else {
+                @($run.Output | Where-Object { $_ -like 'Error: install.ps1 supports Windows only.*' }) | Should -HaveCount 1
+            }
             $run.ExitCode | Should -Be 1
         }
+    }
+}
+
+Describe 'Assert-Prerequisite' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'refuses a non-Windows host and points at install.sh' {
+        Mock Test-IsWindows { $false }
+        { Assert-Prerequisite } | Should -Throw -ExpectedMessage '*supports Windows only*install.sh*'
+    }
+
+    It 'refuses PowerShell older than 5.1' {
+        Mock Test-IsWindows { $true }
+        Mock Test-MinimumPowerShell { $false }
+        { Assert-Prerequisite } | Should -Throw -ExpectedMessage '*5.1 or later is required*'
+    }
+
+    It 'refuses a session that is not in FullLanguage mode' {
+        Mock Test-IsWindows { $true }
+        Mock Test-MinimumPowerShell { $true }
+        Mock Test-FullLanguageMode { $false }
+        { Assert-Prerequisite } | Should -Throw -ExpectedMessage '*FullLanguage mode is required*'
+    }
+
+    It 'reports the host before the PowerShell version' {
+        Mock Test-IsWindows { $false }
+        Mock Test-MinimumPowerShell { $false }
+        Mock Test-FullLanguageMode { $false }
+        { Assert-Prerequisite } | Should -Throw -ExpectedMessage '*supports Windows only*'
+    }
+
+    It 'passes when every prerequisite holds' {
+        Mock Test-IsWindows { $true }
+        Mock Test-MinimumPowerShell { $true }
+        Mock Test-FullLanguageMode { $true }
+        { Assert-Prerequisite } | Should -Not -Throw
     }
 }
