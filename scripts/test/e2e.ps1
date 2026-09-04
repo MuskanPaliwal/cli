@@ -154,6 +154,8 @@ try {
     $phase = 'phase 3: nightly to a custom dir'
     Write-Host "==> $phase"
     $report = Invoke-Installer -Arguments @{ Channel = 'nightly'; InstallDir = $nightlyDir } | Out-String
+    # The assertions below judge this text; show it so a failure is diagnosable from the log.
+    Write-Host $report
 
     Assert-True -Phase $phase -What 'conflict warning printed' -Condition ($report -match '! WARNING: PATH conflict detected')
     Assert-True -Phase $phase -What 'stable install named as the other copy' -Condition ($report.Contains("! Also found:   $(Join-Path $stableDir 'entire.exe')"))
