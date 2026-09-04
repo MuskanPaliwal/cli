@@ -54,21 +54,37 @@ func (a *openCodeAgent) IsTransientError(out Output, _ error) bool {
 	return false
 }
 
+// openCodeWarmupBudget bounds a single warmup attempt. It sits far above the
+// cost of the trivial model round-trip on purpose: the warmup's job is to pay
+// opencode's first-run costs (per-directory dependency install, DB migration)
+// once and serially, before ~40 tests start in parallel, so a budget that kills
+// the attempt part-way leaves that work half-done for every test that follows.
+// It was 30s until 2026-09-04, when opencode's startup latency stepped from
+// ~10s to over 30s and the warmup began being killed on every CI run.
+const openCodeWarmupBudget = 90 * time.Second
+
 func (a *openCodeAgent) Bootstrap() error {
 	// opencode has first-run DB migration + node_modules resolution that
 	// races with parallel test execution (upstream issue #6935).
 	// Run a trivial prompt to force full initialization before tests.
+	//
+	// Each attempt's duration is reported whether it succeeds or not: this is
+	// the only serial, uncontended measurement of opencode startup we take, so
+	// it is the cheapest place to see a step change in it from the CI log.
 	for i := range 3 {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), openCodeWarmupBudget)
 		cmd := exec.CommandContext(ctx, a.Binary(), "run", "--model", a.model, "say hi")
 		cmd.Env = os.Environ()
 		out, err := cmd.CombinedOutput()
 		cancel()
+		elapsed := time.Since(start).Round(time.Millisecond)
 		if err == nil {
+			fmt.Fprintf(os.Stderr, "opencode warmup succeeded on attempt %d in %s\n", i+1, elapsed)
 			return nil
 		}
 		if i < 2 {
-			fmt.Fprintf(os.Stderr, "opencode warmup attempt %d failed: %s\n%s\n", i+1, err, out)
+			fmt.Fprintf(os.Stderr, "opencode warmup attempt %d failed after %s: %s\n%s\n", i+1, elapsed, err, out)
 			time.Sleep(5 * time.Second)
 		}
 	}
