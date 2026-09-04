@@ -134,37 +134,42 @@ function Test-ScoopAppInstalled {
     }
 }
 
+function Format-ScoopOutput {
+    param($Output)
+    ($Output | Out-String).Trim()
+}
+
+# `scoop bucket add` exits 0 when it adds the bucket and 2 when the bucket
+# is already there (0 in Scoop releases before v0.3.0); every real failure
+# exits 1. Asking first with `bucket list` is not an option: its output is
+# rendered text whose shape changes with the number of columns, and on a
+# Scoop with no buckets at all it exits 2 itself.
+function Add-EntireScoopBucket {
+    Write-Info "Adding the Entire Scoop bucket..."
+    $added = Invoke-Scoop bucket add entire $ScoopBucketUrl
+    if ($added.ExitCode -notin 0, 2) {
+        throw "Failed to add the Entire Scoop bucket (scoop exited $($added.ExitCode)). $(Format-ScoopOutput $added.Output)"
+    }
+}
+
 function Install-EntireWithScoop {
     Write-Info "Scoop detected; installing Entire CLI with Scoop..."
 
-    $listed = Invoke-Scoop bucket list
-    if ($listed.ExitCode -ne 0) {
-        $details = ($listed.Output | Out-String).Trim()
-        throw "Failed to list Scoop buckets. $details"
-    }
-
-    $bucketList = $listed.Output | Out-String
-    if ($bucketList -notmatch "(?im)^\s*entire(?:\s|$)") {
-        Write-Info "Adding the Entire Scoop bucket..."
-        $added = Invoke-Scoop bucket add entire $ScoopBucketUrl
-        if ($added.ExitCode -ne 0) {
-            throw "Failed to add the Entire Scoop bucket."
-        }
-    }
+    Add-EntireScoopBucket
 
     $isInstalled = Test-ScoopAppInstalled -AppName "entire"
     if ($isInstalled) {
         Write-Info "Updating Entire CLI with Scoop..."
         $updated = Invoke-Scoop update entire/entire
         if ($updated.ExitCode -ne 0) {
-            throw "Scoop failed to install Entire CLI."
+            throw "Scoop failed to update Entire CLI (scoop exited $($updated.ExitCode)). $(Format-ScoopOutput $updated.Output)"
         }
     }
     else {
         Write-Info "Installing Entire CLI with Scoop..."
         $installed = Invoke-Scoop install entire/entire
         if ($installed.ExitCode -ne 0) {
-            throw "Scoop failed to install Entire CLI."
+            throw "Scoop failed to install Entire CLI (scoop exited $($installed.ExitCode)). $(Format-ScoopOutput $installed.Output)"
         }
     }
 
@@ -204,7 +209,19 @@ function Invoke-GitHubApi {
 
     # -UseBasicParsing is required for Windows PowerShell 5.1 (skips the IE
     # DOM parser). In PowerShell 7+ it is accepted and silently ignored.
-    Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec -UseBasicParsing
+    try {
+        Invoke-RestMethod -Uri $Uri -Headers $headers -TimeoutSec $WebTimeoutSec -UseBasicParsing
+    }
+    catch {
+        # Only WebException (5.1) and HttpResponseException (pwsh) carry a
+        # Response; a timeout surfaces as TaskCanceledException, which has no
+        # such property, and under StrictMode reading it would throw.
+        $response = $_.Exception.PSObject.Properties['Response']
+        if ($null -ne $response -and $null -ne $response.Value) {
+            throw "GitHub returned HTTP $([int] $response.Value.StatusCode) for $Uri. $($_.Exception.Message)"
+        }
+        throw "Could not reach GitHub at $Uri. $($_.Exception.Message) Check your internet connection."
+    }
 }
 
 function Get-ReleaseVersion {
@@ -214,16 +231,24 @@ function Get-ReleaseVersion {
         $uri = "https://api.github.com/repos/$GitHubRepo/releases?per_page=20"
         $releases = Invoke-GitHubApi -Uri $uri
         $release = $null
+        $checked = 0
 
         # GitHub returns created_at descending. The first *nightly* tag is
         # the latest nightly. Windows PowerShell 5.1 returns a JSON array
         # from Invoke-RestMethod as one pipeline object, so enumerate it
         # explicitly instead of piping to Where-Object.
         foreach ($candidate in $releases) {
+            $checked++
             if ($candidate.tag_name -like "*nightly*") {
                 $release = $candidate
                 break
             }
+        }
+        # Invoke-GitHubApi has already thrown for any network or HTTP
+        # failure, so an empty result here means GitHub answered and nothing
+        # in the answer was a nightly.
+        if ($null -eq $release) {
+            throw "No nightly release found among the $checked most recent releases of $GitHubRepo. Try -Channel stable."
         }
     }
     else {
@@ -232,7 +257,7 @@ function Get-ReleaseVersion {
     }
 
     if ($null -eq $release -or [string]::IsNullOrWhiteSpace([string] $release.tag_name)) {
-        throw "Failed to fetch the latest $ReleaseChannel version from GitHub. Check your internet connection."
+        throw "GitHub returned the latest release of $GitHubRepo without a tag name, so the version cannot be determined."
     }
 
     $version = ([string] $release.tag_name) -replace "^v", ""

@@ -44,7 +44,8 @@ Describe 'install.ps1' {
         function Assert-ExpectedFailure {
             param([string[]] $Output, [string] $Prefix)
             if ($env:OS -eq 'Windows_NT') {
-                $Output | Should -Contain "${Prefix}Error: entire-test: network blocked"
+                # Invoke-GitHubApi wraps the stub's message, so match inside the line.
+                @($Output | Where-Object { $_ -like "${Prefix}Error: *entire-test: network blocked*" }) | Should -HaveCount 1
             }
             else {
                 @($Output | Where-Object { $_ -like "${Prefix}Error: install.ps1 supports Windows only.*" }) | Should -HaveCount 1
@@ -409,5 +410,95 @@ Describe 'Install-BinaryFile' {
             Install-BinaryFile -Source (Join-Path $dir 'src.bin') -Destination $target
             Get-OldFile -Directory $dir | Should -HaveCount 0
         }
+    }
+}
+
+Describe 'Install-EntireWithScoop' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    BeforeEach {
+        Mock Write-Info {}
+        Mock Write-Success {}
+        Mock Test-ScoopAppInstalled { $false }
+        Mock Invoke-Scoop { @{ ExitCode = 0; Output = @() } }
+    }
+
+    It 'installs after the bucket is added (exit <ExitCode>)' -TestCases @(
+        @{ ExitCode = 0 }
+        @{ ExitCode = 2 }
+    ) {
+        Mock Invoke-Scoop { @{ ExitCode = $ExitCode; Output = @() } } -ParameterFilter { $ScoopArgs[0] -eq 'bucket' -and $ScoopArgs[1] -eq 'add' }
+        Install-EntireWithScoop
+        Should -Invoke Invoke-Scoop -Times 1 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'install' }
+        Should -Invoke Invoke-Scoop -Times 0 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'bucket' -and $ScoopArgs[1] -eq 'list' }
+    }
+
+    It 'reports scoop output when adding the bucket fails' {
+        Mock Invoke-Scoop { @{ ExitCode = 1; Output = @('boom: no git') } } -ParameterFilter { $ScoopArgs[0] -eq 'bucket' -and $ScoopArgs[1] -eq 'add' }
+        { Install-EntireWithScoop } | Should -Throw -ExpectedMessage '*Failed to add the Entire Scoop bucket (scoop exited 1)*boom: no git*'
+        Should -Invoke Invoke-Scoop -Times 0 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'install' }
+        Should -Invoke Invoke-Scoop -Times 0 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'bucket' -and $ScoopArgs[1] -eq 'list' }
+    }
+
+    It 'updates instead of installing when entire is already present' {
+        Mock Test-ScoopAppInstalled { $true }
+        Install-EntireWithScoop
+        Should -Invoke Invoke-Scoop -Times 1 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'update' }
+        Should -Invoke Invoke-Scoop -Times 0 -Exactly -ParameterFilter { $ScoopArgs[0] -eq 'install' }
+    }
+
+    It 'reports scoop output when the install fails' {
+        Mock Invoke-Scoop { @{ ExitCode = 1; Output = @('manifest not found') } } -ParameterFilter { $ScoopArgs[0] -eq 'install' }
+        { Install-EntireWithScoop } | Should -Throw -ExpectedMessage '*Scoop failed to install Entire CLI (scoop exited 1)*manifest not found*'
+    }
+}
+
+Describe 'Get-ReleaseVersion' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'names the missing nightly when GitHub returns no releases' {
+        Mock Invoke-GitHubApi { $null }
+        { Get-ReleaseVersion -ReleaseChannel nightly } | Should -Throw -ExpectedMessage '*No nightly release found among the 0 most recent releases*'
+    }
+
+    It 'names the missing nightly when every release is stable' {
+        Mock Invoke-GitHubApi { @(@{ tag_name = 'v1.2.0' }, @{ tag_name = 'v1.1.0' }, @{ tag_name = 'v1.0.0' }) }
+        { Get-ReleaseVersion -ReleaseChannel nightly } | Should -Throw -ExpectedMessage '*No nightly release found among the 3 most recent releases*'
+    }
+
+    It 'returns the first nightly tag' {
+        Mock Invoke-GitHubApi { @(@{ tag_name = 'v1.2.0' }, @{ tag_name = 'v1.2.1-nightly.202609040000.abc1234' }, @{ tag_name = 'v1.1.0-nightly.1' }) }
+        Get-ReleaseVersion -ReleaseChannel nightly | Should -Be '1.2.1-nightly.202609040000.abc1234'
+    }
+
+    It 'names a stable release without a tag' {
+        Mock Invoke-GitHubApi { @{ tag_name = '' } }
+        { Get-ReleaseVersion -ReleaseChannel stable } | Should -Throw -ExpectedMessage '*without a tag name*'
+    }
+
+    It 'returns the stable version without its v prefix' {
+        Mock Invoke-GitHubApi { @{ tag_name = 'v1.2.3' } }
+        Get-ReleaseVersion -ReleaseChannel stable | Should -Be '1.2.3'
+    }
+}
+
+Describe 'Invoke-GitHubApi' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'blames connectivity when no response came back' {
+        Mock Invoke-RestMethod { throw 'No such host is known.' }
+        { Invoke-GitHubApi -Uri 'https://api.github.com/x' } | Should -Throw -ExpectedMessage '*Could not reach GitHub at https://api.github.com/x. No such host is known. Check your internet connection.*'
+    }
+
+    It 'survives an exception type without a Response property under StrictMode' {
+        Mock Invoke-RestMethod { throw [System.Threading.Tasks.TaskCanceledException]::new('The operation was canceled.') }
+        Set-StrictMode -Version 2.0
+        { Invoke-GitHubApi -Uri 'https://api.github.com/x' } | Should -Throw -ExpectedMessage '*Could not reach GitHub*The operation was canceled.*'
     }
 }
