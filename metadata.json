@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1PH53DSWN0QH73VVNKZ8FAQ",
+  "strategy": "manual-commit",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "BUG_FIX_CANDIDATES.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 92615,
+    "cache_read_tokens": 2139298,
+    "output_tokens": 16109,
+    "api_call_count": 22
+  }
+}
