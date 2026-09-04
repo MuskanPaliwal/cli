@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -218,17 +219,23 @@ func TestCheckoutBranch(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects ref starting with dash to prevent argument injection", func(t *testing.T) {
-		// "git checkout -b evil" would create a new branch named "evil" instead
-		// of failing, because git interprets "-b" as a flag.
-		err := CheckoutBranch(context.Background(), "-b evil")
-		if err == nil {
-			t.Fatal("CheckoutBranch() should reject refs starting with '-', got nil")
-		}
-		if !strings.Contains(err.Error(), "invalid ref") {
-			t.Errorf("CheckoutBranch() error = %q, want error containing 'invalid ref'", err.Error())
-		}
-	})
+	// A leading dash was the only shape the old guard caught. `git checkout`
+	// reads several others, and the ref reaches here from `entire resume
+	// <branch>` and from a trail's branch field.
+	// Not "@{-1}": `check-ref-format --branch` resolves it to the previous
+	// branch and reports it valid, which is git's own feature rather than
+	// something this guard should override.
+	for _, ref := range []string{"-b evil", "..", "feature/../../etc", "feature\nmore"} {
+		t.Run("rejects "+strconv.Quote(ref), func(t *testing.T) {
+			err := CheckoutBranch(context.Background(), ref)
+			if err == nil {
+				t.Fatalf("CheckoutBranch(%q) should be rejected, got nil", ref)
+			}
+			if !strings.Contains(err.Error(), "invalid branch name") {
+				t.Errorf("CheckoutBranch(%q) error = %q, want error containing 'invalid branch name'", ref, err.Error())
+			}
+		})
+	}
 }
 
 func TestResumeFromCurrentBranch_NoCheckpoint(t *testing.T) {
