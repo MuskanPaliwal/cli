@@ -1,0 +1,232 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1PH52TWBM48GJV5PKFX82KV",
+  "session_id": "500a8a1d-c162-4f21-9f39-e1e543540d17",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-04T15:38:47.143317Z",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 15,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "79d8815e3c3f",
+  "checkpoint_transcript_start": 760,
+  "transcript_lines_at_start": 760,
+  "compact_transcript_start": 145,
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 28345,
+    "cache_read_tokens": 7928051,
+    "output_tokens": 25690,
+    "api_call_count": 32
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_019kEGLtoKmNzkVDueLz1rJL",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "unslop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "09e40e1f2b1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 556,
+        "end": 557,
+        "entry_ids": [
+          "20238cd1-1b3a-46a2-80ca-d6c596513ae7"
+        ],
+        "tool_use_id": "toolu_019kEGLtoKmNzkVDueLz1rJL"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019kEGLtoKmNzkVDueLz1rJL"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: unslop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LrryAUrmG8enyB6fZibjiE",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "commit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "09e40e1f2b1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 666,
+        "end": 667,
+        "entry_ids": [
+          "7e6a1293-9d4e-445d-ad80-138e7d624cc3"
+        ],
+        "tool_use_id": "toolu_01LrryAUrmG8enyB6fZibjiE"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LrryAUrmG8enyB6fZibjiE"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: commit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_011RnppQiKFomMEq4wmq3UPq",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "push-branch"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "79d8815e3c3f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 766,
+        "end": 767,
+        "entry_ids": [
+          "1193ec71-63d3-43a0-a7ed-74aa68aa9bf3"
+        ],
+        "tool_use_id": "toolu_011RnppQiKFomMEq4wmq3UPq"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011RnppQiKFomMEq4wmq3UPq"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: push-branch",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01EwyjRFc1HaQpa3ih2A9wNP",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "draft-github-reply"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "79d8815e3c3f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 892,
+        "end": 893,
+        "entry_ids": [
+          "5d99badb-9c21-4a00-ae11-3124aa463ba2"
+        ],
+        "tool_use_id": "toolu_01EwyjRFc1HaQpa3ih2A9wNP"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01EwyjRFc1HaQpa3ih2A9wNP"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: draft-github-reply",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016eNyLjoyQwPYMhsA4JDNoX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "unslop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "79d8815e3c3f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 910,
+        "end": 911,
+        "entry_ids": [
+          "af57815e-aa90-4c15-aa11-9f292ccc0766"
+        ],
+        "tool_use_id": "toolu_016eNyLjoyQwPYMhsA4JDNoX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016eNyLjoyQwPYMhsA4JDNoX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: unslop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-04T15:38:47.079849Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 297,
+    "human_modified": 755,
+    "human_removed": 0,
+    "total_committed": 311,
+    "total_lines_changed": 2292,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 166,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "review.md": 166
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 180,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 180,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 166,
+      "agent_lines_removed": 0
+    }
+  ]
+}
