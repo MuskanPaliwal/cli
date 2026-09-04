@@ -571,7 +571,9 @@ Describe 'Scoop or archive selection' {
         Mock Get-EntireOnPath { @([pscustomobject]@{ Source = $shim }) }
         Mock Get-UserEnvironmentValue { $otherDir }
         $report = @(Install-Entire 6>&1 | ForEach-Object { "$_" })
-        $report | Should -Contain "! Also found: $(Join-Path $otherDir 'entire.exe')"
+        $report | Should -Contain '! Also on your saved PATH, not active in this shell:'
+        $report | Should -Contain "!   $(Join-Path $otherDir 'entire.exe')"
+        @($report | Where-Object { $_ -like '! Also found:*' }) | Should -HaveCount 0
     }
 
     It 'reports nothing extra when the stored PATH holds no other copy' {
@@ -691,7 +693,9 @@ Describe 'Get-EntireCopy' {
         $copies = Get-EntireCopy
         @($copies) | Should -HaveCount 2
         $copies[0].Source | Should -Be (Join-Path $processDir 'entire.exe')
+        $copies[0].Active | Should -BeTrue
         $copies[1].Source | Should -Be (Join-Path $storedDir 'entire.exe')
+        $copies[1].Active | Should -BeFalse
     }
 
     It 'ignores stored PATH directories without an entire.exe' {
@@ -703,5 +707,30 @@ Describe 'Get-EntireCopy' {
 
         $copies = Get-EntireCopy
         @($copies | Where-Object { $_.Source -like "*$TestDrive*" }) | Should -HaveCount 1
+    }
+}
+
+Describe 'Get-PlatformArchitecture' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'maps <Native> to <Expected>' -TestCases @(
+        @{ Native = 'AMD64'; Expected = 'amd64' }
+        @{ Native = 'ARM64'; Expected = 'arm64' }
+        @{ Native = 'arm64'; Expected = 'arm64' }
+    ) {
+        Mock Get-NativeArchitectureName { $Native }
+        Get-PlatformArchitecture | Should -Be $Expected
+    }
+
+    It 'refuses an architecture it has no build for' {
+        Mock Get-NativeArchitectureName { 'x86' }
+        { Get-PlatformArchitecture } | Should -Throw -ExpectedMessage 'Unsupported architecture: x86'
+    }
+
+    It 'refuses an empty architecture value' {
+        Mock Get-NativeArchitectureName { '' }
+        { Get-PlatformArchitecture } | Should -Throw -ExpectedMessage 'Cannot determine the Windows architecture.'
     }
 }

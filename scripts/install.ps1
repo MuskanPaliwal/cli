@@ -185,14 +185,18 @@ function Install-EntireWithScoop {
     Write-Success "Entire CLI installed with Scoop"
 }
 
+function Get-NativeArchitectureName {
+    $environmentKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+    (Get-ItemProperty -LiteralPath $environmentKey -Name "PROCESSOR_ARCHITECTURE").PROCESSOR_ARCHITECTURE
+}
+
 function Get-PlatformArchitecture {
     # The machine-level value is the native OS architecture. The
     # $env:PROCESSOR_ARCHITECTURE seen by the script is the process's, so
     # x64 PowerShell on ARM64 Windows reports AMD64. RuntimeInformation is
     # not an option either: it needs .NET 4.7.1+, so it is missing on
     # stock Windows PowerShell 5.1 installs.
-    $environmentKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
-    $architecture = (Get-ItemProperty -LiteralPath $environmentKey -Name "PROCESSOR_ARCHITECTURE").PROCESSOR_ARCHITECTURE
+    $architecture = Get-NativeArchitectureName
 
     if ([string]::IsNullOrWhiteSpace($architecture)) {
         throw "Cannot determine the Windows architecture."
@@ -659,14 +663,15 @@ function Get-EntireOnPath {
 
 # Every entire.exe that will compete for the name once the user opens a new
 # terminal: the copies this process can see, in Get-Command order so the
-# priority verdict is unchanged, followed by copies that are only on the
-# stored user or machine PATH. A shell started before an earlier run wrote
-# the registry cannot see that run's directory through $env:Path, and the
-# installer tells the user to restart between installs.
+# priority verdict is unchanged (Active = $true), followed by copies that
+# are only on the stored user or machine PATH (Active = $false). A shell
+# started before an earlier run wrote the registry cannot see that run's
+# directory through $env:Path, and the installer tells the user to restart
+# between installs.
 function Get-EntireCopy {
     $found = @()
     foreach ($command in (Get-EntireOnPath)) {
-        $found += [pscustomobject]@{ Source = $command.Source }
+        $found += [pscustomobject]@{ Source = $command.Source; Active = $true }
     }
 
     $stored = @(
@@ -695,11 +700,32 @@ function Get-EntireCopy {
                 }
             }
             if (-not $known) {
-                $found += [pscustomobject]@{ Source = $candidate }
+                $found += [pscustomobject]@{ Source = $candidate; Active = $false }
             }
         }
     }
     Write-Output -NoEnumerate -InputObject $found
+}
+
+# The "Also found" lines read as a ranking, and only the copies this shell
+# can run are ranked: the ones known from the stored PATH alone will compete
+# after a restart, not now, so they go under their own heading.
+function Write-OtherCopyReport {
+    param(
+        [object[]] $Copies,
+        [string] $Indent
+    )
+
+    foreach ($copy in ($Copies | Where-Object { $_.Active })) {
+        Write-Host "! Also found:$Indent$($copy.Source)"
+    }
+    $inactive = @($Copies | Where-Object { -not $_.Active })
+    if ($inactive.Count -gt 0) {
+        Write-Host "! Also on your saved PATH, not active in this shell:"
+        foreach ($copy in $inactive) {
+            Write-Host "!   $($copy.Source)"
+        }
+    }
 }
 
 function Install-Entire {
@@ -764,9 +790,7 @@ function Install-Entire {
         if ($conflicting.Count -gt 0) {
             Write-Host ""
             Write-Host "! WARNING: Other Entire CLI installations remain on PATH" -ForegroundColor Yellow
-            foreach ($cmd in $conflicting) {
-                Write-Host "! Also found: $($cmd.Source)"
-            }
+            Write-OtherCopyReport -Copies $conflicting -Indent ' '
             Write-Host "! The Scoop shim takes priority, but consider removing the other installation."
             Write-Host ""
         }
@@ -868,9 +892,7 @@ function Install-Entire {
             Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
             Write-Host "!"
             Write-Host "! Installed to: $installPath"
-            foreach ($cmd in $conflicting) {
-                Write-Host "! Also found:   $($cmd.Source)"
-            }
+            Write-OtherCopyReport -Copies $conflicting -Indent '   '
 
             # Our PATH write only ever lands in the user half, and Windows
             # composes a new session as machine-then-user. So a conflict on
