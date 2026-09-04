@@ -572,3 +572,73 @@ Describe 'Scoop or archive selection' {
         Should -Invoke Get-ReleaseVersion -Times 0 -Exactly
     }
 }
+
+Describe 'Get-WriteFailureKind' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'classifies <Name> as <Expected>' -TestCases @(
+        @{ Name = 'UnauthorizedAccessException'; Expected = 'denied'; Build = { [UnauthorizedAccessException]::new('denied') } }
+        @{ Name = 'IOException with the access-denied HResult'; Expected = 'denied'; Build = { [IO.IOException]::new('denied', 0x80070005) } }
+        @{ Name = 'IOException with ERROR_SHARING_VIOLATION'; Expected = 'held'; Build = { [IO.IOException]::new('held', 0x80070020) } }
+        @{ Name = 'IOException with ERROR_LOCK_VIOLATION'; Expected = 'held'; Build = { [IO.IOException]::new('held', 0x80070021) } }
+        @{ Name = 'IOException with another HResult'; Expected = 'other'; Build = { [IO.IOException]::new('disk full', 0x80070070) } }
+        @{ Name = 'an unrelated exception'; Expected = 'other'; Build = { [InvalidOperationException]::new('nope') } }
+        @{ Name = 'a PowerShell wrapper around access denied'; Expected = 'denied'; Build = { [System.Management.Automation.RuntimeException]::new('wrapped', [UnauthorizedAccessException]::new('denied')) } }
+        @{ Name = 'a PowerShell wrapper around a sharing violation'; Expected = 'held'; Build = { [System.Management.Automation.RuntimeException]::new('wrapped', [IO.IOException]::new('held', 0x80070020)) } }
+    ) {
+        Get-WriteFailureKind -Exception (& $Build) | Should -Be $Expected
+    }
+}
+
+Describe 'Denied writes' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+
+        # Removes or restores write access for the current user on a directory.
+        function Edit-DirectoryWriteAccess {
+            param([string] $Path, [bool] $Writable)
+            if ($env:OS -eq 'Windows_NT') {
+                $ace = "$($env:USERNAME):(W)"
+                if ($Writable) { icacls $Path /remove:d $env:USERNAME | Out-Null }
+                else { icacls $Path /deny $ace | Out-Null }
+            }
+            else {
+                chmod $(if ($Writable) { '755' } else { '555' }) $Path
+            }
+        }
+    }
+
+    It 'names access denied, not a held file, when the directory is not writable' {
+        $dir = Join-Path $TestDrive 'locked'
+        $target = Join-Path $dir 'entire.exe'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        Set-Content -LiteralPath $target -Value 'old' -NoNewline
+        Set-Content -LiteralPath (Join-Path $TestDrive 'src.bin') -Value 'new' -NoNewline
+        Edit-DirectoryWriteAccess -Path $dir -Writable $false
+        try {
+            $thrown = $null
+            try { Install-BinaryFile -Source (Join-Path $TestDrive 'src.bin') -Destination $target } catch { $thrown = $_.Exception.Message }
+            $thrown | Should -BeLike "Access denied writing to $dir.*"
+            $thrown | Should -Not -BeLike '*holds it open*'
+        }
+        finally {
+            Edit-DirectoryWriteAccess -Path $dir -Writable $true
+        }
+        Get-Content -LiteralPath $target -Raw | Should -Be 'old'
+    }
+
+    It 'names access denied when the install directory cannot be created' {
+        $parent = Join-Path $TestDrive 'ro-parent'
+        [IO.Directory]::CreateDirectory($parent) | Out-Null
+        Edit-DirectoryWriteAccess -Path $parent -Writable $false
+        try {
+            $wanted = Join-Path $parent 'bin'
+            { Initialize-InstallDirectory -Path $wanted } | Should -Throw -ExpectedMessage "Access denied writing to $wanted.*"
+        }
+        finally {
+            Edit-DirectoryWriteAccess -Path $parent -Writable $true
+        }
+    }
+}

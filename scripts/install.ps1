@@ -326,6 +326,65 @@ function Assert-Checksum {
     }
 }
 
+# Classifies a failed file operation by its cause, walking the exception
+# chain because PowerShell wraps provider and .NET errors differently:
+# Move-Item surfaces UnauthorizedAccessException directly, a .NET method call
+# puts it inside MethodInvocationException. Type is checked before HResult so
+# a wrapper with its own HResult cannot hide the cause.
+function Get-WriteFailureKind {
+    param($Exception)
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [UnauthorizedAccessException] -or $current.HResult -eq 0x80070005) {
+            return 'denied'
+        }
+        # ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION
+        if ($current -is [IO.IOException] -and ($current.HResult -eq 0x80070020 -or $current.HResult -eq 0x80070021)) {
+            return 'held'
+        }
+        $current = $current.InnerException
+    }
+    return 'other'
+}
+
+# The message for a failed write, naming the remedy only when the cause is
+# known: access denied gets elevation or another directory, a held file gets
+# "close the program", anything else is reported as it is.
+function Get-WriteFailureMessage {
+    param(
+        [string] $Action,
+        [string] $Path,
+        [string] $Directory,
+        $Exception
+    )
+
+    switch (Get-WriteFailureKind -Exception $Exception) {
+        'denied' {
+            return "Access denied writing to $Directory. Run PowerShell as Administrator, or pass -InstallDir with a directory you can write to. ($($Exception.Message))"
+        }
+        'held' {
+            return "Cannot replace $Path because another program holds it open. Close entire (including any running 'entire mcp') and any tool that has the file open, then rerun the installer. ($($Exception.Message))"
+        }
+        default {
+            return "Could not $Action $Path. ($($Exception.Message))"
+        }
+    }
+}
+
+# New-Item has no -LiteralPath; CreateDirectory takes the path as written,
+# creates parents, and is a no-op when it exists.
+function Initialize-InstallDirectory {
+    param([string] $Path)
+
+    try {
+        [IO.Directory]::CreateDirectory($Path) | Out-Null
+    }
+    catch {
+        throw (Get-WriteFailureMessage -Action 'create' -Path $Path -Directory $Path -Exception $_.Exception)
+    }
+}
+
 # Windows lets a running executable be renamed but not overwritten or
 # deleted, so an existing binary is moved aside, the verified file copied in,
 # and the old image removed if nothing holds it. A .old that is itself still
@@ -352,7 +411,7 @@ function Install-BinaryFile {
             Move-Item -LiteralPath $Destination -Destination $retired -ErrorAction Stop
         }
         catch {
-            throw "Cannot replace $Destination because another program holds it open. Close entire (including any running 'entire mcp') and any tool that has the file open, then rerun the installer. ($($_.Exception.Message))"
+            throw (Get-WriteFailureMessage -Action 'move aside' -Path $Destination -Directory (Split-Path -Parent $Destination) -Exception $_.Exception)
         }
     }
 
@@ -363,7 +422,7 @@ function Install-BinaryFile {
         if ($null -ne $retired) {
             Move-Item -LiteralPath $retired -Destination $Destination -Force -ErrorAction SilentlyContinue
         }
-        throw
+        throw (Get-WriteFailureMessage -Action 'write' -Path $Destination -Directory (Split-Path -Parent $Destination) -Exception $_.Exception)
     }
 
     if ($null -ne $retired) {
@@ -714,9 +773,7 @@ function Install-Entire {
         }
 
         Write-Info "Installing to $resolvedInstallDir..."
-        # New-Item has no -LiteralPath; CreateDirectory takes the path as
-        # written, creates parents, and is a no-op when it exists.
-        [IO.Directory]::CreateDirectory($resolvedInstallDir) | Out-Null
+        Initialize-InstallDirectory -Path $resolvedInstallDir
 
         Install-BinaryFile -Source $sourceBinary -Destination $installPath
 
