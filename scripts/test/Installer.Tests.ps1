@@ -642,3 +642,35 @@ Describe 'Denied writes' {
         }
     }
 }
+
+Describe 'Get-EntireCopy' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    It 'adds copies that are only on the stored user PATH and lists shared ones once' {
+        $processDir = Join-Path $TestDrive 'proc'
+        $storedDir = Join-Path $TestDrive 'stored'
+        foreach ($dir in $processDir, $storedDir) {
+            [IO.Directory]::CreateDirectory($dir) | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir 'entire.exe') -Value 'x' -NoNewline
+        }
+        Mock Get-EntireOnPath { @([pscustomobject]@{ Source = (Join-Path $processDir 'entire.exe') }) }
+        Mock Get-UserEnvironmentValue { "$storedDir;$processDir" }
+
+        $sources = @(Get-EntireCopy | ForEach-Object { $_.Source })
+        $sources[0] | Should -Be (Join-Path $processDir 'entire.exe')
+        $sources | Should -Contain (Join-Path $storedDir 'entire.exe')
+        @($sources | Where-Object { $_ -eq (Join-Path $processDir 'entire.exe') }) | Should -HaveCount 1
+    }
+
+    It 'ignores stored PATH directories without an entire.exe' {
+        $processDir = Join-Path $TestDrive 'proc2'
+        [IO.Directory]::CreateDirectory($processDir) | Out-Null
+        Set-Content -LiteralPath (Join-Path $processDir 'entire.exe') -Value 'x' -NoNewline
+        Mock Get-EntireOnPath { @([pscustomobject]@{ Source = (Join-Path $processDir 'entire.exe') }) }
+        Mock Get-UserEnvironmentValue { (Join-Path $TestDrive 'empty') + ';;' }
+
+        @(Get-EntireCopy | Where-Object { $_.Source -like "*$TestDrive*" }) | Should -HaveCount 1
+    }
+}

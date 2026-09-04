@@ -561,7 +561,12 @@ function Get-PathWithDirectoryFirst {
 function Get-UserEnvironmentValue {
     param([string] $Name)
 
-    $key = (Get-Item -LiteralPath 'HKCU:').OpenSubKey('Environment')
+    # No HKCU: drive (not Windows) reads as no value, like a missing key.
+    $hive = Get-Item -LiteralPath 'HKCU:' -ErrorAction SilentlyContinue
+    if ($null -eq $hive) {
+        return $null
+    }
+    $key = $hive.OpenSubKey('Environment')
     if ($null -eq $key) {
         return $null
     }
@@ -650,6 +655,51 @@ function Get-EntireOnPath {
     # a single-element array, which would lose .Count under StrictMode 2.0.
     $results = @(Get-Command "entire" -CommandType Application -All -ErrorAction SilentlyContinue)
     Write-Output -NoEnumerate -InputObject $results
+}
+
+# Every entire.exe that will compete for the name once the user opens a new
+# terminal: the copies this process can see, in Get-Command order so the
+# priority verdict is unchanged, followed by copies that are only on the
+# stored user or machine PATH. A shell started before an earlier run wrote
+# the registry cannot see that run's directory through $env:Path, and the
+# installer tells the user to restart between installs.
+function Get-EntireCopy {
+    $found = @()
+    foreach ($command in (Get-EntireOnPath)) {
+        $found += [pscustomobject]@{ Source = $command.Source }
+    }
+
+    $stored = @(
+        (Get-UserEnvironmentValue -Name 'Path'),
+        [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    )
+
+    foreach ($value in $stored) {
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+        foreach ($entry in ($value -split ';')) {
+            $directory = [Environment]::ExpandEnvironmentVariables($entry.Trim())
+            if ([string]::IsNullOrWhiteSpace($directory)) {
+                continue
+            }
+            $candidate = Join-Path $directory 'entire.exe'
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                continue
+            }
+            $known = $false
+            foreach ($existing in $found) {
+                if (Test-SamePath -Left $existing.Source -Right $candidate) {
+                    $known = $true
+                    break
+                }
+            }
+            if (-not $known) {
+                $found += [pscustomobject]@{ Source = $candidate }
+            }
+        }
+    }
+    Write-Output -NoEnumerate -InputObject $found
 }
 
 function Install-Entire {
@@ -798,11 +848,15 @@ function Install-Entire {
             $userPathChanged = Add-ToUserPath -Directory $resolvedInstallDir
         }
 
+        # The verdict is about what this shell runs; the list is about every
+        # copy the user has, including ones this shell cannot see yet.
         $pathCommands = Get-EntireOnPath
-        $conflicting = @($pathCommands | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
+        $conflicting = @(Get-EntireCopy | Where-Object { -not (Test-SamePath -Left $_.Source -Right $installPath) })
         if ($conflicting.Count -gt 0) {
+            # $first can be empty: with -NoPathUpdate nothing put the new
+            # install on this shell's PATH, while stored copies still list.
             $first = $pathCommands | Select-Object -First 1
-            $firstIsOurs = Test-SamePath -Left $first.Source -Right $installPath
+            $firstIsOurs = ($null -ne $first) -and (Test-SamePath -Left $first.Source -Right $installPath)
             Write-Host ""
             Write-Host "! WARNING: PATH conflict detected" -ForegroundColor Yellow
             Write-Host "!"
@@ -834,7 +888,12 @@ function Install-Entire {
 
             if (-not $firstIsOurs) {
                 Write-Host "!"
-                Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                if ($null -eq $first) {
+                    Write-Host "! 'entire' does not resolve to an executable on this shell's PATH."
+                }
+                else {
+                    Write-Host "! 'entire' currently resolves to: $($first.Source)"
+                }
                 Write-Host "! Remove the old installation or adjust PATH to prioritize:"
                 Write-Host "!   $resolvedInstallDir"
                 Write-Host ""
