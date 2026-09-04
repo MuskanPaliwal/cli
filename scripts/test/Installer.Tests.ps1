@@ -173,3 +173,113 @@ Describe 'Assert-Prerequisite' {
         { Assert-Prerequisite } | Should -Not -Throw
     }
 }
+
+Describe 'PATH entry handling' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+        # An environment variable this process owns, so %ENTIRE_TEST_ROOT% is
+        # an unexpanded entry on every OS.
+        $env:ENTIRE_TEST_ROOT = $TestDrive
+    }
+
+    AfterAll {
+        Remove-Item -Path Env:ENTIRE_TEST_ROOT -ErrorAction SilentlyContinue
+    }
+
+    It 'treats an unexpanded entry as the same path as its expansion' {
+        Test-SamePath -Left '%ENTIRE_TEST_ROOT%/sub' -Right (Join-Path $TestDrive 'sub') | Should -BeTrue
+    }
+
+    It 'adds the directory when it is absent and keeps the rest verbatim' {
+        $other = Join-Path $TestDrive 'other'
+        $target = Join-Path $TestDrive 'sub'
+        Get-PathWithDirectoryFirst -PathValue "$other;" -Directory $target | Should -Be "$target;$other;"
+        Get-PathWithDirectoryFirst -PathValue "$other;;$other" -Directory $target | Should -Be "$target;$other;;$other"
+        Get-PathWithDirectoryFirst -PathValue '' -Directory $target | Should -Be $target
+    }
+
+    It 'moves an unexpanded entry to the front as stored' {
+        $other = Join-Path $TestDrive 'other'
+        $target = Join-Path $TestDrive 'sub'
+        Get-PathWithDirectoryFirst -PathValue "$other;%ENTIRE_TEST_ROOT%/sub" -Directory $target | Should -Be "%ENTIRE_TEST_ROOT%/sub;$other"
+    }
+
+    It 'moves a literal entry to the front instead of adding a second one' {
+        $other = Join-Path $TestDrive 'other'
+        $target = Join-Path $TestDrive 'sub'
+        Get-PathWithDirectoryFirst -PathValue "$other;$target" -Directory $target | Should -Be "$target;$other"
+    }
+
+    It 'recognises an unexpanded first entry' {
+        Test-PathIsFirst -PathValue ";%ENTIRE_TEST_ROOT%/sub;other" -Directory (Join-Path $TestDrive 'sub') | Should -BeTrue
+    }
+}
+
+Describe 'User environment registry' -Skip:($env:OS -ne 'Windows_NT') {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+
+        # A throwaway value in the real HKCU:\Environment, named per process
+        # and removed in AfterAll. The real Path value is never touched.
+        function Get-TestValueName { "ENTIRE_INSTALL_TEST_$PID" }
+
+        function Write-RawTestValue {
+            param([string] $Value, [Microsoft.Win32.RegistryValueKind] $Kind)
+            $key = (Get-Item -LiteralPath 'HKCU:').OpenSubKey('Environment', $true)
+            $key.SetValue((Get-TestValueName), $Value, $Kind)
+        }
+
+        function Get-TestValueKind {
+            (Get-Item -LiteralPath 'HKCU:').OpenSubKey('Environment').GetValueKind((Get-TestValueName))
+        }
+    }
+
+    AfterAll {
+        $key = (Get-Item -LiteralPath 'HKCU:').OpenSubKey('Environment', $true)
+        if ($null -ne $key) {
+            $key.DeleteValue("ENTIRE_INSTALL_TEST_$PID", $false)
+        }
+    }
+
+    It 'stores a value containing % unexpanded, as REG_EXPAND_SZ' {
+        Write-UserEnvironmentValue -Name (Get-TestValueName) -Value '%USERPROFILE%\entire-test-a'
+        Get-UserEnvironmentValue -Name (Get-TestValueName) | Should -Be '%USERPROFILE%\entire-test-a'
+        Get-TestValueKind | Should -Be ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+    }
+
+    It 'keeps REG_SZ for a value without %' {
+        Write-RawTestValue -Value 'C:\plain' -Kind ([Microsoft.Win32.RegistryValueKind]::String)
+        Write-UserEnvironmentValue -Name (Get-TestValueName) -Value 'C:\plain;C:\more'
+        Get-TestValueKind | Should -Be ([Microsoft.Win32.RegistryValueKind]::String)
+    }
+
+    It 'keeps REG_EXPAND_SZ when the new value has no %' {
+        Write-RawTestValue -Value '%USERPROFILE%\x' -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+        Write-UserEnvironmentValue -Name (Get-TestValueName) -Value 'C:\plain'
+        Get-TestValueKind | Should -Be ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+    }
+
+    It 'leaves an unexpanded first entry alone' {
+        Write-RawTestValue -Value '%USERPROFILE%\entire-test-leaf;C:\other' -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+        Add-UserPathEntry -Name (Get-TestValueName) -Directory (Join-Path $env:USERPROFILE 'entire-test-leaf') | Should -BeFalse
+        Get-UserEnvironmentValue -Name (Get-TestValueName) | Should -Be '%USERPROFILE%\entire-test-leaf;C:\other'
+    }
+
+    It 'moves an unexpanded entry to the front without expanding it' {
+        Write-RawTestValue -Value 'C:\other;%USERPROFILE%\entire-test-leaf' -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+        Add-UserPathEntry -Name (Get-TestValueName) -Directory (Join-Path $env:USERPROFILE 'entire-test-leaf') | Should -BeTrue
+        Get-UserEnvironmentValue -Name (Get-TestValueName) | Should -Be '%USERPROFILE%\entire-test-leaf;C:\other'
+        Get-TestValueKind | Should -Be ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+    }
+
+    It 'moves a literal entry to the front' {
+        $leaf = Join-Path $env:USERPROFILE 'entire-test-leaf'
+        Write-RawTestValue -Value "C:\other;$leaf" -Kind ([Microsoft.Win32.RegistryValueKind]::String)
+        Add-UserPathEntry -Name (Get-TestValueName) -Directory $leaf | Should -BeTrue
+        Get-UserEnvironmentValue -Name (Get-TestValueName) | Should -Be "$leaf;C:\other"
+    }
+
+    It 'broadcasts the change without throwing' {
+        { Publish-EnvironmentChange } | Should -Not -Throw
+    }
+}

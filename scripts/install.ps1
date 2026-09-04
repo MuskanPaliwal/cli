@@ -308,6 +308,12 @@ function Test-SamePath {
         return $false
     }
 
+    # The user PATH is read unexpanded, so an entry may be stored as
+    # %USERPROFILE%\.local\bin. Expand before normalising: unexpanded, the
+    # entry would be resolved relative to the current directory instead.
+    $Left = [Environment]::ExpandEnvironmentVariables($Left)
+    $Right = [Environment]::ExpandEnvironmentVariables($Right)
+
     try {
         return [string]::Equals(
             (Get-NormalizedPath -Path $Left),
@@ -369,34 +375,110 @@ function Get-PathWithDirectoryFirst {
         [string] $Directory
     )
 
-    $parts = New-Object System.Collections.Generic.List[string]
+    # The value is someone's registry string and this function owns one
+    # entry in it: other entries are kept verbatim, empty entries and a
+    # trailing ";" included. When the directory is already present, its first
+    # occurrence moves to the front as stored, so an entry written as
+    # %USERPROFILE%\... stays unexpanded; only when it is absent is the
+    # literal $Directory added.
+    $kept = New-Object System.Collections.Generic.List[string]
+    $existing = $null
     if (-not [string]::IsNullOrWhiteSpace($PathValue)) {
         foreach ($entry in ($PathValue -split ";")) {
-            $trimmed = $entry.Trim()
-            if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            if (Test-SamePath -Left $entry.Trim() -Right $Directory) {
+                if ($null -eq $existing) {
+                    $existing = $entry
+                }
                 continue
             }
-            if (-not (Test-SamePath -Left $trimmed -Right $Directory)) {
-                $parts.Add($trimmed)
-            }
+            $kept.Add($entry)
         }
     }
-    if ($parts.Count -eq 0) {
-        return $Directory
+    $first = if ($null -ne $existing) { $existing } else { $Directory }
+    if ($kept.Count -eq 0) {
+        return $first
     }
-    return "$Directory;" + ($parts -join ";")
+    return "$first;" + ($kept -join ";")
+}
+
+# [Environment]::GetEnvironmentVariable expands REG_EXPAND_SZ on read and
+# SetEnvironmentVariable writes REG_SZ, so a round trip through them bakes
+# the current %USERPROFILE% into the stored value and downgrades its kind.
+# These read and write the registry value as stored.
+function Get-UserEnvironmentValue {
+    param([string] $Name)
+
+    $key = (Get-Item -LiteralPath 'HKCU:').OpenSubKey('Environment')
+    if ($null -eq $key) {
+        return $null
+    }
+    return $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+}
+
+function Write-UserEnvironmentValue {
+    param(
+        [string] $Name,
+        [string] $Value
+    )
+
+    $key = (Get-Item -LiteralPath 'HKCU:').CreateSubKey('Environment')
+    $existing = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $kind = if ($Value.Contains('%')) {
+        [Microsoft.Win32.RegistryValueKind]::ExpandString
+    }
+    elseif ($null -ne $existing) {
+        $key.GetValueKind($Name)
+    }
+    else {
+        [Microsoft.Win32.RegistryValueKind]::String
+    }
+    $key.SetValue($Name, $Value, $kind)
+    Publish-EnvironmentChange
+}
+
+# Tell Explorer and processes started from it that the environment changed.
+# Consoles that are already open keep their copy, which is why the caller
+# still says to restart the terminal.
+function Publish-EnvironmentChange {
+    if (-not ('Win32.NativeMethods' -as [Type])) {
+        Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(
+    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+    }
+
+    $HWND_BROADCAST = [IntPtr] 0xffff
+    $WM_SETTINGCHANGE = 0x1a
+    $SMTO_ABORTIFHUNG = 2
+    $result = [UIntPtr]::Zero
+    [Win32.NativeMethods]::SendMessageTimeout(
+        $HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, 'Environment',
+        $SMTO_ABORTIFHUNG, 5000, [ref] $result
+    ) | Out-Null
+}
+
+# Puts $Directory first in the named user environment variable, read and
+# written as stored. Returns whether the value changed.
+function Add-UserPathEntry {
+    param(
+        [string] $Name,
+        [string] $Directory
+    )
+
+    $value = Get-UserEnvironmentValue -Name $Name
+    if (Test-PathIsFirst -PathValue $value -Directory $Directory) {
+        return $false
+    }
+    Write-UserEnvironmentValue -Name $Name -Value (Get-PathWithDirectoryFirst -PathValue $value -Directory $Directory)
+    return $true
 }
 
 function Add-ToUserPath {
     param([string] $Directory)
 
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $userPathChanged = $false
-    if (-not (Test-PathIsFirst -PathValue $userPath -Directory $Directory)) {
-        $newUserPath = Get-PathWithDirectoryFirst -PathValue $userPath -Directory $Directory
-        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
-        $userPathChanged = $true
-    }
+    $userPathChanged = Add-UserPathEntry -Name 'Path' -Directory $Directory
 
     # Make the command available immediately when install.ps1 is evaluated
     # in the caller's current PowerShell process. Do this before Get-Command
