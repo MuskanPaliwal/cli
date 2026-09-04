@@ -2,7 +2,9 @@
 
 # Runs the PowerShell test suite under scripts/test. CI (both Windows
 # PowerShell 5.1 and pwsh) and `mise run test:ps1` call this, so Pester
-# configuration lives here once.
+# configuration lives here once. On a fresh machine run scripts/test/init.ps1
+# first; it installs Pester, PSScriptAnalyzer and, on Windows PowerShell 5.1,
+# the NuGet provider they need.
 #
 # The module floors are enforced with Import-Module rather than `#Requires
 # -Modules`: under `pwsh -File`, a `#Requires -Modules` line makes the script's
