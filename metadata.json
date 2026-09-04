@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1PH4WSSJK48H22VT1QFM8AR",
+  "strategy": "manual-commit",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "cmd/entire/cli/strategy/condense_skip_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 369843,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 23676544,
+    "output_tokens": 59548,
+    "api_call_count": 185
+  }
+}
