@@ -72,7 +72,8 @@ curl -fsSL https://entire.io/install.sh | bash                          # stable
 Install with Windows PowerShell 5.1 or later:
 
 ```powershell
-irm https://entire.io/install.ps1 -UseBasicParsing | iex
+irm https://entire.io/install.ps1 -UseBasicParsing | iex  # stable
+# or nightly:
 # & ([scriptblock]::Create((irm https://entire.io/install.ps1 -UseBasicParsing))) -Channel nightly
 ```
 
