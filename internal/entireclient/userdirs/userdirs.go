@@ -23,31 +23,88 @@ import (
 	"github.com/entireio/cli/internal/testdirs"
 )
 
+// The environment variables that override these directories. Named rather than
+// spelled at each use, because RequireAbsoluteOverride reports them back to the
+// user and the string in the error must be the one they can set.
+const (
+	// EnvConfigDir overrides the per-user config directory.
+	EnvConfigDir = "ENTIRE_CONFIG_DIR"
+	// EnvCacheHome overrides the per-user cache directory's parent.
+	EnvCacheHome = "XDG_CACHE_HOME"
+)
+
+// RequireAbsoluteOverride rejects a non-absolute directory override.
+//
+// A relative value resolves against the process's working directory, so the
+// same environment names a different directory in every process — and, for a
+// tool run from inside a repository, typically names a directory inside it.
+// That is wrong for all three trees this rule covers. The config directory
+// holds bearer tokens (contexts.json and the file token store), the cache
+// directory holds cluster discovery state, and the managed plugin directory
+// holds binaries whose bin subdirectory main.go prepends to $PATH.
+//
+// One helper rather than one rule per tree. Every override gets it, not just
+// the Entire-specific ones: XDG_DATA_HOME, XDG_CACHE_HOME and LOCALAPPDATA were
+// joined unchecked and left for osroot (which refuses a relative root open) and
+// for main.go (which restores $PATH) to notice. Those backstops hold, but each
+// answers a question of its own, two layers from where this one is decided.
+//
+// Rejecting is louder than falling through to the platform default, and that is
+// deliberate: a misconfigured override is a user error worth surfacing, and for
+// the config directory the platform default is the developer's REAL
+// ~/.config/entire — quietly substituting it for a test harness's mistyped
+// override is the one outcome worse than an error.
+func RequireAbsoluteOverride(name, value string) error {
+	if !filepath.IsAbs(value) {
+		return fmt.Errorf("%s must be an absolute path, got %q", name, value)
+	}
+	return nil
+}
+
 // Config returns the per-user config directory.
+//
+// The string form cannot report a rejected override, so it returns whatever was
+// set; every path that turns it into I/O opens a root over it, and both this
+// package's roots (configDir below) and the ones contexts and discovery open
+// for themselves refuse a relative directory. Callers that only display the
+// path are unaffected.
 func Config() string {
-	if dir := os.Getenv("ENTIRE_CONFIG_DIR"); dir != "" {
-		return dir
+	dir, _ := configDir() //nolint:errcheck // see doc comment: the roots report it
+	return dir
+}
+
+// configDir is Config with the override check, for the callers that can report.
+func configDir() (string, error) {
+	if dir := os.Getenv(EnvConfigDir); dir != "" {
+		return dir, RequireAbsoluteOverride(EnvConfigDir, dir)
 	}
 	if dir, ok := testdirs.Dir("config"); ok {
-		return dir
+		return dir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".config", "entire")
+	return filepath.Join(home, ".config", "entire"), nil
 }
 
-// Cache returns the per-user cache directory.
+// Cache returns the per-user cache directory. See Config on the unreported
+// override.
 func Cache() string {
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "entire")
+	dir, _ := cacheDir() //nolint:errcheck // see Config's doc comment
+	return dir
+}
+
+// cacheDir is Cache with the override check, for the callers that can report.
+func cacheDir() (string, error) {
+	if xdg := os.Getenv(EnvCacheHome); xdg != "" {
+		return filepath.Join(xdg, "entire"), RequireAbsoluteOverride(EnvCacheHome, xdg)
 	}
 	if dir, ok := testdirs.Dir("cache"); ok {
-		return filepath.Join(dir, "entire")
+		return filepath.Join(dir, "entire"), nil
 	}
 	home, _ := os.UserHomeDir() //nolint:errcheck // best-effort default
-	return filepath.Join(home, ".cache", "entire")
+	return filepath.Join(home, ".cache", "entire"), nil
 }
 
 // EnsurePrivateDir creates dir as a private, user-only directory (0700) and,
@@ -107,33 +164,47 @@ func EnsurePrivateDir(dir string) error {
 // .entire: a command that only looks for a saved login must not leave an
 // ~/.config/entire behind on a machine that has never used one.
 func ConfigRoot() (*os.Root, error) {
-	return openUserRoot(Config(), true)
+	return resolveUserRoot(configDir, true)
 }
 
 // ConfigRootForRead is ConfigRoot without creating the directory. A missing
 // directory is reported unwrapped, so callers classify it with os.IsNotExist.
 func ConfigRootForRead() (*os.Root, error) {
-	return openUserRoot(Config(), false)
+	return resolveUserRoot(configDir, false)
 }
 
 // CacheRoot returns the shared *os.Root over the per-user cache directory,
 // creating it. CacheRootForRead is the same without creation.
 func CacheRoot() (*os.Root, error) {
-	return openUserRoot(Cache(), true)
+	return resolveUserRoot(cacheDir, true)
 }
 
 // CacheRootForRead is CacheRoot without creating the directory.
 func CacheRootForRead() (*os.Root, error) {
-	return openUserRoot(Cache(), false)
+	return resolveUserRoot(cacheDir, false)
+}
+
+// resolveUserRoot fails on a rejected override before any directory is created:
+// creating one under a path that resolves against the cwd is the mistake, so it
+// must not happen on the way to reporting it.
+func resolveUserRoot(resolve func() (string, error), create bool) (*os.Root, error) {
+	dir, err := resolve()
+	if err != nil {
+		return nil, err
+	}
+	return openUserRoot(dir, create)
 }
 
 // openUserRoot absolutizes dir before handing it to the shared registry.
 //
-// Config and Cache can both return a RELATIVE path: when os.UserHomeDir fails
-// they fall back to "." and "" respectively, which join to ".config/entire" and
-// ".cache/entire". A relative root would then mean a different directory
-// depending on where the process happened to be — the same failure the repo
-// anchors exist to remove — so it is resolved once, here.
+// Config and Cache can both return a RELATIVE path even with no override in
+// play: when os.UserHomeDir fails they fall back to "." and "" respectively,
+// which join to ".config/entire" and ".cache/entire". A relative root would then
+// mean a different directory depending on where the process happened to be —
+// the same failure the repo anchors exist to remove — so it is resolved once,
+// here. That fallback is Entire's own, not something the user set, which is why
+// it is absolutized rather than refused the way RequireAbsoluteOverride refuses
+// an override.
 func openUserRoot(dir string, create bool) (*os.Root, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {

@@ -1266,11 +1266,29 @@ the same rule; they are one helper because two copies is how they drifted.
 necessarily the file that executes. The check lives at the exec, not at the
 caller, so it also covers the exported `New`.
 
-`pluginParentDir` (`plugin_store.go`) applies the same absoluteness rule to
-every directory override it reads — `ENTIRE_PLUGIN_DIR`, `XDG_DATA_HOME`,
-`LOCALAPPDATA` — via `requireAbsPluginParent`, rather than leaving the platform
-two to `osroot` and to `main.go`'s `PATH` restore. Those backstops hold, but
-they state the invariant two layers from where it is decided.
+**A per-user directory override must be absolute**, and there is one
+implementation of that rule: `userdirs.RequireAbsoluteOverride`. A relative
+value resolves against the working directory, so the same environment names a
+different directory in every process — usually one inside whatever repository
+the command ran from. It covers all three trees an override can redirect:
+`pluginParentDir` (`ENTIRE_PLUGIN_DIR`, `XDG_DATA_HOME`, `LOCALAPPDATA` — a
+tree whose `bin` subdirectory `main.go` prepends to `$PATH`), and the config and
+cache directories (`ENTIRE_CONFIG_DIR`, `XDG_CACHE_HOME`), which hold the login
+tokens and the discovery caches. Leaving it to `osroot` (which refuses a
+relative root open) and to `main.go`'s `PATH` restore was not wrong, but each
+backstop answers a question of its own, two layers from where this one is
+decided.
+
+Rejecting beats falling through to the platform default: for the config
+directory that default is the developer's REAL `~/.config/entire`, so quietly
+substituting it for a test harness's mistyped override is worse than an error.
+`userdirs.Config()`/`Cache()` cannot report — too many callers only want the
+string — so the refusal lands at every root opened over those directories:
+`userdirs`' own (`resolveUserRoot`, which checks *before* creating anything),
+plus `contexts.configRoot` and `discovery.cacheFile.root`, which open their own.
+Those last two used to launder a relative directory through `filepath.Abs`,
+which produced a plausible-looking absolute path out of the exact mistake being
+guarded against. Do not reintroduce it.
 
 **The OPF `command` is the deliberate exception, and stays one.**
 `redaction.openai_privacy_filter.command` becomes `argv[0]` of an

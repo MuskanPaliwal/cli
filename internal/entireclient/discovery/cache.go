@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
+	"github.com/entireio/cli/internal/entireclient/userdirs"
 	"github.com/gofrs/flock"
 )
 
@@ -168,12 +169,14 @@ type cacheFile struct {
 func (f cacheFile) path() string { return filepath.Join(f.dir, f.name) }
 
 // root opens f.dir and returns f's name inside it.
+// A relative f.dir is refused rather than absolutized, for the reason
+// contexts.configRoot gives: it comes from $XDG_CACHE_HOME, and resolving it
+// against the working directory names a different cache in every process.
 func (f cacheFile) root() (*os.Root, string, error) {
-	abs, err := filepath.Abs(f.dir)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolve cache dir: %w", err)
+	if err := userdirs.RequireAbsoluteOverride("cache dir", f.dir); err != nil {
+		return nil, "", err //nolint:wrapcheck // the error already names the directory and its value
 	}
-	root, err := osroot.Shared(abs)
+	root, err := osroot.Shared(f.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Unwrapped so readCacheBytes can classify a cold cache.
