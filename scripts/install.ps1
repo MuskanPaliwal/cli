@@ -21,6 +21,11 @@ param(
 
 $GitHubRepo = "entireio/cli"
 $ScoopBucketUrl = "https://github.com/entireio/scoop-bucket.git"
+# Whether the caller chose the install directory. Read here because
+# $PSBoundParameters inside a function is that function's own; the functions
+# read this the way they read $InstallDir.
+$InstallDirExplicit = $PSBoundParameters.ContainsKey('InstallDir')
+
 # Two limits, deliberately not one: the API calls get a whole-request cap,
 # the archive download gets only a stall guard. See Save-RemoteFile.
 $ApiTimeoutSec = 60
@@ -55,7 +60,8 @@ Stable installs use Scoop when it is available. Nightly installs use the
 verified release archive because the Scoop bucket only publishes stable builds.
 
 Scoop chooses its own install location and manages its own PATH entry, so
--InstallDir and -NoPathUpdate apply only to release-archive installs.
+An explicit -InstallDir selects a release-archive install even when Scoop
+is available; -NoPathUpdate applies only to release-archive installs.
 "@
 }
 
@@ -606,10 +612,12 @@ function Install-Entire {
     Write-Info "Installing Entire CLI..."
 
     $scoopCommand = Get-Command "scoop" -ErrorAction SilentlyContinue
-    if ($Channel -eq "stable" -and $null -ne $scoopCommand) {
+    if ($Channel -eq "stable" -and $null -ne $scoopCommand -and -not $InstallDirExplicit) {
         # Scoop owns the install location and the shims directory it puts on
-        # PATH, so -InstallDir and -NoPathUpdate do not apply on this branch.
-        # Write-Usage says so; keep the two in step if this changes.
+        # PATH, so -NoPathUpdate does not apply on this branch, and a caller
+        # who chose a directory is sent to the archive install instead (the
+        # update hint names the running binary's directory so that binary is
+        # replaced in place). Write-Usage says so; keep the two in step.
         Install-EntireWithScoop
 
         $prefixResult = Invoke-Scoop prefix entire
@@ -653,6 +661,9 @@ function Install-Entire {
     }
     if ($Channel -eq "nightly" -and $null -ne $scoopCommand) {
         Write-InstallerWarning "Scoop only publishes stable releases; installing nightly from the verified release archive."
+    }
+    elseif ($null -ne $scoopCommand) {
+        Write-Info "Scoop detected, but -InstallDir was given; installing from the verified release archive."
     }
 
     $resolvedInstallDir = Get-NormalizedPath -Path $InstallDir

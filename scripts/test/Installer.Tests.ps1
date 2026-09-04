@@ -531,3 +531,43 @@ Describe 'Web timeouts' {
         }
     }
 }
+
+Describe 'Scoop or archive selection' {
+    BeforeAll {
+        . (Join-Path (Split-Path -Parent $PSScriptRoot) 'install.ps1')
+    }
+
+    BeforeEach {
+        Mock Assert-Prerequisite {}
+        Mock Write-Info {}
+        Mock Install-EntireWithScoop {}
+        Mock Get-PlatformArchitecture { 'amd64' }
+        # The archive branch's first step after the directory is resolved; stop there.
+        Mock Get-ReleaseVersion { throw 'stop-here' }
+    }
+
+    It 'takes the archive path when -InstallDir is explicit even with Scoop on PATH' {
+        function scoop {}
+        # Set-Variable, not assignment: these are read by Install-Entire through
+        # the scope chain, which the linter's unused-variable rule cannot see.
+        Set-Variable -Name Channel -Value 'stable'
+        Set-Variable -Name InstallDir -Value (Join-Path $TestDrive 'chosen')
+        Set-Variable -Name InstallDirExplicit -Value $true
+        { Install-Entire } | Should -Throw -ExpectedMessage '*stop-here*'
+        Should -Invoke Install-EntireWithScoop -Times 0 -Exactly
+        Should -Invoke Get-ReleaseVersion -Times 1 -Exactly
+    }
+
+    It 'uses Scoop on stable when -InstallDir was not given' {
+        function scoop {}
+        # Set-Variable, not assignment: these are read by Install-Entire through
+        # the scope chain, which the linter's unused-variable rule cannot see.
+        Set-Variable -Name Channel -Value 'stable'
+        Set-Variable -Name InstallDirExplicit -Value $false
+        # Stop inside the Scoop branch; what follows it shells out to scoop.
+        Mock Install-EntireWithScoop { throw 'scoop-branch' }
+        { Install-Entire } | Should -Throw -ExpectedMessage '*scoop-branch*'
+        Should -Invoke Install-EntireWithScoop -Times 1 -Exactly
+        Should -Invoke Get-ReleaseVersion -Times 0 -Exactly
+    }
+}
