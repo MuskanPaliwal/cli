@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,7 +33,7 @@ func init() {
 }
 
 func (a *openCodeAgent) Name() string               { return "opencode" }
-func (a *openCodeAgent) Binary() string             { return "opencode" }
+func (a *openCodeAgent) Binary() string             { return openCodeBinary }
 func (a *openCodeAgent) EntireAgent() string        { return "opencode" }
 func (a *openCodeAgent) PromptPattern() string      { return `(Ask anything|▣)` }
 func (a *openCodeAgent) TimeoutMultiplier() float64 { return 2.0 }
@@ -75,6 +76,10 @@ const (
 	// range, so the tree has to be rebuilt on every opencode upgrade.
 	openCodePluginPkg = "@opencode-ai/plugin"
 
+	// openCodeBinary is the executable name, also used before an agent instance
+	// exists (the dependency tree is resolved from package scope).
+	openCodeBinary = "opencode"
+
 	// openCodeSeedGitignore mirrors the .gitignore opencode writes into
 	// .opencode itself. It names its own file, so everything we plant — the
 	// .gitignore included — stays invisible to git. That matters here beyond
@@ -84,13 +89,33 @@ const (
 )
 
 // openCodeVersionRe matches what `opencode --version` prints. The result names
-// a cache directory, so it is validated rather than trusted.
+// a directory, so it is validated rather than trusted.
 var openCodeVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]*$`)
 
-// openCodePluginDeps is the warmed dependency tree built once by Bootstrap and
-// seeded into every test repo by SeedRepo. Empty when it could not be built, in
-// which case seeding is skipped and opencode installs per-directory as usual.
-var openCodePluginDeps string
+// openCodePluginDeps resolves the pre-built dependency tree, building it at most
+// once per process.
+//
+// It resolves rather than reading something Bootstrap stashed, because Bootstrap
+// and SetupRepo run in DIFFERENT PROCESSES: `go run ./e2e/bootstrap`, then
+// `go test ./e2e/tests`. A package variable set by Bootstrap is empty in the
+// test process, and because seeding degrades quietly that failure looks like
+// success — bootstrap reports a fast warmup while every test still pays the
+// install. That is exactly what run 33865617639 did.
+var openCodePluginDeps = sync.OnceValues(buildPluginDeps)
+
+// openCodeDepsDir names the shared tree for one opencode version.
+//
+// Deliberately not under os.UserCacheDir(): the e2e TestMain points
+// XDG_CACHE_HOME at the artifact directory, so a tree built there would both
+// miss the one Bootstrap built — different process, different cache dir — and
+// be uploaded as a ~61MB CI artifact. os.TempDir() is stable across both
+// processes, which is the whole requirement.
+//
+// Keyed by version because opencode pins the plugin to its own binary version,
+// so a tree built for an older opencode is one it would discard and reinstall.
+func openCodeDepsDir(version string) string {
+	return filepath.Join(os.TempDir(), "entire-e2e-opencode-deps-"+version)
+}
 
 func (a *openCodeAgent) Bootstrap() error {
 	// Build the dependency tree opencode would otherwise install itself, once,
@@ -106,14 +131,19 @@ func (a *openCodeAgent) Bootstrap() error {
 	// between "loading path=..." and "all LSPs are disabled".
 	//
 	// Doing it here turns ~40 unbounded installs hidden inside the agent into
-	// one bounded step that reports its own failure. It is not a workaround for
-	// a test-only problem: every user gets the same install on first launch per
-	// repo, and again after each opencode upgrade.
-	if deps, err := a.buildPluginDeps(); err != nil {
+	// one bounded step that reports its own failure.
+	//
+	// Not a test-only problem. opencode forks that install for every config
+	// directory that exists (ConfigPaths.directories) and blocks on all of them
+	// whenever any plugin is configured (plugin/index.ts: `if (plugins.length)
+	// yield* config.waitForDependencies()`). So a repo pays it once it has both
+	// a project-local .opencode directory and a plugin configured anywhere,
+	// global or project — and `entire enable` supplies both.
+	if deps, err := openCodePluginDeps(); err != nil {
 		fmt.Fprintf(os.Stderr, "opencode: could not pre-build plugin deps (%v)\n"+
 			"opencode: tests will pay the per-directory install themselves\n", err)
 	} else {
-		openCodePluginDeps = deps
+		fmt.Fprintf(os.Stderr, "opencode: plugin deps ready at %s\n", deps)
 	}
 
 	// opencode also has a first-run DB migration that races with parallel test
@@ -156,50 +186,61 @@ func (a *openCodeAgent) Bootstrap() error {
 	return nil
 }
 
-// buildPluginDeps materialises the .opencode dependency tree once, keyed by
-// opencode version, and returns the directory holding it. See Bootstrap for why.
-func (a *openCodeAgent) buildPluginDeps() (string, error) {
-	version, err := a.version()
+// buildPluginDeps materialises the .opencode dependency tree once and returns
+// the directory holding it. See Bootstrap for why it exists.
+func buildPluginDeps() (string, error) {
+	version, err := openCodeVersion()
 	if err != nil {
 		return "", err
 	}
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user cache dir: %w", err)
-	}
-	// Keyed by version because the pin follows the binary: a tree built for an
-	// older opencode is one opencode will discard and reinstall.
-	dir := filepath.Join(cache, "entire-e2e", "opencode-plugin-deps", version)
+	dir := openCodeDepsDir(version)
 	if _, err := os.Stat(filepath.Join(dir, "node_modules")); err == nil {
-		fmt.Fprintf(os.Stderr, "opencode: reusing plugin deps for %s at %s\n", version, dir)
 		return dir, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create plugin dep dir %q: %w", dir, err)
+
+	// Built in a staging directory and renamed into place, so a reader never
+	// sees a half-installed tree. Bootstrap normally wins this race and the test
+	// process takes the Stat above; if bootstrap was skipped, a loser here
+	// adopts the winner's tree rather than failing.
+	staging, err := os.MkdirTemp(os.TempDir(), "entire-e2e-opencode-deps-*")
+	if err != nil {
+		return "", fmt.Errorf("create staging dir: %w", err)
 	}
+	defer func() { _ = os.RemoveAll(staging) }() // no-op once renamed away
 	pkg := fmt.Sprintf("{\n  \"dependencies\": {\n    %q: %q\n  }\n}\n", openCodePluginPkg, version)
-	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkg), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, "package.json"), []byte(pkg), 0o644); err != nil {
 		return "", fmt.Errorf("write package.json: %w", err)
 	}
 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), openCodeDepsBudget)
 	defer cancel()
+	// The npm CLI, deliberately: opencode installs the same tree with
+	// @npmcli/arborist in-process, which measured 5m00s against npm's 3s for an
+	// identical result. Using npm here is the point of doing it ourselves.
 	cmd := exec.CommandContext(ctx, "npm", "install", "--no-audit", "--no-fund", "--loglevel=error")
-	cmd.Dir = dir
+	cmd.Dir = staging
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("npm install %s@%s: %w\n%s", openCodePluginPkg, version, err, out)
 	}
-	fmt.Fprintf(os.Stderr, "opencode: built plugin deps for %s in %s\n", version, time.Since(start).Round(time.Millisecond))
+	elapsed := time.Since(start).Round(time.Millisecond)
+
+	if err := os.Rename(staging, dir); err != nil {
+		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr == nil {
+			return dir, nil // lost the race; the winner's tree is equivalent
+		}
+		return "", fmt.Errorf("publish plugin deps to %q: %w", dir, err)
+	}
+	fmt.Fprintf(os.Stderr, "opencode: built plugin deps for %s in %s at %s\n", version, elapsed, dir)
 	return dir, nil
 }
 
-// version reports the running opencode's version, which is the version its
-// generated package.json will pin.
-func (a *openCodeAgent) version() (string, error) {
+// openCodeVersion reports the running opencode's version, which is the version
+// its generated package.json will pin.
+func openCodeVersion() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, a.Binary(), "--version").Output()
+	out, err := exec.CommandContext(ctx, openCodeBinary, "--version").Output()
 	if err != nil {
 		return "", fmt.Errorf("opencode --version: %w", err)
 	}
@@ -214,15 +255,18 @@ func (a *openCodeAgent) version() (string, error) {
 // SeedRepo plants the pre-built dependency tree in a fresh test repo so
 // opencode's own blocking install never runs there.
 func (a *openCodeAgent) SeedRepo(dir string) error {
-	if openCodePluginDeps == "" {
-		return nil // Bootstrap could not build the tree; leave the repo alone.
+	deps, err := openCodePluginDeps()
+	if err != nil {
+		// Leave the repo alone and let opencode install for itself.
+		fmt.Fprintf(os.Stderr, "opencode: no pre-built plugin deps (%v); %s pays the install\n", err, dir)
+		return nil
 	}
 	target := filepath.Join(dir, ".opencode")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return fmt.Errorf("create .opencode: %w", err)
 	}
 	for _, name := range []string{"package.json", "package-lock.json"} {
-		data, err := os.ReadFile(filepath.Join(openCodePluginDeps, name))
+		data, err := os.ReadFile(filepath.Join(deps, name))
 		if err != nil {
 			return fmt.Errorf("read seeded %s: %w", name, err)
 		}
@@ -238,7 +282,7 @@ func (a *openCodeAgent) SeedRepo(dir string) error {
 	// cost about what the install we are avoiding costs. opencode reads through
 	// the link and leaves it in place.
 	link := filepath.Join(target, "node_modules")
-	if err := os.Symlink(filepath.Join(openCodePluginDeps, "node_modules"), link); err != nil {
+	if err := os.Symlink(filepath.Join(deps, "node_modules"), link); err != nil {
 		// Degrade to opencode installing for itself rather than failing setup —
 		// symlinks are not available unprivileged on every platform.
 		fmt.Fprintf(os.Stderr, "opencode: could not link seeded node_modules (%v); this repo pays the install\n", err)
