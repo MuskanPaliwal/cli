@@ -1343,6 +1343,26 @@ avoid-the-shell side) and `cmd/entire/cli/agent/hook_command.go`
 (`escapeWindowsCMD`, the third-party-exec side). Each doc comment points at the
 other.
 
+**The auto-updater's `sh -c` is a considered exception, and it is enforced
+rather than asserted.** `versioncheck.realRunInstaller` (unix only) runs the
+update command through a shell, which the rule above would otherwise forbid. It
+is allowed because there is no dynamic value in it: on unix
+`UpdateCommandForCurrentBinary` returns one of five compile-time literals, and
+the binary's path and version choose *between* them and never appear *in* them —
+while the shell is load-bearing for the fallback, which is a pipeline
+(`curl … | bash`). The tempting next change is exactly the one that breaks this:
+interpolating a channel or a version into the command.
+`TestUpdateCommandIsAlwaysALiteral` (in `versioncheck_unix_test.go`) drives every
+unix install manager and channel with adversarial paths and versions and fails
+when the result is not a known string. A command that genuinely needs a runtime
+value must be built and run as argv, not added to that set.
+
+Windows is deliberately outside that invariant rather than an exception to it:
+`fallbackInstallCommand` there interpolates the running binary's directory into
+`-InstallDir`, and it is safe to because Windows never *runs* the command —
+`realRunInstaller` is unimplemented there, so the string is only ever printed
+for the user to paste.
+
 ### Control-Plane Core Resolution (which core am I talking to?)
 
 Control-plane commands dial one of three cores: the active context's
