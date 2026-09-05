@@ -1,0 +1,5 @@
+⚠ MCP client for `codex_apps` timed out after 30 seconds. Add or adjust `startup_timeout_sec` in your config.toml:
+  [mcp_servers.codex_apps]
+  startup_timeout_sec = XX
+
+⚠ MCP startup incomplete (failed: codex_apps) fix this first
