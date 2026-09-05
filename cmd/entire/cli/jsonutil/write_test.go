@@ -14,7 +14,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
+
+const testGOOSWindows = "windows"
+const atomicFreshContent = "fresh"
 
 func TestWriteFileAtomicStream_ReplacesValidatedFile(t *testing.T) {
 	t.Parallel()
@@ -31,12 +36,12 @@ func TestWriteFileAtomicStream_ReplacesValidatedFile(t *testing.T) {
 		target,
 		0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, `{"fresh":true}`)
+			_, err := io.WriteString(w, `{atomicFreshContent:true}`)
 			return err
 		},
 		func(r io.Reader) error {
 			data, err := io.ReadAll(r)
-			if err == nil && string(data) != `{"fresh":true}` {
+			if err == nil && string(data) != `{atomicFreshContent:true}` {
 				err = fmt.Errorf("validate got %q", data)
 			}
 			validated = err == nil
@@ -54,10 +59,10 @@ func TestWriteFileAtomicStream_ReplacesValidatedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != `{"fresh":true}` {
+	if string(got) != `{atomicFreshContent:true}` {
 		t.Fatalf("destination = %q", got)
 	}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != testGOOSWindows {
 		info, err := os.Stat(target)
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +111,7 @@ func TestWriteFileAtomicStream_ValidatorFailureCleansStaging(t *testing.T) {
 	err := WriteFileAtomicStream(
 		context.Background(), target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, `{"fresh":true}`)
+			_, err := io.WriteString(w, `{atomicFreshContent:true}`)
 			return err
 		},
 		func(io.Reader) error { return wantErr },
@@ -128,7 +133,7 @@ func TestWriteFileAtomicStream_ValidatorReadFailureCleansStaging(t *testing.T) {
 	err := writeFileAtomic(
 		context.Background(), target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, "fresh")
+			_, err := io.WriteString(w, atomicFreshContent)
 			return err
 		},
 		func(r io.Reader) error {
@@ -155,7 +160,7 @@ func TestWriteFileAtomicStream_CancellationBeforePublicationCleansStaging(t *tes
 	err := WriteFileAtomicStream(
 		ctx, target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, `{"fresh":true}`)
+			_, err := io.WriteString(w, `{atomicFreshContent:true}`)
 			cancel()
 			return err
 		},
@@ -198,7 +203,7 @@ func TestWriteFileAtomicStream_CancellationDuringRenameRetryRetainsStaging(t *te
 	err := writeFileAtomic(
 		ctx, target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, "fresh")
+			_, err := io.WriteString(w, atomicFreshContent)
 			return err
 		},
 		func(io.Reader) error { return nil },
@@ -223,7 +228,7 @@ func TestWriteFileAtomicStream_CancellationDuringRenameRetryRetainsStaging(t *te
 	if readErr != nil {
 		t.Fatalf("read retained staging: %v", readErr)
 	}
-	if string(staged) != "fresh" {
+	if string(staged) != atomicFreshContent {
 		t.Fatalf("retained staging = %q, want fresh", staged)
 	}
 }
@@ -299,7 +304,7 @@ func TestWriteFileAtomicStream_SyncAndCloseFailuresCleanStaging(t *testing.T) {
 			err := writeFileAtomic(
 				context.Background(), target, 0o600,
 				func(w io.Writer) error {
-					_, err := io.WriteString(w, "fresh")
+					_, err := io.WriteString(w, atomicFreshContent)
 					return err
 				},
 				func(io.Reader) error {
@@ -396,7 +401,7 @@ func TestWriteFileAtomicStream_ValidationAndChmodFailuresCleanStaging(t *testing
 			err := writeFileAtomic(
 				context.Background(), target, 0o600,
 				func(w io.Writer) error {
-					_, err := io.WriteString(w, "fresh")
+					_, err := io.WriteString(w, atomicFreshContent)
 					return err
 				},
 				func(io.Reader) error { return nil },
@@ -426,7 +431,7 @@ func TestWriteFileAtomicStream_CancellationAfterValidationCleansStaging(t *testi
 	err := writeFileAtomic(
 		ctx, target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, "fresh")
+			_, err := io.WriteString(w, atomicFreshContent)
 			return err
 		},
 		func(io.Reader) error {
@@ -447,7 +452,6 @@ func TestWriteFileAtomicStream_CancellationAfterValidationCleansStaging(t *testi
 
 func TestWriteFileAtomicStream_RenameFailureRetainsValidatedStaging(t *testing.T) {
 	t.Parallel()
-	const fresh = "fresh"
 	dir := t.TempDir()
 	target := seedAtomicDestination(t, dir)
 	wantErr := errors.New("rename failed")
@@ -457,12 +461,12 @@ func TestWriteFileAtomicStream_RenameFailureRetainsValidatedStaging(t *testing.T
 	err := writeFileAtomic(
 		context.Background(), target, 0o600,
 		func(w io.Writer) error {
-			_, err := io.WriteString(w, fresh)
+			_, err := io.WriteString(w, atomicFreshContent)
 			return err
 		},
 		func(r io.Reader) error {
 			data, err := io.ReadAll(r)
-			if err == nil && string(data) != fresh {
+			if err == nil && string(data) != atomicFreshContent {
 				err = fmt.Errorf("validate got %q", data)
 			}
 			return err
@@ -485,7 +489,7 @@ func TestWriteFileAtomicStream_RenameFailureRetainsValidatedStaging(t *testing.T
 	if readErr != nil {
 		t.Fatalf("read retained staging: %v", readErr)
 	}
-	if string(staged) != fresh {
+	if string(staged) != atomicFreshContent {
 		t.Fatalf("retained staging = %q, want fresh", staged)
 	}
 }
@@ -523,7 +527,7 @@ func TestWriteFileAtomicStream_DirectorySyncIsBestEffort(t *testing.T) {
 			err := writeFileAtomic(
 				context.Background(), target, 0o600,
 				func(w io.Writer) error {
-					_, err := io.WriteString(w, "fresh")
+					_, err := io.WriteString(w, atomicFreshContent)
 					return err
 				},
 				nil,
@@ -536,7 +540,7 @@ func TestWriteFileAtomicStream_DirectorySyncIsBestEffort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != "fresh" {
+			if string(got) != atomicFreshContent {
 				t.Fatalf("destination = %q, want fresh", got)
 			}
 			if tt.openErr == nil && (!directory.syncCalled || !directory.closeCalled) {
@@ -690,7 +694,7 @@ func TestWriteFileAtomic_ReplacesExistingFile(t *testing.T) {
 // without the Chmod a 0o644 caller would silently get a tighter mode.
 func TestWriteFileAtomic_AppliesPermission(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == testGOOSWindows {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
 	dir := t.TempDir()
@@ -792,5 +796,114 @@ func TestWriteFileAtomic_ParentMissing(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected ErrNotExist; got: %v", err)
+	}
+}
+
+func TestWriteFileAtomicIn_WritesThroughRoot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("os.OpenRoot: %v", err)
+	}
+	defer root.Close()
+
+	if err := os.MkdirAll(filepath.Join(dir, "metadata"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := WriteFileAtomicIn(root, "metadata/state.json", []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomicIn: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "metadata", "state.json"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != `{"a":1}` {
+		t.Errorf("contents = %q, want %q", got, `{"a":1}`)
+	}
+}
+
+func TestWriteFileAtomicIn_ReplacesExistingAndLeavesNoTemp(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("os.OpenRoot: %v", err)
+	}
+	defer root.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("stale"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := WriteFileAtomicIn(root, "settings.json", []byte(atomicFreshContent), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomicIn: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != atomicFreshContent {
+		t.Errorf("contents = %q, want %q", got, atomicFreshContent)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "settings.json" {
+		t.Errorf("temp file left behind: %v", entries)
+	}
+}
+
+// The whole reason .entire writes go through a root: a name assembled from
+// agent-supplied input must not be able to land outside it.
+func TestWriteFileAtomicIn_RejectsEscapingName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "inner"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	root, err := os.OpenRoot(filepath.Join(dir, "inner"))
+	if err != nil {
+		t.Fatalf("os.OpenRoot: %v", err)
+	}
+	defer root.Close()
+
+	if err := WriteFileAtomicIn(root, "../escaped.json", []byte("nope"), 0o600); err == nil {
+		t.Fatal("expected an escaping name to be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "escaped.json")); !os.IsNotExist(err) {
+		t.Errorf("escaping write landed outside the root: %v", err)
+	}
+}
+
+func TestWriteFileAtomicIn_RejectsSymlinkedParentInsideRoot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir, "metadata")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("os.OpenRoot: %v", err)
+	}
+	defer root.Close()
+
+	err = WriteFileAtomicIn(root, "metadata/state.json", []byte("nope"), 0o600)
+	if !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Fatalf("WriteFileAtomicIn error = %v, want ErrSymlinkedPath", err)
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("write reached symlink target: %v", err)
 	}
 }

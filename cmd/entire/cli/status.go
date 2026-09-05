@@ -3,10 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	checkpointremote "github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
@@ -76,16 +75,10 @@ func runStatus(ctx context.Context, w io.Writer, detailed, jsonOutput bool) erro
 	}
 
 	// Check which settings files exist
-	_, projectErr := os.Lstat(settingsPath)
-	if projectErr != nil && !errors.Is(projectErr, fs.ErrNotExist) {
-		return fmt.Errorf("cannot access project settings file: %w", projectErr)
+	projectExists, localExists, err := settings.FilesPresent(ctx)
+	if err != nil {
+		return err //nolint:wrapcheck // already contextual; a bare %w only changes the concrete type
 	}
-	_, localErr := os.Lstat(localSettingsPath)
-	if localErr != nil && !errors.Is(localErr, fs.ErrNotExist) {
-		return fmt.Errorf("cannot access local settings file: %w", localErr)
-	}
-	projectExists := projectErr == nil
-	localExists := localErr == nil
 
 	if !projectExists && !localExists {
 		fmt.Fprintln(w, "○ not set up (run `entire enable` to get started)")
@@ -144,6 +137,14 @@ func runStatusDetailed(ctx context.Context, w io.Writer, sty statusStyles, setti
 			return fmt.Errorf("failed to load project settings: %w", err)
 		}
 		fmt.Fprintln(w, formatSettingsStatus("Project", projectSettings, sty))
+	}
+
+	// An external_agents grant the loader refused. The user can see the
+	// setting in their file and has no other way to learn it is inert:
+	// discovery simply does not run, and the agent never appears.
+	if reason, rejected := effectiveSettings.ExternalAgentsRejection(); rejected {
+		fmt.Fprintf(w, "  external_agents is ignored: %s\n  move it to %s, and keep that file out of version control\n",
+			reason, settings.EntireSettingsLocalFile)
 	}
 
 	// Show local settings if it exists. LoadFromFile is ungated, so this
@@ -207,10 +208,18 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 		}
 
 		// Warn when installed hooks are out of date (read-only; fix is manual).
-		for _, displayName := range OutdatedHookAgentDisplayNames(ctx) {
+		for _, name := range OutdatedHookAgents(ctx) {
+			ag, err := agent.Get(name)
+			if err != nil {
+				continue
+			}
 			b.WriteString("\n")
-			b.WriteString(sty.render(sty.yellow, "  ! "+displayName+" hooks out of date"))
+			b.WriteString(sty.render(sty.yellow, "  ! "+string(ag.Type())+" hooks out of date"))
 			b.WriteString(sty.render(sty.dim, " · run 'entire enable --force'"))
+		}
+		if warning := codexStatusWarning(inspectCodexHookIssue(ctx)); warning != "" {
+			b.WriteString("\n")
+			b.WriteString(sty.render(sty.yellow, "  ! "+warning))
 		}
 	}
 
@@ -791,6 +800,9 @@ type statusJSON struct {
 	// HooksOutdated lists agents whose installed hook config is out of date and
 	// should be refreshed with `entire enable --force`.
 	HooksOutdated []string `json:"hooks_outdated,omitempty"`
+	// CodexHooks reports effective discovery/trust warnings separately from
+	// current-checkout installation and freshness semantics.
+	CodexHooks *codexHooksStatusJSON `json:"codex_hooks,omitempty"`
 	// CheckpointSyncRemote is the elected checkpoint sync remote name, or the
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named
 	// checkpoint_remote, which is the existing GitHub-coupled setting.
@@ -801,6 +813,31 @@ type statusJSON struct {
 	// SecretScanners lists the enabled engines when non-default; omitted when default.
 	SecretScanners []string `json:"secret_scanners,omitempty"`
 	Error          string   `json:"error,omitempty"`
+}
+
+type codexHooksStatusJSON struct {
+	State            string   `json:"state"`
+	WorktreePath     string   `json:"worktree_path,omitempty"`
+	DiscoveredPath   string   `json:"discovered_path,omitempty"`
+	ProjectLayerPath string   `json:"project_layer_path,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	MissingHooks     []string `json:"missing_hooks,omitempty"`
+	MissingApprovals []string `json:"missing_approvals,omitempty"`
+}
+
+func codexHooksStatusFromIssue(issue *codexHookIssue) *codexHooksStatusJSON {
+	if issue == nil {
+		return nil
+	}
+	return &codexHooksStatusJSON{
+		State:            issue.State,
+		WorktreePath:     issue.WorktreePath,
+		DiscoveredPath:   issue.DiscoveredPath,
+		ProjectLayerPath: issue.ProjectLayerPath,
+		Error:            issue.Error,
+		MissingHooks:     issue.MissingHooks,
+		MissingApprovals: issue.MissingApprovals,
+	}
 }
 
 type sessionBriefJSON struct {
@@ -821,25 +858,12 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		return writeJSON(statusJSON{Error: "not a git repository"})
 	}
 
-	settingsPath, err := paths.AbsPath(ctx, EntireSettingsFile)
-	if err != nil {
-		settingsPath = EntireSettingsFile
-	}
-	localSettingsPath, err := paths.AbsPath(ctx, EntireSettingsLocalFile)
-	if err != nil {
-		localSettingsPath = EntireSettingsLocalFile
+	projectExists, localExists, presenceErr := settings.FilesPresent(ctx)
+	if presenceErr != nil {
+		return writeJSON(statusJSON{Error: presenceErr.Error()})
 	}
 
-	_, projectErr := os.Lstat(settingsPath)
-	if projectErr != nil && !errors.Is(projectErr, fs.ErrNotExist) {
-		return writeJSON(statusJSON{Error: fmt.Sprintf("cannot access project settings file: %v", projectErr)})
-	}
-	_, localErr := os.Lstat(localSettingsPath)
-	if localErr != nil && !errors.Is(localErr, fs.ErrNotExist) {
-		return writeJSON(statusJSON{Error: fmt.Sprintf("cannot access local settings file: %v", localErr)})
-	}
-
-	if projectErr != nil && localErr != nil {
+	if !projectExists && !localExists {
 		return writeJSON(statusJSON{Error: "not set up"})
 	}
 
@@ -865,6 +889,7 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		for _, name := range OutdatedHookAgents(ctx) {
 			result.HooksOutdated = append(result.HooksOutdated, string(name))
 		}
+		result.CodexHooks = codexHooksStatusFromIssue(inspectCodexHookIssue(ctx))
 
 		// Same computation as the text path (writeCheckpointSyncLines);
 		// empty fields drop out via omitempty when nothing resolved.

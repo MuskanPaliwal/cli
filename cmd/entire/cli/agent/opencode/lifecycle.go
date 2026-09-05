@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/entiredir"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
@@ -147,7 +149,7 @@ func (a *OpenCodeAgent) ParseHookEvent(ctx context.Context, hookName string, std
 // This method always refreshes the transcript to ensure the latest agent activity is captured.
 func (a *OpenCodeAgent) PrepareTranscript(ctx context.Context, sessionRef string) error {
 	// Validate the session ref path
-	if _, err := os.Stat(sessionRef); err != nil && !os.IsNotExist(err) {
+	if _, err := agent.StatTranscriptFile(sessionRef); err != nil && !os.IsNotExist(err) {
 		// Permission denied, broken symlink, or other non-recoverable errors
 		return fmt.Errorf("failed to stat OpenCode transcript path %s: %w", sessionRef, err)
 	}
@@ -187,8 +189,14 @@ func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error
 	if err != nil {
 		repoRoot = "."
 	}
+	// Absolute on purpose: this value is handed to callers that pass it to other
+	// processes and to agent-facing APIs. Reads and writes still go through the
+	// shared root (see fetchAndCacheExport).
 	return filepath.Join(repoRoot, paths.EntireTmpDir, sessionID+".json"), nil
 }
+
+// entireTmpName is .entire/tmp relative to the .entire root.
+var entireTmpName = entiredir.MustName(paths.EntireTmpDir)
 
 // fetchAndCacheExport calls `opencode export <sessionID>` and writes the result
 // to a temporary file. Returns the path to the temp file.
@@ -208,12 +216,18 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 		repoRoot = "."
 	}
 
-	tmpDir := filepath.Join(repoRoot, paths.EntireTmpDir)
-	tmpFile := filepath.Join(tmpDir, sessionID+".json")
+	// File operations stay confined to .entire; callers receive an absolute path.
+	root, err := entiredir.OpenAt(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("open %s for export cache: %w", paths.EntireDir, err)
+	}
+	entireDirAbs := filepath.Join(repoRoot, paths.EntireDir)
+	tmpName := entireTmpName + "/" + sessionID + ".json"
+	tmpFile := filepath.Join(entireDirAbs, filepath.FromSlash(tmpName))
 
 	// Integration test mode: use pre-written mock file without calling opencode export
 	if os.Getenv("ENTIRE_TEST_OPENCODE_MOCK_EXPORT") != "" {
-		if _, err := os.Stat(tmpFile); err == nil {
+		if _, err := root.Stat(tmpName); err == nil {
 			return tmpFile, nil
 		}
 		return "", fmt.Errorf("mock export file not found: %s (ENTIRE_TEST_OPENCODE_MOCK_EXPORT is set)", tmpFile)
@@ -221,15 +235,16 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 
 	// Write export directly to temp file under .entire. Avoid stdout capture,
 	// which can truncate large payloads in some opencode versions.
-	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
+	if err := osroot.MkdirAllNoSymlink(root, entireTmpName, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	// The cache may be the session's only local transcript until checkpointing;
 	// publish only a complete export that has passed JSON validation.
-	err = jsonutil.WriteFileAtomicStream(
+	err = jsonutil.WriteFileAtomicStreamIn(
 		ctx,
-		tmpFile,
+		root,
+		tmpName,
 		0o600,
 		func(writer io.Writer) error {
 			return runOpenCodeExportFn(ctx, sessionID, writer)

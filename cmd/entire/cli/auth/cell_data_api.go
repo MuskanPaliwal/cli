@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/httputil"
@@ -212,8 +213,8 @@ type cellSubject struct {
 // `--jurisdiction` mints a token for the caller's SELECTED environment, so with
 // (say) a partial.to context active it must mint a partial.to token even though
 // the data host defaults to entire.io. Discovery keys off api.BaseURL(), so it
-// would fail outright — clusterdiscovery.requireActiveContext validates the
-// active context against *that* host's trusted issuers and errors when they
+// would fail outright — clusterdiscovery.selectLoginContext validates the
+// selected context against *that* host's trusted issuers and errors when they
 // don't match, which for this command is the wrong question to ask: the target
 // jurisdiction comes from the flag, not from the default data host.
 // NewEntireAPICellClient is a different case — it dials the data plane — so it
@@ -350,13 +351,13 @@ func resolveEnvTokenCellSubject(raw string, insecureHTTP bool) (cellSubject, err
 func cellExchangeHTTPClient(origin string) *http.Client {
 	switch {
 	case cellExchangeTransportForTest != nil:
-		return &http.Client{Timeout: cellDataAPITimeout, Transport: cellExchangeTransportForTest}
+		return &http.Client{Timeout: cellDataAPITimeout, Transport: versioninfo.WrapTransport(cellExchangeTransportForTest)}
 	case shouldUsePlainHTTPDiscovery(origin):
 		c := dataAPIDiscoveryClient(origin)
 		c.Timeout = cellDataAPITimeout
 		return c
 	default:
-		return &http.Client{Timeout: cellDataAPITimeout}
+		return &http.Client{Timeout: cellDataAPITimeout, Transport: versioninfo.WrapTransport(nil)}
 	}
 }
 
@@ -386,12 +387,27 @@ func resolveJurisdiction(override, loginJWT string) (string, error) {
 			return "", err
 		}
 	}
-	jurisdiction = strings.ToLower(strings.TrimSpace(jurisdiction))
+	jurisdiction, err := NormalizeJurisdiction(jurisdiction)
+	if err != nil {
+		return "", fmt.Errorf("%w; refusing to route", err)
+	}
 	if jurisdiction == "" {
 		return "", errors.New("login token has no home_jurisdiction claim; cannot route to entire-api cell")
 	}
+	return jurisdiction, nil
+}
+
+// NormalizeJurisdiction is the one rule for a user- or claim-supplied
+// jurisdiction: trimmed, lowercased, and constrained to a single DNS label
+// (`--jurisdiction US`, `" us "` and `us` all yield `us`). Empty is returned as
+// "" without error so callers can apply their own default (home).
+func NormalizeJurisdiction(value string) (string, error) {
+	jurisdiction := strings.ToLower(strings.TrimSpace(value))
+	if jurisdiction == "" {
+		return "", nil
+	}
 	if !jurisdictionLabelPattern.MatchString(jurisdiction) {
-		return "", fmt.Errorf("jurisdiction %q is not a valid label; refusing to route", jurisdiction)
+		return "", fmt.Errorf("jurisdiction %q is not a valid label", jurisdiction)
 	}
 	return jurisdiction, nil
 }
@@ -561,9 +577,11 @@ func requireSafeExchangeURL(label, raw string) error {
 
 // HomeJurisdictionFromLoginJWT reads the home_jurisdiction claim without
 // verifying the signature — callers only route with it; the server
-// re-verifies. Returns "" (no error) when the claim is absent so each
-// caller can phrase its own missing-claim error. Shared with
-// git-remote-entire's jurisdiction git auth.
+// re-verifies. The claim is normalized (NormalizeJurisdiction), so a
+// malformed label is an error here and every reader sees one spelling.
+// Returns "" (no error) when the claim is absent so each caller can phrase
+// its own missing-claim error. Shared with git-remote-entire's jurisdiction
+// git auth.
 func HomeJurisdictionFromLoginJWT(loginJWT string) (string, error) {
 	parts := strings.Split(loginJWT, ".")
 	if len(parts) < 2 {
@@ -579,7 +597,7 @@ func HomeJurisdictionFromLoginJWT(loginJWT string) (string, error) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", fmt.Errorf("parse login token payload: %w", err)
 	}
-	return claims.HomeJurisdiction, nil
+	return NormalizeJurisdiction(claims.HomeJurisdiction)
 }
 
 type clusterListingRow struct {
