@@ -1,0 +1,1 @@
+https://github.com/entireio/cli/pull/2027 lets resolved the conflicts here
