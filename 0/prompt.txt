@@ -11,3 +11,7 @@ yeah but then what is our branch get to preserver?
 ---
 
 right. let's resolve comflicts. but before that give me a broader overview of what's happening in main and what we did and after merge what goes where
+
+---
+
+nice that makes sense
