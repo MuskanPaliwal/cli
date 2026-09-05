@@ -427,6 +427,77 @@ func TestShadowStrategy_ClearSessionState(t *testing.T) {
 	}
 }
 
+// TestClearSessionState_SerializesAgainstConcurrentMutation is a real
+// concurrency reproduction of the race clearSessionState's gate closes:
+// before the fix, it acquired no lock at all, so a clear racing a
+// concurrently-running MutateSessionState for the same session could run
+// while that mutation was still in flight -- deleting the state file out
+// from under a write that had not yet landed, silently destroying it. This
+// drives both paths with real goroutines and explicit channel
+// synchronization (no sleeps to fake a race): a writer goroutine holds the
+// real gate (via MutateSessionState) and blocks mid-mutation; a concurrent
+// clearSessionState call must block until the writer releases, not run
+// concurrently with it.
+func TestClearSessionState_SerializesAgainstConcurrentMutation(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	s := &ManualCommitStrategy{}
+	const sessionID = "race-session"
+	require.NoError(t, s.saveSessionState(context.Background(), &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}))
+
+	writerStarted := make(chan struct{})
+	writerMayFinish := make(chan struct{})
+	writerFinished := make(chan struct{})
+	go func() {
+		defer close(writerFinished)
+		if err := MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
+			close(writerStarted)
+			<-writerMayFinish
+			state.StepCount = 1
+			return nil
+		}); err != nil {
+			t.Errorf("MutateSessionState: %v", err)
+		}
+	}()
+	<-writerStarted // writer holds the gate now, mid-mutation
+
+	clearStarted := make(chan struct{})
+	clearReturned := make(chan struct{})
+	go func() {
+		defer close(clearReturned)
+		close(clearStarted)
+		if err := s.clearSessionState(context.Background(), sessionID); err != nil {
+			t.Errorf("clearSessionState: %v", err)
+		}
+	}()
+	// Wait until the goroutine is genuinely running before timing anything.
+	// Without this, "clearReturned is not closed" is also satisfied by a
+	// goroutine the scheduler never started, so the assertion below could
+	// pass without the gate doing any work at all.
+	<-clearStarted
+
+	// clearSessionState must be blocked waiting for the writer's gate right
+	// now. Before the fix (no locking at all in clearSessionState) it would
+	// return almost immediately here, well within this window, proving the
+	// race is real.
+	select {
+	case <-clearReturned:
+		t.Fatal("clearSessionState returned while a concurrent MutateSessionState was still mid-mutation -- not serialized")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: still blocked on the gate.
+	}
+
+	close(writerMayFinish)
+	<-writerFinished
+	<-clearReturned
+}
+
 func TestShadowStrategy_ListPendingCheckpoints_NoShadowBranch(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
@@ -1052,15 +1123,14 @@ func TestShadowStrategy_FilesTouched_OnlyModifiedFiles(t *testing.T) {
 	// First checkpoint using SaveStep - captures ALL working directory files
 	// (the checkpoint tree is a full snapshot), but tracks only modified files in FilesTouched
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{}, // No files modified yet
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{}, // No files modified yet
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -1075,15 +1145,14 @@ func TestShadowStrategy_FilesTouched_OnlyModifiedFiles(t *testing.T) {
 
 	// Second checkpoint using SaveStep - only modified file should be tracked
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"existing1.txt"}, // Only this file was modified
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 2",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"existing1.txt"}, // Only this file was modified
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 2",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -1711,15 +1780,14 @@ func TestShadowStrategy_CondenseSession_EphemeralBranchTrailer(t *testing.T) {
 
 	// Use SaveStep to create a checkpoint (this creates the shadow branch)
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -1816,15 +1884,14 @@ func TestSaveStep_EmptyBaseCommit_Recovery(t *testing.T) {
 
 	// SaveStep should recover by re-initializing the session state
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Test checkpoint",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Test checkpoint",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() should recover from empty BaseCommit, got error: %v", err)
@@ -1888,16 +1955,15 @@ func TestSaveStep_UsesCtxAgentType_WhenNoSessionState(t *testing.T) {
 	}
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Test checkpoint",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
-		AgentType:      agent.AgentTypeClaudeCode,
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Test checkpoint",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
+		AgentType:     agent.AgentTypeClaudeCode,
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -1964,16 +2030,15 @@ func TestSaveStep_UsesCtxAgentType_WhenPartialState(t *testing.T) {
 	}
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Test checkpoint",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
-		AgentType:      agent.AgentTypeClaudeCode,
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Test checkpoint",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
+		AgentType:     agent.AgentTypeClaudeCode,
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -2144,15 +2209,14 @@ func TestCondenseSession_IncludesAttribution(t *testing.T) {
 
 	// First checkpoint - captures agent's work on shadow branch
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"test.go"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"test.go"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -2666,15 +2730,14 @@ func TestMultiCheckpoint_UserEditsBetweenCheckpoints(t *testing.T) {
 	}
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"agent.go"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"agent.go"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() checkpoint 1 error = %v", err)
@@ -2712,15 +2775,14 @@ func TestMultiCheckpoint_UserEditsBetweenCheckpoints(t *testing.T) {
 	}
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"agent.go"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 2",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"agent.go"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 2",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() checkpoint 2 error = %v", err)
@@ -2900,15 +2962,14 @@ func TestCondenseSession_PrefersLiveTranscript(t *testing.T) {
 
 	// SaveStep to create shadow branch with the stale transcript
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -3127,16 +3188,15 @@ func TestCondenseSession_GeminiTranscript(t *testing.T) {
 
 	// Save checkpoint (creates shadow branch)
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"test.txt"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Gemini CLI",
-		AuthorEmail:    "gemini@test.com",
-		AgentType:      agent.AgentTypeGemini,
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"test.txt"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Gemini CLI",
+		AuthorEmail:   "gemini@test.com",
+		AgentType:     agent.AgentTypeGemini,
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() error = %v", err)
@@ -3287,16 +3347,15 @@ func TestCondenseSession_GeminiMultiCheckpoint(t *testing.T) {
 
 	// Save checkpoint 1
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"code.go"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Gemini CLI",
-		AuthorEmail:    "gemini@test.com",
-		AgentType:      agent.AgentTypeGemini,
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"code.go"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Gemini CLI",
+		AuthorEmail:   "gemini@test.com",
+		AgentType:     agent.AgentTypeGemini,
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() checkpoint 1 error = %v", err)
@@ -3373,16 +3432,15 @@ func TestCondenseSession_GeminiMultiCheckpoint(t *testing.T) {
 
 	// Save checkpoint 2
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"code.go"},
-		NewFiles:       []string{},
-		DeletedFiles:   []string{},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 2",
-		AuthorName:     "Gemini CLI",
-		AuthorEmail:    "gemini@test.com",
-		AgentType:      agent.AgentTypeGemini,
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"code.go"},
+		NewFiles:      []string{},
+		DeletedFiles:  []string{},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 2",
+		AuthorName:    "Gemini CLI",
+		AuthorEmail:   "gemini@test.com",
+		AgentType:     agent.AgentTypeGemini,
 	})
 	if err != nil {
 		t.Fatalf("SaveStep() checkpoint 2 error = %v", err)
@@ -3971,13 +4029,12 @@ func TestCondenseSession_RedactionFailure_DropsTranscriptButWritesMetadata(t *te
 	require.NoError(t, os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript), 0o644))
 
 	err = s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		ModifiedFiles:  []string{"main.go"},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint 1",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"main.go"},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	})
 	require.NoError(t, err)
 

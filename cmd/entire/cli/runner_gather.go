@@ -7,15 +7,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
+	"github.com/entireio/cli/cmd/entire/cli/worktreedir"
 )
 
 const (
@@ -106,7 +107,7 @@ func skip(reason string) string { return "_skipped: " + reason + "_\n" }
 func gatherRepoStatics(repoRoot string) string {
 	var b strings.Builder
 
-	if mod, ok := readCapped(filepath.Join(repoRoot, "go.mod"), 400); ok {
+	if mod, ok := readCapped(repoRoot, "go.mod", 400); ok {
 		for _, line := range strings.Split(mod, "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "module ") || strings.HasPrefix(line, "go ") {
@@ -115,7 +116,7 @@ func gatherRepoStatics(repoRoot string) string {
 		}
 	}
 
-	if entries, err := os.ReadDir(repoRoot); err == nil {
+	if entries, err := listWorktreeTopLevel(repoRoot); err == nil {
 		var dirs []string
 		for _, e := range entries {
 			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
@@ -136,7 +137,7 @@ func gatherRepoStatics(repoRoot string) string {
 		{"AGENTS.md", tuneDocCap},
 		{"README.md", tuneReadmeCap},
 	} {
-		text, ok := readCapped(filepath.Join(repoRoot, doc.name), doc.cap)
+		text, ok := readCapped(repoRoot, doc.name, doc.cap)
 		if !ok || strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -151,10 +152,42 @@ func gatherRepoStatics(repoRoot string) string {
 	return b.String()
 }
 
-// readCapped reads a file and truncates it to maxLen characters, appending a
-// truncation marker when cut. Returns ok=false when the file can't be read.
-func readCapped(path string, maxLen int) (string, bool) {
-	data, err := os.ReadFile(path) //nolint:gosec // caller passes repo-root-relative paths
+// listWorktreeTopLevel lists the worktree root's entries through its shared root.
+func listWorktreeTopLevel(repoRoot string) ([]os.DirEntry, error) {
+	root, err := worktreedir.OpenAt(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open worktree root: %w", err)
+	}
+	entries, err := osroot.ReadDirNoSymlinks(root, ".")
+	if err != nil {
+		return nil, fmt.Errorf("read worktree root: %w", err)
+	}
+	return entries, nil
+}
+
+// readCapped reads name from the worktree at repoRoot and truncates it to maxLen
+// bytes, appending a truncation marker when cut. Returns ok=false when the file
+// can't be read.
+//
+// The read itself is bounded, not just the result. These are working-tree files
+// named by convention (README.md, CONTRIBUTING.md), so they arrive by clone and
+// their size is not ours to trust — and the caller has already said how much of
+// one it will use. Reading a gigabyte in order to keep its first 4KB is a cost
+// with no return.
+func readCapped(repoRoot, name string, maxLen int) (string, bool) {
+	root, err := worktreedir.OpenAt(repoRoot)
+	if err != nil {
+		return "", false
+	}
+	f, err := osroot.OpenNoFollow(root, name)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	// maxLen+1 so a file sitting exactly on the cap is distinguishable from one
+	// over it, which is what decides whether the marker is appended.
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxLen)+1))
 	if err != nil {
 		return "", false
 	}
@@ -277,12 +310,16 @@ func gatherCheckpoints(ctx context.Context) string {
 
 func gatherTrails(ctx context.Context, errW io.Writer, limit int, insecureHTTP bool) string {
 	var out strings.Builder
-	err := runAuthenticatedTrailAPI(ctx, errW, insecureHTTP, "", func(ctx context.Context, client *api.Client) error {
+	err := runAuthenticatedTrailAPI(ctx, errW, insecureHTTP, "", func(ctx context.Context, client *api.Client, repoID string) error {
 		forge, owner, repo, err := resolveTrailRemote(ctx)
 		if err != nil {
 			return err
 		}
-		resources, _, err := listTrailResources(ctx, client, forge, owner, repo, nil, "", limit)
+		basePath, err := trailRepoBasePath(forge, owner, repo, repoID)
+		if err != nil {
+			return err
+		}
+		resources, _, err := listTrailResources(ctx, client, basePath, nil, "", limit)
 		if err != nil {
 			return err
 		}
@@ -303,7 +340,7 @@ func gatherTrails(ctx context.Context, errW io.Writer, limit int, insecureHTTP b
 			scanned = scanned[:tuneMaxTrailsForFindings]
 		}
 		for i := range scanned {
-			client.SetTrailRoute(scanned[i].ID, trailNumberPath(forge, owner, repo, scanned[i].Number))
+			client.SetTrailRoute(scanned[i].ID, trailNumberPathForBase(basePath, scanned[i].Number))
 			comments, err := fetchAllTrailReviewComments(ctx, client, scanned[i].ID, trailReviewSummaryOptions())
 			if err != nil {
 				fetchFailures++
