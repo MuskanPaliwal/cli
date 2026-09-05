@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1RGC0AC77N30FXENHKD84X0",
+  "strategy": "manual-commit",
+  "branch": "fix-opf-ref-cas-race",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/checkpoint/persistent_ref_update.go",
+    "cmd/entire/cli/checkpoint/persistent_ref_update_test.go",
+    "cmd/entire/cli/gitrepo/ref_cas.go",
+    "cmd/entire/cli/gitrepo/ref_cas_test.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_cas_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 151964,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 9381120,
+    "output_tokens": 20542,
+    "api_call_count": 74
+  }
+}
