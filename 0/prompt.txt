@@ -1,0 +1,13 @@
+https://github.com/entireio/cli/pull/2053 can we also resolve these conflicts
+
+---
+
+you have to explain the strategy to resolve conflicts before doing anything
+
+---
+
+yeah but then what is our branch get to preserver?
+
+---
+
+right. let's resolve comflicts. but before that give me a broader overview of what's happening in main and what we did and after merge what goes where
