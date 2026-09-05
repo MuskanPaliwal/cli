@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/entiredir"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -29,17 +30,17 @@ func appendPrompt(ctx context.Context, sessionID, prompt string, skipDuplicate b
 		return false, nil
 	}
 
-	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
-	sessionDirAbs, err := paths.AbsPath(ctx, sessionDir)
+	sessionName := sessionMetadataName(sessionID)
+	root, err := entiredir.Open(ctx)
 	if err != nil {
-		return false, fmt.Errorf("resolve session metadata directory: %w", err)
+		return false, fmt.Errorf("open .entire directory: %w", err)
 	}
-	if err := os.MkdirAll(sessionDirAbs, 0o750); err != nil {
+	if err := osroot.MkdirAllNoSymlink(root, sessionName, 0o750); err != nil {
 		return false, fmt.Errorf("create session metadata directory: %w", err)
 	}
 
-	promptPath := filepath.Join(sessionDirAbs, paths.PromptFileName)
-	existing, err := os.ReadFile(promptPath) //nolint:gosec // session metadata path
+	promptName := sessionName + "/" + paths.PromptFileName
+	existing, err := entiredir.ReadFile(root, promptName)
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("read prompt.txt: %w", err)
 	}
@@ -52,7 +53,7 @@ func appendPrompt(ctx context.Context, sessionID, prompt string, skipDuplicate b
 	if len(existing) > 0 {
 		content = string(existing) + checkpoint.PromptSeparator + prompt
 	}
-	if err := os.WriteFile(promptPath, []byte(content), 0o600); err != nil { //nolint:gosec // path from internal metadata, not user input
+	if err := entiredir.WriteFile(root, promptName, []byte(content), 0o600); err != nil {
 		return false, fmt.Errorf("write prompt.txt: %w", err)
 	}
 	return true, nil
@@ -73,7 +74,7 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 	}
 
 	var appendedSkillEvents []agent.SkillEvent
-	stateSaved, err := strategy.MutateSessionStateSaved(ctx, event.SessionID, func(state *strategy.SessionState) error {
+	err := strategy.MutateSessionStateOnSaved(ctx, event.SessionID, func(state *strategy.SessionState) error {
 		// Condensation clears prompt.txt while holding the same lock. Keep the
 		// repair file and state writes ordered with that operation.
 		promptAppended, err := appendPromptToFileIfLastDiffers(ctx, event.SessionID, event.Prompt)
@@ -88,12 +89,11 @@ func handleLifecyclePromptUpdate(ctx context.Context, ag agent.Agent, event *age
 			return strategy.ErrMutationSkip
 		}
 		return nil
+	}, func() {
+		strategy.EmitSkillInvocationTelemetry(ctx, appendedSkillEvents)
 	})
 	if err != nil {
 		return fmt.Errorf("update prompt storage: %w", err)
-	}
-	if stateSaved {
-		strategy.EmitSkillInvocationTelemetry(ctx, appendedSkillEvents)
 	}
 	return nil
 }
