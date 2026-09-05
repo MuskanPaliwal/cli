@@ -74,7 +74,9 @@ func TestAtomicSetV1Ref_DoesNotReportUnverifiedConflictAsMoved(t *testing.T) {
 	var movedErr *V1RefMovedError
 	require.NotErrorAs(t, err, &movedErr,
 		"an unreadable current value does not prove that the ref moved")
-	require.ErrorIs(t, err, gitrepo.ErrRefCASConflict)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, gitrepo.ErrRefCASConflict)
+	require.Contains(t, err.Error(), "unable to resolve reference")
 }
 
 func TestOPFCheckpointRefRewriteDoesNotLoseConcurrentCheckpointUpdate(t *testing.T) {

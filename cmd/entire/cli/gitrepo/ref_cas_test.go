@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -150,6 +151,83 @@ func TestPreparedRefCASCancellationReleasesGitLock(t *testing.T) {
 			require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
 
 			gitenv.Run(t, repoDir, "update-ref", refName.String(), replacement, initial)
+			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestRefCASCommitAcknowledgementSurvivesCancellation(t *testing.T) {
+	t.Parallel()
+	for _, backend := range refCASBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := backend.init(t)
+			refName := plumbing.ReferenceName("refs/entire/committed-cas")
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tx, err := prepareRefCAS(ctx, repoDir, refName, plumbing.NewHash(replacement), plumbing.NewHash(initial))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, tx.abort()) })
+
+			require.NoError(t, tx.exchange("commit", "commit: ok"))
+			cancel()
+			require.Eventually(t, tx.canceled.Load, time.Second, time.Millisecond)
+			require.NoError(t, tx.wait(), "a confirmed ref update must not become a cancellation failure")
+			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial, replacement)
+			require.Equal(t, initial, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestCompareAndSwapRef_DeletedRefRemainsCASConflict(t *testing.T) {
+	t.Parallel()
+	for _, backend := range refCASBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := backend.init(t)
+			refName := plumbing.ReferenceName("refs/entire/deleted-cas")
+			gitenv.Run(t, repoDir, "update-ref", refName.String(), initial)
+			gitenv.Run(t, repoDir, "update-ref", "-d", refName.String())
+
+			err := CompareAndSwapRef(t.Context(), repoDir, refName, plumbing.NewHash(replacement), plumbing.NewHash(initial))
+			require.ErrorIs(t, err, ErrRefCASConflict)
+			require.NoError(t, CompareAndSwapRef(t.Context(), repoDir, refName, plumbing.NewHash(replacement), plumbing.ZeroHash))
+			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
+		})
+	}
+}
+
+func TestCompareAndSwapRef_DirectoryAtRefPath(t *testing.T) {
+	t.Parallel()
+	for _, layout := range []string{"worktree", "linked worktree", "bare"} {
+		t.Run(layout, func(t *testing.T) {
+			t.Parallel()
+			repoDir, initial, replacement := initFilesRefCASRepo(t)
+			commonDir := filepath.Join(repoDir, ".git")
+			switch layout {
+			case "linked worktree":
+				linkedDir := t.TempDir()
+				gitenv.Run(t, repoDir, "worktree", "add", "-b", "linked", linkedDir)
+				repoDir = linkedDir
+			case "bare":
+				bareDir := t.TempDir()
+				gitenv.Run(t, repoDir, "clone", "--bare", repoDir, bareDir)
+				repoDir, commonDir = bareDir, bareDir
+			}
+			refName := plumbing.ReferenceName("refs/entire/directory-cas")
+			refPath := filepath.Join(commonDir, filepath.FromSlash(refName.String()))
+			require.NoError(t, os.MkdirAll(refPath, 0o755))
+
+			err := CompareAndSwapRef(t.Context(), repoDir, refName, plumbing.NewHash(replacement), plumbing.NewHash(initial))
+			require.ErrorContains(t, err, "is a directory")
+			require.NotErrorIs(t, err, ErrRefCASConflict)
+			require.NotErrorIs(t, err, ErrRefLocked)
+
+			require.NoError(t, os.Remove(refPath))
+			require.NoError(t, CompareAndSwapRef(t.Context(), repoDir, refName, plumbing.NewHash(replacement), plumbing.ZeroHash))
 			require.Equal(t, replacement, strings.TrimSpace(gitenv.Run(t, repoDir, "rev-parse", refName.String())))
 		})
 	}

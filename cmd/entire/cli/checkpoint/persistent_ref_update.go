@@ -27,7 +27,7 @@ func casUpdateRef(ctx context.Context, repoRoot string, refName plumbing.Referen
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, gitrepo.ErrRefCASConflict) || errors.Is(err, gitrepo.ErrRefLocked) {
+	if !errors.Is(err, gitrepo.ErrRefSymbolic) && (errors.Is(err, gitrepo.ErrRefCASConflict) || errors.Is(err, gitrepo.ErrRefLocked)) {
 		return fmt.Errorf("%w: %w", ErrShadowRefBusy, err)
 	}
 	return fmt.Errorf("compare and swap ref %s: %w", refName, err)
@@ -110,7 +110,7 @@ func retryPersistentRefLockContention(
 		if refErr == nil {
 			return nil
 		}
-		if !errors.Is(refErr, gitrepo.ErrRefLocked) {
+		if errors.Is(refErr, gitrepo.ErrRefSymbolic) || !errors.Is(refErr, gitrepo.ErrRefLocked) {
 			return refErr
 		}
 		lockErr = refErr

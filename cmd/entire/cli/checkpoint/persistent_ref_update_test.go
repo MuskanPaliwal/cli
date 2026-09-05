@@ -2,7 +2,10 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -176,6 +179,19 @@ func TestRetryPersistentRefLockContention_RetriesOnlyLockErrors(t *testing.T) {
 		require.Equal(t, 1, attempts)
 	})
 
+	t.Run("symbolic rejection takes precedence over abort lock error", func(t *testing.T) {
+		t.Parallel()
+		attempts := 0
+		err := retryPersistentRefLockContention(t.Context(), refName, func() error {
+			attempts++
+			return errors.Join(gitrepo.ErrRefSymbolic, gitrepo.ErrRefLocked)
+		})
+
+		require.ErrorIs(t, err, gitrepo.ErrRefSymbolic)
+		require.ErrorIs(t, err, gitrepo.ErrRefLocked)
+		require.Equal(t, 1, attempts)
+	})
+
 	t.Run("lock retry budget is bounded", func(t *testing.T) {
 		t.Parallel()
 		attempts := 0
@@ -294,6 +310,30 @@ func TestUpdatePersistentRef_RebuildsAfterRefIsDeleted(t *testing.T) {
 	ref, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, initial, ref.Hash())
+}
+
+func TestUpdatePersistentRef_DoesNotRetryDirectoryAtRefPath(t *testing.T) {
+	t.Parallel()
+	repo, initial := setupBranchTestRepo(t)
+	_, commonDir, err := repositoryDirs(repo)
+	require.NoError(t, err)
+	refName := plumbing.ReferenceName("refs/entire/directory-ref")
+	refPath := filepath.Join(commonDir, filepath.FromSlash(refName.String()))
+	require.NoError(t, os.MkdirAll(refPath, 0o755))
+
+	builds := 0
+	err = updatePersistentRef(t.Context(), repo, refName, func() (plumbing.Hash, plumbing.Hash, error) {
+		builds++
+		return initial, initial, nil
+	})
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrShadowRefBusy)
+	require.NotErrorIs(t, err, gitrepo.ErrRefCASConflict)
+	require.Equal(t, 1, builds, "a directory cannot be repaired by rebuilding checkpoint commits")
+	info, statErr := os.Stat(refPath)
+	require.NoError(t, statErr)
+	require.True(t, info.IsDir())
 }
 
 func TestUpdatePersistentRef_NoOpConflictKeepsExistingCommit(t *testing.T) {

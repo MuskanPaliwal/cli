@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	gitfilesystem "github.com/go-git/go-git/v6/storage/filesystem"
 )
 
 const refCASWaitDelay = 3 * time.Second
@@ -54,14 +56,15 @@ func CompareAndSwapRef(
 }
 
 type refCASTransaction struct {
-	ctx      context.Context
-	refName  plumbing.ReferenceName
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   *bufio.Scanner
-	stderr   bytes.Buffer
-	done     bool
-	canceled atomic.Bool
+	ctx       context.Context
+	refName   plumbing.ReferenceName
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    *bufio.Scanner
+	stderr    bytes.Buffer
+	done      bool
+	committed bool
+	canceled  atomic.Bool
 }
 
 func prepareRefCAS(
@@ -144,13 +147,16 @@ func (tx *refCASTransaction) exchange(request, response string) error {
 	if got := tx.stdout.Text(); got != response {
 		return fmt.Errorf("response to %q was %q, want %q", request, got, response)
 	}
+	if request == "commit" {
+		tx.committed = true
+	}
 	return nil
 }
 
 func (tx *refCASTransaction) preparationError(protocolErr error) error {
 	waitErr := tx.wait()
 	if waitErr != nil {
-		return classifyRefCASError(tx.ctx, tx.refName, tx.stderr.Bytes(), waitErr)
+		return classifyRefCASError(tx.ctx, tx.cmd.Dir, tx.refName, tx.stderr.Bytes(), waitErr)
 	}
 	return fmt.Errorf("prepare git update-ref transaction for %s: %w", tx.refName, protocolErr)
 }
@@ -170,7 +176,7 @@ func (tx *refCASTransaction) finish(request, response string) error {
 	protocolErr := tx.exchange(request, response)
 	waitErr := tx.wait()
 	if waitErr != nil {
-		return classifyRefCASError(tx.ctx, tx.refName, tx.stderr.Bytes(), waitErr)
+		return classifyRefCASError(tx.ctx, tx.cmd.Dir, tx.refName, tx.stderr.Bytes(), waitErr)
 	}
 	if protocolErr != nil {
 		return fmt.Errorf("finish git update-ref transaction for %s: %w", tx.refName, protocolErr)
@@ -185,6 +191,11 @@ func (tx *refCASTransaction) wait() error {
 	tx.done = true
 	_ = tx.stdin.Close()
 	err := tx.cmd.Wait()
+	// Git's commit acknowledgement establishes the durable outcome even if
+	// cancellation or a shutdown error arrives before the child is reaped.
+	if tx.committed {
+		return nil
+	}
 	if tx.canceled.Load() {
 		return fmt.Errorf("wait for git update-ref transaction: %w", tx.ctx.Err())
 	}
@@ -194,11 +205,19 @@ func (tx *refCASTransaction) wait() error {
 	return nil
 }
 
-func classifyRefCASError(ctx context.Context, refName plumbing.ReferenceName, stderr []byte, err error) error {
+func classifyRefCASError(ctx context.Context, repoRoot string, refName plumbing.ReferenceName, stderr []byte, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("git update-ref %s: %w", refName, ctxErr)
 	}
 	detail := strings.TrimSpace(string(stderr))
+	// Git uses the same unresolved diagnostic for deletion and a directory at
+	// the ref path. Only confirmed absence permits a rebuild after this error.
+	if isUnresolvedRef(refName, stderr) {
+		absent, readErr := refIsAbsent(repoRoot, refName)
+		if !absent {
+			return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, errors.Join(err, readErr))
+		}
+	}
 	switch {
 	case isRefCASConflict(refName, stderr):
 		return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, ErrRefCASConflict)
@@ -207,6 +226,36 @@ func classifyRefCASError(ctx context.Context, refName plumbing.ReferenceName, st
 	default:
 		return fmt.Errorf("git update-ref %s: %s: %w", refName, detail, err)
 	}
+}
+
+func refIsAbsent(repoRoot string, refName plumbing.ReferenceName) (bool, error) {
+	repo, err := OpenPath(repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("open repository to verify missing ref: %w", err)
+	}
+	defer repo.Close()
+	// go-git falls back to packed refs after any loose-ref read error, so its
+	// not-found result alone cannot distinguish a directory from absence.
+	if storage, ok := repo.Storer.(*gitfilesystem.Storage); ok {
+		info, statErr := storage.Filesystem().Lstat(refName.String())
+		if statErr == nil {
+			if info.IsDir() {
+				return false, fmt.Errorf("ref %s is a directory", refName)
+			}
+			return false, nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return false, fmt.Errorf("inspect ref %s: %w", refName, statErr)
+		}
+	}
+	_, err = repo.Reference(refName, false)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read ref %s: %w", refName, err)
+	}
+	return false, nil
 }
 
 func symbolicRefTarget(ctx context.Context, repoRoot string, refName plumbing.ReferenceName) (string, bool, error) {
@@ -235,14 +284,19 @@ func symbolicRefTarget(ctx context.Context, repoRoot string, refName plumbing.Re
 	return "", false, fmt.Errorf("probe symbolic ref %s: %s: %w", refName, detail, err)
 }
 
-// isRefCASConflict reports that git rejected the expected old value, including
-// the cases where a required ref disappeared or a create-only ref appeared.
+// isRefCASConflict matches Git's expected-value diagnostics. An unresolved
+// files-backend ref also needs an absence check to exclude a directory.
 func isRefCASConflict(refName plumbing.ReferenceName, stderr []byte) bool {
 	msg := strings.ToLower(strings.TrimSpace(string(stderr)))
-	unresolved := fmt.Sprintf("unable to resolve reference '%s'", strings.ToLower(refName.String()))
 	return strings.Contains(msg, "but expected") ||
-		strings.HasSuffix(msg, unresolved) ||
+		isUnresolvedRef(refName, stderr) ||
 		strings.Contains(msg, "reference already exists")
+}
+
+func isUnresolvedRef(refName plumbing.ReferenceName, stderr []byte) bool {
+	msg := strings.ToLower(strings.TrimSpace(string(stderr)))
+	unresolved := fmt.Sprintf("unable to resolve reference '%s'", strings.ToLower(refName.String()))
+	return strings.HasSuffix(msg, unresolved)
 }
 
 func isRefLockContention(stderr []byte) bool {
