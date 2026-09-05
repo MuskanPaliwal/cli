@@ -62,11 +62,11 @@ func TestCASPersistentRef_DoesNotWaitForPersistentRefFlock(t *testing.T) {
 		t.Context(), repo, initialCommit.TreeHash, initial, "replacement", "Test", "test@test.com",
 	)
 	require.NoError(t, err)
-	_, commonDir, err := repositoryDirs(context.Background(), repo)
+	_, commonDir, err := repositoryDirs(repo)
 	require.NoError(t, err)
-	lockPath, err := persistentRefLockPath(commonDir, refName)
+	lockRoot, lockName, err := persistentRefLock(commonDir, refName)
 	require.NoError(t, err)
-	releaseHolder, err := flock.Acquire(lockPath)
+	releaseHolder, err := flock.AcquireIn(lockRoot, lockName)
 	require.NoError(t, err)
 	released := false
 	t.Cleanup(func() {
@@ -191,11 +191,11 @@ func TestRetryPersistentRefLockContention_RetriesOnlyLockErrors(t *testing.T) {
 
 func holdPersistentRefLock(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) {
 	t.Helper()
-	_, commonDir, err := repositoryDirs(context.Background(), repo)
+	_, commonDir, err := repositoryDirs(repo)
 	require.NoError(t, err)
-	lockPath, err := persistentRefLockPath(commonDir, refName)
+	lockRoot, lockName, err := persistentRefLock(commonDir, refName)
 	require.NoError(t, err)
-	release, err := flock.Acquire(lockPath)
+	release, err := flock.AcquireIn(lockRoot, lockName)
 	require.NoError(t, err)
 	t.Cleanup(release)
 }
@@ -206,7 +206,7 @@ func TestUpdatePersistentRef_RebuildsAfterCASConflict(t *testing.T) {
 	repo, initial := setupBranchTestRepo(t)
 	refName := plumbing.ReferenceName("refs/entire/test-cas")
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
-	repoRoot, _, err := repositoryDirs(ctx, repo)
+	repoRoot, _, err := repositoryDirs(repo)
 	require.NoError(t, err)
 
 	var (
@@ -302,7 +302,7 @@ func TestUpdatePersistentRef_NoOpConflictKeepsExistingCommit(t *testing.T) {
 	repo, initial := setupBranchTestRepo(t)
 	refName := plumbing.ReferenceName("refs/entire/test-cas-noop")
 	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, initial)))
-	repoRoot, _, err := repositoryDirs(ctx, repo)
+	repoRoot, _, err := repositoryDirs(repo)
 	require.NoError(t, err)
 
 	calls := 0

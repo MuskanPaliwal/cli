@@ -6,42 +6,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
 type persistentRefBuilder func() (newHash, expectedHash plumbing.Hash, err error)
-
-func repositoryRoot(repo *git.Repository) (string, error) {
-	wt, err := repo.Worktree()
-	if err != nil {
-		return "", fmt.Errorf("open worktree: %w", err)
-	}
-	worktreeRoot := wt.Filesystem().Root()
-	if worktreeRoot == "" {
-		return "", errors.New("repository worktree filesystem has no root path")
-	}
-	return worktreeRoot, nil
-}
-
-func repositoryDirs(ctx context.Context, repo *git.Repository) (worktreeRoot, commonDir string, err error) {
-	worktreeRoot, err = repositoryRoot(repo)
-	if err != nil {
-		return "", "", err
-	}
-	commonDir, err = resolveGitCommonDir(ctx, repo)
-	if err != nil {
-		return "", "", err
-	}
-	return worktreeRoot, commonDir, nil
-}
 
 // casUpdateRef adapts precise native Git CAS outcomes to the legacy retry
 // sentinel used by checkpoint writers.
@@ -56,21 +33,29 @@ func casUpdateRef(ctx context.Context, repoRoot string, refName plumbing.Referen
 	return fmt.Errorf("compare and swap ref %s: %w", refName, err)
 }
 
-func persistentRefLockPath(commonDir string, refName plumbing.ReferenceName) (string, error) {
-	lockDir := filepath.Join(commonDir, "entire-persistent-ref-locks")
-	if err := os.MkdirAll(lockDir, 0o750); err != nil {
-		return "", fmt.Errorf("create persistent ref lock directory: %w", err)
+const persistentRefLockDirName = "entire-persistent-ref-locks"
+
+// persistentRefLock keeps lock paths inside the shared Git directory and rejects
+// symlinked directories. The caller must acquire the lock through flock's In API
+// to also reject a symlink at the lock file.
+func persistentRefLock(commonDir string, refName plumbing.ReferenceName) (*os.Root, string, error) {
+	root, err := gitdir.OpenAt(commonDir)
+	if err != nil {
+		return nil, "", fmt.Errorf("open git common dir: %w", err)
+	}
+	if err := osroot.MkdirAllNoSymlink(root, persistentRefLockDirName, 0o750); err != nil {
+		return nil, "", fmt.Errorf("create persistent ref lock directory: %w", err)
 	}
 	safe := strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(refName.String())
-	return filepath.Join(lockDir, safe+".lock"), nil
+	return root, persistentRefLockDirName + "/" + safe + ".lock", nil
 }
 
 func withPersistentRefFlock(ctx context.Context, commonDir string, refName plumbing.ReferenceName, fn func() error) error {
-	path, err := persistentRefLockPath(commonDir, refName)
+	root, name, err := persistentRefLock(commonDir, refName)
 	if err != nil {
 		return err
 	}
-	release, err := flock.AcquireContext(ctx, path)
+	release, err := flock.AcquireContextIn(ctx, root, name)
 	if err != nil {
 		return fmt.Errorf("acquire persistent ref flock %s: %w", refName, err)
 	}
@@ -84,7 +69,7 @@ func withLockedPersistentRef(
 	refName plumbing.ReferenceName,
 	fn func(repoRoot, commonDir string) error,
 ) error {
-	repoRoot, commonDir, err := repositoryDirs(ctx, repo)
+	repoRoot, commonDir, err := repositoryDirs(repo)
 	if err != nil {
 		return fmt.Errorf("resolve repository directories: %w", err)
 	}
@@ -97,8 +82,8 @@ func withLockedPersistentRef(
 // compare-and-swap protocol. It deliberately does not acquire the persistent
 // writer flock: the expected value predates this call, so native Git provides
 // the safety boundary without making deadline-free pre-push contexts wait
-// indefinitely. Native lock contention is retried without rebuilding because
-// the expected ref has not moved; a CAS conflict remains terminal.
+// indefinitely. Native lock contention is retried with the original expected
+// hash; a CAS conflict remains terminal.
 func CASPersistentRef(
 	ctx context.Context,
 	repo *git.Repository,
