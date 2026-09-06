@@ -1,0 +1,47 @@
+Let's review and implement split part 4 of the Git metadata traversal refactor in entireio/cli: strategy and hooks migration (GMT-004).
+
+Work in the existing worktree for branch `refactor-strategy-hook-metadata-resolution`. Read its repository instructions and independently review the current code, tests, history, and live upstream state before editing. This handoff supplies context, not a substitute for your review. Check whether the proposed scope is still appropriate, already addressed, or needs adjustment. Report material findings briefly, then proceed with the authorized implementation without an extra confirmation round unless a real blocker requires input.
+
+Starting state and dependencies:
+- Refresh `upstream/main` and update this branch safely, preserving any existing local work. The worktree was last observed at its original planning baseline.
+- Part 4 requires part 1's `gitrepo.ResolveWorktreeMetadata`, already present on the inspected upstream/main. It does not require merging or cherry-picking part 3.
+- Parts 2 and 3 migrate checkpoint and session callers respectively. Part 2 removed its private resolver/cache. Part 3 retained shared session/gitdir APIs and caches because other consumers still use them.
+- The agreed approach is to migrate callers through the split PRs and finish shared deletion in part 5. Remove helpers earlier only when no callers remain. Do not expand part 4 into unrelated consumer migrations merely to delete shared APIs.
+- Portable planning references: “Plan: Split Git Metadata Traversal Consolidation”, GMT-004, and original tracking PR #2190. Planning documents may exist only in the original planning worktree; this prompt contains the essential scope.
+
+Implementation scope:
+- Migrate physical Git metadata traversal in strategy/hooks, reset, cleanup, reconciliation, checkpoint-sync capture, and session routing to `gitrepo.ResolveWorktreeMetadata` using explicit worktree roots.
+- Migrate callers of `strategy.GetGitCommonDir`; delete it if no callers remain. If callers outside this slice still need it, retain it temporarily and record the exact deferred callers.
+- For multi-store session locks, resolve common directories, establish physical repository identities, deduplicate aliases, sort deterministically, then acquire one rooted lock per repository. Fail closed when identity cannot be established; preserve correct lock release on failures.
+- Keep semantic Git queries that validate repository equality or user-supplied repositories. When a retained query targets an explicit path, strip inherited repository selectors using the existing helper.
+- Preserve prepare-commit, post-commit, reset, reconciliation, session-routing, cancellation, and caller-specific error behavior. Preserve rooted/no-follow storage and lock access.
+
+Design constraints:
+- The canonical resolver remains explicit-root, context-free, option-free, cache-free, subprocess-free, and all-or-error. It returns metadata facts; callers own policy.
+- Preserve lexical paths where caller-visible spelling matters; use physical identity for repository ownership and lock deduplication.
+- Reuse existing helpers and patterns before adding Go code. Follow repository instructions for discovery and historical context.
+- Keep settings, status, Codex, trail, legacy paths APIs, and final cross-consumer cleanup outside this slice. Leave the migration ownership guard's shared ledger unchanged; final strict enforcement belongs to part 5.
+
+Validation:
+- Add focused behavioral coverage for shared-repository worktrees, symlink aliases, deterministic lock ordering/deduplication, identity failures, and explicit-path queries under conflicting Git environment selectors.
+- Verify relevant hook/reset/reconciliation behavior and measure complete affected hook operations with Trace2; a subprocess-free resolver alone does not prove operation-level performance.
+- Use isolated temporary Git repositories and repository test helpers. Parallelize tests unless they modify process-global state. Isolate config, cache, credentials, and subprocess interactivity as required by repository instructions.
+- Run relevant package tests, `mise run fmt` followed by `mise run lint`, `mise run dup`, and `git diff --check`. Run `mise run check` before any commit. Do not run paid real-agent E2E tests; the deterministic Vogon canary is allowed.
+
+Finish with the change summary, exact validation results, and any legacy APIs/callers deliberately deferred to part 5. Do not push, create a PR, merge, or post public messages. Landing order remains part 3 before part 4; before eventual publication, rebase onto refreshed main after part 3 lands and rerun checks.
+
+---
+
+is this a seperate bug?
+
+---
+
+then can you keep the bug seperate?
+
+---
+
+can you describe me the bug? and how is it seperate from the refactor we are doing now?
+
+---
+
+but why we remove the git subprocess?

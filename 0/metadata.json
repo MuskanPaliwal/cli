@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1VXRSXZ28KB6F9TQA8X3WGQ",
+  "session_id": "01a075b4-5f3f-79c3-af63-698da968c2f3",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-06T17:55:29.329321Z",
+  "branch": "refactor-strategy-hook-metadata-resolution",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_capture.go",
+    "cmd/entire/cli/strategy/cleanup.go",
+    "cmd/entire/cli/strategy/common.go",
+    "cmd/entire/cli/strategy/hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_reset.go",
+    "cmd/entire/cli/strategy/manual_commit_session.go",
+    "cmd/entire/cli/strategy/metadata_hook_trace_test.go",
+    "cmd/entire/cli/strategy/metadata_reconcile.go",
+    "cmd/entire/cli/strategy/metadata_resolution_test.go",
+    "cmd/entire/cli/strategy/phase_postcommit_test.go",
+    "cmd/entire/cli/strategy/push_common.go",
+    "cmd/entire/cli/strategy/session_state.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "221b72c3380e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 447307,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11362816,
+    "output_tokens": 40136,
+    "api_call_count": 86
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-06T17:55:29.213311Z",
+    "agent_lines": 825,
+    "agent_removed": 23,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 96,
+    "total_committed": 825,
+    "total_lines_changed": 944,
+    "agent_percentage": 89.83050847457628,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 535,
+      "user_lines_removed": 96,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 2,
+        "cmd/entire/cli/strategy/checkpoint_sync_capture.go": 1,
+        "cmd/entire/cli/strategy/cleanup.go": 3,
+        "cmd/entire/cli/strategy/common.go": 16,
+        "cmd/entire/cli/strategy/hooks.go": 20,
+        "cmd/entire/cli/strategy/manual_commit_hooks.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_reset.go": 3,
+        "cmd/entire/cli/strategy/manual_commit_session.go": 9,
+        "cmd/entire/cli/strategy/metadata_hook_trace_test.go": 95,
+        "cmd/entire/cli/strategy/metadata_reconcile.go": 8,
+        "cmd/entire/cli/strategy/metadata_resolution_test.go": 312,
+        "cmd/entire/cli/strategy/phase_postcommit_test.go": 2,
+        "cmd/entire/cli/strategy/push_common.go": 3,
+        "cmd/entire/cli/strategy/session_state.go": 52,
+        "docs/architecture/sessions-and-checkpoints.md": 8
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/gitrepo/metadata_guard_test.go": 1,
+        "cmd/entire/cli/strategy/checkpoint_sync_capture.go": 2,
+        "cmd/entire/cli/strategy/cleanup.go": 4,
+        "cmd/entire/cli/strategy/common.go": 18,
+        "cmd/entire/cli/strategy/hooks.go": 20,
+        "cmd/entire/cli/strategy/manual_commit_hooks.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_reset.go": 2,
+        "cmd/entire/cli/strategy/manual_commit_session.go": 7,
+        "cmd/entire/cli/strategy/metadata_reconcile.go": 14,
+        "cmd/entire/cli/strategy/phase_postcommit_test.go": 2,
+        "cmd/entire/cli/strategy/session_state.go": 25
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 537,
+      "agent_lines_removed": 96
+    }
+  ]
+}
