@@ -45,3 +45,7 @@ can you describe me the bug? and how is it seperate from the refactor we are doi
 ---
 
 but why we remove the git subprocess?
+
+---
+
+commit the changes
