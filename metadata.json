@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M1VX4GKW1WQQ5QE5YJTF4MCC",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "cmd/entire/cli/agent/opencode/cli_commands_test.go",
+    "cmd/entire/cli/agent/opencode/stage_export.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 124593,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4963328,
+    "output_tokens": 16646,
+    "api_call_count": 55
+  }
+}
