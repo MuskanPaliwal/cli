@@ -69,11 +69,11 @@ func sessionLockDeadlineFromContext(ctx context.Context) (time.Time, bool) {
 // getSessionStateDir returns the path to the session state directory.
 // This is stored in the git common dir so it's shared across all worktrees.
 func getSessionStateDir(ctx context.Context) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
+	root, err := openGitCommonRoot(ctx)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(commonDir, session.SessionStateDirName), nil
+	return filepath.Join(root.Name(), session.SessionStateDirName), nil
 }
 
 // openSessionStateRoot creates the session state directory if needed and returns
@@ -83,12 +83,12 @@ func getSessionStateDir(ctx context.Context) (string, error) {
 // Callers must Close the returned root.
 //
 // The root is derived from the git common dir's shared root with
-// Root.OpenRoot, not opened on an assembled path. That is what makes the
+// osroot.OpenChild, not opened on an assembled path. That is what makes the
 // containment transitive: the state directory is proven to be a real directory
 // inside .git before anything is named within it, so neither the directory nor
 // the files under it can be redirected out of the clone.
 func openSessionStateRoot(ctx context.Context) (*os.Root, error) {
-	commonRoot, err := gitdir.Open(ctx)
+	commonRoot, err := openGitCommonRoot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git common dir: %w", err)
 	}
@@ -112,10 +112,7 @@ func openSessionStateRoot(ctx context.Context) (*os.Root, error) {
 // INSIDE the common dir, so a bare OpenRoot would read another directory's
 // session state as this repo's.
 func openSessionStateRootForRead(ctx context.Context) (*os.Root, error) {
-	commonRoot, err := gitdir.Open(ctx)
-	if os.IsNotExist(err) {
-		return nil, nil //nolint:nilnil // no common dir = no hint; callers handle nil root
-	}
+	commonRoot, err := openGitCommonRoot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git common dir: %w", err)
 	}
@@ -763,25 +760,21 @@ func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGat
 }
 
 // WithSessionStateLocks acquires the per-session state lock in each git common
-// dir, then runs fn. Lock paths are deduplicated and sorted so callers that
+// dir, then runs fn. Physical repositories are deduplicated and sorted so callers that
 // span repositories or worktrees can safely acquire more than one lock.
 func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []string, fn func() error) error {
-	locks := make([]stateLock, 0, len(commonDirs))
-	seen := make(map[string]struct{}, len(commonDirs))
-	for _, commonDir := range commonDirs {
+	dirs, err := sessionLockCommonDirs(commonDirs)
+	if err != nil {
+		return err
+	}
+	locks := make([]stateLock, 0, len(dirs))
+	for _, commonDir := range dirs {
 		lock, err := stateLockInCommonDir(commonDir, sessionID)
 		if err != nil {
 			return err
 		}
-		if _, ok := seen[lock.path]; ok {
-			continue
-		}
-		seen[lock.path] = struct{}{}
 		locks = append(locks, lock)
 	}
-	// Sorted by absolute path so callers spanning repositories acquire in a
-	// consistent order and cannot deadlock against each other.
-	slices.SortFunc(locks, func(a, b stateLock) int { return strings.Compare(a.path, b.path) })
 
 	releases := make([]func(), 0, len(locks))
 	releaseAll := func() {
@@ -804,6 +797,42 @@ func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []s
 	defer releaseAll()
 
 	return fn()
+}
+
+func sessionLockCommonDirs(commonDirs []string) ([]string, error) {
+	dirs := make([]string, 0, len(commonDirs))
+	for _, commonDir := range commonDirs {
+		if strings.TrimSpace(commonDir) == "" {
+			return nil, errors.New("empty git common dir")
+		}
+		absolute, err := filepath.Abs(commonDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve git common dir: %w", err)
+		}
+		physical, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("resolve git common dir identity: %w", err)
+		}
+		dirs = append(dirs, physical)
+	}
+	slices.Sort(dirs)
+	unique := make([]string, 0, len(dirs))
+	identities := make([]os.FileInfo, 0, len(dirs))
+	for _, dir := range dirs {
+		info, err := os.Stat(dir)
+		if err != nil {
+			return nil, fmt.Errorf("inspect git common dir identity: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("git common dir %s is not a directory", dir)
+		}
+		if slices.ContainsFunc(identities, func(existing os.FileInfo) bool { return os.SameFile(existing, info) }) {
+			continue
+		}
+		identities = append(identities, info)
+		unique = append(unique, dir)
+	}
+	return unique, nil
 }
 
 // ErrMutationSkip signals MutateSessionState to skip the save without
@@ -841,10 +870,8 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 	return err
 }
 
-// stateLock names a per-session lock file two ways: path, for dedup and for the
-// deterministic ordering WithSessionStateLocks needs across repositories, and
-// (root, name) for the acquire itself so the session-ID-derived name resolves
-// inside the git common dir rather than as an assembled string.
+// stateLock keeps a display path and rooted coordinates so acquiring a lock
+// cannot follow a session-ID-derived name outside the git common directory.
 type stateLock struct {
 	path string
 	root *os.Root
@@ -870,11 +897,11 @@ func stateLockPath(ctx context.Context, sessionID string) (string, error) {
 }
 
 func stateLockForSession(ctx context.Context, sessionID string) (stateLock, error) {
-	commonDir, err := gitdir.CommonDir(ctx)
+	root, err := openGitCommonRoot(ctx)
 	if err != nil {
 		return stateLock{}, fmt.Errorf("resolve git common dir: %w", err)
 	}
-	return stateLockInCommonDir(commonDir, sessionID)
+	return stateLockInCommonDir(root.Name(), sessionID)
 }
 
 func stateLockInCommonDir(commonDir, sessionID string) (stateLock, error) {
