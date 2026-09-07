@@ -127,8 +127,7 @@ func isolateWindowsInstallEnv(t *testing.T) string {
 	t.Setenv("USERPROFILE", dir)
 	t.Setenv("SCOOP", "")
 	t.Setenv("SCOOP_GLOBAL", "")
-	t.Setenv("MISE_INSTALLS_DIR", "")
-	t.Setenv("MISE_DATA_DIR", "")
+	isolateMiseInstallEnv(t)
 	return dir
 }
 

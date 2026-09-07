@@ -79,3 +79,19 @@ func assertPrintOnly(t *testing.T, f *autoUpdateFixture, action AutoUpdateAction
 		t.Errorf("manual hint missing installer command %q: %q", wantCmd, out)
 	}
 }
+
+// isolateMiseInstallEnv clears the mise install roots so a relocated mise on
+// the host cannot claim a test's exec path. MISE_INSTALLS_DIR is the only
+// probe variable whose value becomes a root verbatim — MISE_DATA_DIR gets
+// "installs" appended and Scoop's four get "apps", and that mandatory extra
+// segment is what stops them prefixing an arbitrary path. So the rows most
+// exposed are the ones asserting that NO probe matched, and the variable that
+// hijacks them is this one.
+//
+// Lives here, untagged, because both platforms need it: the unix table test
+// calls it directly and isolateWindowsInstallEnv wraps it.
+func isolateMiseInstallEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MISE_INSTALLS_DIR", "")
+	t.Setenv("MISE_DATA_DIR", "")
+}
