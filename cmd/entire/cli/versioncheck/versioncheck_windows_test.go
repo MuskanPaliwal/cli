@@ -97,7 +97,7 @@ func TestWindowsUpdateCommandForCurrentBinary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			isolateWindowsScoopConfig(t)
+			isolateWindowsInstallEnv(t)
 			setExecutablePath(t, tt.execPath)
 
 			if got := UpdateCommandForCurrentBinary(tt.currentVersion); got != tt.want {
@@ -117,18 +117,23 @@ func TestWindowsUpdateCommandWithoutExecPathOmitsInstallDir(t *testing.T) {
 	}
 }
 
-func isolateWindowsScoopConfig(t *testing.T) string {
+// isolateWindowsInstallEnv points every install-root lookup the probes make —
+// Scoop's env vars and config.json, mise's env vars — at an empty temp dir, so
+// a relocated Scoop or mise on the host cannot claim a test's exec path.
+func isolateWindowsInstallEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("USERPROFILE", dir)
 	t.Setenv("SCOOP", "")
 	t.Setenv("SCOOP_GLOBAL", "")
+	t.Setenv("MISE_INSTALLS_DIR", "")
+	t.Setenv("MISE_DATA_DIR", "")
 	return dir
 }
 
 func TestWindowsScoopRelocatedSCOOPEnv(t *testing.T) {
-	isolateWindowsScoopConfig(t)
+	isolateWindowsInstallEnv(t)
 	t.Setenv("SCOOP", `D:\tools`)
 	setExecutablePath(t, `D:\tools\apps\entire\current\entire.exe`)
 
@@ -138,7 +143,7 @@ func TestWindowsScoopRelocatedSCOOPEnv(t *testing.T) {
 }
 
 func TestWindowsScoopRelocatedSCOOPEnvCLIAppMigrates(t *testing.T) {
-	isolateWindowsScoopConfig(t)
+	isolateWindowsInstallEnv(t)
 	t.Setenv("SCOOP", `D:\tools`)
 	setExecutablePath(t, `D:\tools\apps\cli\current\entire.exe`)
 
@@ -148,7 +153,7 @@ func TestWindowsScoopRelocatedSCOOPEnvCLIAppMigrates(t *testing.T) {
 }
 
 func TestWindowsScoopRelocatedSCOOPGlobal(t *testing.T) {
-	isolateWindowsScoopConfig(t)
+	isolateWindowsInstallEnv(t)
 	t.Setenv("SCOOP_GLOBAL", `D:\g`)
 	setExecutablePath(t, `D:\g\apps\entire\current\entire.exe`)
 
@@ -158,7 +163,7 @@ func TestWindowsScoopRelocatedSCOOPGlobal(t *testing.T) {
 }
 
 func TestWindowsScoopRelocatedConfigRootPath(t *testing.T) {
-	dir := isolateWindowsScoopConfig(t)
+	dir := isolateWindowsInstallEnv(t)
 	cfgDir := filepath.Join(dir, "scoop")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -174,7 +179,7 @@ func TestWindowsScoopRelocatedConfigRootPath(t *testing.T) {
 }
 
 func TestWindowsScoopRelocatedCaseInsensitive(t *testing.T) {
-	isolateWindowsScoopConfig(t)
+	isolateWindowsInstallEnv(t)
 	t.Setenv("SCOOP", `d:\Tools`)
 	setExecutablePath(t, `D:\tools\apps\entire\current\entire.exe`)
 
@@ -184,7 +189,7 @@ func TestWindowsScoopRelocatedCaseInsensitive(t *testing.T) {
 }
 
 func TestWindowsScoopDefaultMarkerStillMatches(t *testing.T) {
-	isolateWindowsScoopConfig(t)
+	isolateWindowsInstallEnv(t)
 	setExecutablePath(t, `C:\Users\x\scoop\apps\entire\current\entire.exe`)
 
 	if got := UpdateCommandForCurrentBinary("1.0.0"); got != scoopUpdateCmd {
