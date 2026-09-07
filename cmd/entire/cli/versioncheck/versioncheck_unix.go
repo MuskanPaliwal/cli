@@ -26,6 +26,10 @@ var brewProbe = installProbe{
 	command: brewUpgradeCommand,
 }
 
+// installProbes order is load-bearing: UpdateCommandForCurrentBinary returns
+// the FIRST match, and roots match by prefix, so a mise root wide enough to
+// cover a brew path would claim it if it came first. Pinned by
+// TestUnixBrewBeatsAMiseRootCoveringTheSamePath.
 var installProbes = []installProbe{brewProbe, miseProbe}
 
 func fallbackInstallCommand(_, currentVersion string) string {

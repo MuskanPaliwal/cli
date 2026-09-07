@@ -74,7 +74,6 @@ func TestUpdateCommandForCurrentBinary_Unix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			isolateMiseInstallEnv(t)
 			setExecutable(t, tt.execPath)
 
 			if got := UpdateCommandForCurrentBinary(tt.currentVersion); got != tt.want {
@@ -236,5 +235,28 @@ func TestCheckAndNotify_InstallerFailureKeepsCacheFresh(t *testing.T) {
 	}
 	if time.Since(cache.LastCheckTime) > time.Minute {
 		t.Errorf("cache LastCheckTime not fresh after installer failure: %v", cache.LastCheckTime)
+	}
+}
+
+// TestUnixBrewBeatsAMiseRootCoveringTheSamePath pins probe precedence, which
+// is a product invariant and not only a test-support one: a developer can have
+// entire installed by brew *and* mise relocated somewhere broad enough to
+// cover the cask path (MISE_INSTALLS_DIR is the one probe variable used
+// verbatim, so /opt is enough), and that user must be told to run brew.
+// installProbes orders brewProbe first and brewProbe matches a cask path by
+// marker, so mise cannot claim it however wide its root is.
+func TestUnixBrewBeatsAMiseRootCoveringTheSamePath(t *testing.T) {
+	t.Setenv("MISE_INSTALLS_DIR", "/opt")
+
+	norm := normalizePath(brewCaskPath)
+	if !miseProbe.matches(norm) {
+		t.Fatalf("precondition: miseProbe should also match %q under MISE_INSTALLS_DIR=/opt; "+
+			"without a contending probe this test no longer pins precedence", norm)
+	}
+
+	setExecutablePath(t, brewCaskPath)
+	if got := UpdateCommandForCurrentBinary("1.0.0"); got != brewUpgradeCmd {
+		t.Errorf("UpdateCommandForCurrentBinary() = %q, want %q; brew must be probed before mise",
+			got, brewUpgradeCmd)
 	}
 }

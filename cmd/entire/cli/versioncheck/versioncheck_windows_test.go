@@ -117,17 +117,16 @@ func TestWindowsUpdateCommandWithoutExecPathOmitsInstallDir(t *testing.T) {
 	}
 }
 
-// isolateWindowsInstallEnv points every install-root lookup the probes make —
-// Scoop's env vars and config.json, mise's env vars — at an empty temp dir, so
-// a relocated Scoop or mise on the host cannot claim a test's exec path.
+// isolateWindowsInstallEnv redirects Scoop's config.json lookup at an empty
+// temp dir, so a relocated Scoop root recorded there cannot claim a test's
+// exec path. The install-root env vars are already cleared package-wide by
+// TestMain; this covers only what needs to be per-test, and returns the dir so
+// a test can plant a config.json of its own.
 func isolateWindowsInstallEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	t.Setenv("SCOOP", "")
-	t.Setenv("SCOOP_GLOBAL", "")
-	isolateMiseInstallEnv(t)
 	return dir
 }
 
@@ -227,5 +226,29 @@ func TestWindowsUpdateCommandShell(t *testing.T) {
 
 	if got := UpdateCommandShell(); got != "PowerShell" {
 		t.Errorf("UpdateCommandShell() = %q, want %q", got, "PowerShell")
+	}
+}
+
+// TestWindowsScoopBeatsAMiseRootCoveringTheSamePath is the Windows half of
+// TestUnixBrewBeatsAMiseRootCoveringTheSamePath: installProbes puts scoopProbe
+// first, and it matches a Scoop apps path by marker, so a MISE_INSTALLS_DIR
+// wide enough to cover the same path cannot claim it. Worth pinning separately
+// rather than inferring from the unix test, because scoopProbe matches through
+// two mechanisms (its own roots as well as the marker) where brewProbe has
+// markers only.
+func TestWindowsScoopBeatsAMiseRootCoveringTheSamePath(t *testing.T) {
+	isolateWindowsInstallEnv(t)
+	t.Setenv("MISE_INSTALLS_DIR", `C:\Users\test\scoop`)
+
+	norm := normalizePath(scoopEntireExecutablePath)
+	if !miseProbe.matches(norm) {
+		t.Fatalf("precondition: miseProbe should also match %q under a covering MISE_INSTALLS_DIR; "+
+			"without a contending probe this test no longer pins precedence", norm)
+	}
+
+	setExecutablePath(t, scoopEntireExecutablePath)
+	if got := UpdateCommandForCurrentBinary("1.0.0"); got != scoopUpdateCmd {
+		t.Errorf("UpdateCommandForCurrentBinary() = %q, want %q; scoop must be probed before mise",
+			got, scoopUpdateCmd)
 	}
 }

@@ -146,6 +146,10 @@ var scoopProbe = installProbe{
 	command: scoopUpgradeCommand,
 }
 
+// installProbes order is load-bearing: UpdateCommandForCurrentBinary returns
+// the FIRST match, and roots match by prefix, so a mise root wide enough to
+// cover a Scoop path would claim it if it came first. Pinned by
+// TestWindowsScoopBeatsAMiseRootCoveringTheSamePath.
 var installProbes = []installProbe{scoopProbe, miseProbe}
 
 // fallbackInstallCommand names the running binary's directory with
