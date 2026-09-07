@@ -127,6 +127,11 @@ func (f *HookConfigFile) Exists() bool {
 // as a symlink is refused with osroot.ErrSymlinkedPath rather than followed.
 func (f *HookConfigFile) Write(data []byte, perm os.FileMode) error {
 	if dir := path.Dir(f.name); dir != "." {
+		// 0750 for every agent, including the directories Entire creates below
+		// an agent's own (.pi/extensions/entire). The agent process runs as
+		// whoever ran `entire enable`, so it can traverse its own config
+		// directory; a setup where those differ (provisioned as root, agent as
+		// another uid) needs 0755 for all nine and is not one agent's to choose.
 		if err := osroot.MkdirAllNoSymlink(f.root, dir, 0o750); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(f.path), err)
 		}

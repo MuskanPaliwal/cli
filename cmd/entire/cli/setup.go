@@ -2354,9 +2354,10 @@ func promptTelemetryConsent(settings *EntireSettings, telemetryFlag bool) error 
 	return nil
 }
 
-// worktreeFileName reports the name to read a working-tree file by, and whether
-// it is there at all, following a symlink whose target stays inside the worktree
-// and refusing one that leaves it.
+// worktreeFileName reports the name to read a working-tree file by, following a
+// symlink whose target stays inside the worktree and refusing one that leaves
+// it. An empty name means the file is not there — a separate bool would be the
+// same fact twice, which is what the callers below test.
 //
 // The two-step exists because os.Root refuses an ABSOLUTE symlink target
 // unconditionally — including one resolving inside the root — with an error that
@@ -2369,35 +2370,35 @@ func promptTelemetryConsent(settings *EntireSettings, telemetryFlag bool) error 
 //
 // Only for files that are the USER's. Entire's own trees refuse a link either
 // way and must keep using the root directly.
-func worktreeFileName(worktreeRoot string, root *os.Root, name string) (string, bool, error) {
+func worktreeFileName(worktreeRoot string, root *os.Root, name string) (string, error) {
 	_, err := root.Stat(name)
 	if err == nil {
-		return name, true, nil
+		return name, nil
 	}
 	if os.IsNotExist(err) {
-		return "", false, nil
+		return "", nil
 	}
 
 	resolved, resolveErr := worktreedir.NameFollowingLinks(worktreeRoot, name)
 	switch {
 	case errors.Is(resolveErr, os.ErrNotExist):
 		// A dangling link reads as absent, which is what os.Stat gave before.
-		return "", false, nil
+		return "", nil
 	case resolveErr != nil:
 		// The root's refusal stays the wrapped cause: that is the condition the
 		// user has to act on ("path escapes from parent"), while resolveErr only
 		// says the fallback did not apply. It is still worth carrying, since a
 		// resolve that failed for its own reason — a permission denied part-way
 		// down the link chain — is otherwise invisible.
-		return "", false, fmt.Errorf("check %s: %w (resolving the link: %w)", name, err, resolveErr)
+		return "", fmt.Errorf("check %s: %w (resolving the link: %w)", name, err, resolveErr)
 	}
 	// EvalSymlinks stats every component, so a successful resolve already proved
 	// the target is there. This re-stat only closes the window between the two,
 	// and a failure in it is a race rather than a state worth reading as absent.
 	if _, err := root.Stat(resolved); err != nil {
-		return "", false, fmt.Errorf("check %s: %w", resolved, err)
+		return "", fmt.Errorf("check %s: %w", resolved, err)
 	}
-	return resolved, true, nil
+	return resolved, nil
 }
 
 // loadVercelConfigIfPresent reads the config only when there is one to read.
@@ -2427,7 +2428,7 @@ func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, target
 		// vercelJSONName is empty exactly when vercel.json is absent, so it is
 		// both the name to read by and the presence flag; a second bool would be
 		// the same fact twice.
-		vercelJSONName, _, err := worktreeFileName(repoRoot, worktree, vercelconfig.FileName)
+		vercelJSONName, err := worktreeFileName(repoRoot, worktree, vercelconfig.FileName)
 		if err != nil {
 			fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check %s: %v\n", vercelconfig.FileName, err)
 			return false, nil
@@ -2436,12 +2437,12 @@ func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, target
 		hasVercelProject := vercelJSONName != ""
 		if !hasVercelProject {
 			for _, name := range []string{".vercel", "vercel.ts"} {
-				_, found, statErr := worktreeFileName(repoRoot, worktree, name)
+				found, statErr := worktreeFileName(repoRoot, worktree, name)
 				if statErr != nil {
 					fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check %s: %v\n", name, statErr)
 					return false, nil
 				}
-				if found {
+				if found != "" {
 					hasVercelProject = true
 					break
 				}

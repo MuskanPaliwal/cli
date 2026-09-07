@@ -5206,38 +5206,35 @@ func TestConfigureCmd_SummarizeProvider_ExternalLocalOnlyRepo_GrantSurvives(t *t
 	}
 }
 
-// TestWorktreeFileName covers the four shapes vercel.json can arrive in. The
+// TestWorktreeFileName covers the shapes vercel.json can arrive in. The
 // absolute-in-repo row is the regression the helper exists for: os.Root reports
 // `vercel.json -> /abs/path/inside/repo/shared/vercel.json` as "path escapes
 // from parent", which is not os.ErrNotExist, so detection printed a note and
 // skipped — silently dropping the feature for a monorepo setup that worked
 // before the anchor went in.
 //
-// The same four cases are asserted one layer down in
-// worktreedir.TestNameFollowingLinks; this table is the caller's view of them.
+// worktreedir.TestNameFollowingLinks asserts the link cases one layer down;
+// this table is the caller's view, plus the rows that never reach the resolve.
 func TestWorktreeFileName(t *testing.T) {
 	t.Parallel()
 
 	const name = "vercel.json"
 	for _, tc := range []struct {
-		desc      string
-		link      func(t *testing.T, dir string) // nil: a real file, no link
-		wantName  string
-		wantFound bool
-		wantErr   bool
+		desc     string
+		link     func(t *testing.T, dir string) // nil: a real file, no link
+		wantName string                         // "" means absent
+		wantErr  bool
 	}{
 		{
-			desc:      "a real file is read by its own name",
-			wantName:  name,
-			wantFound: true,
+			desc:     "a real file is read by its own name",
+			wantName: name,
 		},
 		{
 			desc: "an absolute link inside the worktree resolves to its target",
 			link: func(t *testing.T, dir string) {
 				linkTo(t, dir, filepath.Join(dir, "shared", name))
 			},
-			wantName:  "shared/vercel.json",
-			wantFound: true,
+			wantName: "shared/vercel.json",
 		},
 		{
 			// os.Root follows a RELATIVE link that stays inside it, so the fast
@@ -5248,8 +5245,7 @@ func TestWorktreeFileName(t *testing.T) {
 			link: func(t *testing.T, dir string) {
 				linkTo(t, dir, filepath.Join("shared", name))
 			},
-			wantName:  name,
-			wantFound: true,
+			wantName: name,
 		},
 		{
 			desc: "a link out of the worktree is refused, not followed",
@@ -5298,12 +5294,9 @@ func TestWorktreeFileName(t *testing.T) {
 			}
 			defer root.Close()
 
-			gotName, gotFound, gotErr := worktreeFileName(dir, root, name)
+			gotName, gotErr := worktreeFileName(dir, root, name)
 			if (gotErr != nil) != tc.wantErr {
 				t.Fatalf("worktreeFileName() error = %v, wantErr %v", gotErr, tc.wantErr)
-			}
-			if gotFound != tc.wantFound {
-				t.Errorf("worktreeFileName() found = %v, want %v", gotFound, tc.wantFound)
 			}
 			if gotName != tc.wantName {
 				t.Errorf("worktreeFileName() = %q, want %q", gotName, tc.wantName)

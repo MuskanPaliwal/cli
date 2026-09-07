@@ -11,14 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// skipWithoutSymlinks skips a test that needs to create one. Kept as a
-// package-local name for its callers; the condition lives in testutil so every
-// package that needs it says the same thing.
-func skipWithoutSymlinks(t *testing.T) {
-	t.Helper()
-	testutil.SkipWithoutSymlinks(t)
-}
-
 func TestHookConfig_ReadWriteRemoveRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -48,7 +40,7 @@ func TestHookConfig_ReadWriteRemoveRoundTrip(t *testing.T) {
 // through it — to wherever it pointed, outside the repository included.
 func TestHookConfig_WriteRefusesASymlinkedConfigDirectory(t *testing.T) {
 	t.Parallel()
-	skipWithoutSymlinks(t)
+	testutil.SkipWithoutSymlinks(t)
 
 	worktree := t.TempDir()
 	outside := t.TempDir()
@@ -66,7 +58,7 @@ func TestHookConfig_WriteRefusesASymlinkedConfigDirectory(t *testing.T) {
 
 func TestHookConfig_ReadRejectsARelativeSymlinkInsideTheWorktree(t *testing.T) {
 	t.Parallel()
-	skipWithoutSymlinks(t)
+	testutil.SkipWithoutSymlinks(t)
 
 	worktree := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(worktree, ".claude"), 0o750))
@@ -86,7 +78,7 @@ func TestHookConfig_ReadRejectsARelativeSymlinkInsideTheWorktree(t *testing.T) {
 // installed".
 func TestHookConfig_ReadRefusesAnAbsoluteSymlinkAtTheLeaf(t *testing.T) {
 	t.Parallel()
-	skipWithoutSymlinks(t)
+	testutil.SkipWithoutSymlinks(t)
 
 	worktree := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "settings.json")

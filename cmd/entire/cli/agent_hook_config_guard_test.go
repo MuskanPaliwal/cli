@@ -63,6 +63,15 @@ func TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent(t *testing.T) {
 	// The registry is the thing doctor actually reads, so a locator that exists
 	// in source but never reaches AllHookConfigRelPaths (an agent left out of
 	// the registry, or one returning "") is its own failure.
+	//
+	// A count, deliberately, directly under the argument against counts above —
+	// and defeatable the same way, by dropping one agent from the registry while
+	// adding another locator. A set comparison would need to map a package
+	// directory to the rel path it declares, and nothing does: `geminicli`
+	// declares `.gemini/settings.json` and `copilotcli` declares
+	// `.github/hooks/entire.json`, so neither the package name nor the path's
+	// first component derives the other. The set comparison above is the guard
+	// that matters; this one only catches a locator the registry never sees.
 	require.Len(t, agent.AllHookConfigRelPaths(), len(locators),
 		"%d agent packages implement HookConfigRelPath but the registry reports %d paths (%s)",
 		len(locators), len(agent.AllHookConfigRelPaths()), strings.Join(agent.AllHookConfigRelPaths(), ", "))
@@ -79,8 +88,7 @@ func agentPackagesMatching(t *testing.T, repoRoot, needle string) []string {
 	grep.Dir = repoRoot
 	// Set for the same reason every git subprocess naming its target with
 	// cmd.Dir does: git exports GIT_DIR/GIT_WORK_TREE to hooks, and those take
-	// precedence over cmd.Dir. Came from main while this test was being
-	// rewritten; kept.
+	// precedence over cmd.Dir.
 	grep.Env = gitrepo.EnvWithoutRepoOverrides()
 	out, err := grep.Output()
 	require.NoError(t, err, "no agent source matches %q, which cannot be right", needle)

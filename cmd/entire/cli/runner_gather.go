@@ -200,16 +200,16 @@ func readCapped(repoRoot, name string, maxLen int) (string, bool) {
 		// mid-rune" means, so back off the continuation bytes — at most
 		// UTFMax-1 of them, which is the furthest a rune's start can be.
 		//
-		// Asking RuneStart rather than "is s[:cut] valid UTF-8?" is what keeps
-		// this local to the cut. Validating the prefix walks the whole 6KB, and
-		// answering "no" for a doc that is not UTF-8 at all (a latin-1 README)
-		// sent an earlier revision scanning back to 0 — every prefix invalid,
-		// the empty string valid — so the caller got the truncation marker and
-		// none of the content. Invalidity our cut did not cause is the file's
-		// own, and the under-cap path above passes those bytes through too.
-		// The floor is explicit rather than a fixed iteration count, because a
-		// count alone underflowed: at maxLen=1 over a file of continuation bytes
-		// the third pass indexed s[-1] and panicked.
+		// RuneStart at the cut rather than "is s[:cut] valid UTF-8?": the
+		// question is whether OUR cut split a rune, and validating the prefix
+		// answers a different one. It walks the whole 6KB, and it answers "no"
+		// for a doc that is not UTF-8 at all (a latin-1 README) — which, chased
+		// far enough, drops the file's content in favour of a bare truncation
+		// marker. Invalidity our cut did not cause is the file's own, and the
+		// under-cap path above passes those bytes through too.
+		// The floor is explicit rather than implied by an iteration count: a
+		// count alone underflows at maxLen=1 over a file of continuation bytes,
+		// where the third pass indexes s[-1].
 		cut := maxLen
 		for lo := max(0, maxLen-(utf8.UTFMax-1)); cut > lo; cut-- {
 			if utf8.RuneStart(s[cut]) {

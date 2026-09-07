@@ -842,7 +842,11 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 	if len(wrongType) > 0 {
 		fmt.Fprintln(w, "Agent config directories: BROKEN")
 		printCappedList(w, wrongType, func(name string) string {
-			return name + " is not a directory, but Entire needs one there"
+			what := "of an unknown type"
+			if info, err := osroot.LstatNoSymlinks(root, name); err == nil {
+				what = paths.DescribeMode(info.Mode())
+			}
+			return fmt.Sprintf("%s is %s", name, what)
 		})
 		fmt.Fprintln(w, "  Entire cannot create the hooks and skills that belong under these paths,")
 		fmt.Fprintln(w, "  so `entire status` reports them as absent rather than as blocked.")
@@ -887,7 +891,8 @@ const (
 // agentSymlinkCheckPaths returns the worktree-relative paths Entire creates or
 // writes through on behalf of an agent, sorted and deduplicated. Each is a full
 // path rather than a directory, because scanForSymlinkedComponent examines every
-// component of what it is given and the leaf is refused too: HookConfigFile
+// component of what it is given and the leaf is refused too — for a symlink and
+// for a wrong file type alike: HookConfigFile
 // reads and writes through ReadFileNoFollow / a pinned-parent rename, and
 // writeManagedScaffold does the same, so a symlinked .claude/settings.json is
 // as broken as a symlinked .claude.
@@ -976,34 +981,48 @@ func scanForSymlinkedComponent(root *os.Root, name string) (string, componentSca
 		if info.Mode()&os.ModeSymlink != 0 {
 			return prefix, componentScanLinked
 		}
-		// A component with more path still to go has to be a directory. Stated
-		// as an allowlist of the traversable shapes, not as a test for a regular
-		// file: the .entire scan's doc spends a paragraph on why an allowlist a
-		// rejected type can enter by setting an extra bit is not an allowlist,
-		// and the narrower version here missed a FIFO, socket or device node at
-		// `.claude` entirely — os.Root and every hook install fail on one, and
-		// doctor printed nothing.
+		// Every component's shape is checked, with the expectation depending on
+		// where it sits: a component with more path still to go has to be a
+		// directory, and the leaf has to be a regular file. Both are allowlists
+		// rather than tests for one rejected type — the .entire scan's doc spends
+		// a paragraph on why an allowlist a rejected type can enter by setting an
+		// extra bit is not an allowlist — and an earlier revision that only
+		// looked for a regular file at a non-leaf missed a FIFO, socket or device
+		// node entirely.
+		//
+		// The leaf matters as much as its parents, and for a worse reason: a FIFO
+		// at `.claude/settings.json` does not fail the read, it BLOCKS it. Every
+		// agent's config read goes through osroot.OpenNoFollow, whose open(2) has
+		// no O_NONBLOCK, so `entire doctor` hangs in openat until interrupted.
+		// Reporting it is all this scan can do; refusing to open one is
+		// OpenNoFollow's job.
 		//
 		// Identified from the mode rather than from the ENOTDIR the next Lstat
 		// would return, which would mean being right about which errno each
 		// platform picks. fs.ModeIrregular is tolerated the way the .entire scan
 		// tolerates it: Windows maps directory junctions and cloud placeholders
-		// onto that bit and both are traversable, and a junction arrives as bare
-		// ModeIrregular (a name-surrogate reparse tag withholds ModeDir) while a
-		// placeholder directory arrives as ModeDir|ModeIrregular.
-		if prefix != name && !traversableComponent(info.Mode()) {
+		// onto that bit, a junction arriving as bare ModeIrregular (a
+		// name-surrogate reparse tag withholds ModeDir) and a placeholder
+		// directory as ModeDir|ModeIrregular.
+		if !componentHasExpectedShape(info.Mode(), prefix == name) {
 			return prefix, componentScanWrongType
 		}
 	}
 	return "", componentScanClean
 }
 
-// traversableComponent reports whether mode can hold a path below it: a real
-// directory, or one of the two shapes Windows expresses with fs.ModeIrregular.
-// See scanForSymlinkedComponent for why that bit is tolerated.
-func traversableComponent(mode fs.FileMode) bool {
-	t := mode.Type()
-	return t == fs.ModeDir || t == fs.ModeIrregular || t == fs.ModeDir|fs.ModeIrregular
+// componentHasExpectedShape reports whether mode is what has to be at this
+// position: a regular file at the leaf, something a path can descend through
+// above it. fs.ModeIrregular is masked out of both tests rather than matched
+// against — see scanForSymlinkedComponent for why Windows makes that necessary,
+// and note it is why a bare ModeIrregular satisfies the leaf test as well as
+// the directory one.
+func componentHasExpectedShape(mode fs.FileMode, isLeaf bool) bool {
+	t := mode.Type() &^ fs.ModeIrregular
+	if isLeaf {
+		return t == 0
+	}
+	return t == fs.ModeDir
 }
 
 // readlinkOrUnknown renders a symlink's target for a diagnostic, never failing:

@@ -118,7 +118,6 @@ func TestReadCapped_KeepsContentOfANonUTF8File(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// 0xE9 is "é" in latin-1 and invalid on its own in UTF-8.
 	// 0xE9 is "é" in latin-1 and invalid on its own in UTF-8. Go strings hold
 	// arbitrary bytes, so testutil.WriteFile carries it fine.
 	body := string(append([]byte{0xE9}, []byte(strings.Repeat("resume of the project. ", 20))...))

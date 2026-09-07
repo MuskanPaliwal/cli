@@ -1515,7 +1515,7 @@ func TestCheckAgentDirSymlinks_ReportsSymlinkedScaffoldParent(t *testing.T) {
 	t.Cleanup(osroot.ResetShared)
 
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName), 0o750))
-	if err := os.Symlink(t.TempDir(), filepath.Join(dir, ".claude", "skills")); err != nil {
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, claudeDirName, "skills")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1569,7 +1569,7 @@ func TestCheckAgentDirSymlinks_ReportsSymlinkedConfigFile(t *testing.T) {
 	t.Cleanup(osroot.ResetShared)
 
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName), 0o750))
-	if err := os.Symlink(filepath.Join(t.TempDir(), "settings.json"), filepath.Join(dir, ".claude", "settings.json")); err != nil {
+	if err := os.Symlink(filepath.Join(t.TempDir(), "settings.json"), filepath.Join(dir, claudeDirName, "settings.json")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1670,9 +1670,9 @@ func TestCheckAgentDirSymlinks_SilentWhenClean(t *testing.T) {
 	})
 
 	t.Run("real directories and a user's own link inside one", func(t *testing.T) {
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude", "skills"), 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}"), 0o600))
-		if err := os.Symlink(t.TempDir(), filepath.Join(dir, ".claude", "skills", "my-own")); err != nil {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName, "skills"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, claudeDirName, "settings.json"), []byte("{}"), 0o600))
+		if err := os.Symlink(t.TempDir(), filepath.Join(dir, claudeDirName, "skills", "my-own")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
 
@@ -1782,28 +1782,32 @@ func TestScanForSymlinkedComponent_DirectoryIsClean(t *testing.T) {
 	}
 }
 
-// TestTraversableComponent pins each mode combination, including the Windows
-// shapes that must not be rejected: a bare fs.ModeIrregular is how Go reports a
-// directory junction, and ModeDir|ModeIrregular a cloud placeholder directory.
-func TestTraversableComponent(t *testing.T) {
+// TestComponentHasExpectedShape pins each mode combination at both positions,
+// including the Windows shapes that must not be rejected: a bare
+// fs.ModeIrregular is how Go reports a directory junction, and
+// ModeDir|ModeIrregular a cloud placeholder directory.
+func TestComponentHasExpectedShape(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		mode fs.FileMode
-		want bool
+		mode                fs.FileMode
+		wantLeaf, wantInner bool
 	}{
-		{fs.ModeDir, true},
-		{fs.ModeIrregular, true},
-		{fs.ModeDir | fs.ModeIrregular, true},
-		{0, false},
-		{fs.ModeNamedPipe, false},
-		{fs.ModeSocket, false},
-		{fs.ModeDevice, false},
-		{fs.ModeDevice | fs.ModeCharDevice, false},
-		{fs.ModeSymlink, false},
+		{mode: fs.ModeDir, wantLeaf: false, wantInner: true},
+		{mode: fs.ModeIrregular, wantLeaf: true, wantInner: false},
+		{mode: fs.ModeDir | fs.ModeIrregular, wantLeaf: false, wantInner: true},
+		{mode: 0, wantLeaf: true, wantInner: false},
+		{mode: fs.ModeNamedPipe, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeSocket, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeDevice, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeDevice | fs.ModeCharDevice, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeSymlink, wantLeaf: false, wantInner: false},
 	} {
-		if got := traversableComponent(tc.mode); got != tc.want {
-			t.Errorf("traversableComponent(%v) = %v, want %v", tc.mode, got, tc.want)
+		if got := componentHasExpectedShape(tc.mode, true); got != tc.wantLeaf {
+			t.Errorf("componentHasExpectedShape(%v, leaf) = %v, want %v", tc.mode, got, tc.wantLeaf)
+		}
+		if got := componentHasExpectedShape(tc.mode, false); got != tc.wantInner {
+			t.Errorf("componentHasExpectedShape(%v, inner) = %v, want %v", tc.mode, got, tc.wantInner)
 		}
 	}
 }
