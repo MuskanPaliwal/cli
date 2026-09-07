@@ -141,7 +141,7 @@ func validateOpenedFile(root *os.Root, name string, f *os.File) error {
 		return err //nolint:wrapcheck // preserve original error classification
 	}
 	if !os.SameFile(pathInfo, openedInfo) {
-		return fmt.Errorf("%s changed while it was being opened", name)
+		return fmt.Errorf("%s changed while it was being opened: %w", name, ErrReplacedDuringOpen)
 	}
 	return nil
 }
@@ -224,6 +224,16 @@ func ReadDirNoSymlinks(root *os.Root, name string) ([]os.DirEntry, error) {
 // ErrSymlinkedPath reports a symlink where a real path component was required.
 // Callers match it with errors.Is.
 var ErrSymlinkedPath = errors.New("path component is a symlink")
+
+// ErrReplacedDuringOpen reports that name resolved to one file when it was
+// opened and a different one by the time the open was validated: something
+// replaced it in between. Callers match it with errors.Is.
+//
+// It is a race, not a refusal. A caller contending for a file that is expected
+// to be replaced under it - a lock file being reaped and recreated - can retry
+// against the new file. A caller that expected a stable name should treat it as
+// the failure it is.
+var ErrReplacedDuringOpen = errors.New("file was replaced while it was being opened")
 
 // MkdirAllNoSymlink is MkdirAll with one added refusal: if any component of
 // name already exists as a symlink, it returns an error wrapping
@@ -366,6 +376,35 @@ func RemoveNoSymlinks(root *os.Root, name string) error {
 	}
 	defer closeParent()
 	return Remove(parent, leaf)
+}
+
+// RemoveAllNoSymlinks removes name and everything beneath it, rejecting a
+// symlink in every parent directory component. A missing name is not an error.
+//
+// os.Root.RemoveAll on its own is not enough, and the reason is the same one
+// that makes OpenChild necessary next to a bare Root.OpenRoot: it refuses a
+// symlink that would take the descent OUT of the root, and it unlinks a
+// symlinked leaf rather than deleting whatever is at the far end, but it says
+// nothing about the components ABOVE the leaf. A repository shipping
+// `.pi -> /home/victim/notes` therefore had `.pi/extensions/entire` removed
+// from inside /home/victim, with every component Root examined still nominally
+// inside the worktree.
+//
+// The leaf is unlinked rather than followed, which is os.RemoveAll's behaviour
+// too, so a symlink there costs the link and not its target.
+func RemoveAllNoSymlinks(root *os.Root, name string) error {
+	parent, leaf, closeParent, err := OpenParentNoSymlinks(root, name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer closeParent()
+	if err := parent.RemoveAll(leaf); err != nil {
+		return fmt.Errorf("remove %s: %w", name, err)
+	}
+	return nil
 }
 
 // WalkDirNoSymlinks walks dir within root, refusing a symlink anywhere it goes:
