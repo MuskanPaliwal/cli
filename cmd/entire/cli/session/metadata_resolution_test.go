@@ -29,9 +29,9 @@ func TestStateStoreConstructionGitSubprocesses(t *testing.T) {
 			testutil.InitRepo(t, root)
 			t.Chdir(root)
 			paths.ClearWorktreeRootCache()
-			ClearGitCommonDirCache()
+
 			t.Cleanup(paths.ClearWorktreeRootCache)
-			t.Cleanup(ClearGitCommonDirCache)
+
 			ctx := context.Background()
 			if tc.warmRoot {
 				_, err := paths.WorktreeRoot(ctx)

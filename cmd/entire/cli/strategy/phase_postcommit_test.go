@@ -11,6 +11,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -2572,7 +2573,7 @@ func runIdleTaskRecordCondenses(t *testing.T, s *ManualCommitStrategy, repo *git
 
 	worktreePath, err := paths.WorktreeRoot(context.Background())
 	require.NoError(t, err)
-	worktreeID, err := paths.GetWorktreeID(worktreePath)
+	worktreeMetadata, err := gitrepo.ResolveWorktreeMetadata(worktreePath)
 	require.NoError(t, err)
 	head, err := repo.Head()
 	require.NoError(t, err)
@@ -2588,7 +2589,7 @@ func runIdleTaskRecordCondenses(t *testing.T, s *ManualCommitStrategy, repo *git
 		SessionID:      sessionID,
 		BaseCommit:     head.Hash().String(),
 		WorktreePath:   worktreePath,
-		WorktreeID:     worktreeID,
+		WorktreeID:     worktreeMetadata.WorktreeID,
 		StartedAt:      now,
 		Phase:          session.PhaseIdle,
 		AgentType:      agent.AgentTypeClaudeCode,

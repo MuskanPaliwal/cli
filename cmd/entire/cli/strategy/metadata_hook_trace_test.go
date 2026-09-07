@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -70,8 +69,7 @@ func TestMetadataHookTrace(t *testing.T) {
 func traceHookOperation(t *testing.T, name string, operation func() error) {
 	t.Helper()
 	paths.ClearWorktreeRootCache()
-	session.ClearGitCommonDirCache()
-	gitdir.ClearCache()
+
 	tracePath := filepath.Join(t.TempDir(), "git-trace.jsonl")
 	t.Setenv("GIT_TRACE2_EVENT", tracePath)
 	start := time.Now()

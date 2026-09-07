@@ -1107,22 +1107,3 @@ func (s *StateStore) List(ctx context.Context) ([]*State, error) {
 	}
 	return states, nil
 }
-
-// ClearGitCommonDirCache clears the cached git common dir.
-// Useful for testing when changing directories.
-func ClearGitCommonDirCache() {
-	gitdir.ClearCache()
-}
-
-// GetGitCommonDir returns the .git common directory for the current working
-// directory, absolute. In a regular checkout this is .git/; in a worktree, it's
-// the main repo's .git/ (not .git/worktrees/<name>/). Result is cached per
-// working directory.
-//
-// The resolution lives in gitdir, which also owns the *os.Root over the same
-// directory — this stays as the name 19 call sites already import. It used to be
-// one of two hand-rolled copies of the same git subprocess, the other in
-// strategy with no cache at all.
-func GetGitCommonDir(ctx context.Context) (string, error) {
-	return gitdir.CommonDir(ctx) //nolint:wrapcheck // gitdir already names the failure and the command it ran
-}
