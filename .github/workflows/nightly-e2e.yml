@@ -188,6 +188,10 @@ jobs:
         shell: bash
         env:
           TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
+          # A native path, not $PWD: these steps run under Git Bash, where $PWD
+          # is /d/a/cli/cli, and E2E_ARTIFACT_DIR is read by the Go test binary,
+          # which resolves that leading slash against the current drive.
+          ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -202,7 +206,7 @@ jobs:
             echo "::group::$agent"
             # A failed bootstrap counts as a failed agent, not a skipped one.
             go run ./e2e/bootstrap "$agent" &&
-              E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/$agent" \
+              E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$agent" \
                 mise run test:e2e --agent "$agent" "$TEST_FILTER"
             echo "$agent $?" >> e2e/artifacts/results.txt
             echo "::endgroup::"
@@ -213,12 +217,13 @@ jobs:
         shell: bash
         env:
           TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
+          ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
           COPILOT_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           mkdir -p e2e/artifacts
           go run ./e2e/bootstrap copilot-cli &&
-            E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/copilot-cli" \
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/copilot-cli" \
               mise run test:e2e --agent copilot-cli "$TEST_FILTER"
           echo "copilot-cli $?" >> e2e/artifacts/results.txt
 
@@ -257,6 +262,8 @@ jobs:
 
   notify-slack:
     runs-on: ubuntu-latest
+    # Posting to an incoming webhook needs no token at all.
+    permissions: {}
     needs: [smoke]
     if: ${{ always() && needs.smoke.result == 'failure' && github.event_name == 'schedule' }}
     steps:
