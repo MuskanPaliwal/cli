@@ -1,0 +1,53 @@
+Let's review the completed strategy and hooks migration (GMT-004), part 4 of the Git metadata traversal refactor in entireio/cli, and discuss whether it is ready to land after part 3.
+
+Find the existing worktree for branch refactor-strategy-hook-metadata-resolution. Review commit 81418ad94706c16050d5007fcf9cc5d19752ec77 (refactor(strategy): use canonical git metadata resolution) against its parent, 3dbdf8b83. The working tree was clean after the commit. This is a review-only request: do not edit, commit, rebase, or change the worktree. Do not push, create a PR, merge, close issues, label, or post public messages.
+
+Own the independent review. This handoff is starting context, not evidence that the change is correct. Read repository instructions and contribution guidance, inspect the complete diff, relevant surrounding code, tests, historical intent, and live upstream/GitHub/CI state before drawing conclusions. Use repository discovery and historical-context helpers as instructed. The commit carries Entire-Checkpoint: 01M1VXRSXZ28KB6F9TQA8X3WGQ. Assess whether the scope is still appropriate, stale, already addressed upstream, incomplete, or better handled differently. Report unavailable evidence explicitly.
+
+Context and boundaries:
+- Portable planning anchors: “Plan: Split Git Metadata Traversal Consolidation”, GMT-004, tracking PR #2190. Planning documents may exist only in the original planning worktree.
+- The implementation baseline included part 1 (#2241) and part 2 (#2254). Part 1 provides gitrepo.ResolveWorktreeMetadata. Part 3 was neither merged nor cherry-picked into this branch; re-check its current status.
+- Part 4 migrates physical metadata traversal in strategy/hooks, reset, cleanup, reconciliation, checkpoint-sync capture, and session routing to the canonical resolver using explicit worktree roots.
+- Keep settings, status, Codex, trail, legacy paths APIs, and unrelated consumers outside this slice. Shared API deletion and final strict ownership-guard enforcement belong to part 5. Landing order remains part 3 before part 4; eventual publication requires refreshing main, rebasing after part 3 lands, and rerunning checks.
+
+Review priorities:
+1. Verify explicit-root resolution and caller policy. The canonical resolver must remain context-free, option-free, cache-free, subprocess-free, and all-or-error. Check lexical spelling where caller-visible paths matter versus physical identity for repository ownership. Audit worktree IDs and common/per-worktree metadata selection for ordinary repositories, linked worktrees, and symlink aliases.
+2. Audit multi-store session locks closely. Resolve every common directory and establish physical identity before acquisition; deduplicate aliases, order deterministically, and acquire one rooted lock per repository. Check whether different alias spellings across concurrent callers can undermine ordering. Fail closed on identity errors and preserve cancellation and release on acquisition failures, callback errors, and all other exits. Preserve rooted/no-follow storage and lock access.
+3. Verify prepare-commit, post-commit, reset, reconciliation, capture, cleanup, and session-routing behavior, including missing/broken metadata and caller-specific errors. Check that retained Git queries still validate repository equality or explicit repository semantics; physical traversal replacement must not erase semantic validation.
+4. Check explicit-path Git queries use the existing EnvWithoutRepoOverrides helper. Keep the known separate bug below distinct from regressions introduced by this commit.
+5. Verify strategy.GetGitCommonDir has no remaining callers and its deletion is safe. The shared migration ledger entries were deliberately kept unchanged; the guard now logs retired query entries while continuing to reject unlisted traversal. Assess whether that temporary guard adjustment remains consistent with the split plan without demanding unrelated migrations or final strict cleanup here.
+6. Evaluate test strength, not just pass status. Look for assertions of actual contention and release, deterministic ordering across alias inputs, identity failures before lock creation, shared-repository worktrees, lexical path preservation, conflicting supported Git selectors, and complete hook outcomes.
+
+Separate bug, deliberately excluded at the user's request:
+The existing EnvWithoutRepoOverrides strips GIT_DIR, GIT_WORK_TREE, and GIT_INDEX_FILE but not GIT_COMMON_DIR. An isolated reproduction showed getHooksDirInPath targeting repository A reading repository B's core.hooksPath with inherited GIT_COMMON_DIR, even when the other selectors were stripped. Its helper fix and regression test are saved separately as git-common-dir-env-isolation.patch in local ignored handoff materials and are not in the commit. The GMT-004 test covers only the three selectors supported by the unchanged helper. Do not silently fold this fix into the refactor or describe it as newly introduced without before/after evidence. You may flag any concrete dependency or release implication separately.
+
+Known deferred consumers to verify rather than migrate:
+- Part 3: session.NewStateStore, session.NewStateStoreForWorktree, session sweep.
+- session.GetGitCommonDir: settings.ClonePreferencesPath; investigate.NewStateStore, NewLocalManifestStore, and runFresh; trailEnablementScopeHintPath and spawnDetachedTrailEnablementRefresh.
+- gitdir.Open: setup.removeAllSessionStates and review.pendingMarkerRoot.
+- gitdir.CommonDirForWorktree: review.localReviewManifestStore.
+- Shared session/gitdir resolver and cache APIs, paths.GetWorktreeID, gitrepo.ResolveDotGitPath, and gitrepo.ResolveCommonGitPath remain for later migration/cleanup.
+
+Reported validation — independently verify what matters:
+- A fresh pre-commit mise run check passed, exit 0, 229.36 seconds: formatting, lint with zero issues, race-enabled unit/integration tests, Vogon 56/56, and external roger-roger deterministic canary 4/4. No paid real-agent E2E ran.
+- mise run dup completed, exit 0, with 908 repository-wide advisory findings; the implementer reported none overlap changed production lines or new tests. git diff --check passed.
+- An earlier full run had a TestExternalCommand_SigintReachesPlugin readiness timeout; the isolated retry and subsequent full runs passed without changes to that test or implementation.
+- Trace2 compared identical isolated fixtures against an archive of baseline 3dbdf8b83, using fresh strategy instances and cleared discovery caches. Git subprocess counts: PrepareCommitMsg without a session 4→3; with an active session 3→2; PostCommit without a session 2→2; with active condensation 13→12. These measure complete strategy hook methods, not full Cobra process startup. Timing samples do not establish latency improvements. Inspect the fixture and independently measure relevant operations if needed; a subprocess-free resolver alone is insufficient performance evidence.
+- Local ignored GMT-004 handoff materials contain the earlier review report and trace logs. That report predates the commit and fresh pre-commit check; its uncommitted status and older validation duration are stale.
+
+Use isolated temporary Git repositories and repository test helpers. Parallelize tests unless they mutate process-global state. Isolate config, cache, credentials/keyring, and subprocess interactivity according to repository instructions. Do not run paid real-agent E2E; deterministic Vogon is allowed. For a review, prefer targeted proof; if code changes are subsequently authorized, require mise run fmt followed by mise run lint, relevant tests, mise run dup, git diff --check, and mise run check before a commit.
+
+Return findings first, ordered by severity, with precise file/line references, concrete failure scenarios, and supporting evidence or a minimal reproduction. Separate introduced defects from pre-existing bugs, deferred work, and optional improvements. Then give a readiness recommendation, exact commands/results you verified, and remaining uncertainty. If you find no actionable defects, say so explicitly. Do not invent findings to fill the review.
+ review this run-playbook
+
+---
+
+so what to fix?
+
+---
+
+yupp go on. what s deduplication btw?
+
+---
+
+okay now verify if the diff is clean. can you give me an overview of what wee have done
