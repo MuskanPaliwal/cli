@@ -169,10 +169,15 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://claude.ai/install.sh | bash
-          curl -fsSL https://opencode.ai/install | bash
           curl https://cursor.com/install -fsS | bash
           curl -fsSL https://app.factory.ai/cli | sh
-          npm install -g @openai/codex @github/copilot
+          # opencode by npm rather than its install script, which resolves its
+          # version through an unauthenticated api.github.com call it gives no
+          # way to authenticate (plain `curl -s`, no token support) — so it is
+          # 403-ed by the shared runner IP's rate limit at random and reports
+          # it as "Failed to fetch version information". This is the same
+          # install the Windows leg uses.
+          npm install -g @openai/codex @github/copilot opencode-ai
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli" >> "$GITHUB_ENV"
 
