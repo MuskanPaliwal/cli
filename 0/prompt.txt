@@ -1,0 +1,51 @@
+I want to discuss and complete split 5 of the Entire CLI Git metadata traversal consolidation: remaining consumers, legacy deletion, and final cross-cutting proof.
+
+Start with an extensive independent review. You own that review: treat this handoff as starting evidence, assess whether the task is still needed and correctly scoped, identify stale assumptions or a smaller/better approach, then proceed with scoped implementation if the review supports it.
+
+Worktree:
+- Start the new session in `/Users/muskanpaliwal/Work/open-source/entire/cli/refactor-remaining-git-metadata-consumers`.
+- Branch: `refactor-remaining-git-metadata-consumers`.
+- Checked on 2026-09-07: this worktree is clean at `ee6d53f3d3398267358e8f9d306267c87a088101`, with no unique commits and 187 commits behind the locally cached `upstream/main`. It is a prepared destination, not an integrated implementation base.
+- Planning/reference worktree: `/Users/muskanpaliwal/Work/open-source/entire/cli/refactor-git-metadata-traversal`. Its untracked `plan.md` describes the five-way split. Its `GIT_METADATA_TRAVERSAL_IMPLEMENTATION_PLAN.md` and `GIT_METADATA_TRAVERSAL_THERMO_NUCLEAR_REVIEW.md` provide historical design evidence. Their status sections are stale; do not interpret them as live implementation status or commit these local notes.
+
+Live GitHub state checked on 2026-09-07:
+- Split 1, canonical owner: https://github.com/entireio/cli/pull/2241 — merged.
+- Split 2, checkpoint migration: https://github.com/entireio/cli/pull/2254 — merged.
+- Split 3, session migration: https://github.com/entireio/cli/pull/2285 — open, review required. Remote head observed: `976d891d33ef8e536e1f219bd3cb96a88d71eafb`; local branch head: `9463c3fac`.
+- Split 4, strategy/hooks: https://github.com/entireio/cli/pull/2305 — open, review required; explicitly depends on split 3. Remote head observed: `1c7280a4793fedf3da46acb3af5b0dd1ab8dcfb9`; local branch head: `f86c01f4e`.
+- Original tracking PR: https://github.com/entireio/cli/pull/2190 — open; preserve it until all five replacements land.
+- PRs 3 and 4 returned empty status-check lists. That is not evidence of passing CI.
+
+First, establish a safe current base:
+1. Read current repository/agent instructions and inspect local changes before altering the destination branch. Re-check live PR heads, reviews, CI, and main; the local prerequisite heads already differ from GitHub.
+2. Fetch current main and prerequisite branch tips. If splits 3 and 4 have merged, refresh the clean split-5 branch onto main. Otherwise integrate their current implementations locally in dependency order, preserving any newer fixes. Do not blindly cherry-pick the old hashes above or port the original monolithic PR wholesale.
+3. Split 5 requires all four prerequisite implementations present before deleting their shared APIs. Local integration is allowed; publishing split 5 against main waits for prerequisite landing and a narrow refreshed diff.
+4. The split plan records a shared bare-layout Codex hook snapshot: the shared root `.codex/hooks.json` should be refreshed from the chosen worktree before its session starts. Inspect the current documented hook setup and use the supported mechanism; preserve ownership/trust policy and do not blindly copy or enable hooks. If this bootstrap was not done before launch, assess it before relying on checkpoint capture.
+
+Remaining implementation:
+- Migrate physical metadata traversal in Codex discovery, settings clone preferences, status, review, investigate, trail, setup/cleanup, explain, dispatch, benchmarks, and integration fixtures. Re-inventory current callers rather than treating this list as exhaustive.
+- Delete `paths.GetWorktreeID`, its marker parser and obsolete tests, the legacy exported `gitrepo.ResolveDotGitPath` / `ResolveCommonGitPath` composition surface, forwarding wrappers, stale cache-reset calls, and cache-only tests once the last callers migrate.
+- Explicitly include the deferred session/gitdir cleanup. Split 3's live PR says `session.GetGitCommonDir`, the clearing API, and the `gitdir` common-directory resolver/cache remain for outside consumers. The original split plan expected earlier deletion, but that did not happen in split 3. Remove `gitdir.CommonDir`, `CommonDirForWorktree`, `ClearCache`, and subprocess/cache state only after validating their current call graph. Preserve `gitdir.OpenForCurrentWorktree`, `OpenAt`, `OpenPathIn`, and `Reset`, including rooted-handle lifetime.
+- Replace the temporary migration ledger with the final strict source ownership guard. Preserve only individually justified semantic-query or policy exceptions. Split 4 deliberately allows retired ledger query entries to become diagnostics during migration; the final guard must no longer depend on that transition behavior.
+- Add final cross-consumer agreement, failure-policy, identity/layout, and complete-operation Trace2 proof. Record production line-count and subprocess-count changes.
+
+Contracts to preserve:
+- `gitrepo.ResolveWorktreeMetadata(root)` remains the sole physical traversal owner: explicit non-empty root, cleaned absolute lexical paths, complete metadata or an error; no subprocess, context, options, layout enum, or cache.
+- `paths.WorktreeRoot` retains CWD discovery and its existing cache. Rooted/no-follow storage and locking must remain intact. A bare store is not a worktree; repository opening must not downgrade malformed/unreadable metadata into a weaker fallback.
+- Preserve required failures and optional warning/skip/fail-open behavior at each consumer. Preserve Codex trust, backlink, submodule/bare handling, diagnostics, installation, and cross-checkout-write policy. Preserve settings safety and caller-visible lexical status/trail paths.
+- Retain Git queries with real semantic duties: adoption validates an arbitrary source repository; strategy checks repository identity; trail validates reusable worktrees and ref/branch state. Physical traversal and semantic validation are different responsibilities.
+- Preserve split 4's alias-independent multi-store lock ordering and deduplication by filesystem identity. Local `f86c01f4e` contains the follow-up fix using device/inode on Unix and volume/file index on Windows. Confirm the current remote prerequisite includes its equivalent; do not regress to lexical path sorting.
+- A separate `GIT_COMMON_DIR` environment-scrubbing bug was excluded from split 4 and has a separate local worktree (`fix-git-common-dir-env-isolation`). Re-check its state if it affects tests, but do not absorb unrelated work into this refactor.
+
+Evidence and validation:
+- Split 4 checkpoint `01M1XAFRN8M65DVP35TSDCQMSM` records the lock-ordering fix and its session. The transcript reports full `mise run check` passing in 279.46s, Vogon 56/56, external deterministic canary 4/4, zero lint issues, and Windows cross-compilation. Windows runtime behavior was not tested. This is historical evidence, not validation of the future integrated tree.
+- Use current Entire graph/history tools for discovery where available. Run required related-code discovery before Go implementation; if `/go:discover-related` is unavailable, say so and use existing repository search utilities.
+- Use isolated real Git fixtures for normal/linked/bare-backed/separate-Git-dir/submodule/relative-pointer/moved-registration/alias layouts, plus malformed metadata and repair cases. Assert exact IDs and physical identity without globally canonicalizing lexical output.
+- Prove failure policies at real callers and alias convergence at locks. Mutation-test the final ownership guard so an introduced independent traversal is rejected.
+- Measure complete operations: session construction, checkpoint queue creation, prepare-commit, status, and Codex discovery. Include a Trace2 positive control; resolver-only measurements do not prove whole-operation performance. Report subprocess counts without claiming unmeasured latency gains.
+- Run focused tests, formatting followed by lint, `mise run dup`, full `mise run check`, and `git diff --check` on the final tree. Follow repository requirements before any commit or remote update. No paid real-agent E2E tests.
+
+Output and boundaries:
+- Lead with independent review findings and the actual dependency/base state, then implement the remaining scoped work and report exact verification evidence and limitations.
+- Keep comments short and limited to non-obvious invariants/contracts; no agent/process/task labels in production comments.
+- Keep progress/handoff notes local. Do not push, merge, create/close PRs or issues, label, or post public comments without explicit authorization. Landing order remains split 3, split 4, then split 5; tracking-PR closeout comes after all replacements land.
