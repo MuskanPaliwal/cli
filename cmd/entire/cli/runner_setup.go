@@ -138,7 +138,7 @@ If <runner> is given (e.g. "risk" or "trail-risk"), only that runner is tuned.`,
 	}
 
 	cmd.Flags().BoolVarP(&opts.assumeYes, "yes", "y", false,
-		"Create the default runners if missing and tailor them to this repo, without asking")
+		"Create the default runners if missing and tailor them to this repo; add --agent to skip the provider choice too")
 	cmd.Flags().BoolVar(&opts.defaultsOnly, "defaults-only", false,
 		"Create the generic default runners and stop (no tailoring, no provider call)")
 	cmd.Flags().BoolVar(&opts.printPrompt, "print-prompt", false,
