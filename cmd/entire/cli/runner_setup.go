@@ -87,6 +87,7 @@ type runnerSetupOptions struct {
 	defaultsOnly bool
 	printPrompt  bool
 	dryRun       bool
+	agent        string // --agent: text-generation agent for this run; skips the provider choice, saves nothing
 	debugDir     string // if set, dump prompt.txt (+ response.txt when a provider ran) here
 	sources      []string
 	limit        int
@@ -117,8 +118,10 @@ or defaults tailored to this repo. Otherwise name the action up front:
       --print-prompt  print the tailoring prompt for your own agent to run
       --dry-run       show the tailoring as a diff and write nothing
 
---yes and --dry-run each call your configured summary provider once. Review a
-tailoring with git diff .entire/runners.
+--yes and --dry-run each call your configured summary provider once. With no
+provider configured and several agents installed, you are asked which to use;
+pass --agent <name> to name one for this run instead (nothing is saved).
+Review a tailoring with git diff .entire/runners.
 
 If <runner> is given (e.g. "risk" or "trail-risk"), only that runner is tuned.`,
 		Args: cobra.MaximumNArgs(1),
@@ -142,6 +145,8 @@ If <runner> is given (e.g. "risk" or "trail-risk"), only that runner is tuned.`,
 		"Print the tailoring prompt for your own agent instead of running a provider")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false,
 		"Show the tailoring as a diff and write nothing")
+	cmd.Flags().StringVar(&opts.agent, "agent", "",
+		"Text-generation agent to tailor with for this run (e.g. codex); skips the provider choice and saves nothing (requires --yes or --dry-run)")
 	cmd.Flags().StringSliceVar(&opts.sources, "sources", nil,
 		"Comma-separated data sources to gather: repo, prs, checkpoints, trails, all (default: all)")
 	cmd.Flags().IntVar(&opts.limit, "limit", 20, "How many recent PRs/issues/trails to sample")
@@ -175,9 +180,15 @@ func runRunnerSetup(ctx context.Context, w, errW io.Writer, opts runnerSetupOpti
 		return nil // picker cancelled; handleFormCancellation already said so
 	}
 
+	// --agent names the provider, so it is a contradiction for a mode that never
+	// calls one — the same rule as dispatch's --agent without --local. Before
+	// the scaffold: a usage error must not leave files behind.
+	if opts.agent != "" && !mode.needsProvider() {
+		return errors.New("--agent only applies when setup calls a provider: pass it with --yes or --dry-run")
+	}
+
 	// --sources and --limit only steer the gather, so they are validated for
 	// the modes that gather and not for --defaults-only, which reads neither.
-	// Before the scaffold, though: a usage error must not leave files behind.
 	var src tuneSources
 	if mode.gathersSignal() {
 		if src, err = parseTuneSources(opts.sources); err != nil {
@@ -206,10 +217,11 @@ func runRunnerSetup(ctx context.Context, w, errW io.Writer, opts runnerSetupOpti
 	}
 
 	// Resolved before the gather: resolution can fail outright, or stop to ask
-	// which provider to use, and neither belongs after seconds of waiting.
+	// which provider to use, and neither belongs after seconds of waiting. An
+	// --agent override takes dispatch's path: validated, used once, not saved.
 	var provider *checkpointSummaryProvider
 	if mode.needsProvider() {
-		if provider, err = resolveCheckpointSummaryProvider(ctx, errW); err != nil {
+		if provider, err = resolveDispatchSummaryProvider(ctx, errW, opts.agent); err != nil {
 			return err
 		}
 	}

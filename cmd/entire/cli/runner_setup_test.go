@@ -433,3 +433,117 @@ func TestRunRunnerSetup_BadGatherFlagsWriteNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestRunRunnerSetup_AgentFlagIsPromptless pins what --agent is for: with no
+// provider configured, several agents installed, and a terminal to ask on,
+// `-y --agent codex` still opens no picker. The named agent is used for this
+// run only, so nothing is written to settings.local.json.
+func TestRunRunnerSetup_AgentFlagIsPromptless(t *testing.T) {
+	repoRoot := newRunnerSetupRepo(t)
+	gen := stubNamedTuningAgent(t, agent.AgentNameCodex)
+
+	var out, errOut bytes.Buffer
+	if err := runRunnerSetup(context.Background(), &out, &errOut, runnerSetupOptions{
+		assumeYes: true,
+		agent:     string(agent.AgentNameCodex),
+		sources:   []string{"repo"}, // local signal only: no gh, no API
+		limit:     1,
+	}); err != nil {
+		t.Fatalf("runRunnerSetup: %v", err)
+	}
+
+	if gen.calls != 1 {
+		t.Errorf("named agent was called %d time(s), want exactly 1", gen.calls)
+	}
+	if written := runnerFiles(t, repoRoot); len(written) != wantDefaultCount(t) {
+		t.Errorf("-y wrote %d runner file(s), want the full default set", len(written))
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, settings.EntireSettingsLocalFile)); !os.IsNotExist(err) {
+		t.Errorf("--agent must not persist a provider choice (stat err = %v)", err)
+	}
+}
+
+// TestRunRunnerSetup_AgentRequiresAProviderMode mirrors dispatch, where --agent
+// without --local is an error: naming an agent for a mode that never calls one
+// is a contradiction, and it is reported before anything is written.
+func TestRunRunnerSetup_AgentRequiresAProviderMode(t *testing.T) {
+	repoRoot := newRunnerSetupRepo(t)
+	stubNamedTuningAgent(t, agent.AgentNameCodex)
+
+	for _, tc := range []struct {
+		name string
+		opts runnerSetupOptions
+	}{
+		{"defaults-only", runnerSetupOptions{defaultsOnly: true, agent: "codex"}},
+		{"print-prompt", runnerSetupOptions{printPrompt: true, agent: "codex", limit: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runRunnerSetup(context.Background(), io.Discard, io.Discard, tc.opts)
+			if err == nil || !strings.Contains(err.Error(), "--agent") {
+				t.Fatalf("error = %v, want one naming --agent", err)
+			}
+			if written := runnerFiles(t, repoRoot); len(written) != 0 {
+				t.Errorf("a usage error wrote %d runner file(s); it must write none", len(written))
+			}
+		})
+	}
+}
+
+// tuningStubAgent answers every tailoring prompt with "no changes" and counts
+// how often it was asked.
+type tuningStubAgent struct {
+	*stubTextAgent
+
+	calls int
+}
+
+func (a *tuningStubAgent) GenerateText(context.Context, string, string) (string, error) { //nolint:unparam // agent.TextGenerator signature
+	a.calls++
+	return "{}", nil
+}
+
+// stubNamedTuningAgent registers one resolvable agent under name and arranges
+// the resolver's worst case for a promptless run: no configured provider, two
+// candidates, and a terminal. The picker and the settings writer both fail the
+// test if reached.
+func stubNamedTuningAgent(t *testing.T, name types.AgentName) *tuningStubAgent {
+	t.Helper()
+	stub := &tuningStubAgent{stubTextAgent: &stubTextAgent{name: name, kind: types.AgentType(name)}}
+
+	originalLoad, originalSave := loadSummarySettings, saveLocalSummarySettings
+	originalGet, originalList := getSummaryAgent, listRegisteredAgents
+	originalCLI, originalCanPrompt := isSummaryCLIAvailable, canPromptForSummaryProvider
+	originalPrompt := promptSummaryProvider
+	originalDiscoverAlways, originalDiscoverNamed := discoverSummaryProvidersAlways, discoverNamedSummaryProvider
+	t.Cleanup(func() {
+		loadSummarySettings, saveLocalSummarySettings = originalLoad, originalSave
+		getSummaryAgent, listRegisteredAgents = originalGet, originalList
+		isSummaryCLIAvailable, canPromptForSummaryProvider = originalCLI, originalCanPrompt
+		promptSummaryProvider = originalPrompt
+		discoverSummaryProvidersAlways, discoverNamedSummaryProvider = originalDiscoverAlways, originalDiscoverNamed
+	})
+
+	loadSummarySettings = func(context.Context) (*settings.EntireSettings, error) {
+		return &settings.EntireSettings{}, nil // no summary_generation.provider
+	}
+	saveLocalSummarySettings = func(context.Context, *settings.EntireSettings) error {
+		t.Fatal("--agent must not persist a provider selection")
+		return nil
+	}
+	getSummaryAgent = func(n types.AgentName) (agent.Agent, error) {
+		if n != name {
+			return nil, fmt.Errorf("stub: no agent %s", n)
+		}
+		return stub, nil
+	}
+	listRegisteredAgents = func() []types.AgentName { return []types.AgentName{name, "other"} }
+	isSummaryCLIAvailable = func(n types.AgentName) bool { return n == name }
+	canPromptForSummaryProvider = func() bool { return true }
+	promptSummaryProvider = func([]checkpointSummaryProvider) (types.AgentName, error) {
+		t.Fatal("--agent must not open the provider picker")
+		return "", nil
+	}
+	discoverSummaryProvidersAlways = func(context.Context) {}
+	discoverNamedSummaryProvider = func(context.Context, types.AgentName) error { return nil }
+	return stub
+}
