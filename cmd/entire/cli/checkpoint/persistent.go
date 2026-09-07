@@ -2813,9 +2813,9 @@ func readTranscriptFile(file *object.File) (content []byte, err error) {
 	}()
 
 	var buf bytes.Buffer
-	// Use a bounded size hint for normal chunks; larger legacy blobs still
-	// use incremental buffer growth.
-	if file.Size >= 0 && file.Size <= agent.MaxChunkSize {
+	// Shadow transcripts can exceed MaxChunkSize without being chunked. Bound
+	// only the upfront allocation hint at 1 GiB; larger blobs still grow incrementally.
+	if file.Size >= 0 && file.Size <= 1<<30 {
 		buf.Grow(int(file.Size) + bytes.MinRead)
 	}
 	if _, err := buf.ReadFrom(reader); err != nil {

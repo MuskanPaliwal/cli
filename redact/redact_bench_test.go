@@ -16,7 +16,10 @@ AAEAGZmFrZS1rZXktZm9yLXJlZGFjdGlvbi1iZW5jaG1hcmstb25seQECAwQF`)
 
 // Repeated credentials can occur in captured tool output, such as request logs.
 // Each matching scanner finding must not trigger another whole-input scan for
-// all copies of the same secret.
+// all copies of the same secret within one String call. Parsed JSONL is redacted
+// per string field, so repeated values in separate fields or lines are not deduped.
+// Compare benchmark results manually against a base ref; CI does not enforce
+// a performance baseline.
 func BenchmarkRedactStringRepeatedSecret(b *testing.B) {
 	for _, repeats := range []int{1, 10, 100, 1000} {
 		b.Run(fmt.Sprintf("Occurrences%d", repeats), func(b *testing.B) {

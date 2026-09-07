@@ -21,17 +21,19 @@ func TestReadTranscriptFromTreeFormats(t *testing.T) {
 		files map[string][]byte
 		want  []byte
 	}{
-		{name: "base", files: map[string][]byte{"full.jsonl": []byte("first\nsecond\n")}, want: []byte("first\nsecond\n")},
+		{name: "base", files: map[string][]byte{paths.TranscriptFileName: []byte("first\nsecond\n")}, want: []byte("first\nsecond\n")},
 		{name: "legacy", files: map[string][]byte{paths.TranscriptFileNameLegacy: []byte("legacy\n")}, want: []byte("legacy\n")},
-		{name: "empty", files: map[string][]byte{"full.jsonl": {}}, want: []byte{}},
+		// A present empty transcript must remain non-nil: ephemeral reads use
+		// nil to decide whether to fall through to their legacy read path.
+		{name: "empty", files: map[string][]byte{paths.TranscriptFileName: {}}, want: []byte{}},
 		{name: "absent", files: map[string][]byte{}, want: nil},
 		{
 			name: "chunk order",
 			files: map[string][]byte{
-				"full.jsonl":     []byte("zero"),
-				"full.jsonl.010": []byte("ten"),
-				"full.jsonl.002": []byte("two"),
-				"full.jsonl.001": []byte("one"),
+				paths.TranscriptFileName:          []byte("zero"),
+				paths.TranscriptFileName + ".010": []byte("ten"),
+				paths.TranscriptFileName + ".002": []byte("two"),
+				paths.TranscriptFileName + ".001": []byte("one"),
 			},
 			want: []byte("zero\none\ntwo\nten"),
 		},
@@ -49,7 +51,8 @@ func TestReadTranscriptFromTreeFormats(t *testing.T) {
 }
 
 func BenchmarkReadTranscriptFromTree(b *testing.B) {
-	for _, size := range []int{1 << 20, 8 << 20} {
+	// The 64 MiB case covers unchunked shadow transcripts above MaxChunkSize.
+	for _, size := range []int{1 << 20, 8 << 20, 64 << 20} {
 		b.Run(fmt.Sprintf("%dMiB", size>>20), func(b *testing.B) {
 			// In-memory objects isolate transcript decoding and allocation costs
 			// from filesystem cache state; tree and blob lookup are still real.
