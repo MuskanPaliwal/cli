@@ -74,7 +74,6 @@ func TestUpdateCommandForCurrentBinary_Unix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			isolateMiseInstallEnv(t)
 			setExecutable(t, tt.execPath)
 
 			if got := UpdateCommandForCurrentBinary(tt.currentVersion); got != tt.want {
@@ -201,7 +200,6 @@ func TestCheckAndNotify_InstallerFailureKeepsCacheFresh(t *testing.T) {
 	// Simulate an interactive user who accepts the upgrade prompt, and an
 	// installer that fails (e.g. brew upgrade blew up mid-run).
 	t.Setenv("ENTIRE_TEST_TTY", "1")
-	isolateMiseInstallEnv(t)
 	setExecutablePath(t, brewCaskPath)
 
 	origChoose := chooseUpdate
@@ -244,16 +242,11 @@ func TestCheckAndNotify_InstallerFailureKeepsCacheFresh(t *testing.T) {
 // is a product invariant and not only a test-support one: a developer can have
 // entire installed by brew *and* mise relocated somewhere broad enough to
 // cover the cask path (MISE_INSTALLS_DIR is the one probe variable used
-// verbatim, so `/opt` is enough), and that user must be told to run brew.
+// verbatim, so /opt is enough), and that user must be told to run brew.
 // installProbes orders brewProbe first and brewProbe matches a cask path by
 // marker, so mise cannot claim it however wide its root is.
-//
-// Asserting the precondition matters as much as the outcome. Without it, a
-// change that stopped mise matching at all would leave this test passing while
-// no longer testing precedence.
 func TestUnixBrewBeatsAMiseRootCoveringTheSamePath(t *testing.T) {
 	t.Setenv("MISE_INSTALLS_DIR", "/opt")
-	t.Setenv("MISE_DATA_DIR", "")
 
 	norm := normalizePath(brewCaskPath)
 	if !miseProbe.matches(norm) {
