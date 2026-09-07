@@ -42,7 +42,6 @@ func TestSessionLocksDeduplicatePhysicalRepositories(t *testing.T) {
 	ordered, err := sessionLockCommonDirs(commonDirs)
 	require.NoError(t, err)
 	require.Len(t, ordered, 2)
-	require.Less(t, ordered[0], ordered[1])
 	reverse, err := sessionLockCommonDirs([]string{commonDirs[3], commonDirs[2], commonDirs[1], commonDirs[0]})
 	require.NoError(t, err)
 	require.Equal(t, ordered, reverse, "input order and aliases must not affect acquisition order")
@@ -65,6 +64,50 @@ func TestSessionLocksDeduplicatePhysicalRepositories(t *testing.T) {
 	require.ErrorIs(t, err, callbackErr)
 	for _, dir := range ordered {
 		requireSessionLockReleased(t, dir, "shared-session")
+	}
+}
+
+func TestSessionLocksOrderIndependentOfCaseAliases(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	first := filepath.Join(base, "alpha")
+	second := filepath.Join(base, "Beta")
+	require.NoError(t, os.Mkdir(first, 0o750))
+	require.NoError(t, os.Mkdir(second, 0o750))
+	testutil.InitRepo(t, first)
+	testutil.InitRepo(t, second)
+	alias := filepath.Join(base, "Alpha")
+	aliasInfo, err := os.Stat(alias)
+	if os.IsNotExist(err) {
+		t.Skip("requires a case-insensitive filesystem")
+	}
+	require.NoError(t, err)
+	firstInfo, err := os.Stat(first)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(firstInfo, aliasInfo))
+
+	inputs := [][]string{
+		{filepath.Join(first, ".git"), filepath.Join(second, ".git")},
+		{filepath.Join(alias, ".git"), filepath.Join(second, ".git")},
+	}
+	var expected []os.FileInfo
+	for _, dirs := range inputs {
+		ordered, err := sessionLockCommonDirs(dirs)
+		require.NoError(t, err)
+		require.Len(t, ordered, 2)
+		for i, dir := range ordered {
+			info, err := os.Stat(dir)
+			require.NoError(t, err)
+			if len(expected) < len(ordered) {
+				expected = append(expected, info)
+			} else {
+				require.True(t, os.SameFile(expected[i], info), "aliases must preserve physical lock order: %v", ordered)
+			}
+		}
+		require.NoError(t, WithSessionStateLocks(t.Context(), "case-session", dirs, func() error { return nil }))
+		for _, dir := range dirs {
+			requireSessionLockReleased(t, dir, "case-session")
+		}
 	}
 }
 

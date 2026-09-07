@@ -799,8 +799,16 @@ func WithSessionStateLocks(ctx context.Context, sessionID string, commonDirs []s
 	return fn()
 }
 
+// These are the filesystem identifiers used by os.SameFile, ordered independently
+// of path spelling so case aliases and mount aliases cannot reverse lock order.
+type sessionLockIdentity [2]uint64
+
 func sessionLockCommonDirs(commonDirs []string) ([]string, error) {
-	dirs := make([]string, 0, len(commonDirs))
+	type directory struct {
+		path     string
+		identity sessionLockIdentity
+	}
+	dirs := make([]directory, 0, len(commonDirs))
 	for _, commonDir := range commonDirs {
 		if strings.TrimSpace(commonDir) == "" {
 			return nil, errors.New("empty git common dir")
@@ -813,24 +821,29 @@ func sessionLockCommonDirs(commonDirs []string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve git common dir identity: %w", err)
 		}
-		dirs = append(dirs, physical)
-	}
-	slices.Sort(dirs)
-	unique := make([]string, 0, len(dirs))
-	identities := make([]os.FileInfo, 0, len(dirs))
-	for _, dir := range dirs {
-		info, err := os.Stat(dir)
+		info, err := os.Stat(physical)
 		if err != nil {
 			return nil, fmt.Errorf("inspect git common dir identity: %w", err)
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("git common dir %s is not a directory", dir)
+			return nil, fmt.Errorf("git common dir %s is not a directory", physical)
 		}
-		if slices.ContainsFunc(identities, func(existing os.FileInfo) bool { return os.SameFile(existing, info) }) {
-			continue
+		identity, err := sessionLockDirectoryIdentity(physical, info)
+		if err != nil {
+			return nil, fmt.Errorf("identify git common dir %s: %w", physical, err)
 		}
-		identities = append(identities, info)
-		unique = append(unique, dir)
+		dirs = append(dirs, directory{path: physical, identity: identity})
+	}
+	slices.SortFunc(dirs, func(a, b directory) int {
+		if order := slices.Compare(a.identity[:], b.identity[:]); order != 0 {
+			return order
+		}
+		return strings.Compare(a.path, b.path)
+	})
+	dirs = slices.CompactFunc(dirs, func(a, b directory) bool { return a.identity == b.identity })
+	unique := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		unique = append(unique, dir.path)
 	}
 	return unique, nil
 }
