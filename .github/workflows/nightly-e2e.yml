@@ -9,6 +9,14 @@ name: Nightly Install Smoke
 # agent work on Linux, macOS and Windows?
 
 on:
+  # Temporary, for PR #2159 only: a new workflow_dispatch workflow cannot be
+  # dispatched until its file is on the default branch, so this is the only way
+  # to prove the workflow runs before it merges. Path-scoped the way
+  # install-ps1-e2e.yml is, so it fires only when this file changes.
+  # REMOVE THIS TRIGGER BEFORE MERGE.
+  pull_request:
+    paths:
+      - .github/workflows/nightly-e2e.yml
   schedule:
     # 3h after nightly.yml cuts the tag at 06:00 UTC, so release.yml has
     # published the artifacts this workflow installs.
