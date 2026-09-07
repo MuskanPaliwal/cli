@@ -207,12 +207,21 @@ func readCapped(repoRoot, name string, maxLen int) (string, bool) {
 		// the empty string valid — so the caller got the truncation marker and
 		// none of the content. Invalidity our cut did not cause is the file's
 		// own, and the under-cap path above passes those bytes through too.
+		// The floor is explicit rather than a fixed iteration count, because a
+		// count alone underflowed: at maxLen=1 over a file of continuation bytes
+		// the third pass indexed s[-1] and panicked.
 		cut := maxLen
-		for range utf8.UTFMax - 1 {
+		for lo := max(0, maxLen-(utf8.UTFMax-1)); cut > lo; cut-- {
 			if utf8.RuneStart(s[cut]) {
 				break
 			}
-			cut--
+		}
+		if !utf8.RuneStart(s[cut]) {
+			// No rune start in the window, so the invalidity is the file's own
+			// and not something our cut introduced. Keep the bytes: dropping
+			// them is how an earlier revision handed the caller a truncation
+			// marker and no content.
+			cut = maxLen
 		}
 		s = s[:cut] + "\n…(truncated)…"
 	}

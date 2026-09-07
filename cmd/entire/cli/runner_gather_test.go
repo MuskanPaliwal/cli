@@ -153,3 +153,47 @@ func TestReadCapped_FileStartingMidRune(t *testing.T) {
 		t.Errorf("readCapped() kept only %d bytes; the backup must be bounded", len(content))
 	}
 }
+
+// TestReadCapped_SmallCapsOverContinuationBytes is the regression for an
+// index-out-of-range panic: the boundary backoff ran a fixed UTFMax-1 passes
+// with no floor, so at maxLen=1 over a file of continuation bytes the third
+// pass indexed s[-1]. No caller passes a cap this small (the smallest is 400),
+// which is exactly why it needs pinning here.
+//
+// Every cap from 0 up past the backoff window is exercised, over bodies chosen
+// so the cut can never find a rune start: a count-based bound is wrong for all
+// of maxLen < UTFMax-1, not just for one value.
+func TestReadCapped_SmallCapsOverContinuationBytes(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{
+		strings.Repeat("\x80", 50), // nothing but continuation bytes
+		"\x80\x80\x80" + strings.Repeat("a", 50),
+		strings.Repeat("é", 50), // valid, but every odd cut is mid-rune
+	} {
+		for cap := range 8 {
+			dir := t.TempDir()
+			testutil.WriteFile(t, dir, "go.mod", body)
+
+			got, ok := readCapped(dir, "go.mod", cap)
+			if !ok {
+				t.Fatalf("readCapped(cap=%d) not ok", cap)
+			}
+			content := strings.TrimSuffix(got, "\n…(truncated)…")
+			if len(content) > cap {
+				t.Errorf("readCapped(cap=%d) returned %d bytes, over the cap", cap, len(content))
+			}
+			// The contract, stated as the two ways out: either the cut landed on
+			// a rune boundary, or it kept the file's own bytes because there was
+			// no boundary to land on. Both are fine; silently substituting
+			// something else is not.
+			//
+			// Note an empty result is legitimate at a cap below one rune's width
+			// — no non-empty valid prefix exists — which is why this asserts the
+			// disjunction rather than "not empty".
+			if !utf8.ValidString(content) && content != body[:cap] {
+				t.Errorf("readCapped(cap=%d) = %q: neither valid UTF-8 nor the file's own bytes", cap, content)
+			}
+		}
+	}
+}
