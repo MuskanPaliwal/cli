@@ -115,7 +115,7 @@ or defaults tailored to this repo. Otherwise name the action up front:
 
   -y, --yes           create the defaults if missing, then tailor them in place
       --defaults-only create the generic defaults and stop
-      --print-prompt  print the tailoring prompt for your own agent to run
+      --print-prompt  create the defaults if missing, then print the tailoring prompt for your own agent to run
       --dry-run       show the tailoring as a diff and write nothing
 
 --yes and --dry-run each call your configured summary provider once. With no
@@ -142,11 +142,11 @@ If <runner> is given (e.g. "risk" or "trail-risk"), only that runner is tuned.`,
 	cmd.Flags().BoolVar(&opts.defaultsOnly, "defaults-only", false,
 		"Create the generic default runners and stop (no tailoring, no provider call)")
 	cmd.Flags().BoolVar(&opts.printPrompt, "print-prompt", false,
-		"Print the tailoring prompt for your own agent instead of running a provider")
+		"Create the default runners if missing, then print the tailoring prompt for your own agent instead of running a provider")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false,
 		"Show the tailoring as a diff and write nothing")
 	cmd.Flags().StringVar(&opts.agent, "agent", "",
-		"Text-generation agent to tailor with for this run (e.g. codex); skips the provider choice and saves nothing (requires --yes or --dry-run)")
+		"Text-generation agent to tailor with for this run (e.g. codex); skips the provider choice and saves nothing. Only for runs that tailor: --yes, --dry-run, or choosing to tailor at the prompt")
 	cmd.Flags().StringSliceVar(&opts.sources, "sources", nil,
 		"Comma-separated data sources to gather: repo, prs, checkpoints, trails, all (default: all)")
 	cmd.Flags().IntVar(&opts.limit, "limit", 20, "How many recent PRs/issues/trails to sample")
@@ -180,11 +180,13 @@ func runRunnerSetup(ctx context.Context, w, errW io.Writer, opts runnerSetupOpti
 		return nil // picker cancelled; handleFormCancellation already said so
 	}
 
-	// --agent names the provider, so it is a contradiction for a mode that never
-	// calls one — the same rule as dispatch's --agent without --local. Before
-	// the scaffold: a usage error must not leave files behind.
+	// --agent names the agent that tailors, so it is a contradiction for a mode
+	// that never tailors — the same rule as dispatch's --agent without --local.
+	// Adding -y cannot rescue such a run: --defaults-only and --print-prompt
+	// outrank it in resolveRunnerSetupMode. Before the scaffold: a usage error
+	// must not leave files behind.
 	if opts.agent != "" && !mode.needsProvider() {
-		return errors.New("--agent only applies when setup calls a provider: pass it with --yes or --dry-run")
+		return errors.New("--agent names the agent that tailors, but this run does not tailor; drop --agent, or tailor with --yes or --dry-run instead of --defaults-only or --print-prompt")
 	}
 
 	// --sources and --limit only steer the gather, so they are validated for
@@ -199,10 +201,17 @@ func runRunnerSetup(ctx context.Context, w, errW io.Writer, opts runnerSetupOpti
 		}
 	}
 
-	// Choosing a mode was the consent for creating the runner files.
+	// Choosing a mode was the consent for creating the runner files. In
+	// print-prompt mode stdout is the prompt itself — callers redirect it into
+	// their own agent — so the "created" lines are narration and belong on
+	// stderr with the rest of that mode's messages.
 	var created []string
 	if mode.writesRunnerFiles() && !haveRunners {
-		if created, err = createDefaultRunners(w, repoRoot); err != nil {
+		scaffoldW := w
+		if mode == setupModePrintPrompt {
+			scaffoldW = errW
+		}
+		if created, err = createDefaultRunners(scaffoldW, repoRoot); err != nil {
 			return err
 		}
 	}

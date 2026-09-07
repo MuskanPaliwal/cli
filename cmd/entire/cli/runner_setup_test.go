@@ -163,6 +163,37 @@ func TestRunRunnerSetup_DefaultsOnlyIsANoopWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestRunRunnerSetup_PrintPromptKeepsStdoutForThePrompt pins the stream split
+// in this mode: stdout carries the prompt alone, because callers redirect it
+// into their own agent, so the scaffold's "created" lines go to stderr with the
+// rest of this mode's narration.
+func TestRunRunnerSetup_PrintPromptKeepsStdoutForThePrompt(t *testing.T) {
+	repoRoot := newRunnerSetupRepo(t)
+
+	var out, errOut bytes.Buffer
+	// No provider stub: this mode never resolves one.
+	if err := runRunnerSetup(context.Background(), &out, &errOut, runnerSetupOptions{
+		printPrompt: true,
+		sources:     []string{"repo"},
+		limit:       1,
+	}); err != nil {
+		t.Fatalf("--print-prompt: %v", err)
+	}
+
+	if strings.Contains(out.String(), "created .entire") {
+		t.Errorf("stdout must carry the prompt only, got a scaffold line:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "You are tuning Entire") {
+		t.Errorf("stdout missing the prompt:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "created .entire") {
+		t.Errorf("stderr missing the scaffold lines:\n%s", errOut.String())
+	}
+	if written := runnerFiles(t, repoRoot); len(written) != wantDefaultCount(t) {
+		t.Errorf("--print-prompt wrote %d runner file(s), want the full default set (%d)", len(written), wantDefaultCount(t))
+	}
+}
+
 func TestDefaultTuneRunners(t *testing.T) {
 	t.Parallel()
 
@@ -464,8 +495,9 @@ func TestRunRunnerSetup_AgentFlagIsPromptless(t *testing.T) {
 }
 
 // TestRunRunnerSetup_AgentRequiresAProviderMode mirrors dispatch, where --agent
-// without --local is an error: naming an agent for a mode that never calls one
-// is a contradiction, and it is reported before anything is written.
+// without --local is an error: naming an agent for a mode that never tailors is
+// a contradiction, and it is reported before anything is written. Adding -y does
+// not rescue such a run, because the explicit mode flags outrank it.
 func TestRunRunnerSetup_AgentRequiresAProviderMode(t *testing.T) {
 	repoRoot := newRunnerSetupRepo(t)
 	stubNamedTuningAgent(t, agent.AgentNameCodex)
@@ -476,11 +508,15 @@ func TestRunRunnerSetup_AgentRequiresAProviderMode(t *testing.T) {
 	}{
 		{"defaults-only", runnerSetupOptions{defaultsOnly: true, agent: "codex"}},
 		{"print-prompt", runnerSetupOptions{printPrompt: true, agent: "codex", limit: 1}},
+		{"defaults-only even with -y", runnerSetupOptions{defaultsOnly: true, assumeYes: true, agent: "codex"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := runRunnerSetup(context.Background(), io.Discard, io.Discard, tc.opts)
 			if err == nil || !strings.Contains(err.Error(), "--agent") {
 				t.Fatalf("error = %v, want one naming --agent", err)
+			}
+			if strings.Contains(err.Error(), "pass it with") {
+				t.Errorf("error should not offer a flag that cannot rescue the run: %v", err)
 			}
 			if written := runnerFiles(t, repoRoot); len(written) != 0 {
 				t.Errorf("a usage error wrote %d runner file(s); it must write none", len(written))
