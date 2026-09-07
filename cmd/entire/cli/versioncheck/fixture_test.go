@@ -23,6 +23,10 @@ func newAutoUpdateFixture(t *testing.T) *autoUpdateFixture {
 	t.Setenv(envKillSwitch, "")
 	// Force interactive mode on by default; individual tests can opt out.
 	t.Setenv("ENTIRE_TEST_TTY", "1")
+	// Every fixture user drives UpdateCommandForCurrentBinary through an exec
+	// path, so none of them wants the host's install roots deciding which
+	// probe claims it.
+	isolateMiseInstallEnv(t)
 
 	f := &autoUpdateFixture{chooseValue: autoUpdateActionUpdate}
 
