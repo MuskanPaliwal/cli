@@ -2475,8 +2475,25 @@ func fetchBranchFromRemote(ctx context.Context, remote, branchName string) error
 // was not enough for either.
 //
 // Known limitation: timeout_seconds is validated only as >= 0, so a value
-// configured above this bound is truncated and git is killed mid-rewrite.
-// Deriving the bound from that setting is the fix if anyone hits it.
+// configured above this bound is truncated and the push is cut short. Deriving
+// the bound from that setting is the fix if anyone hits it.
+//
+// What expiry kills is git, and only git: exec.CommandContext's default Cancel
+// is Process.Kill() on the child's PID, no Setpgid is set, and no group signal
+// is sent. The OPF re-redaction and the checkpoint ref CAS-updates do not run
+// there — they run in the pre-push hook, a grandchild (.git/hooks/pre-push,
+// which execs `entire hooks pre-push`). So the hook is orphaned, not
+// interrupted: expiry cannot leave a half-rewritten ref or a stale lock the way
+// StatusWalkBudget's SIGKILL can, because that one kills the process holding
+// the lock and this one does not. Nor is expiry likely to land on a local write
+// at all — the reason it fires is the OPF prompt, and pre-push runs before any
+// transfer or ref update, so git is parked holding nothing.
+//
+// The orphan is the real cost, and it is deliberately accepted: the hook keeps
+// the inherited terminal and can go on publishing checkpoint refs and printing
+// after trail create has failed and begun retracting the branch. Killing the
+// process group instead would trade that for the mid-rewrite kill this note
+// used to describe, which is the worse of the two.
 //
 // A bound exists at all only because trail create is a multi-step command and a
 // wedged push must not hang it forever. A plain `git push` has none — the hook
@@ -2513,6 +2530,12 @@ const trailBranchPushTimeout = 10 * time.Minute
 // ErrOrStderr fall through to os.Stdout/os.Stderr, and nothing on the path to
 // trail create calls SetOut/SetErr — so a pager or output tee added to the root
 // command would silently undo this.
+//
+// It would undo more than the tty. Once os/exec has to interpose a pipe,
+// Cmd.Wait blocks on its copy goroutine until every holder of the write end
+// closes it — and an orphaned hook (see trailBranchPushTimeout) holds one.
+// WaitDelay is unset, so that wait has no ceiling: the timeout above would stop
+// bounding this call at all, which is the one thing it exists to do.
 //
 // stdin is inherited so git can prompt for credentials as on a push the user
 // typed. It does not reach the hook, which git hands a pipe carrying the ref
