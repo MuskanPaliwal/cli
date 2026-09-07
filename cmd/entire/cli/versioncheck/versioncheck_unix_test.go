@@ -123,3 +123,13 @@ func assertNoWindowsInstallerNames(t *testing.T, cmd string) {
 		}
 	}
 }
+
+// brew, mise, and the curl|bash one-liner all run in any POSIX shell, so
+// messages that print an update command name no shell here.
+func TestUpdateCommandShell_Unix(t *testing.T) {
+	t.Parallel()
+
+	if got := UpdateCommandShell(); got != "" {
+		t.Errorf("UpdateCommandShell() = %q, want %q", got, "")
+	}
+}
