@@ -58,6 +58,7 @@ func TestMaybeAutoUpdate_WindowsNeverAutoRuns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newAutoUpdateFixture(t)
+			isolateWindowsScoopConfig(t)
 			setExecutablePath(t, tt.execPath)
 
 			var buf bytes.Buffer
