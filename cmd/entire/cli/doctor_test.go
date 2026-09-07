@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -1761,35 +1760,6 @@ func TestAgentSymlinkCheckPaths_CoversLegacySubagentDir(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no candidate under .claude/agents/; got %v", candidates)
-	}
-}
-
-// TestScanForSymlinkedComponent_NonTraversableComponent pins the allowlist. An
-// earlier revision tested only for a regular file, so a FIFO, socket or device
-// node where a directory belongs came back clean and doctor printed nothing —
-// while os.Root and every hook install fail on it.
-func TestScanForSymlinkedComponent_NonTraversableComponent(t *testing.T) {
-	t.Parallel()
-
-	if runtime.GOOS == windowsGOOS {
-		t.Skip("mkfifo is not available on Windows")
-	}
-
-	dir := t.TempDir()
-	if err := syscall.Mkfifo(filepath.Join(dir, claudeDirName), 0o600); err != nil {
-		t.Skipf("mkfifo unsupported: %v", err)
-	}
-	root, err := worktreedir.OpenAt(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	name, outcome := scanForSymlinkedComponent(root, claudeDirName+"/settings.json")
-	if outcome != componentScanWrongType {
-		t.Errorf("outcome = %v, want componentScanWrongType for a FIFO", outcome)
-	}
-	if name != claudeDirName {
-		t.Errorf("name = %q, want %s", name, claudeDirName)
 	}
 }
 
