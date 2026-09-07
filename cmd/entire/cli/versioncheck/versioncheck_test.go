@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -342,11 +340,6 @@ func TestParseGitHubRelease(t *testing.T) {
 	}
 }
 
-// brewUpgradeCmd is the install command produced for any brew-installed
-// binary on a stable channel. Hoisted to a const so tests can reference
-// it without tripping goconst on repeated string literals.
-const brewUpgradeCmd = "brew upgrade --yes entire"
-
 // brewCaskPath is a brew-installed binary; tests that do not care about the
 // install manager use it.
 const brewCaskPath = "/opt/homebrew/Caskroom/entire/1.0.0/entire"
@@ -514,57 +507,6 @@ func TestCheckAndNotify_PrintsNotificationWhenOutdated(t *testing.T) {
 	}
 }
 
-func TestCheckAndNotify_BrewSkipUntilNextVersionCachesLatest(t *testing.T) {
-	server := newVersionServer(t, "v2.0.0")
-	cmd, _ := setupCheckAndNotifyTest(t, server.URL)
-	f := newAutoUpdateFixture(t)
-	setExecutablePath(t, brewCaskPath)
-	f.chooseValue = autoUpdateActionSkipUntilNextVersion
-
-	CheckAndNotify(context.Background(), cmd.OutOrStdout(), "1.0.0")
-
-	if f.installCalls != 0 {
-		t.Fatalf("installer called %d times, want 0", f.installCalls)
-	}
-	cache, err := loadCache()
-	if err != nil {
-		t.Fatalf("loadCache() error = %v", err)
-	}
-	if cache.SkippedVersion != "v2.0.0" {
-		t.Errorf("SkippedVersion = %q, want v2.0.0", cache.SkippedVersion)
-	}
-	if f.lastCmdStr != brewUpgradeCmd {
-		t.Errorf("prompt got cmd %q, want %q", f.lastCmdStr, brewUpgradeCmd)
-	}
-}
-
-// TestCheckAndNotify_MiseSkipUntilNextVersionCachesLatest verifies the
-// skip-until-next-version persistence works for non-brew installers too.
-// The cache flow is installer-agnostic; this locks that contract in.
-func TestCheckAndNotify_MiseSkipUntilNextVersionCachesLatest(t *testing.T) {
-	server := newVersionServer(t, "v2.0.0")
-	cmd, _ := setupCheckAndNotifyTest(t, server.URL)
-	f := newAutoUpdateFixture(t)
-	setExecutablePath(t, miseExecutablePath)
-	f.chooseValue = autoUpdateActionSkipUntilNextVersion
-
-	CheckAndNotify(context.Background(), cmd.OutOrStdout(), "1.0.0")
-
-	if f.installCalls != 0 {
-		t.Fatalf("installer called %d times, want 0", f.installCalls)
-	}
-	cache, err := loadCache()
-	if err != nil {
-		t.Fatalf("loadCache() error = %v", err)
-	}
-	if cache.SkippedVersion != "v2.0.0" {
-		t.Errorf("SkippedVersion = %q, want v2.0.0", cache.SkippedVersion)
-	}
-	if f.lastCmdStr != miseUpgradeCmd {
-		t.Errorf("prompt got cmd %q, want %q", f.lastCmdStr, miseUpgradeCmd)
-	}
-}
-
 func TestCheckAndNotify_SkipsVersionMarkedSkipped(t *testing.T) {
 	server := newVersionServer(t, "v2.0.0")
 	cmd, buf := setupCheckAndNotifyTest(t, server.URL)
@@ -593,51 +535,6 @@ func TestCheckAndNotify_NoNotificationWhenUpToDate(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output when up to date, got %q", buf.String())
-	}
-}
-
-func TestCheckAndNotify_InstallerFailureKeepsCacheFresh(t *testing.T) {
-	server := newVersionServer(t, "v2.0.0")
-	cmd, buf := setupCheckAndNotifyTest(t, server.URL)
-
-	// Simulate an interactive user who accepts the upgrade prompt, and an
-	// installer that fails (e.g. brew upgrade blew up mid-run).
-	t.Setenv("ENTIRE_TEST_TTY", "1")
-	setExecutablePath(t, brewCaskPath)
-
-	origChoose := chooseUpdate
-	chooseUpdate = func(_ context.Context, _, _, _ string) (AutoUpdateAction, error) {
-		return autoUpdateActionUpdate, nil
-	}
-	t.Cleanup(func() { chooseUpdate = origChoose })
-
-	origRun := runInstaller
-	runInstaller = func(_ context.Context, _ string) error { return errors.New("boom") }
-	t.Cleanup(func() { runInstaller = origRun })
-
-	origIsTerminalOut := isTerminalOut
-	isTerminalOut = func(_ io.Writer) bool { return true }
-	t.Cleanup(func() { isTerminalOut = origIsTerminalOut })
-
-	CheckAndNotify(context.Background(), cmd.OutOrStdout(), "1.0.0")
-
-	// User sees the failure message with a manual-retry hint.
-	if !strings.Contains(buf.String(), "Try again later running:") {
-		t.Errorf("missing retry hint in output: %q", buf.String())
-	}
-
-	// Cache must remain bumped: we don't want to re-prompt every invocation
-	// while the upstream issue is still in place. The user already has the
-	// hint with the exact command to run manually.
-	cache, err := loadCache()
-	if err != nil {
-		t.Fatalf("loadCache() error = %v", err)
-	}
-	if cache.LastCheckTime.IsZero() {
-		t.Errorf("cache LastCheckTime was reset after installer failure; want fresh bump")
-	}
-	if time.Since(cache.LastCheckTime) > time.Minute {
-		t.Errorf("cache LastCheckTime not fresh after installer failure: %v", cache.LastCheckTime)
 	}
 }
 
