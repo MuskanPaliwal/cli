@@ -66,6 +66,7 @@ func TestUpdateCommandForCurrentBinary_Unix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			isolateMiseInstallEnv(t)
 			setExecutable(t, tt.execPath)
 
 			if got := UpdateCommandForCurrentBinary(tt.currentVersion); got != tt.want {
