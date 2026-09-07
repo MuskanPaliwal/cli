@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"reflect"
 	"strconv"
@@ -2537,14 +2536,19 @@ const trailBranchPushTimeout = 10 * time.Minute
 // WaitDelay is unset, so that wait has no ceiling: the timeout above would stop
 // bounding this call at all, which is the one thing it exists to do.
 //
-// stdin is inherited so git can prompt for credentials as on a push the user
-// typed. It does not reach the hook, which git hands a pipe carrying the ref
-// list — that is why the prompt's input path goes through /dev/tty above.
+// stdin is deliberately NOT inherited, though a real push would inherit it,
+// because nothing downstream reads it and /dev/null is what makes a
+// non-interactive trail create fail fast rather than block to the timeout. The
+// justification this note used to give — git prompting for credentials — does
+// not hold: git push has no --stdin mode, git's credential prompt uses /dev/tty
+// or askpass, the OPF prompt reads /dev/tty per bubbletea's fallback above, and
+// the hook never receives ours anyway, since git hands it a pipe carrying the
+// ref list. Inheriting it only converted an immediate EOF into a real blocking
+// read for an agent whose stdin is a long-lived pipe.
 func pushBranchToRemote(ctx context.Context, out, errOut io.Writer, remote, branchName string) error {
 	ctx, cancel := context.WithTimeout(ctx, trailBranchPushTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "push", "-u", remote, branchName)
-	cmd.Stdin = os.Stdin
 	cmd.Stdout = out
 	cmd.Stderr = errOut
 	if err := cmd.Run(); err != nil {
