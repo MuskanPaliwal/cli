@@ -1711,6 +1711,29 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
   without granting the `$PATH` sweep; that is a real want, but it costs a third
   settings-layer classification and a third rejection channel, so it waits until
   someone asks for the combination.
+- **Agent instruction fields get the same provenance gate**:
+  `investigate.always_prompt`, every `ReviewConfig.Prompt` (per-worker and
+  judge, in `review_profiles` and the legacy `review` map), and every
+  `ReviewProfileConfig.Task` land verbatim in prompts of agents that
+  investigate/review spawn with approval checks disabled, so a committed value
+  would let a pull request steer a permission-bypassed agent. Task and Prompt
+  are adjacent sections of the same composed prompt, which is why gating one
+  without the other would be a formality. `settings.enforceAgentPromptTrust`
+  (`settings/agent_prompt_trust.go`) honors them only from a developer-owned
+  layer: clone-local preferences (in `.git/`, unreachable by clone) or a
+  `classifyLocalSettingsDeep`-verified `.entire/settings.local.json`.
+  Provenance follows merge order (local replaces investigate wholesale and
+  review profiles per profile name). Rejection is a downgrade recorded in
+  `EntireSettings.AgentPromptRejections()`, and review/investigate print a
+  one-line stderr notice for fields they would have used — suppressed for a
+  dropped task equal to review's built-in default, which the fallback
+  reproduces anyway (the non-interactive first-run setup persists exactly
+  that). Deliberately ungated, each with a mechanism or reason: Skills
+  (validated against installed skills before spawning), Agent/Model (registry
+  keys and routing hints), review_default_profile (selects among profiles whose
+  instruction content is itself gated).
+  `TestAgentPromptGate_CoversEveryReviewConfigInSchema`
+  pins that a future `ReviewConfig` placement cannot bypass the gate.
 - **A tracked `.entire/settings.local.json` is ignored wholesale**: the local layer's premise is that it is per-clone and per-developer (it is gitignored, `entire enable --local` writes it, and `CheckpointRemoteIsLocalOnly` treats presence there as proof the developer chose it). `.gitignore` does not apply to an already-tracked path, so a committed one arrives by cloning and would override project settings for everyone. `loadMergedSettings` drops the layer when the file is **proven** tracked, records `EntireSettings.LocalLayerRejection()`, and the redaction consumer prints it with the `git rm --cached` fix. It never errors — one committed file must not brick `status`/`doctor`. Two deliberately opposite failure directions, expressed as the three-state `localTrust` (`localUnverifiable` is the zero value so a forgotten assignment fails safe): an *unverifiable* repo keeps the layer (losing all local settings is worse than the risk) but still drops the exec-bearing settings, OPF `command` and `external_agents` (being wrong there means running someone else's binary); *no* repository counts as proof of locality. `CheckpointRemoteIsLocalOnly` reads the raw file outside the loader, so it repeats the check itself.
 - Safe to use on main/master since it never modifies commit history
 
