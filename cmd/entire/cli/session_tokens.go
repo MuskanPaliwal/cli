@@ -121,10 +121,19 @@ optimize next steps."`,
 
 func runSessionTokens(ctx context.Context, cmd *cobra.Command, sessionID string, current, jsonOutput, agentBrief bool) error {
 	if sessionID == "" {
+		// --current pins the answer to this worktree and nothing else, which
+		// is the one thing the resolver deliberately will not do: it prefers
+		// the caller's own session wherever that session lives. Keep the flag
+		// literal, and let the default path identify the caller.
 		if current {
 			sessionID = strategy.FindMostRecentSessionInCurrentWorktree(ctx)
 		} else {
-			sessionID = strategy.FindMostRecentSession(ctx)
+			resolved := strategy.ResolveCallerSession(ctx)
+			sessionID = resolved.SessionID
+			if resolved.Resolution == strategy.ResolutionOtherWorktree {
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"[entire] No session is recorded in this worktree; reporting the most recent one from elsewhere in this repository. It is not this command's caller.")
+			}
 		}
 		if sessionID == "" {
 			fmt.Fprintln(cmd.OutOrStdout(), "No active session found in this worktree.")

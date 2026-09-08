@@ -82,24 +82,11 @@ func linkingSetContains(states []*SessionState, id string) bool {
 // file per session in the shared store, so a per-candidate walk would repeat
 // the hostname/boot/proc reads dozens of times per commit.
 func (s *ManualCommitStrategy) findSessionByCommitAncestry(ctx context.Context, states []*SessionState) *SessionState {
-	ancestry, ok := proclive.CurrentAncestry()
-	if !ok {
-		return nil
-	}
-	var best *SessionState
-	bestDepth := -1
-	for _, state := range states {
-		if state.WorktreePath == "" || state.Kind.IsImported() || state.AdoptedIntoWorktreePath != "" || state.Owner == nil {
-			continue
-		}
-		depth := ancestry.Depth(*state.Owner)
-		if depth < 0 {
-			continue
-		}
-		if best == nil || depth < bestDepth || (depth == bestDepth && interactedAfter(state, best)) {
-			best, bestDepth = state, depth
-		}
-	}
+	// requireWorktreePath: a commit is attributed in order to condense and
+	// link it, and both need somewhere to do that. Caller resolution asks only
+	// "whose process am I", so it does not require one — see
+	// nearestSessionByOwnerAncestry.
+	best, _ := nearestSessionByOwnerAncestry(states, true)
 	if best != nil {
 		logging.Debug(logging.WithComponent(ctx, "checkpoint"),
 			"commit attributed to session by process ancestry",
@@ -109,6 +96,72 @@ func (s *ManualCommitStrategy) findSessionByCommitAncestry(ctx context.Context, 
 		)
 	}
 	return best
+}
+
+// nearestSessionByOwnerAncestry returns the session whose recorded owner
+// process is the nearest ancestor of this one, with its ancestry depth, or
+// (nil, -1) when none is.
+//
+// The one implementation of "which session's agent spawned us", shared by
+// commit attribution (findSessionByCommitAncestry) and caller resolution
+// (sessionIDByOwnerAncestry). They had a loop each, differing only in one
+// guard, which is how the tie-break and the imported/adopted exclusions —
+// invariants documented at length above and both easy to get subtly wrong —
+// came to be independently editable in two places.
+//
+// The owner fingerprint carries host, boot and start-time guards, so a
+// recycled PID or an identity recorded on another machine cannot match, and
+// nearest-ancestor-wins resolves nesting. Returns (nil, -1) on platforms that
+// cannot introspect processes (Windows), which is why every caller needs a
+// weaker fallback.
+//
+// requireWorktreePath is the sole difference between the two callers, and it
+// is a real semantic one rather than an accident: attribution mutates
+// worktree-coupled state and so needs a worktree recorded, while caller
+// resolution only names a session.
+func nearestSessionByOwnerAncestry(states []*SessionState, requireWorktreePath bool) (*SessionState, int) {
+	ancestry, ok := proclive.CurrentAncestry()
+	if !ok {
+		return nil, -1
+	}
+	var best *SessionState
+	bestDepth := -1
+	for _, state := range states {
+		if state.Owner == nil || state.Kind.IsImported() || state.AdoptedIntoWorktreePath != "" {
+			continue
+		}
+		if requireWorktreePath && state.WorktreePath == "" {
+			continue
+		}
+		depth := ancestry.Depth(*state.Owner)
+		if depth < 0 {
+			continue
+		}
+		if best == nil || isNearerOwner(depth, bestDepth, state, best) {
+			best, bestDepth = state, depth
+		}
+	}
+	return best, bestDepth
+}
+
+// isNearerOwner reports whether an owner match at depth beats the incumbent at
+// bestDepth: a resolved depth (>= 0) beats an unresolved one, nearer beats
+// farther, and otherwise the more recently interacting session wins.
+//
+// Recency only ever breaks a tie WITHIN one depth — the same agent process
+// hosting several sessions over its lifetime, e.g. after a resume — never
+// across depths, where the nearer process is the answer whatever the clocks
+// say. Callers that filter out unresolved depths never reach the last branch;
+// caller resolution does reach it, because a candidate the environment named
+// may have no owner recorded yet.
+func isNearerOwner(depth, bestDepth int, state, best *SessionState) bool {
+	if (depth >= 0) != (bestDepth >= 0) {
+		return depth >= 0
+	}
+	if depth >= 0 {
+		return depth < bestDepth || (depth == bestDepth && interactedAfter(state, best))
+	}
+	return interactedAfter(state, best)
 }
 
 // isSessionHomeWorktree reports whether worktreePath — the commit's worktree,
