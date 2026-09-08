@@ -2593,7 +2593,10 @@ func RedactBlobBytes(ctx context.Context, content []byte, treePath string, usePr
 		if err == nil {
 			return redacted.Bytes(), nil
 		}
-		if errors.Is(err, redact.ErrScannerDegraded) {
+		// ErrRedactionIncomplete is not a parse failure: the content parsed and
+		// redaction flagged a leaf it could not rewrite, so the plain-bytes
+		// fallback would ship exactly that leaf. Fail the write instead.
+		if errors.Is(err, redact.ErrScannerDegraded) || errors.Is(err, redact.ErrRedactionIncomplete) {
 			return nil, fmt.Errorf("redact %s: %w", treePath, err)
 		}
 		// JSONL parse failed — fall through to plain bytes.
