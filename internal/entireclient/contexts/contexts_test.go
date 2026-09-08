@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -308,5 +309,65 @@ func TestSave_RefusesRelativeConfigDirBeforeCreatingIt(t *testing.T) {
 	}
 	if _, err := os.Stat("relative-config"); err == nil {
 		t.Error("Save() created the directory it was refusing")
+	}
+}
+
+// TestEveryEntryPointRefusesRelativeConfigDirWithoutSideEffects covers all four
+// public entry points, not just the two that had tests.
+//
+// The refusal has to land before EnsurePrivateDir and before lockFile: configRoot
+// refuses a relative directory too, but only at the READ, by which point
+// ./<value> exists with a .lock inside it. For a CLI run from a repository that
+// is a directory inside the repository, which is the mistake the check exists to
+// report, so it must not happen on the way to reporting it.
+func TestEveryEntryPointRefusesRelativeConfigDirWithoutSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(dir string) error
+	}{
+		{"FilePath", func(d string) error { _, err := contexts.FilePath(d); return err }},
+		{"Load", func(d string) error { _, err := contexts.Load(d); return err }},
+		{"Save", func(d string) error { return contexts.Save(d, &contexts.File{}) }},
+		{"Modify", func(d string) error {
+			return contexts.Modify(d, func(*contexts.File) (bool, error) { return true, nil })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+
+			err := tc.call("relative-config")
+			if err == nil {
+				t.Fatalf("%s(%q) = nil error, want a rejected override", tc.name, "relative-config")
+			}
+			if !strings.Contains(err.Error(), "absolute") {
+				t.Errorf("%s error = %q, want it to name the absolute-path requirement", tc.name, err)
+			}
+
+			// Nothing at all, not merely no target directory: the lock file is
+			// created beside the target and would land in the cwd too.
+			entries, readErr := os.ReadDir(cwd)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, e := range entries {
+				t.Errorf("%s left %q behind in the working directory", tc.name, e.Name())
+			}
+		})
+	}
+}
+
+// Entire's OWN fallback must stay usable. When os.UserHomeDir fails, configDir
+// returns its home-relative default, and rejecting that alongside a genuine
+// user override broke every command that touches a saved login on a machine
+// with no resolvable home. userdirs absolutizes it instead; this pins that the
+// consumer accepts what the resolver now produces.
+func TestLoad_AcceptsTheResolversOwnFallback(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	dir := filepath.Join(cwd, ".config", "entire")
+	if _, err := contexts.Load(dir); err != nil {
+		t.Fatalf("Load(%q) = %v, want the resolver's own fallback honored", dir, err)
 	}
 }

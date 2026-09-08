@@ -1086,6 +1086,13 @@ func TestPersistSummaryProviderSelection_AutoSelectPersistsNothingForAnExternal(
 
 // The round trip the bug actually produced: auto-select, save, then resolve
 // again from the saved settings. It must not fail on what Entire itself wrote.
+//
+// The second resolution runs with the registry RESTORED to its pre-discovery
+// state, which is what a fresh process actually has. Without that this proves
+// much less than it appears to: the first call leaves the external agent
+// registered process-wide, so a second call in the same process resolves it
+// from memory whether or not anything usable was persisted. The bug is a
+// next-invocation bug, so the test has to be one too.
 func TestResolveCheckpointSummaryProvider_AutoSelectedExternalSurvivesTheNextRun(t *testing.T) {
 	// Cannot use t.Parallel(): mutates the package-level agent registry via discovery.
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -1111,6 +1118,7 @@ func TestResolveCheckpointSummaryProvider_AutoSelectedExternalSurvivesTheNextRun
 	// The always-variant, which is what the real non-interactive path uses to
 	// build its candidate list: installation is the opt-in to "this plugin
 	// exists", and it is what makes the run in progress work without the grant.
+	restore := agent.SnapshotRegistryForTesting()
 	discoverSummaryProvidersAlways(ctx)
 
 	var first bytes.Buffer
@@ -1126,9 +1134,58 @@ func TestResolveCheckpointSummaryProvider_AutoSelectedExternalSurvivesTheNextRun
 		t.Errorf("output should say how to make the choice stick, got %q", first.String())
 	}
 
-	// Second run: whatever was written, resolving again must still work.
+	// A fresh process: the plugin is on $PATH but nothing is registered yet.
+	restore()
+
 	if _, err := resolveCheckpointSummaryProvider(ctx, io.Discard); err != nil {
-		t.Fatalf("second run failed on settings the first run wrote: %v", err)
+		t.Fatalf("a fresh process failed on the settings the first run wrote: %v", err)
+	}
+}
+
+// The negative control for the test above, and the reason not-persisting is the
+// fix rather than a dodge.
+//
+// It writes by hand what the old code wrote by itself -- the provider name with
+// no external_agents grant -- and then resolves as a fresh process would. That
+// configuration is unusable: discoverSummaryProviderIfMissing gates the named
+// lookup on the grant, so the name resolves to nothing and the command fails on
+// something Entire put there. If a future change makes this state reachable
+// again, this test says so.
+func TestResolveCheckpointSummaryProvider_PersistedExternalWithoutTheGrantIsBroken(t *testing.T) {
+	// Cannot use t.Parallel(): mutates the package-level agent registry via discovery.
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	t.Chdir(tmpDir)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o750); err != nil {
+		t.Fatalf("mkdir .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled":true}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	const providerName = "external-summary-persisted"
+	externalDir := t.TempDir()
+	writeExternalSummaryAgentBinary(t, externalDir, providerName)
+	t.Setenv("PATH", externalDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// What persisting used to produce: the name, and no grant.
+	local := fmt.Sprintf(`{"summary_generation":{"provider":%q}}`, providerName)
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.local.json"), []byte(local), 0o600); err != nil {
+		t.Fatalf("write local settings: %v", err)
+	}
+
+	_, err := resolveCheckpointSummaryProvider(ctx, io.Discard)
+	if err == nil {
+		t.Fatal("a persisted external provider with no grant resolved; the gate is not being applied")
+	}
+	if !strings.Contains(err.Error(), providerName) {
+		t.Errorf("error = %q, want it to name the unresolvable provider", err)
 	}
 }
 

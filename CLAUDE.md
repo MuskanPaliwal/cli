@@ -1410,16 +1410,31 @@ Two rules about *where* the check goes, both learned by getting them wrong:
   dropped a `.lock` inside it on the way to reporting the refusal, which is the
   mistake itself. `resolveUserRoot` already had this right; the other two did
   not.
-- **A tree with no root to check at must check for itself.** The token store is
-  the fourth consumer and has no root over the config dir: `fileStore.dir`
-  anchors on the dirname of its own path (one of the two places the root-base
-  rule permits that, since `ENTIRE_TOKEN_STORE_PATH` names a file the caller
-  chose) and reaches it through `filepath.Abs`. So it calls
+- **A root whose base is DERIVED cannot enforce this, so its owner must check
+  for itself.** The token store is the fourth consumer, and it does open a root
+  — the claim that it had none was wrong. `fileStore.dir` anchors on
+  `filepath.Dir` of its own path, one of the two places the root-base rule
+  permits a derived base (`ENTIRE_TOKEN_STORE_PATH` names a file the caller
+  chose), and gets there through `filepath.Abs`. That `Abs` is precisely why the
+  root can never refuse a relative config dir: it launders `./relative-config`
+  into a plausible absolute path *before* the root exists, which is the same
+  laundering removed from `contexts` and `discovery`. So the store calls
   `userdirs.ConfigDirChecked` and carries the error on `fileStore.pathErr`,
-  reported by `dir` and `ensureDir` before any filesystem access. Left out, it
-  put bearer tokens at `./<value>/tokens.json`. An explicit
-  `ENTIRE_TOKEN_STORE_PATH` is deliberately still exempt: the user named that
-  file.
+  reported by `dir` and `ensureDir` ahead of any filesystem access — verified
+  through `Get`/`Set`/`Delete`, not just the resolver. Left out, it put bearer
+  tokens at `./<value>/tokens.json`. An explicit `ENTIRE_TOKEN_STORE_PATH` is
+  deliberately still exempt: the user named that file.
+
+- **Only a USER-supplied override is refused; Entire's own fallback is
+  absolutized.** `userdirs.ownFallbackDir` resolves the home-relative default
+  that `configDir`/`cacheDir` produce when `os.UserHomeDir` fails, because by
+  the time a consumer sees a plain string it can no longer tell a value the user
+  set from one Entire made up — and refusing both was a regression: on a machine
+  with no resolvable home (no `HOME`, an odd container, a service account) every
+  command touching a saved login or a discovery cache began failing with advice
+  about a variable the user had never set. There is nothing for them to fix
+  there, and a cwd-relative directory that works beats a hard failure, so the
+  distinction is drawn in the one place that still has the information.
 
 **The OPF `command` is the deliberate exception, and stays one.**
 `redaction.openai_privacy_filter.command` becomes `argv[0]` of an

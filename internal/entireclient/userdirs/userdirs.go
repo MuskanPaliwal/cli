@@ -98,7 +98,9 @@ func configDir() (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = "."
+		// nil error deliberately: a machine with no resolvable home is not a
+		// user error to report, and ownFallbackDir returns something usable.
+		return ownFallbackDir(".config", "entire"), nil //nolint:nilerr // see ownFallbackDir
 	}
 	return filepath.Join(home, ".config", "entire"), nil
 }
@@ -118,8 +120,40 @@ func cacheDir() (string, error) {
 	if dir, ok := testdirs.Dir("cache"); ok {
 		return filepath.Join(dir, "entire"), nil
 	}
-	home, _ := os.UserHomeDir() //nolint:errcheck // best-effort default
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// See configDir: the fallback is usable, so there is nothing to report.
+		return ownFallbackDir(".cache", "entire"), nil //nolint:nilerr // see ownFallbackDir
+	}
 	return filepath.Join(home, ".cache", "entire"), nil
+}
+
+// ownFallbackDir builds the home-relative default for a machine where
+// os.UserHomeDir fails, resolved to an absolute path.
+//
+// The absolutization is the point, and it belongs HERE rather than at each
+// consumer, because this is the only place that still knows the difference
+// between a path the USER set and a path Entire made up. Both resolvers return
+// a plain string, so by the time contexts, discovery or the token store sees
+// one, a relative value looks identical either way -- and those consumers must
+// refuse a relative override, since it names a different directory in every
+// process. Refusing this one too was a regression: on a machine where
+// UserHomeDir fails (no HOME, an odd container, a service account) every
+// command that touched a saved login or a discovery cache started failing with
+// advice about an environment variable the user had never set.
+//
+// Absolutized rather than refused because it is not a user error to report:
+// there is nothing for them to fix, and a cwd-relative directory that at least
+// works beats a hard failure. It resolves against the working directory at
+// call time, which is the same tradeoff openUserRoot documented when it was
+// the only place doing this.
+func ownFallbackDir(parts ...string) string {
+	rel := filepath.Join(parts...)
+	abs, err := filepath.Abs(rel)
+	if err != nil {
+		return rel
+	}
+	return abs
 }
 
 // EnsurePrivateDir creates dir as a private, user-only directory (0700) and,
