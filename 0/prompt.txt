@@ -1,0 +1,57 @@
+https://github.com/entireio/cli/pull/2303 this pr has side findings that we might be able to address. let's disuss the issues and then we try to fix them in seperate worktrees
+
+---
+
+ohh the git issue we already have md file in refactor-strategy-hook-resolution worktree. can you check?
+
+---
+
+so how the two bugs are related?
+
+---
+
+right so how many bugs are there that we can literally fix?
+
+---
+
+yupp
+
+---
+
+wait
+
+---
+
+maybe we should use it in the workyree
+
+---
+
+like give me handoff session for the fix we are working on and tell me the worktree
+
+---
+
+so we fixed the git commmon dir now what bug?
+
+---
+
+what is the actual bug and what does the reporter actually talk about it?
+
+---
+
+use unslop
+
+---
+
+create draft pr then
+
+---
+
+continue
+
+---
+
+no i am askig what next bug we need to fix?
+
+---
+
+create handoff prompt for this bug
