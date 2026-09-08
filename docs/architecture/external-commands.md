@@ -16,8 +16,11 @@ Rules, in order:
 2. **Reserved names are skipped.** Names beginning with `agent-` are reserved for the [agent protocol](external-agent-protocol.md). The resolver refuses to invoke them as external commands.
 3. **Path-traversal candidates are rejected.** Names containing `/` or `\` never resolve.
 4. **Found-but-not-executable surfaces as a launch error.** If `entire-<name>` exists on `$PATH` but lacks the executable bit, the resolver reports `Failed to run plugin entire-<name>` with exit code 1, rather than falling through to Cobra's "unknown command" path.
+5. **Missing Graph offers installation.** When `entire-graph` is absent, `entire graph <command>` asks `Install the entire-graph plugin?` with Yes selected by default. Accepting installs `graph` through the configured plugin index using the normal managed installer, then executes the installed binary with all remaining arguments unchanged. This also works for bare `entire graph` and `entire graph --help`. Installation output goes to stderr. Declining, cancelling, or failing installation exits nonzero without running the command. Non-interactive sessions receive an `entire plugin install graph` hint instead of a prompt. Other missing plugin names still fall through to Cobra.
 
 ### Managed install directory
+
+Remote installs report index lookup, release metadata, download, checksum verification, and installation progress on stderr. Styled terminals show a spinner; non-terminal and accessibility output prints plain status lines as each step starts. Progress stops before confirmations and results, including when installation fails. The same reporting applies when `entire graph` offers to install its missing plugin and when installing dependencies.
 
 Users can drop binaries anywhere on `$PATH`, but a per-user managed directory is also automatically discovered:
 
@@ -279,6 +282,7 @@ The resolver lives in `cmd/entire/cli/plugin.go`. The entry point is `MaybeRunPl
 Key files:
 
 - `cmd/entire/cli/plugin.go` — entry point, `resolvePlugin`, `runPlugin`
+- `cmd/entire/cli/plugin_on_demand.go` — missing Graph installation prompt and managed-install handoff
 - `cmd/entire/cli/plugin_env.go` — `pluginEnv`, the allowlist, and `ENTIRE_PLUGIN_ENV` parsing
 - `cmd/entire/cli/plugin_official.go` — `officialPlugins` allowlist, `IsOfficialPlugin`
 - `cmd/entire/cli/plugin_store.go` — managed install directory, `PluginBinDir`, `PluginDataDir`, `InstallPluginFromPath`, `ListInstalledPlugins`, `RemoveInstalledPlugin`, `PrependPluginBinDirToPATH`

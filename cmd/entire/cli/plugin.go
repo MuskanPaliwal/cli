@@ -53,6 +53,19 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 		return false, 0
 	}
 	pluginName := args[0]
+	if binPath == "" {
+		var err error
+		binPath, err = installMissingPlugin(ctx, rootCmd, pluginName)
+		if err != nil {
+			fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
+			return true, 1
+		}
+		if binPath == "" {
+			// The command was not executed because installation was declined.
+			return true, 1
+		}
+		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running plugin with command: %s\n", strings.Join(pluginArgs, " "))
+	}
 	exitCode = runPlugin(ctx, pluginName, binPath, pluginArgs)
 	if exitCode == 0 {
 		maybeTrackPluginInvocation(ctx, pluginName)
@@ -86,6 +99,8 @@ func maybeTrackPluginInvocation(ctx context.Context, pluginName string) {
 	telemetry.TrackPluginDetached(pluginName, s.Enabled, versioninfo.Version)
 }
 
+// resolvePlugin returns an empty binary path for a missing graph plugin so
+// the dispatcher can offer installation. Other missing names fall through.
 func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, pluginArgs []string, ok bool) {
 	if len(args) == 0 {
 		return "", nil, false
@@ -114,6 +129,9 @@ func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, plugi
 		// through to Cobra's generic unknown-command path.
 		if p, found := findInaccessiblePlugin(binName); found {
 			return p, args[1:], true
+		}
+		if name == "graph" && errors.Is(err, exec.ErrNotFound) {
+			return "", args[1:], true
 		}
 		return "", nil, false
 	}

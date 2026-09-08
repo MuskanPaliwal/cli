@@ -276,6 +276,8 @@ type fetchedAsset struct {
 // one is published. Returns errAssetNotFound (possibly wrapped) when the
 // tag has no asset for this platform.
 func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, name, tag, stagingDir string, allowUnverified bool) (*fetchedAsset, error) {
+	stopLocate := startPluginStep(ctx, "Locating plugin release files...")
+	defer stopLocate()
 	// Resolve the prefix once. It does not depend on the asset name, so
 	// deriving it per candidate meant re-parsing the repo URL ~36 times in the
 	// probe loop and carrying an error return through three call sites for a
@@ -302,6 +304,7 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 				errUnverifiedAsset, pluginMetadataFileName, checksumsFileName)
 		}
 		u := expandDownloadTemplate(meta.DownloadURL, name, tag, "")
+		stopLocate()
 		return fetchAndVerify(ctx, u, assetNameFromURL(u), "", stagingDir)
 	}
 
@@ -323,6 +326,7 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 			// directly.
 			continue
 		}
+		stopLocate()
 		return fetchAndVerify(ctx, assetURL(asset), asset, digest, stagingDir)
 	}
 
@@ -337,6 +341,7 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 	// wrong would report a missing release for a plugin that simply doesn't
 	// ship checksums.
 	for _, asset := range assetCandidates(name, tag) {
+		stopLocate()
 		fa, err := fetchAndVerify(ctx, assetURL(asset), asset, "", stagingDir)
 		switch {
 		case errors.Is(err, errAssetNotFound):
@@ -409,6 +414,8 @@ func httpGetSmall(ctx context.Context, rawURL string) ([]byte, error) {
 // command errors to stderr and a download failure is an ordinary event
 // (network hiccup, 5xx, checksum mismatch), not an exceptional one.
 func fetchAndVerify(ctx context.Context, rawURL, asset, wantDigest, stagingDir string) (*fetchedAsset, error) {
+	stopDownload := startPluginStep(ctx, "Downloading plugin archive...")
+	defer stopDownload()
 	stagingRoot, err := osroot.Shared(stagingDir)
 	if err != nil {
 		return nil, fmt.Errorf("open staging dir: %w", err)
@@ -468,6 +475,11 @@ func fetchAndVerify(ctx context.Context, rawURL, asset, wantDigest, stagingDir s
 	if n > maxPluginAssetSize {
 		_ = osroot.RemoveNoSymlinks(stagingRoot, asset) //nolint:errcheck // best-effort cleanup of a staging file we are already abandoning
 		return nil, fmt.Errorf("download %s: exceeds %d byte limit", redactURL(rawURL), int64(maxPluginAssetSize))
+	}
+	stopDownload()
+	if wantDigest != "" {
+		stopVerify := startPluginStep(ctx, "Verifying plugin checksum...")
+		defer stopVerify()
 	}
 	got := hex.EncodeToString(h.Sum(nil))
 	if wantDigest != "" && !strings.EqualFold(got, wantDigest) {

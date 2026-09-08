@@ -202,6 +202,7 @@ type remoteInstallFlags struct {
 
 func runRemoteInstall(ctx context.Context, cmd *cobra.Command, src installSource, flags remoteInstallFlags) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	ctx = withPluginProgress(ctx, errOut)
 
 	repoURL := src.Ref
 	var trusted bool
@@ -210,7 +211,9 @@ func runRemoteInstall(ctx context.Context, cmd *cobra.Command, src installSource
 	// Both paths need the catalog: one to resolve a name, the other for the
 	// trust check. Sync once. An unreachable index is fatal only for the
 	// name-resolution path; a URL install degrades to "not listed".
+	stopIndex := startPluginStep(ctx, "Checking plugin index...")
 	idx, idxErr := SyncPluginIndex(ctx, resolvePluginIndexURL(flags.index), false)
+	stopIndex()
 
 	if src.Kind == installFromIndex {
 		if idxErr != nil {
@@ -300,7 +303,9 @@ func runRemoteInstall(ctx context.Context, cmd *cobra.Command, src installSource
 // error — doctor reports the gap afterwards.
 func installPlannedDeps(ctx context.Context, cmd *cobra.Command, reqs []PluginRequirement, idx *PluginIndex, flags remoteInstallFlags) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	stopPlan := startPluginStep(ctx, "Checking plugin dependencies...")
 	plan, err := PlanDependencyInstalls(ctx, reqs, idx)
+	stopPlan()
 	if err != nil {
 		return fmt.Errorf("resolve dependencies: %w", err)
 	}
