@@ -980,6 +980,48 @@ comments at each site say which case applies:
   `HookConfigFile.RemoveDir`, because pi discovers extensions by directory, so
   removing only the file would leave a half-uninstalled extension behind.
 
+  **One escape hatch, and only for these directories.**
+  `allow_symlinked_agent_dirs` in `.entire/settings.local.json` names
+  worktree-relative agent config directories whose symlinks Entire follows
+  instead of refusing, anchoring its root on the resolved target
+  (`agent.AnchorWorktreePath` / `OpenAnchoredRoot`). It exists because a
+  dotfile-managed `.claude` (chezmoi, stow, yadm) is an ordinary setup among
+  exactly the people who run coding agents, and the previous answer was "stop
+  managing it that way".
+
+  Three properties make it a hatch rather than a hole, and all three are load
+  bearing:
+
+  - **A list, not a boolean.** A flag would disable the class; naming a path is
+    the user saying which arrangement is theirs.
+  - **Two independent boundaries.** `enforceSymlinkedAgentDirsTrust` answers
+    "may this FILE grant anything" with the same untracked-and-verified gate as
+    the OPF command and `external_agents` (a repository that could both ship the
+    link and vouch for it is the whole attack). `agent.SetVouchedSymlinkedDirs`
+    then answers "is this PATH one an agent config lives under", against a
+    pinned list plus a structural `neverVouchable` rule, so `.entire` and
+    `.git/hooks` are unspellable *even from a verified local file*.
+  - **Pinned, not derived.** `agent.vouchableDirs` was first derived from
+    `AllHookConfigRelPaths()`, which is wrong twice: that registry is mutable at
+    runtime, so an external plugin could widen what a user may vouch for, and it
+    is empty in a binary that has not imported the agent packages, so the set
+    silently collapsed depending on the caller's import graph.
+    `TestVouchableDirsMatchTheBuiltInAgents` (in the `cli` package, where every
+    built-in agent is registered) fails on drift in both directions.
+
+  Scope notes: vouching for `.claude` does **not** vouch for links inside it,
+  since below the anchor everything is a name in a root again; the scaffolds go
+  through the same anchor (`openScaffoldTarget`), because a vouched directory
+  that hook installation follows and scaffolding refuses leaves `entire enable`
+  half-applied across two directories; and a vouched but *unresolvable* link is
+  an error, not a quiet fall back to refusing. `entire status` prints what is
+  being followed and any rejected entries, and `doctor` reports the link under
+  FOLLOWING SYMLINKS rather than as a fault. `.entire`, the settings files, and
+  the git hooks directory are deliberately excluded — the settings case is
+  circular (a symlinked `settings.local.json` vouching for symlinked settings
+  files authorizes itself) and the hooks case already has git's own
+  `core.hooksPath`.
+
   The config FILE is refused too, not just its parents: the merge READ would
   otherwise pull the link target's contents into
   what Entire then writes, and the write is a rename, which replaces the link

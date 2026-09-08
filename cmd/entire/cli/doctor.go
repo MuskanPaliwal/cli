@@ -801,7 +801,7 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		return
 	}
 
-	var links, unreadable, wrongType []string
+	var links, unreadable, wrongType, vouched []string
 	reported := make(map[string]struct{})
 	for _, candidate := range agentSymlinkCheckPaths() {
 		name, outcome := scanForSymlinkedComponent(root, candidate)
@@ -814,6 +814,15 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 			continue
 		}
 		reported[name] = struct{}{}
+		// A link the user vouched for in settings.local.json is followed, not
+		// refused, so reporting it as a fault would be wrong twice: it names a
+		// problem that is not one, and it hides the fact that Entire is writing
+		// somewhere other than where the path appears to lead. Reported below in
+		// its own section instead.
+		if outcome == componentScanLinked && slices.Contains(agent.VouchedSymlinkedDirs(), name) {
+			vouched = append(vouched, name)
+			continue
+		}
 		switch outcome {
 		case componentScanUnreadable:
 			unreadable = append(unreadable, name)
@@ -824,6 +833,17 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		case componentScanClean:
 			// Filtered out above; listed so a new outcome fails the build here.
 		}
+	}
+
+	if len(vouched) > 0 {
+		fmt.Fprintln(w, "Agent config directories: FOLLOWING SYMLINKS")
+		printCappedList(w, vouched, func(name string) string {
+			return name + " -> " + readlinkOrUnknownIn(root, name)
+		})
+		fmt.Fprintf(w, "  Allowed by allow_symlinked_agent_dirs in %s. Entire installs hooks and\n",
+			settings.EntireSettingsLocalFile)
+		fmt.Fprintln(w, "  skills at the far end of these links rather than inside the repository.")
+		fmt.Fprintln(w, "  Remove the entry to go back to refusing them.")
 	}
 
 	if len(links) > 0 {

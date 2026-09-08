@@ -86,18 +86,31 @@ type HookConfigLocator interface {
 // (".cursor/hooks.json"). The directory does not need to exist: Read reports a
 // missing file the way os.ReadFile does, and Write creates the parents.
 func OpenHookConfig(worktreeRoot, relPath string) (*HookConfigFile, error) {
+	// Validate against the worktree root first, so a relPath that escapes is
+	// rejected before anything is resolved. AnchorWorktreePath re-anchors only
+	// on directories the user vouched for by name, but it should never be the
+	// thing deciding whether the path was well formed.
 	name, err := worktreedir.Name(worktreeRoot, relPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve hook config path: %w", err)
 	}
-	root, err := worktreedir.OpenAt(worktreeRoot)
+	display := filepath.Join(worktreeRoot, filepath.FromSlash(name))
+
+	// Two bases, one behaviour below. The ordinary case anchors on the worktree
+	// root and every agent directory stays a name inside it, refusable by
+	// MkdirAllNoSymlink. A vouched symlinked directory anchors on its resolved
+	// target instead, and everything below it is still a name inside a root.
+	root, inner, err := OpenAnchoredRoot(worktreeRoot, name)
 	if err != nil {
-		return nil, fmt.Errorf("open worktree root: %w", err)
+		return nil, fmt.Errorf("resolve hook config path: %w", err)
 	}
 	return &HookConfigFile{
 		root: root,
-		name: name,
-		path: filepath.Join(worktreeRoot, filepath.FromSlash(name)),
+		name: inner,
+		// The link's own path, not the resolved one. It is what the user typed,
+		// what doctor prints, and what the agents write into their own config,
+		// where following the link is the agent's business and works.
+		path: display,
 	}, nil
 }
 

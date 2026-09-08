@@ -44,6 +44,7 @@ var allowedRootBases = map[string]string{
 	// Trees with their own resolver, anchored at the boundary between what
 	// Entire owns and what it does not.
 	"cmd/entire/cli/agent/session_store.go":      "the agent's own GetSessionDir (opened per operation, not memoized)",
+	"cmd/entire/cli/agent/vouched_dirs.go":       "worktree root, or a symlinked agent directory the user vouched for in settings.local.json, resolved",
 	"cmd/entire/cli/strategy/hooks.go":           "git rev-parse --git-path hooks; core.hooksPath can name a directory no other anchor covers",
 	"cmd/entire/cli/plugin_store.go":             "pluginParentDir()",
 	"cmd/entire/cli/plugin_index.go":             "the per-index cache dir, opened at the clone it contains",
