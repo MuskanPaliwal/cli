@@ -4,6 +4,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -116,15 +117,50 @@ func TestWriteManagedScaffold_RefusesSymlinkedLeaf(t *testing.T) {
 func TestVouchableDirsMatchTheBuiltInAgents(t *testing.T) {
 	t.Parallel()
 
+	// deliberatelyUnvouchable is the ledger of directories the derivation
+	// produces that must NOT be vouchable, each with its reason. A ledger rather
+	// than a filter reimplementing agent.neverVouchable, so the exclusion has to
+	// be argued for here and cannot quietly grow.
+	deliberatelyUnvouchable := map[string]string{
+		".pi/extensions/entire": "Entire both creates and deletes this directory (HookConfigFile.RemoveDir), " +
+			"so it cannot also be a link the user manages; vouching for it anchored the root ON it and " +
+			"left uninstall with nothing above it to delete from",
+	}
+
 	want := map[string]struct{}{}
 	for _, relPath := range agent.AllHookConfigRelPaths() {
 		dir := path.Dir(filepath.ToSlash(relPath))
 		for dir != "." && dir != "/" && dir != "" {
-			want[dir] = struct{}{}
+			if _, excluded := deliberatelyUnvouchable[dir]; !excluded {
+				want[dir] = struct{}{}
+			}
 			dir = path.Dir(dir)
 		}
 	}
 	require.NotEmpty(t, want, "no built-in agent declares a hook config path; this guard proves nothing")
+
+	// A stale exclusion is its own failure: if the path stops existing, the
+	// entry has outlived its reason.
+	derived := map[string]struct{}{}
+	for _, relPath := range agent.AllHookConfigRelPaths() {
+		dir := path.Dir(filepath.ToSlash(relPath))
+		for dir != "." && dir != "/" && dir != "" {
+			derived[dir] = struct{}{}
+			dir = path.Dir(dir)
+		}
+	}
+	for d, reason := range deliberatelyUnvouchable {
+		if _, still := derived[d]; !still {
+			assert.Failf(t, "stale exclusion",
+				"%s is listed as deliberately unvouchable (%s) but no agent config lives under it "+
+					"any more; remove the entry", d, reason)
+		}
+		if slices.Contains(agent.VouchableSymlinkedDirs(), d) {
+			assert.Failf(t, "exclusion not enforced",
+				"%s is listed as deliberately unvouchable (%s) but agent.VouchableSymlinkedDirs "+
+					"still offers it", d, reason)
+		}
+	}
 
 	got := map[string]struct{}{}
 	for _, d := range agent.VouchableSymlinkedDirs() {

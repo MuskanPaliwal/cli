@@ -54,8 +54,18 @@ import (
 // entry — and manages it locally, which is what a dotfile workflow does anyway.
 type HookConfigFile struct {
 	root *os.Root
+	// name is root-relative, for I/O. It is NOT worktree-relative: when a
+	// vouched symlinked agent directory was followed, the root is anchored at
+	// that directory's target and name has lost the components consumed getting
+	// there.
 	name string
-	path string
+	// relName is the worktree-relative name, for every DECISION about the path
+	// as opposed to every access through it. Two coordinates for one file, the
+	// same split entiredir.Name draws, and RemoveDir is why it exists: it
+	// reasons about which directory it is allowed to delete, and doing that on
+	// the root-relative name let anchoring change the answer.
+	relName string
+	path    string
 }
 
 // HookConfigLocator is implemented by an agent whose Entire hook configuration
@@ -105,8 +115,9 @@ func OpenHookConfig(worktreeRoot, relPath string) (*HookConfigFile, error) {
 		return nil, fmt.Errorf("resolve hook config path: %w", err)
 	}
 	return &HookConfigFile{
-		root: root,
-		name: inner,
+		root:    root,
+		name:    inner,
+		relName: name,
 		// The link's own path, not the resolved one. It is what the user typed,
 		// what doctor prints, and what the agents write into their own config,
 		// where following the link is the agent's business and works.
@@ -196,14 +207,35 @@ func (f *HookConfigFile) Remove() error {
 // root and every shared intermediate fails the name test instead, and pi's
 // `.pi/extensions/entire` passes it because Entire is what created it.
 func (f *HookConfigFile) RemoveDir() error {
-	dir := path.Dir(f.name)
-	if dir == "." {
+	// The precondition is decided on the WORKTREE-relative name and the removal
+	// is performed on the root-relative one. Deciding on the root-relative name
+	// was a bug: with a vouched symlink at `.pi/extensions/entire` the root
+	// anchors on that directory's target and the name collapses to `index.ts`,
+	// so path.Dir was "." and uninstall refused with "refusing to remove the
+	// worktree root" -- about a path that was neither. Pi discovers extensions
+	// by directory, so the refusal left one it still loads. The two coordinates
+	// answer different questions and only relName answers this one.
+	relDir := path.Dir(f.relName)
+	if relDir == "." {
 		return fmt.Errorf("remove %s: refusing to remove the worktree root", filepath.Dir(f.path))
 	}
-	if path.Base(dir) != entireOwnedDirName {
+	if path.Base(relDir) != entireOwnedDirName {
 		return fmt.Errorf("remove %s: refusing to remove %q, which Entire did not create; "+
 			"RemoveDir is only for a directory named %q that holds one generated file",
-			filepath.Dir(f.path), path.Base(dir), entireOwnedDirName)
+			filepath.Dir(f.path), path.Base(relDir), entireOwnedDirName)
+	}
+
+	dir := path.Dir(f.name)
+	if dir == "." {
+		// The owned directory IS the anchor, so it cannot be removed through
+		// its own root (see "A directory cannot be created, statted, or removed
+		// through its own root" in CLAUDE.md). Unreachable today, because
+		// neverVouchable refuses a vouch for the Entire-owned directory itself
+		// for exactly this reason. Kept as the honest answer rather than as the
+		// misleading one above, since any future way of anchoring here needs a
+		// real message and not a claim about the worktree root.
+		return fmt.Errorf("remove %s: the directory Entire owns is itself the followed symlink, "+
+			"so it cannot be removed from inside; remove the link by hand", filepath.Dir(f.path))
 	}
 	if err := osroot.RemoveAllNoSymlinks(f.root, dir); err != nil {
 		return fmt.Errorf("remove %s: %w", filepath.Dir(f.path), err)

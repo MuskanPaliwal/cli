@@ -120,7 +120,8 @@ var vouchableDirs = []string{
 	".opencode/plugins",
 	".pi",
 	".pi/extensions",
-	".pi/extensions/entire",
+	// .pi/extensions/entire is deliberately absent, and neverVouchable refuses
+	// it a second time. See that function.
 }
 
 // VouchableSymlinkedDirs is the set a user may name, with the trees Entire owns
@@ -143,19 +144,30 @@ func VouchableSymlinkedDirs() []string {
 	return out
 }
 
-// neverVouchable names the trees whose symlink refusals are not negotiable,
+// neverVouchable names the paths whose symlink refusals are not negotiable,
 // whoever is asking and however the path is spelled.
 //
-// .entire holds the redaction settings that decide what may be committed, and
-// .git holds the hooks directory, whose escape hatch is core.hooksPath rather
-// than this. Matched as path prefixes so a deeper path cannot slip under.
+// Two rules. `.entire` holds the redaction settings that decide what may be
+// committed, and `.git` holds the hooks directory, whose escape hatch is
+// core.hooksPath rather than this one. Matched as path prefixes so a deeper
+// path cannot slip under.
+//
+// And a directory named `entire` is refused wherever it appears, because that
+// is the one directory Entire both CREATES and DELETES: HookConfigFile.RemoveDir
+// removes `.pi/extensions/entire` wholesale on uninstall, since pi discovers
+// extensions by directory and removing only the file leaves one it still loads.
+// A path Entire owns the lifecycle of cannot also be a link the user manages --
+// the two claims are incompatible, and the hatch is for the agent's own
+// directory, not for Entire's scratch space inside it. Vouching for it also
+// anchored the root ON that directory, so RemoveDir had nothing above it to
+// delete from and refused, leaving the extension in place.
 func neverVouchable(dir string) bool {
 	for _, owned := range []string{".entire", ".git"} {
 		if dir == owned || strings.HasPrefix(dir, owned+"/") {
 			return true
 		}
 	}
-	return false
+	return path.Base(dir) == entireOwnedDirName
 }
 
 // isVouched reports whether a worktree-relative directory has been vouched for.

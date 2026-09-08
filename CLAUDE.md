@@ -1048,6 +1048,19 @@ comments at each site say which case applies:
     `TestVouchableDirsMatchTheBuiltInAgents` (in the `cli` package, where every
     built-in agent is registered) fails on drift in both directions.
 
+  **The Entire-owned directory is not vouchable, and `RemoveDir` reads the
+  worktree-relative name.** `.pi/extensions/entire` is the one directory Entire
+  both creates *and* deletes, so it cannot also be a link the user manages;
+  `neverVouchable` refuses any path whose base is `entire`, and the pinned list
+  omits it. `HookConfigFile` therefore carries **two coordinates** — `name`
+  (root-relative, for I/O) and `relName` (worktree-relative, for decisions) —
+  the same split `entiredir.Name` draws. `RemoveDir` decides on `relName` and
+  removes on `name`: deciding on the root-relative name let a vouch for
+  `.pi/extensions/entire` anchor the root *on* that directory, collapse the name
+  to `index.ts`, and refuse with "refusing to remove the worktree root" about a
+  path that was neither — leaving an extension pi still discovers. Reading
+  either coordinate for both jobs gets one of them wrong.
+
   Scope notes: vouching for `.claude` does **not** vouch for links inside it,
   since below the anchor everything is a name in a root again; the scaffolds go
   through the same anchor (`openScaffoldTarget`), because a vouched directory

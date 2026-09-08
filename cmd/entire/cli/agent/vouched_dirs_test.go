@@ -212,3 +212,99 @@ func TestOpenHookConfig_VouchedButDanglingIsAnError(t *testing.T) {
 func isSymlinkRefusal(err error) bool {
 	return err != nil && strings.Contains(err.Error(), osroot.ErrSymlinkedPath.Error())
 }
+
+// The Entire-owned directory is the one directory Entire both creates and
+// deletes, so it cannot also be a link the user manages. Vouching for it was
+// accepted and then broke uninstall: the root anchored ON that directory, so
+// RemoveDir had nothing above it to delete from and refused with "refusing to
+// remove the worktree root" -- about a path that was neither -- leaving the pi
+// extension in place for pi to keep discovering.
+func TestSetVouchedSymlinkedDirs_RefusesTheEntireOwnedDirectory(t *testing.T) {
+	resetVouched(t)
+
+	rejected := agent.SetVouchedSymlinkedDirs([]string{".pi/extensions/entire"})
+	if len(rejected) != 1 {
+		t.Errorf("rejected = %v, want .pi/extensions/entire refused", rejected)
+	}
+	if got := agent.VouchedSymlinkedDirs(); len(got) != 0 {
+		t.Errorf("vouched = %v, want none", got)
+	}
+	if slices.Contains(agent.VouchableSymlinkedDirs(), ".pi/extensions/entire") {
+		t.Error(".pi/extensions/entire must not appear in the vouchable set either")
+	}
+}
+
+// Pi is still served by the hatch, at the levels the user actually owns, and
+// uninstall works through the link. This is the test the coordinate split
+// exists for: the ownership decision comes from the worktree-relative name
+// (whose dir is `.pi/extensions/entire`, base `entire`) while the removal is
+// performed on the root-relative name (`entire`) inside the anchored root.
+// Reading either coordinate for both jobs gets one of them wrong.
+func TestOpenHookConfig_VouchedPiExtensionsInstallsAndUninstalls(t *testing.T) {
+	for _, vouch := range []string{".pi", ".pi/extensions"} {
+		t.Run(vouch, func(t *testing.T) {
+			resetVouched(t)
+
+			worktree := t.TempDir()
+			dest := t.TempDir()
+			linkAt := filepath.Join(worktree, filepath.FromSlash(vouch))
+			if err := os.MkdirAll(filepath.Dir(linkAt), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(dest, linkAt); err != nil {
+				t.Skipf("symlink not supported: %v", err)
+			}
+			agent.SetVouchedSymlinkedDirs([]string{vouch})
+
+			cfg, err := agent.OpenHookConfig(worktree, ".pi/extensions/entire/index.ts")
+			if err != nil {
+				t.Fatalf("OpenHookConfig() error = %v", err)
+			}
+			if err := cfg.Write([]byte("// entire\n"), 0o600); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			if !cfg.Exists() {
+				t.Fatal("Exists() = false after Write")
+			}
+
+			if err := cfg.RemoveDir(); err != nil {
+				t.Fatalf("RemoveDir() error = %v; pi discovers extensions by directory, so a "+
+					"refused uninstall leaves one it still loads", err)
+			}
+
+			// The generated directory is gone from wherever it landed...
+			if _, serr := os.Lstat(filepath.Join(worktree, ".pi", "extensions", "entire")); serr == nil {
+				t.Error("the entire/ extension directory survived uninstall")
+			}
+			// ...and the user's own linked directory is not deleted with it.
+			if _, serr := os.Lstat(dest); serr != nil {
+				t.Errorf("the vouched link's target must survive uninstall: %v", serr)
+			}
+			if _, serr := os.Lstat(linkAt); serr != nil {
+				t.Errorf("the user's own link at %s must survive uninstall: %v", vouch, serr)
+			}
+		})
+	}
+}
+
+// RemoveDir's precondition still refuses a directory Entire did not create,
+// and says which one, rather than reporting the worktree root.
+func TestRemoveDir_RefusesADirectoryEntireDidNotCreate(t *testing.T) {
+	resetVouched(t)
+
+	worktree := t.TempDir()
+	cfg, err := agent.OpenHookConfig(worktree, ".claude/settings.json")
+	if err != nil {
+		t.Fatalf("OpenHookConfig() error = %v", err)
+	}
+	err = cfg.RemoveDir()
+	if err == nil {
+		t.Fatal("RemoveDir() on .claude = nil error; it would delete the user's own config")
+	}
+	if !strings.Contains(err.Error(), ".claude") {
+		t.Errorf("error = %q, want it to name the directory it refused", err)
+	}
+	if strings.Contains(err.Error(), "worktree root") {
+		t.Errorf("error = %q, must not report the worktree root for a named directory", err)
+	}
+}
