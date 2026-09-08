@@ -761,6 +761,12 @@ narrower: naming a session ancestry *cannot* rank — one whose owner was never
 recorded (no turn yet), or any session on a platform that cannot introspect
 processes.
 
+`session tokens` preserves this provenance in its JSON `resolution` field and
+in text/agent-brief `Resolved:` lines (omitted for an explicit session ID).
+Ambiguous matches warn on stderr before recommendations are printed. Untracked
+callers reuse `session current`'s diagnostic; JSON and agent-brief modes leave
+stdout empty and exit non-zero rather than emitting a token report.
+
 **`caller-ambiguous` is a third outcome of that tier, and it does not satisfy
 `IsCaller()`.** The rule (`claimsRuledOut`) is that **the winner is believed
 only when no session the environment named could be nearer to us than it is.**
@@ -799,8 +805,8 @@ which states an arbitrary pick as the answer when several untracked claims
 exist. It now says which sessions claim it and that the caller could not be
 determined; the diagnosis survives, the identification does not.
 
-**Tier 4 is why this exists.** `entire session current` used to collapse tiers
-3 and 4 and describe either as "the active session for the current worktree".
+**Tier 3 is why this exists.** `entire session current` used to collapse tiers
+2 and 3 and describe either as "the active session for the current worktree".
 Worktrees share one session store, so in a worktree with no sessions of its own
 it returned a live session belonging to a *different* worktree —
 indistinguishably from a real answer, with that worktree's path in the JSON.
@@ -810,7 +816,7 @@ a wrong ID there mutates a third party's running session. The tier still
 exists, because "what has been happening in this repo" is a real question — it
 just has to say that is what it answered. `SessionResolution.IsCaller()` is the
 gate for anything that *acts* on a session rather than displaying it; only
-tiers 1 and 2 pass.
+tier 1 passes, and then only when it resolves to `caller-env` or `ancestry`.
 
 **`IsCaller()` currently guards nothing, and that is the open half of this
 work.** `session adopt` — the command whose damage motivated the tiering, since

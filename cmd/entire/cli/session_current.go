@@ -25,8 +25,8 @@ recorded in this worktree, and then to the most recent one anywhere in the
 repository's shared session store.
 
 Those are different answers to different questions, so the output always says
-which one you got — the "Resolved" line, or the "resolution" field under
---json. Only "caller-env" and "ancestry" identify the session running this
+which one you got: the "Resolved" line in text mode, or the "resolution" field
+under --json. Only "caller-env" and "ancestry" identify the session running this
 command; "other-worktree" can be any unrelated session in the store, because
 every worktree of a repository shares one. Check it before acting on the
 session rather than merely displaying it.

@@ -390,3 +390,77 @@ func TestSessionCurrent_AmbiguousTrackedWinnerIsLabelledAndWarned(t *testing.T) 
 		t.Errorf("expected a stderr warning about the unordered claims, got: %q", stderr.String())
 	}
 }
+
+// The help promises the output always says which question it answered. The
+// worktree tier is the most common one and used to print no line at all,
+// making that promise false in exactly the case a user hits most.
+func TestSessionCurrent_TextModeLabelsTheWorktreeTier(t *testing.T) {
+	// t.Chdir cannot coexist with t.Parallel; this test mutates process CWD.
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+	clearCallerSessionEnv(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	state := &strategy.SessionState{
+		SessionID:           "worktree-tier-session",
+		AgentType:           agent.AgentTypeClaudeCode,
+		WorktreePath:        dir,
+		StartedAt:           now,
+		LastInteractionTime: &now,
+		Phase:               session.PhaseIdle,
+	}
+	if err := strategy.SaveSessionState(context.Background(), state); err != nil {
+		t.Fatalf("SaveSessionState: %v", err)
+	}
+
+	cmd := newSessionCurrentCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs(nil)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Resolved:") {
+		t.Errorf("text mode omitted the resolution the help promises, got: %q", stdout.String())
+	}
+}
+
+// `session info <id>` names its session outright, so there is nothing to
+// explain and the line must stay absent.
+func TestSessionInfo_TextModeHasNoResolutionLine(t *testing.T) {
+	// t.Chdir cannot coexist with t.Parallel; this test mutates process CWD.
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+	clearCallerSessionEnv(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	state := &strategy.SessionState{
+		SessionID:           "named-outright",
+		AgentType:           agent.AgentTypeClaudeCode,
+		WorktreePath:        dir,
+		StartedAt:           now,
+		LastInteractionTime: &now,
+		Phase:               session.PhaseIdle,
+	}
+	if err := strategy.SaveSessionState(context.Background(), state); err != nil {
+		t.Fatalf("SaveSessionState: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	cmd := newInfoCmd()
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"named-outright"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(stdout.String(), "Resolved:") {
+		t.Errorf("session info explained a resolution it was handed, got: %q", stdout.String())
+	}
+}

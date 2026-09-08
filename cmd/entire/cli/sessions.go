@@ -921,14 +921,16 @@ func stopSessionAndPrint(ctx context.Context, cmd *cobra.Command, state *strateg
 	return nil
 }
 
-// sessionResolutionLabel renders how a session was resolved, for humans. Empty
-// for a session the caller named outright, and for the plain worktree tier —
-// "the most recent session recorded here" is what someone typing `session
-// current` in a terminal already assumes, so saying it adds noise.
+// sessionResolutionLabel renders how a session was resolved, for humans.
 //
-// The two tiers that are worth a line are the ones that contradict that
-// assumption: an identified caller (better than assumed) and a session from
-// another worktree (weaker than assumed).
+// Every resolution gets a line except ResolutionNone, which means the caller
+// named the session outright and there is nothing to explain. An earlier
+// revision also returned "" for the plain worktree tier, on the grounds that
+// "the most recent session recorded here" is what someone typing `session
+// current` already assumes — but the command's own help promises the output
+// always says which question it answered, and silently omitting the most
+// common tier made that false. Cheaper to keep the promise than to qualify
+// it.
 func sessionResolutionLabel(resolution strategy.SessionResolution) string {
 	switch resolution {
 	case strategy.ResolutionCallerEnv:
@@ -939,7 +941,9 @@ func sessionResolutionLabel(resolution strategy.SessionResolution) string {
 		return "a guess — several agents claim this command and nothing could order them"
 	case strategy.ResolutionOtherWorktree:
 		return "another worktree's session — this worktree has none of its own"
-	case strategy.ResolutionWorktree, strategy.ResolutionNone:
+	case strategy.ResolutionWorktree:
+		return "the most recently active session recorded in this worktree"
+	case strategy.ResolutionNone:
 		return ""
 	default:
 		return ""

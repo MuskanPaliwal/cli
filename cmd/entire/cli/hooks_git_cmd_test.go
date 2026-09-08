@@ -336,10 +336,14 @@ func TestWithHookSession_StampsTheCallersSessionFromEnv(t *testing.T) {
 	enableEntire(t, tmpDir)
 	entireDir := filepath.Join(tmpDir, paths.EntireDir)
 
-	// The decoy is the most recently active session and is what the old
-	// most-recent behaviour would have stamped.
-	writeTestSessionState(t, tmpDir, "decoy-most-recent")
+	// Write order is load-bearing: writeTestSessionState stamps
+	// LastInteractionTime at call time, so the SECOND state is the most recent
+	// one and is what the fallback tiers would pick. The caller therefore goes
+	// first, leaving the environment claim as the only thing that can select
+	// it — otherwise this test passes with the claim removed and proves
+	// nothing.
 	writeTestSessionState(t, tmpDir, "caller-session-id")
+	writeTestSessionState(t, tmpDir, "decoy-most-recent")
 	t.Setenv("CODEX_SESSION_ID", "caller-session-id")
 
 	l, err := logging.New(logging.Config{Root: entiredir.OpenerAt(tmpDir), Dir: logging.LogsName})

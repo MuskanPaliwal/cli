@@ -83,19 +83,30 @@ type ResolvedSession struct {
 	SessionID  string
 	Resolution SessionResolution
 
-	// AgentType is the agent that claimed the session, set only for
-	// ResolutionCallerEnv — the environment says which agent published the ID
-	// before any state has been loaded, and that is worth reporting even when
-	// Tracked is false.
+	// AgentType names the agent the session belongs to, on any resolution the
+	// identification tier produced — from the environment when a claim named
+	// the session, otherwise from the session's own state. Set even when
+	// Tracked is false, which is the case it exists for: the environment
+	// identifies the agent before any state has been loaded, and "you are
+	// inside a Codex session Entire is not recording" is the whole diagnosis.
+	// Empty on the worktree and other-worktree tiers, which report a session
+	// rather than a caller.
 	AgentType types.AgentType
 
-	// Tracked reports whether Entire holds session state for SessionID. False
-	// only on the ResolutionCallerEnv tier, where the agent named a session
-	// Entire has not recorded: hooks are not installed, they failed, or the
-	// session's first turn has not happened yet (state is created at turn
-	// start). That combination is a diagnosis worth surfacing rather than an
-	// error — the caller is genuinely in a session, and Entire is genuinely
-	// not tracking it.
+	// Tracked reports whether Entire holds session state for SessionID.
+	//
+	// False only when the environment named a session Entire has not
+	// recorded — hooks not installed, hooks failed, or the first turn not yet
+	// landed, since state is created at turn start. That reaches the caller as
+	// ResolutionCallerEnv for a single claim or ResolutionCallerAmbiguous for
+	// several, so do NOT test it by comparing Resolution; test this field.
+	//
+	// A diagnosis rather than an error: the caller is genuinely in a session,
+	// and Entire is genuinely not tracking it. Load-bearing for exactly that
+	// reason — `session current` and `session tokens` branch to their
+	// untracked diagnostic on it — so resolveUntrackedClaims assigns it
+	// explicitly rather than leaning on the zero value, matching the
+	// `Tracked: true` its sibling paths write.
 	Tracked bool
 }
 
@@ -313,6 +324,10 @@ func resolveUntrackedClaims(ctx context.Context, claims []agent.CallerSessionCan
 		SessionID:  claims[0].SessionID,
 		Resolution: resolution,
 		AgentType:  claims[0].AgentType,
+		// Explicit, not the zero value: false here is the assertion this
+		// whole function makes, and the flag every untracked diagnostic
+		// branches on. Its sibling paths spell out Tracked: true.
+		Tracked: false,
 	}
 	logging.Debug(logging.WithComponent(ctx, "session"),
 		"caller session claimed but not tracked",
