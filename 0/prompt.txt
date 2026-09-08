@@ -1,0 +1,29 @@
+there's a last thing which needs to be there in man: https://github.com/entireio/cli/pull/2211 in the last review comment. how about we craete a worktree for that and fix it and raise a draft pr
+
+---
+
+i need you to help me understand what was the issue and what we fixed
+
+---
+
+go through code by code
+
+---
+
+but why the symbolic ref needs to be aborted? and why would any other branch update ref?
+
+---
+
+continue
+
+---
+
+okay so the error is if we want to update the commit hash we use commit hashes but git gives HEAD which is symbolic ref so abort the transaction. but then who gives commit hash?
+
+---
+
+so what was the issue ? explain one more time
+
+---
+
+the description is not what we usually write. use update-pr-descripion skill

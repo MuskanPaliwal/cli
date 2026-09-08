@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M20BZWC4WF9TKF64PAPNBKZW",
+  "session_id": "01a077d1-a0cd-7a20-afdf-5380590fa63b",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-08T11:20:59.080805Z",
+  "branch": "refactor-remaining-git-metadata-consumers",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "CLAUDE.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "b7a9bda59361",
+  "checkpoint_transcript_start": 373,
+  "transcript_lines_at_start": 373,
+  "compact_transcript_start": 51,
+  "token_usage": {
+    "input_tokens": 118087,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2219008,
+    "output_tokens": 5350,
+    "api_call_count": 20
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-08T11:20:59.025928Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 1689,
+    "human_modified": 202,
+    "human_removed": 0,
+    "total_committed": 1689,
+    "total_lines_changed": 2942,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 731,
+      "user_lines_removed": 168,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "CLAUDE.md": 33,
+        "ISSUE-DRAFTS.md": 282,
+        "PR-REVIEW-RETROSPECTIVE.md": 270,
+        "PR-SELF-REVIEW-CHECKLIST.md": 146
+      },
+      "user_removed_per_file": {
+        "CLAUDE.md": 168
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 705,
+      "agent_lines_removed": 0
+    }
+  ]
+}
