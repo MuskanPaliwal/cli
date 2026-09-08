@@ -1,10 +1,10 @@
 package agent_test
 
 import (
-	"os/exec"
-	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // transcriptReadPattern matches a read of an already-resolved transcript path:
@@ -63,35 +63,33 @@ var unconfinedTranscriptReads = map[string]int{
 func TestTranscriptReadsOnlyShrink(t *testing.T) {
 	t.Parallel()
 
-	repoRoot, err := exec.Command("git", "rev-parse", "--show-toplevel").Output() //nolint:noctx // guard test, no cancellation needed
-	if err != nil {
-		t.Skipf("not in a git checkout: %v", err)
+	repoRoot, ok := testutil.GitGrepGuardRepoRoot(t)
+	if !ok {
+		return
 	}
 
-	// --no-color for the reason rootbase_guard_test.go gives: color.ui set to
-	// `always` colorizes into a pipe, the escapes land in the filename field,
-	// and every line then parses as something this test cannot use.
-	grep := exec.Command("git", "grep", "-c", "--no-color", "-E", "--", transcriptReadPattern, //nolint:noctx // guard test, no cancellation needed
+	// -o, not -c: `git grep -c` counts LINES containing a match, so a second
+	// read added to a line that already had one is invisible to the ratchet.
+	// -o emits one output line per MATCH, which is what the counts below mean.
+	//
+	// testutil.GitGrepGuard owns --untracked, --no-color and the repo-selector
+	// scrubbing, and explains why each is load-bearing for a guard like this.
+	out := testutil.GitGrepGuard(t, repoRoot, "-o", "-E", "--", transcriptReadPattern,
 		"--", ":(glob)cmd/**/*.go", ":(exclude,glob)**/*_test.go")
-	grep.Dir = strings.TrimSpace(string(repoRoot))
-	out, grepErr := grep.Output()
-	if grepErr != nil {
-		t.Fatalf("git grep for %q found nothing, which cannot be right — the pattern has gone stale: %v", transcriptReadPattern, grepErr)
-	}
 
+	// One line per match, `path:line:matched-text`, so the tally is of matches.
 	found := map[string]int{}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		file, countText, ok := strings.Cut(line, ":")
-		count, convErr := strconv.Atoi(countText)
-		if !ok || !strings.HasSuffix(file, ".go") || convErr != nil {
-			t.Fatalf("cannot parse git grep output; expected `path:count`, got:\n  %s\n"+
+		file, _, ok := strings.Cut(line, ":")
+		if !ok || !strings.HasSuffix(file, ".go") {
+			t.Fatalf("cannot parse git grep output; expected `path:line:match`, got:\n  %s\n"+
 				"The filename field is unusable, so this test can prove nothing. "+
 				"Check whether git is colorizing into a pipe (color.ui or color.grep set to `always`).", line)
 		}
-		found[file] = count
+		found[file]++
 	}
 	if len(found) == 0 {
 		t.Fatal("guard matched no transcript reads at all; the detection pattern has gone stale and must be re-pointed")

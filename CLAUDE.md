@@ -457,6 +457,45 @@ Before pushing commits or otherwise sending code changes to any remote, run `mis
 - Lint errors → run `mise run lint` and fix issues
 - Test failures → run `mise run test` and fix
 
+### Source-Level Guard Tests
+
+Four tests scan this repo's own source with `git grep` to enforce an invariant
+the compiler cannot: `TestRootBasesAreTrusted` (root bases are trusted paths),
+`TestTranscriptReadsOnlyShrink` (the unconfined transcript-read ratchet),
+`TestGitStatusCallSitesPassNoOptionalLocks`, and
+`TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent`.
+
+**They all go through `testutil.GitGrepGuard`, which owns three flags.** Each was
+missing from at least one guard, and the same one was missing from three:
+
+- `--untracked`. `git grep` searches the INDEX. Every one of these guards has
+  "someone just added a file" as its subject, so the file it most needs to see is
+  the one not yet staged. Two failure shapes were worse than a miss: the
+  hook-config guard compares two sets built from the same blind grep, so a new
+  agent package calling `OpenHookConfig` without declaring `HookConfigRelPath`
+  was absent from both and the comparison *passed*; and the root-base guard's
+  staleness half reported a just-added entry as STALE, telling the author to
+  delete the entry that legitimised their new root.
+- `--no-color`. `color.ui`/`color.grep` set to `always` colorizes into a pipe and
+  the escapes land in the **filename** field. True of `-l` too, which looks
+  immune. Guards then either misparse (read as staleness, #2248) or compare
+  garbage to garbage while their "did we match anything" assertion still passes.
+- Repo-selector scrubbing. Git exports `GIT_DIR`/`GIT_WORK_TREE` to hooks and
+  they outrank `cmd.Dir`, so a `go test` under a hook or `git rebase --exec`
+  scanned a different repository. `RunGit`'s isolation does **not** cover this:
+  it filters `GIT_CONFIG_*` only.
+
+Two rules for writing one:
+
+- **A pathspec restricted to `*.go`, so an unparseable path can be fatal.** The
+  `git status` guard passed a bare `cmd internal`, which also matched testdata
+  `.jsonl` and a `.md`, so its non-`.go` branch had to `continue` — and that
+  skip was the only thing between colorized output and a guard that silently
+  checked nothing.
+- **Fail on zero matches.** A detection pattern that goes stale otherwise passes
+  forever. `GitGrepGuard` does this itself; the `checked == 0` tallies are the
+  second half of the same idea.
+
 ### Code Duplication Prevention
 
 Before implementing Go code, use `/go:discover-related` to find existing utilities and patterns that might be reusable.
