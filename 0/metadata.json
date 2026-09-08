@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M20C04EYEQ5XJZDEN3961VFY",
+  "session_id": "01a07b2f-e7b1-7dc1-ac2a-a848db2bb440",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-08T11:21:08.464404Z",
+  "branch": "refactor-remaining-git-metadata-consumers",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "HANDOFF_GIT_METADATA_SPLIT_5.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "7e129c7edb05",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 56380,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 511616,
+    "output_tokens": 3885,
+    "api_call_count": 11
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-08T11:21:08.366432Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 19631,
+    "human_modified": 51,
+    "human_removed": 0,
+    "total_committed": 19682,
+    "total_lines_changed": 23626,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2232,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "GIT_METADATA_TRAVERSAL_IMPLEMENTATION_PLAN.md": 916,
+        "GIT_METADATA_TRAVERSAL_THERMO_NUCLEAR_REVIEW.md": 935,
+        "plan.md": 323,
+        "review.md": 58
+      }
+    }
+  ]
+}
