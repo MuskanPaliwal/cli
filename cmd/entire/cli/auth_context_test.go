@@ -301,3 +301,175 @@ func TestPromoteNextLogin(t *testing.T) {
 		t.Fatalf("expected a context to be promoted to current (current=%q, err=%v)", current, err)
 	}
 }
+
+// setupContextsForUse records one login context per host into an isolated config
+// dir and returns their names in on-disk order. Only the first stays active, so
+// a test can tell the picker's default from whatever was recorded last.
+func setupContextsForUse(t *testing.T, hosts ...string) []string {
+	t.Helper()
+	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	exp := time.Now().Add(time.Hour).Unix()
+	names := make([]string, 0, len(hosts))
+	for i, host := range hosts {
+		claims := fmt.Sprintf(`{"iss":"https://%s","handle":"user-%d","exp":%d}`, host, i, exp)
+		name, err := auth.RecordLoginContext(makeContextJWT(t, claims), "", i == 0)
+		if err != nil {
+			t.Fatalf("record %s: %v", host, err)
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// TestSelectContextToUse_NoContexts pins that a bare `entire auth use` with
+// nothing saved points at login instead of erroring or opening an empty picker.
+func TestSelectContextToUse_NoContexts(t *testing.T) {
+	setupContextsForUse(t)
+
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	got, err := selectContextToUse(cmd)
+	if err != nil {
+		t.Fatalf("selectContextToUse: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("selected = %q, want no selection", got)
+	}
+	if !strings.Contains(out.String(), "entire login") {
+		t.Fatalf("output = %q, want a hint pointing at 'entire login'", out.String())
+	}
+}
+
+// TestSelectContextToUse_SingleContextNeedsNoPicker pins that one saved login
+// resolves directly — a one-row picker asks a question with one answer, and this
+// is the branch that keeps a bare `auth use` working with no terminal.
+func TestSelectContextToUse_SingleContextNeedsNoPicker(t *testing.T) {
+	names := setupContextsForUse(t, "core-a.example.com")
+
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	got, err := selectContextToUse(cmd)
+	if err != nil {
+		t.Fatalf("selectContextToUse: %v", err)
+	}
+	if got != names[0] {
+		t.Fatalf("selected = %q, want the only saved context %q", got, names[0])
+	}
+}
+
+// TestSelectContextToUse_NoTerminalNamesThePositional pins the agent-safe
+// fallback: with several logins and no terminal the picker can't render, so the
+// error names every candidate and the non-interactive way to choose one rather
+// than hanging or picking for the user.
+func TestSelectContextToUse_NoTerminalNamesThePositional(t *testing.T) {
+	// interactive.CanPromptInteractively() is false under `go test`, so this
+	// exercises the no-terminal branch without faking a TTY.
+	names := setupContextsForUse(t, "core-a.example.com", "core-b.example.com")
+
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	got, err := selectContextToUse(cmd)
+	if err == nil {
+		t.Fatalf("selected %q, want an error when the picker can't render", got)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "entire auth use") {
+		t.Fatalf("error = %q, want it to name `entire auth use`", msg)
+	}
+	for _, name := range names {
+		if !strings.Contains(msg, name) {
+			t.Fatalf("error = %q, want it to list candidate %q", msg, name)
+		}
+	}
+}
+
+// TestContextSelectOptions pins the picker rows: one per context, valued by the
+// name SetCurrentContext takes, labelled with the handle and login server that
+// tell similarly-named logins apart, and exactly one marked active.
+func TestContextSelectOptions(t *testing.T) {
+	t.Parallel()
+
+	all := []*contexts.Context{
+		{Name: "prod", Handle: "alice", CoreURL: "https://core-a.example.com"},
+		{Name: "staging", Handle: "bob", CoreURL: "https://core-b.example.com"},
+		{Name: "bare"},
+	}
+
+	options := contextSelectOptions(all, "staging")
+	if len(options) != len(all) {
+		t.Fatalf("options = %d, want one per context (%d)", len(options), len(all))
+	}
+
+	var activeCount int
+	for i, opt := range options {
+		if opt.Value != all[i].Name {
+			t.Errorf("option %d value = %q, want the context name %q", i, opt.Value, all[i].Name)
+		}
+		if !strings.Contains(opt.Key, all[i].Name) {
+			t.Errorf("option %d label = %q, want it to carry the name %q", i, opt.Key, all[i].Name)
+		}
+		if strings.Contains(opt.Key, "(active)") {
+			activeCount++
+			if opt.Value != "staging" {
+				t.Errorf("option %q is marked active, want only staging", opt.Value)
+			}
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("want exactly one (active) row, got %d", activeCount)
+	}
+
+	// A context with no handle or login server renders as a bare name — no
+	// dangling separators for the fields it doesn't have.
+	if options[2].Key != "bare" {
+		t.Errorf("label for a handle-less, URL-less context = %q, want %q", options[2].Key, "bare")
+	}
+	if !strings.Contains(options[0].Key, "alice") || !strings.Contains(options[0].Key, "core-a.example.com") {
+		t.Errorf("label = %q, want the handle and login server", options[0].Key)
+	}
+}
+
+// TestAuthUseCmd_ArgsAndSwitch pins the command surface: a name still switches
+// without asking, and the argument is now optional so a bare `entire auth use`
+// reaches the picker instead of failing argument validation.
+func TestAuthUseCmd_ArgsAndSwitch(t *testing.T) {
+	names := setupContextsForUse(t, "core-a.example.com", "core-b.example.com")
+
+	cmd := newAuthUseCmd()
+	if err := cmd.Args(cmd, nil); err != nil {
+		t.Fatalf("Args(no args) = %v, want the picker form to be accepted", err)
+	}
+	if err := cmd.Args(cmd, []string{"a", "b"}); err == nil {
+		t.Error("Args(two args) = nil, want at most one context")
+	}
+
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{names[1]})
+	if err := cmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("auth use %s: %v", names[1], err)
+	}
+	if !strings.Contains(out.String(), names[1]) {
+		t.Fatalf("output = %q, want confirmation naming %q", out.String(), names[1])
+	}
+	_, current, err := auth.StoredContexts()
+	if err != nil {
+		t.Fatalf("StoredContexts: %v", err)
+	}
+	if current != names[1] {
+		t.Fatalf("current context = %q, want %q", current, names[1])
+	}
+}
