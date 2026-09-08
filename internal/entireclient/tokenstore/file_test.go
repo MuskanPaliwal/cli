@@ -495,3 +495,52 @@ func TestResolveBackend_OwnsDirOnlyForTheDefaultPath(t *testing.T) {
 		t.Error("custom path: ownsDir = true, want false")
 	}
 }
+
+// The token store is the fourth consumer of userdirs.Config(), and the one with
+// no root to catch a rejected override: fileStore.dir anchors on the dirname of
+// its own path (permitted, since ENTIRE_TOKEN_STORE_PATH names a file the caller
+// chose) and reaches it through filepath.Abs, which launders a relative
+// ENTIRE_CONFIG_DIR into a plausible-looking path. Left unchecked, bearer tokens
+// landed at ./<value>/tokens.json — for a CLI run from a repository, inside the
+// repository.
+func TestFileBackendPath_RejectsRelativeConfigDirWithoutTouchingDisk(t *testing.T) {
+	t.Setenv(PathEnvVar, "")
+	t.Setenv("ENTIRE_CONFIG_DIR", "relative-config")
+	t.Chdir(t.TempDir())
+
+	path, err := fileBackendPathChecked()
+	if err == nil {
+		t.Fatalf("fileBackendPathChecked() = %q, nil; want a rejected override", path)
+	}
+	if !strings.Contains(err.Error(), "ENTIRE_CONFIG_DIR") {
+		t.Errorf("error = %q, want it to name the variable the user has to change", err)
+	}
+
+	// The carried error must stop every operation before it creates anything.
+	s := &fileStore{path: path, pathErr: err, ownsDir: true}
+	if _, getErr := s.Get("svc", "user"); getErr == nil {
+		t.Error("Get() succeeded against a rejected config dir")
+	}
+	if setErr := s.Set("svc", "user", "secret"); setErr == nil {
+		t.Error("Set() succeeded against a rejected config dir")
+	}
+	if _, statErr := os.Stat("relative-config"); statErr == nil {
+		t.Error("the store created the directory it was refusing")
+	}
+}
+
+// An explicit ENTIRE_TOKEN_STORE_PATH is deliberately not held to the rule: it
+// names a file the user chose, the same reasoning that exempts it from the
+// root-base rule in CLAUDE.md.
+func TestFileBackendPath_ExplicitPathIsNotHeldToTheAbsoluteRule(t *testing.T) {
+	t.Setenv("ENTIRE_CONFIG_DIR", "relative-config")
+	t.Setenv(PathEnvVar, "relative-tokens.json")
+
+	path, err := fileBackendPathChecked()
+	if err != nil {
+		t.Fatalf("fileBackendPathChecked() error = %v, want the caller's own path honored", err)
+	}
+	if path != "relative-tokens.json" {
+		t.Errorf("path = %q, want the value as given", path)
+	}
+}

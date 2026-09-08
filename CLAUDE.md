@@ -799,7 +799,7 @@ to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 | the working tree | `worktreedir` | worktree root |
 | an agent's hook config | `agent.HookConfigFile` | worktree root (`.claude/`, `.cursor/`, `.gemini/`, `.github/hooks/`, `.factory/`, `.codex/`, `.opencode/plugins/`, `.pi/extensions/entire/`) |
 | an agent's session store | `agent.SessionStore` | the agent's own `GetSessionDir` |
-| the active git hooks dir | `strategy.hooksRoot` | `git rev-parse --git-path hooks`, absolutized |
+| the active git hooks dir | `strategy.hooksRootForInstall` / `ForRemoval` | `git rev-parse --git-path hooks`, absolutized |
 | per-user config / cache | `userdirs.ConfigRoot` / `CacheRoot` | `$ENTIRE_CONFIG_DIR` else `~/.config/entire`; `$XDG_CACHE_HOME/entire` else `~/.cache/entire` |
 | managed plugin tree | `pluginRoot` (`plugin_store.go`) | `pluginParentDir()` — `$ENTIRE_PLUGIN_DIR`, `%LOCALAPPDATA%`, or `$XDG_DATA_HOME` |
 
@@ -903,8 +903,8 @@ comments at each site say which case applies:
   those names arrived from somewhere else. It was the last tree Entire wrote to
   with bare `os.ReadFile`/`os.WriteFile` on a joined path, so a symlink at
   `.git/hooks/pre-push` was read through and then *written* through, replacing
-  whatever the link named with a shell script. `hooksRoot` refuses a link at the
-  directory (git's own `--git-path hooks` answer, which `core.hooksPath` can put
+  whatever the link named with a shell script. `hooksRootForInstall` refuses a
+  link at the directory (git's own `--git-path hooks` answer, which `core.hooksPath` can put
   anywhere, which is why no other anchor reaches it); the four reads go through
   `osroot.ReadFileNoFollow`; and the write is `jsonutil.WriteFileAtomicIn`,
   whose rename **replaces** a leaf link rather than following it.
@@ -913,7 +913,29 @@ comments at each site say which case applies:
   A symlinked hook is then classified as *foreign* rather than as absent, so it
   is backed up to `<hook>.pre-entire` and chained to exactly as a foreign script
   would be: refusing to read through someone's link must not mean silently
-  discarding it. `doctor`'s `checkGitHookSymlinks` reports both conditions, and
+  discarding it.
+
+  **The directory refusal is install-only, and that asymmetry is load-bearing.**
+  `hooksRootForRemoval` resolves the link and anchors on its target; only
+  `hooksRootForInstall` refuses. Removal deletes files carrying Entire's marker
+  and renames back the backups Entire itself made, so it acts only on files
+  Entire created and the redirect costs nothing. Sharing one function cost a
+  great deal: `entire disable` exited non-zero forever with no other uninstall
+  path, and `gitHookStateInHooksDir` reported `GitHooksAbsent`, which sent
+  `EnsureSetup` to `InstallGitHook` and failed **every agent turn** on the same
+  refusal. A refusal a user can neither act on nor uninstall past is worse than
+  the redirect it declines to follow.
+
+  **A hook that cannot be READ is never replaced.** `classifyExistingHook`
+  identifies absent / ours / foreign positively and returns an error for
+  anything else, because the write is `jsonutil.WriteFileAtomicIn` and
+  `rename(2)` needs no permission on the target at all: a mode-0000 hook was
+  classified "not foreign", got no backup, and was silently destroyed. The
+  in-place truncating write this replaced failed loudly with `EACCES`, so
+  switching to the rename (correct, for symlinks) turned a loud failure into
+  data loss. Removal treats the same case as present-and-not-ours, so a backup
+  is not renamed over it either, and warns rather than erroring so uninstall
+  still finishes. `doctor`'s `checkGitHookSymlinks` reports both conditions, and
   it is a separate function from `checkAgentDirSymlinks` because that one scans
   worktree-relative paths through the worktree root and `core.hooksPath` can
   name a directory outside the worktree entirely.
@@ -1030,7 +1052,8 @@ comments at each site say which case applies:
   largest gap left**, so do not read it as settled. The WRITE half is contained
   — every agent's `WriteSession` goes through `agent.WriteSessionFile` and
   `SessionStore`, which rejects a `SessionRef` outside the agent's session
-  directory — while the eight `os.ReadFile(sessionRef)` reads are not, and the
+  directory — while the `os.ReadFile(sessionRef)` reads are not (the count is
+  pinned per file by `agent.TestTranscriptReadsOnlyShrink`), and the
   read is what pulls transcript content into checkpoints. Closing it is a
   protocol change rather than a refactor, which is why it is scoped separately;
   the shape it wants is `HookInput.RepoPath` plus the same
@@ -1292,12 +1315,30 @@ Rejecting beats falling through to the platform default: for the config
 directory that default is the developer's REAL `~/.config/entire`, so quietly
 substituting it for a test harness's mistyped override is worse than an error.
 `userdirs.Config()`/`Cache()` cannot report — too many callers only want the
-string — so the refusal lands at every root opened over those directories:
-`userdirs`' own (`resolveUserRoot`, which checks *before* creating anything),
-plus `contexts.configRoot` and `discovery.cacheFile.root`, which open their own.
-Those last two used to launder a relative directory through `filepath.Abs`,
+string — so **every consumer that turns one into I/O checks, and there are
+four**: `userdirs`' own roots, `contexts`, `discovery`, and the token store.
+The first three used to launder a relative directory through `filepath.Abs`,
 which produced a plausible-looking absolute path out of the exact mistake being
 guarded against. Do not reintroduce it.
+
+Two rules about *where* the check goes, both learned by getting them wrong:
+
+- **It must precede every `MkdirAll`, not merely every root open.** Checking at
+  the root is checking at the READ, and `contexts.FilePath` and
+  `withCacheFileLock` run several steps earlier: they created `./<value>` and
+  dropped a `.lock` inside it on the way to reporting the refusal, which is the
+  mistake itself. `resolveUserRoot` already had this right; the other two did
+  not.
+- **A tree with no root to check at must check for itself.** The token store is
+  the fourth consumer and has no root over the config dir: `fileStore.dir`
+  anchors on the dirname of its own path (one of the two places the root-base
+  rule permits that, since `ENTIRE_TOKEN_STORE_PATH` names a file the caller
+  chose) and reaches it through `filepath.Abs`. So it calls
+  `userdirs.ConfigDirChecked` and carries the error on `fileStore.pathErr`,
+  reported by `dir` and `ensureDir` before any filesystem access. Left out, it
+  put bearer tokens at `./<value>/tokens.json`. An explicit
+  `ENTIRE_TOKEN_STORE_PATH` is deliberately still exempt: the user named that
+  file.
 
 **The OPF `command` is the deliberate exception, and stays one.**
 `redaction.openai_privacy_filter.command` becomes `argv[0]` of an

@@ -73,6 +73,15 @@ const contextsFileName = "contexts.json"
 // The path is for messages and for the flock, which takes one. Reads and writes
 // go through configRoot.
 func FilePath(configDir string) (string, error) {
+	// Before EnsurePrivateDir, not after. configRoot refuses a relative
+	// directory, but it runs at the READ, several steps past this one: by then
+	// EnsurePrivateDir has created ./<value> relative to the working directory
+	// and lockFile has put a .lock inside it. Creating that directory is the
+	// exact mistake the check exists to prevent, so it cannot happen on the way
+	// to reporting it.
+	if err := userdirs.RequireAbsoluteOverride("config dir", configDir); err != nil {
+		return "", err //nolint:wrapcheck // the error already names the directory and its value
+	}
 	if err := userdirs.EnsurePrivateDir(configDir); err != nil {
 		return "", fmt.Errorf("create config dir: %w", err)
 	}

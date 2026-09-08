@@ -299,18 +299,29 @@ func BranchExistsLocally(ctx context.Context, branchName string) (bool, error) {
 // Should be switched back to go-git once we upgrade to go-git v6
 // Returns an error if the ref doesn't exist or checkout fails.
 //
-// The leading-dash guard it used to carry is the narrowest part of the problem:
-// `git checkout` also reads `--`, a pathspec, and `@{-1}`, and the ref arrives
-// from `entire resume <branch>` and from a trail's branch field. Full
-// validation costs one subprocess on a command a human is waiting on, and it
-// still admits an object id — `check-ref-format --branch` accepts a hex string
-// — so the "or commit" half of the old contract survives even though no caller
-// uses it.
+// Two guards, because neither covers the other.
+//
+// ValidateBranchName replaces a leading-dash check that was the narrowest part
+// of the problem: the ref arrives from `entire resume <branch>` and from a
+// trail's branch field, and `git checkout` also reads `@{-1}` and a name
+// carrying a newline. It still admits an object id, since `check-ref-format
+// --branch` accepts a hex string, so the "or commit" half of the old contract
+// survives even though no caller uses it.
+//
+// The trailing `--` covers what validation cannot, and validation cannot cover
+// it in principle: `git checkout <name>` falls back to treating <name> as a
+// PATHSPEC when no such ref exists, and a filename is very often a perfectly
+// legal branch name. `check-ref-format --branch README.md` exits 0, and
+// `git checkout README.md` in a repo with no such branch then restores that file
+// from the index, discarding the user's edits, and exits 0 -- a silent data loss
+// reported as success. With the `--`, the same call is `fatal: invalid
+// reference: README.md` and exits 128. A branch and a raw commit id both still
+// resolve, so nothing legitimate is lost.
 func CheckoutBranch(ctx context.Context, ref string) error {
 	if err := ValidateBranchName(ctx, ref); err != nil {
 		return fmt.Errorf("checkout failed: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "git", "checkout", ref)
+	cmd := exec.CommandContext(ctx, "git", "checkout", ref, "--")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("checkout failed: %s: %w", strings.TrimSpace(string(output)), err)
 	}

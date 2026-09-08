@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,8 +142,18 @@ func getHooksDirInPath(ctx context.Context, dir string) (string, error) {
 	return filepath.Clean(hooksDir), nil
 }
 
-// hooksRoot anchors a root at the active hooks directory and refuses a symlink
-// at the directory itself.
+// absHooksDir absolutizes git's answer for the hooks directory. Both roots
+// below anchor on the result, and every message names it.
+func absHooksDir(hooksDir string) (string, error) {
+	abs, err := filepath.Abs(hooksDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve hooks directory %s: %w", hooksDir, err)
+	}
+	return abs, nil
+}
+
+// hooksRootForInstall anchors a root at the active hooks directory and refuses a
+// symlink at the directory itself.
 //
 // The base is git's own answer to `git rev-parse --git-path hooks`, which is
 // what makes it a trusted one: core.hooksPath may name any directory, inside
@@ -158,12 +169,15 @@ func getHooksDirInPath(ctx context.Context, dir string) (string, error) {
 // target says the same thing without the indirection -- or something that
 // redirects every hook Entire installs somewhere it cannot see.
 //
+// The refusal is INSTALL-ONLY, which hooksRootForRemoval is the other half of.
+// Read that function's comment before widening this one back out.
+//
 // A missing directory is returned unwrapped so callers can classify it with
 // os.IsNotExist.
-func hooksRoot(hooksDir string) (*os.Root, error) {
-	abs, err := filepath.Abs(hooksDir)
+func hooksRootForInstall(hooksDir string) (*os.Root, error) {
+	abs, err := absHooksDir(hooksDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve hooks directory %s: %w", hooksDir, err)
+		return nil, err
 	}
 	info, err := os.Lstat(abs)
 	if err != nil {
@@ -175,18 +189,144 @@ func hooksRoot(hooksDir string) (*os.Root, error) {
 	return osroot.Shared(abs) //nolint:wrapcheck // preserve os.IsNotExist classification, as the doc comment promises
 }
 
-// symlinkedHooksDirError explains a refusal from hooksRoot in terms of the one
-// setting that can produce it.
+// hooksRootForRemoval anchors a root at the directory a symlinked hooks path
+// points AT, instead of refusing the link the way hooksRootForInstall does.
+//
+// Removal is not the operation the refusal exists to prevent. Installing writes
+// new content through a path it cannot verify; removing deletes files carrying
+// Entire's own marker and renames back the .pre-entire backups Entire itself
+// created. Both act only on files Entire put there, so following the link costs
+// nothing the install-time refusal was protecting.
+//
+// Refusing here instead cost a great deal, which is why this exists. RemoveGitHook
+// and gitHookStateInHooksDir shared hooksRootForInstall, so a symlinked hooks
+// directory made `entire disable` exit non-zero forever -- there is no uninstall
+// path that does not go through this function, so the user could not get out by
+// running Entire at all -- while the detection half reported GitHooksAbsent,
+// which sent EnsureSetup to InstallGitHook and failed every agent turn on the
+// same error. A refusal a user cannot act on and cannot uninstall past is worse
+// than the redirect it declines to follow.
+//
+// EvalSymlinks rather than Readlink: the link may be relative or chained, and
+// the root has to anchor on a real directory. A missing directory is returned
+// unwrapped so callers can classify it with os.IsNotExist.
+func hooksRootForRemoval(hooksDir string) (*os.Root, error) {
+	abs, err := absHooksDir(hooksDir)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // preserve os.IsNotExist classification
+	}
+	return osroot.Shared(resolved) //nolint:wrapcheck // preserve os.IsNotExist classification
+}
+
+// HooksDirLinkTarget resolves a symlinked hooks directory to the absolute
+// directory it names, reporting false when it cannot be resolved (a dangling
+// link, or one whose target is unreadable).
+//
+// Exported because doctor prints the same remedy, and it must print the same
+// path: os.Readlink returns the link's raw contents, which for a relative link
+// is relative to the link's own parent rather than to anywhere the user's shell
+// will be. Pasting that into `git config core.hooksPath` sets a path git then
+// resolves from somewhere else entirely.
+func HooksDirLinkTarget(hooksDir string) (string, bool) {
+	abs, err := absHooksDir(hooksDir)
+	if err != nil {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+// symlinkedHooksDirError explains a refusal from hooksRootForInstall in terms of
+// the one setting that can produce it.
+//
+// The unresolvable branch names no target at all rather than a placeholder: the
+// remedy is a command the user pastes, and `git config core.hooksPath its target`
+// is worse than no command, because it looks like one.
 func symlinkedHooksDirError(hooksDir string, err error) error {
-	target, readErr := os.Readlink(hooksDir)
-	if readErr != nil {
-		target = "its target"
+	const refusal = "Entire will not install hooks through a link, because everything it writes there would land somewhere it cannot verify.\n"
+	abs, absErr := absHooksDir(hooksDir)
+	if absErr != nil {
+		abs = hooksDir
+	}
+	target, ok := HooksDirLinkTarget(hooksDir)
+	if !ok {
+		return fmt.Errorf("git resolves the hooks directory to %s, which is a symlink Entire cannot resolve\n"+
+			refusal+
+			"Find where the path is set, then point git at a real directory:\n"+
+			"  git config --show-origin --get-all core.hooksPath\n"+
+			"%w", abs, err)
 	}
 	return fmt.Errorf("git resolves the hooks directory to %s, which is a symlink to %s\n"+
-		"Entire will not install hooks through a link, because everything it writes there would land somewhere it cannot verify.\n"+
+		refusal+
 		"Point git at the target directly instead:\n"+
 		"  git config core.hooksPath %s\n"+
-		"or replace the link with a real directory: %w", hooksDir, target, target, err)
+		"or replace the link with a real directory: %w", abs, target, target, err)
+}
+
+// hookClassification is what is sitting at a managed hook's path.
+type hookClassification int
+
+const (
+	// hookAbsent: nothing is there.
+	hookAbsent hookClassification = iota
+	// hookOurs: a regular file carrying Entire's marker.
+	hookOurs
+	// hookForeign: something that is not Entire's -- a script another tool or
+	// the user wrote, or a symlink, which Entire never installs.
+	hookForeign
+)
+
+// classifyExistingHook reports what is at name inside root.
+//
+// Every outcome is identified POSITIVELY and an unrecognised read error is
+// returned rather than folded into one of them. That is not style. The previous
+// expression was
+//
+//	foreign := errors.Is(err, osroot.ErrSymlinkedPath) || (err == nil && !hasMarker)
+//
+// which is false for a hook that exists but cannot be READ -- a mode-0600 hook
+// owned by another user, say. "Not foreign" meant no backup, and the write that
+// followed is a temp-file-and-rename, which needs no permission on the target at
+// all: rename(2) only needs the directory writable. So an unreadable hook was
+// silently destroyed. The in-place truncating write this code replaced failed
+// loudly with EACCES and left the file alone, so the atomic write -- correct for
+// refusing to follow a symlink -- turned a loud failure into data loss.
+//
+// The caller must therefore treat a returned error as "something is there and I
+// could not tell what", and write nothing.
+func classifyExistingHook(root *os.Root, name string) (hookClassification, error) {
+	data, err := osroot.ReadFileNoFollow(root, name)
+	switch {
+	case err == nil:
+		if strings.Contains(string(data), entireHookMarker) {
+			return hookOurs, nil
+		}
+		return hookForeign, nil
+	case errors.Is(err, osroot.ErrSymlinkedPath):
+		// Entire never installs a link, so it belongs to the user or another
+		// tool: foreign, and backed up and chained to like any other.
+		return hookForeign, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return hookAbsent, nil
+	default:
+		return hookAbsent, err //nolint:wrapcheck // callers add the hook name and the remedy
+	}
+}
+
+// unclassifiableHookError refuses to replace a hook that could not be read.
+func unclassifiableHookError(hooksDir, name string, err error) error {
+	return fmt.Errorf("cannot read the existing %s hook to tell whether it is Entire's: %w\n"+
+		"Entire will not replace a hook it cannot classify. The install writes by atomic rename, "+
+		"which would replace the file whether or not it is readable, so there would be no backup and no warning.\n"+
+		"Check what is there and fix its permissions, or move it aside yourself:\n"+
+		"  ls -l %s", name, err, filepath.Join(hooksDir, name))
 }
 
 // hookFileExists reports whether name exists directly inside root. It lstats, so
@@ -296,7 +436,11 @@ const bareEntireHookCmd = "entire"
 // Current, which is what makes EnsureSetup reinstall it rather than leaving a
 // broken hook in place forever.
 func gitHookStateInHooksDir(hooksDir string) GitHookState {
-	root, err := hooksRoot(hooksDir)
+	// ForRemoval: this is a read, and reporting GitHooksAbsent for a symlinked
+	// hooks directory is what sent EnsureSetup to InstallGitHook on every agent
+	// turn, to fail on a refusal only `entire enable` should ever hit. Seeing
+	// through the link reports what is actually installed there.
+	root, err := hooksRootForRemoval(hooksDir)
 	if err != nil {
 		return GitHooksAbsent
 	}
@@ -498,7 +642,7 @@ func InstallGitHook(ctx context.Context, silent, absolutePath bool) (int, error)
 		return 0, fmt.Errorf("failed to create hooks directory: %w", err)
 	}
 
-	root, err := hooksRoot(hooksDir)
+	root, err := hooksRootForInstall(hooksDir)
 	if err != nil {
 		if errors.Is(err, osroot.ErrSymlinkedPath) {
 			return 0, symlinkedHooksDirError(hooksDir, err)
@@ -522,10 +666,14 @@ func InstallGitHook(ctx context.Context, silent, absolutePath bool) (int, error)
 		// tool. Refusing to read through it must not mean quietly replacing it,
 		// and the rename below preserves the link itself as the backup, which
 		// the generated chain call then invokes exactly as it would a script.
-		existing, existingErr := osroot.ReadFileNoFollow(root, spec.name)
-		foreign := errors.Is(existingErr, osroot.ErrSymlinkedPath) ||
-			(existingErr == nil && !strings.Contains(string(existing), entireHookMarker))
-		if foreign {
+		//
+		// A hook that cannot be classified at all stops the install for that
+		// hook rather than being treated as absent; see classifyExistingHook.
+		class, classErr := classifyExistingHook(root, spec.name)
+		if classErr != nil {
+			return installedCount, unclassifiableHookError(hooksDir, spec.name, classErr)
+		}
+		if class == hookForeign {
 			if !backupExists {
 				if err := root.Rename(spec.name, backupName); err != nil {
 					return installedCount, fmt.Errorf("failed to back up %s: %w", spec.name, err)
@@ -592,13 +740,13 @@ func RemoveGitHook(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	root, err := hooksRoot(hooksDir)
+	// ForRemoval: uninstall must be able to finish on a repo install refused.
+	// See hooksRootForRemoval for why following the link is safe here and not
+	// in InstallGitHook.
+	root, err := hooksRootForRemoval(hooksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil // no hooks directory, so nothing of ours in it
-		}
-		if errors.Is(err, osroot.ErrSymlinkedPath) {
-			return 0, symlinkedHooksDirError(hooksDir, err)
 		}
 		return 0, fmt.Errorf("failed to open hooks directory %s: %w", hooksDir, err)
 	}
@@ -612,9 +760,20 @@ func RemoveGitHook(ctx context.Context) (int, error) {
 		// Remove the hook if it contains our marker. A symlink at the path is
 		// present but never ours, so it is left alone and, like any other
 		// foreign hook, blocks the backup from being restored over it.
-		data, readErr := osroot.ReadFileNoFollow(root, hook)
-		hookIsOurs := readErr == nil && strings.Contains(string(data), entireHookMarker)
-		hookExists := readErr == nil || errors.Is(readErr, osroot.ErrSymlinkedPath)
+		//
+		// A hook that cannot be read is treated as present-and-not-ours, which
+		// is the safe direction on this path too: classifying it as absent let
+		// the backup be renamed OVER it below, destroying it exactly as the
+		// install did. Warn and leave both files alone -- uninstall is cleanup
+		// and must still finish, so this is not an error.
+		class, classErr := classifyExistingHook(root, hook)
+		if classErr != nil {
+			fmt.Fprintf(os.Stderr, "[entire] Warning: cannot read %s to tell whether it is Entire's (%v); leaving it and any %s%s backup in place\n",
+				hook, classErr, hook, backupSuffix)
+			continue
+		}
+		hookIsOurs := class == hookOurs
+		hookExists := class != hookAbsent
 
 		if hookIsOurs {
 			if err := osroot.RemoveNoSymlinks(root, hook); err != nil {

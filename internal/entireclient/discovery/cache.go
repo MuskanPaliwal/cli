@@ -72,6 +72,12 @@ func writeCacheNoLock(f cacheFile, cache ClusterCache) error {
 // withCacheFileLock ensures cacheDir exists, takes the exclusive flock for
 // the named cache file, and runs fn with the file's path.
 func withCacheFileLock(cacheDir, fileName string, fn func(cacheFile) error) error {
+	// Before the MkdirAll, for the reason contexts.FilePath gives: cacheFile.root
+	// refuses a relative directory, but only at the read, by which point this
+	// has already created ./<value> and dropped a .lock in it.
+	if err := userdirs.RequireAbsoluteOverride("cache dir", cacheDir); err != nil {
+		return err //nolint:wrapcheck // the error already names the directory and its value
+	}
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1019,17 +1020,23 @@ func TestResolveCheckpointSummaryProvider_ConfiguredProviderUsesNamedDiscovery(t
 	}
 }
 
-// TestPersistSummaryProviderSelection_AutoSelectDoesNotGrantExternalAgents
-// pins that the repo-wide external_agents grant needs a human.
+// TestPersistSummaryProviderSelection_AutoSelectPersistsNothingForAnExternal
+// pins both halves of the automatic case.
 //
-// The non-interactive branches of resolveCheckpointSummaryProvider auto-select
-// (single candidate, or first-of-many with no TTY) and used to persist the
-// grant on the way through. That grant is not scoped to the chosen provider:
-// it turns on the $PATH sweep that runs every entire-agent-* binary from then
-// on, so it must not be minted by a code path where nobody chose anything. The
-// chosen provider still resolves on later runs without it, through the named
-// ungated lookup in discoverSummaryProviderIfMissing.
-func TestPersistSummaryProviderSelection_AutoSelectDoesNotGrantExternalAgents(t *testing.T) {
+// The repo-wide external_agents grant needs a human: the non-interactive
+// branches of resolveCheckpointSummaryProvider auto-select (single candidate,
+// or first-of-many with no TTY) and used to persist the grant on the way
+// through. That grant is not scoped to the chosen provider, it turns on the
+// $PATH sweep that runs every entire-agent-* binary from then on, so it must
+// not be minted by a code path where nobody chose anything.
+//
+// And with the grant withheld, the provider NAME must not be persisted either.
+// It used to be, on the reasoning that it resolved through an ungated named
+// lookup. That lookup is gated now, so the write produced a settings file whose
+// very next read fails with "unknown summary provider" -- Entire breaking
+// itself with its own write. Persisting nothing leaves the working behaviour:
+// the next run re-discovers and auto-selects the same provider.
+func TestPersistSummaryProviderSelection_AutoSelectPersistsNothingForAnExternal(t *testing.T) {
 	// Cannot use t.Parallel(): mutates the package-level agent registry via discovery.
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
@@ -1054,24 +1061,74 @@ func TestPersistSummaryProviderSelection_AutoSelectDoesNotGrantExternalAgents(t 
 	discoverSummaryProvidersAlways(ctx)
 
 	flagFlipped, err := persistSummaryProviderSelection(ctx, types.AgentName(providerName), "", selectionAutomatic)
-	if err != nil {
-		t.Fatalf("persistSummaryProviderSelection() error = %v", err)
+	if !errors.Is(err, errSelectionNotPersistable) {
+		t.Fatalf("persistSummaryProviderSelection() error = %v, want errSelectionNotPersistable", err)
 	}
 	if flagFlipped {
 		t.Error("an automatic selection must not flip external_agents")
 	}
 
-	s, err := settings.LoadFromFile(filepath.Join(tmpDir, ".entire", "settings.local.json"))
+	localFile := filepath.Join(tmpDir, ".entire", "settings.local.json")
+	if _, statErr := os.Stat(localFile); statErr == nil {
+		s, loadErr := settings.LoadFromFile(localFile)
+		if loadErr != nil {
+			t.Fatalf("LoadFromFile() error = %v", loadErr)
+		}
+		if s.ExternalAgents {
+			t.Error("external_agents granted without a human choosing the provider")
+		}
+		if s.SummaryGeneration != nil && s.SummaryGeneration.Provider != "" {
+			t.Errorf("provider %q persisted without the grant that makes it resolvable; "+
+				"the next run reads it back and fails", s.SummaryGeneration.Provider)
+		}
+	}
+}
+
+// The round trip the bug actually produced: auto-select, save, then resolve
+// again from the saved settings. It must not fail on what Entire itself wrote.
+func TestResolveCheckpointSummaryProvider_AutoSelectedExternalSurvivesTheNextRun(t *testing.T) {
+	// Cannot use t.Parallel(): mutates the package-level agent registry via discovery.
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	t.Chdir(tmpDir)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o750); err != nil {
+		t.Fatalf("mkdir .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled":true}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	const providerName = "external-summary-roundtrip"
+	externalDir := t.TempDir()
+	writeExternalSummaryAgentBinary(t, externalDir, providerName)
+	t.Setenv("PATH", externalDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The always-variant, which is what the real non-interactive path uses to
+	// build its candidate list: installation is the opt-in to "this plugin
+	// exists", and it is what makes the run in progress work without the grant.
+	discoverSummaryProvidersAlways(ctx)
+
+	var first bytes.Buffer
+	got, err := autoSelectSummaryProvider(ctx, &first, types.AgentName(providerName),
+		"test: non-interactive auto-select", selectionAutomatic)
 	if err != nil {
-		t.Fatalf("LoadFromFile() error = %v", err)
+		t.Fatalf("autoSelectSummaryProvider() error = %v", err)
 	}
-	if s.ExternalAgents {
-		t.Error("external_agents granted without a human choosing the provider")
+	if got.Name != types.AgentName(providerName) {
+		t.Fatalf("provider = %q, want %q", got.Name, providerName)
 	}
-	// The provider choice itself is still worth persisting: it is what keeps
-	// the next run from re-deciding, and it grants nothing on its own.
-	if s.SummaryGeneration == nil || s.SummaryGeneration.Provider != providerName {
-		t.Fatalf("provider not persisted; got %+v", s.SummaryGeneration)
+	if !strings.Contains(first.String(), "entire agent") {
+		t.Errorf("output should say how to make the choice stick, got %q", first.String())
+	}
+
+	// Second run: whatever was written, resolving again must still work.
+	if _, err := resolveCheckpointSummaryProvider(ctx, io.Discard); err != nil {
+		t.Fatalf("second run failed on settings the first run wrote: %v", err)
 	}
 }
 

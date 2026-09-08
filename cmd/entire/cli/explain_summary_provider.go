@@ -185,6 +185,10 @@ func discoverSummaryProviderIfMissing(ctx context.Context, name types.AgentName)
 // (single-installed or non-interactive-first-of-many) and persists the choice
 // so subsequent runs don't re-decide. Persistence failure is surfaced as a
 // warning — not an error — because the selection is still usable in-process.
+// errSelectionNotPersistable reports a selection that is correct for this run
+// and must not be written down. See persistSummaryProviderSelection.
+var errSelectionNotPersistable = errors.New("selection is valid for this run but would not resolve on the next one")
+
 func autoSelectSummaryProvider(ctx context.Context, w io.Writer, name types.AgentName, reason string, origin summarySelectionOrigin) (*checkpointSummaryProvider, error) {
 	logging.Info(ctx, reason, "provider", string(name))
 	provider, err := buildCheckpointSummaryProvider(name, "")
@@ -192,7 +196,15 @@ func autoSelectSummaryProvider(ctx context.Context, w io.Writer, name types.Agen
 		return nil, err
 	}
 	flagFlipped, saveErr := persistSummaryProviderSelection(ctx, provider.Name, provider.Model, origin)
-	if saveErr != nil {
+	switch {
+	case errors.Is(saveErr, errSelectionNotPersistable):
+		// Not a warning: nothing went wrong and the run is unaffected. Say what
+		// would make the choice stick, since re-selecting it on every run is the
+		// only symptom the user would otherwise see.
+		logging.Info(ctx, "not persisting auto-selected external summary provider without the external_agents grant",
+			"provider", string(provider.Name))
+		fmt.Fprintf(w, "Using %s for this run. To save it as the default, run `entire agent` and pick it: an external plugin needs the external_agents grant, and only your own selection can give it.\n", provider.DisplayName)
+	case saveErr != nil:
 		logging.Warn(ctx, "failed to save summary provider selection, continuing without persistence",
 			"error", saveErr.Error())
 		fmt.Fprintf(w, "Warning: could not save provider selection: %v\nUse `entire configure --summarize-provider %s` to set it manually.\n", saveErr, provider.Name)
@@ -347,17 +359,32 @@ func persistSummaryProviderSelection(ctx context.Context, provider types.AgentNa
 	}
 	s.SummaryGeneration.SetProvider(string(provider), model)
 
-	// Only a human's pick grants external_agents. The provider name is
-	// persisted either way — it decides nothing on its own, and it is what
-	// stops the next run re-deciding. An automatically chosen external
-	// provider keeps working without the grant, because
-	// discoverSummaryProviderIfMissing resolves a configured name through the
-	// named ungated lookup rather than through the sweep the grant enables.
-	if origin == selectionByUser {
-		if ag, getErr := getSummaryAgent(provider); getErr == nil && external.IsExternal(ag) && !s.ExternalAgents {
-			s.ExternalAgents = true
-			flagFlipped = true
+	// Only a human's pick grants external_agents: an automatic selection is no
+	// one's decision to widen a repo-wide execution grant.
+	//
+	// Which leaves the case this returns early on. An external provider chosen
+	// automatically cannot be persisted either, because the name alone no longer
+	// resolves. discoverSummaryProviderIfMissing gates the named lookup on the
+	// grant, so writing `provider: X` without it produces a configuration that
+	// fails on the very next run: Entire breaking itself with its own write. It
+	// did resolve ungated once, which is what the comment that used to sit here
+	// said. Gating that lookup closed a hole and invalidated the claim.
+	//
+	// Writing nothing is not a lost setting. The run in progress already has the
+	// agent registered from discoverSummaryProvidersAlways, so it completes, and
+	// the next run re-discovers and auto-selects the same provider by the same
+	// route. What is lost is only the shortcut of not re-deciding, against a
+	// stored value that would make the command fail.
+	//
+	// This is the rule enableExternalAgentsLocally already follows: do not report
+	// success for a write that cannot take effect. Persisting here is that same
+	// false claim written to disk instead of printed.
+	if ag, getErr := getSummaryAgent(provider); getErr == nil && external.IsExternal(ag) && !s.ExternalAgents {
+		if origin != selectionByUser {
+			return false, errSelectionNotPersistable
 		}
+		s.ExternalAgents = true
+		flagFlipped = true
 	}
 
 	if err := saveLocalSummarySettings(ctx, s); err != nil {

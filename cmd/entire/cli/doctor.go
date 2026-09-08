@@ -904,15 +904,29 @@ func checkGitHookSymlinks(cmd *cobra.Command) {
 		return // absent or unreadable: checkGitHooks reports what that costs
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		target := readlinkOrUnknown(hooksDir)
 		fmt.Fprintln(w, "Git hooks directory: SYMLINK")
-		fmt.Fprintf(w, "  %s -> %s\n", hooksDir, target)
+		// The resolved target, not os.Readlink's raw contents: a relative link
+		// reads relative to the link's own parent, so pasting it into the
+		// command below sets a path git resolves from somewhere else. When it
+		// cannot be resolved, no command is printed at all -- a remedy the user
+		// pastes must not contain a placeholder.
+		target, resolved := strategy.HooksDirLinkTarget(hooksDir)
+		if resolved {
+			fmt.Fprintf(w, "  %s -> %s\n", hooksDir, target)
+		} else {
+			fmt.Fprintf(w, "  %s -> %s (unresolvable)\n", hooksDir, readlinkOrUnknown(hooksDir))
+		}
 		fmt.Fprintln(w, "  Entire will not install hooks through a link, so its git hooks are not")
-		fmt.Fprintln(w, "  installed and other commands report them as absent rather than blocked.")
-		fmt.Fprintln(w, "  Fix: point git at the target directly, which says the same thing without")
-		fmt.Fprintln(w, "  the indirection:")
-		fmt.Fprintf(w, "    git config core.hooksPath %s\n", target)
-		fmt.Fprintln(w, "  or replace the link with a real directory.")
+		fmt.Fprintln(w, "  installed. Uninstalling still works: `entire disable` follows the link.")
+		if resolved {
+			fmt.Fprintln(w, "  Fix: point git at the target directly, which says the same thing without")
+			fmt.Fprintln(w, "  the indirection:")
+			fmt.Fprintf(w, "    git config core.hooksPath %s\n", target)
+			fmt.Fprintln(w, "  or replace the link with a real directory.")
+		} else {
+			fmt.Fprintln(w, "  Fix: find where the path is set, then point git at a real directory:")
+			fmt.Fprintln(w, "    git config --show-origin --get-all core.hooksPath")
+		}
 		return
 	}
 	if !info.IsDir() {

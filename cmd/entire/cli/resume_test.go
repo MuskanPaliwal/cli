@@ -236,6 +236,34 @@ func TestCheckoutBranch(t *testing.T) {
 			}
 		})
 	}
+
+	// Validation cannot catch this one, and no amount of tightening it would:
+	// a filename is very often a legal branch name, so `check-ref-format
+	// --branch test.txt` exits 0. Without a trailing `--`, git falls back to
+	// reading the argument as a PATHSPEC, restores the file from the index, and
+	// exits 0 — the user's edits gone, reported as a successful checkout.
+	t.Run("a filename is not silently treated as a pathspec", func(t *testing.T) {
+		if err := CheckoutBranch(context.Background(), "feature"); err != nil {
+			t.Fatalf("setup checkout: %v", err)
+		}
+		const edited = "edited, must survive\n"
+		if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(edited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		err := CheckoutBranch(context.Background(), "test.txt")
+		if err == nil {
+			t.Error("CheckoutBranch(\"test.txt\") = nil; a file that is not a ref must not report success")
+		}
+
+		got, readErr := os.ReadFile(filepath.Join(tmpDir, "test.txt"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(got) != edited {
+			t.Errorf("test.txt = %q, want the uncommitted edit intact; git restored it from the index", got)
+		}
+	})
 }
 
 func TestResumeFromCurrentBranch_NoCheckpoint(t *testing.T) {

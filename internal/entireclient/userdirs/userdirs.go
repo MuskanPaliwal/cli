@@ -67,13 +67,25 @@ func RequireAbsoluteOverride(name, value string) error {
 // Config returns the per-user config directory.
 //
 // The string form cannot report a rejected override, so it returns whatever was
-// set; every path that turns it into I/O opens a root over it, and both this
-// package's roots (configDir below) and the ones contexts and discovery open
-// for themselves refuse a relative directory. Callers that only display the
-// path are unaffected.
+// set. Every consumer that turns it into I/O is responsible for checking, and
+// there are four: this package's own roots, contexts, discovery, and the token
+// store. The first three open a root that refuses a relative directory; the
+// token store cannot, because it anchors on the dirname of a path the caller may
+// have named itself, so it calls ConfigDirChecked instead. An earlier version of
+// this comment listed only the middle two, and the token store was the one that
+// slipped past: bearer tokens at ./<value>/tokens.json.
+//
+// Callers that only display the path are unaffected.
 func Config() string {
-	dir, _ := configDir() //nolint:errcheck // see doc comment: the roots report it
+	dir, _ := configDir() //nolint:errcheck // see doc comment: the consumers report it
 	return dir
+}
+
+// ConfigDirChecked is Config for a caller that can report a rejected override.
+// It returns the directory in both cases, so a caller building a path for a
+// message still has one.
+func ConfigDirChecked() (string, error) {
+	return configDir()
 }
 
 // configDir is Config with the override check, for the callers that can report.

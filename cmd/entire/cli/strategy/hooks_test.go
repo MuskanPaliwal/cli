@@ -1984,3 +1984,132 @@ func TestRemoveGitHook_LeavesSymlinkedForeignHook(t *testing.T) {
 	require.NoError(t, err, "a foreign hook must survive removal")
 	assert.NotZero(t, info.Mode()&os.ModeSymlink)
 }
+
+// The refusal is install-only. It used to be shared with removal and detection,
+// which left a repo with a symlinked hooks directory unable to uninstall (there
+// is no other uninstall path) and failing EnsureSetup on every agent turn,
+// because detection reported the hooks absent and sent it back to the install
+// that had just refused.
+func TestRemoveGitHook_FinishesThroughASymlinkedHooksDir(t *testing.T) {
+	repoDir, _ := initHooksTestRepo(t)
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.NoError(t, err)
+	require.Equal(t, GitHooksCurrent, CheckGitHookState(context.Background()))
+
+	realHooks := filepath.Join(repoDir, ".git", "hooks")
+	link := filepath.Join(repoDir, "linked-hooks")
+	if err := os.Symlink(realHooks, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	testutil.RunGit(t, repoDir, "config", "--local", "core.hooksPath", link)
+	ClearHooksDirCache()
+
+	assert.Equal(t, GitHooksCurrent, CheckGitHookState(context.Background()),
+		"detection must see through the link, or EnsureSetup reinstalls into the refusal on every turn")
+
+	removed, err := RemoveGitHook(context.Background())
+	require.NoError(t, err, "uninstall must be able to finish; there is no other way out")
+	assert.Positive(t, removed)
+	for _, hook := range ManagedGitHookNames() {
+		assert.NoFileExists(t, filepath.Join(realHooks, hook))
+	}
+}
+
+// A hook Entire cannot read is a hook Entire must not replace. The write is an
+// atomic rename, which needs no permission on the target at all, so classifying
+// an unreadable hook as "not foreign" destroyed it with no backup and no
+// warning. The in-place write this replaced failed loudly with EACCES.
+func TestInstallGitHook_RefusesToReplaceAnUnreadableHook(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test removes")
+	}
+	if runtime.GOOS == goosWindows {
+		t.Skip("unix permission bits")
+	}
+	_, hooksDir := initHooksTestRepo(t)
+
+	const precious = "#!/bin/sh\n# someone else's pre-push\n"
+	hookPath := filepath.Join(hooksDir, "pre-push")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	require.NoError(t, os.WriteFile(hookPath, []byte(precious), 0o700))
+	require.NoError(t, os.Chmod(hookPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(hookPath, 0o700) }) //nolint:errcheck // best-effort restore for t.TempDir cleanup
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pre-push")
+	assert.Contains(t, err.Error(), "cannot read", "the message must name the condition, not just fail")
+
+	require.NoError(t, os.Chmod(hookPath, 0o400))
+	got, readErr := os.ReadFile(hookPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, precious, string(got), "the hook must survive untouched")
+	assert.NoFileExists(t, hookPath+GitHookBackupSuffix, "and no backup should have been invented for it")
+}
+
+// The same hole on the removal side: an unreadable hook classified as absent let
+// the .pre-entire backup be renamed over it.
+func TestRemoveGitHook_LeavesAnUnreadableHookAndItsBackup(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test removes")
+	}
+	if runtime.GOOS == goosWindows {
+		t.Skip("unix permission bits")
+	}
+	_, hooksDir := initHooksTestRepo(t)
+
+	const precious = "#!/bin/sh\n# someone else's pre-push\n"
+	hookPath := filepath.Join(hooksDir, "pre-push")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	require.NoError(t, os.WriteFile(hookPath, []byte(precious), 0o700))
+
+	_, err := InstallGitHook(context.Background(), true, false)
+	require.NoError(t, err)
+	require.FileExists(t, hookPath+GitHookBackupSuffix)
+
+	require.NoError(t, os.Chmod(hookPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(hookPath, 0o700) }) //nolint:errcheck // best-effort restore for t.TempDir cleanup
+
+	_, err = RemoveGitHook(context.Background())
+	require.NoError(t, err, "uninstall stays best-effort: an unreadable hook is a warning, not a failure")
+
+	require.NoError(t, os.Chmod(hookPath, 0o400))
+	got, readErr := os.ReadFile(hookPath)
+	require.NoError(t, readErr)
+	assert.NotEqual(t, precious, string(got),
+		"sanity: the file at the hook path is the one install wrote, not the backup")
+	assert.FileExists(t, hookPath+GitHookBackupSuffix,
+		"the backup must not have been renamed over a file we could not classify")
+}
+
+// A remedy the user pastes must be a command that works. os.Readlink returns the
+// link's raw contents, so a relative link produced a path git resolves from
+// somewhere else, and an unreadable one produced the literal
+// `git config core.hooksPath its target`.
+func TestSymlinkedHooksDirError_RemedyIsPasteable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	realHooks := filepath.Join(dir, "real-hooks")
+	require.NoError(t, os.MkdirAll(realHooks, 0o750))
+	link := filepath.Join(dir, "hooks")
+	if err := os.Symlink("real-hooks", link); err != nil { // deliberately relative
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	msg := symlinkedHooksDirError(link, osroot.ErrSymlinkedPath).Error()
+	assert.Contains(t, msg, "git config core.hooksPath "+realHooks,
+		"the remedy must name the resolved absolute target, not the link's raw contents")
+	assert.NotContains(t, msg, "core.hooksPath real-hooks",
+		"a relative target would be resolved by git from a different directory")
+
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), dangling); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	msg = symlinkedHooksDirError(dangling, osroot.ErrSymlinkedPath).Error()
+	assert.NotContains(t, msg, "its target", "never emit a command containing a placeholder")
+	assert.Contains(t, msg, "git config --show-origin --get-all core.hooksPath",
+		"with no target to name, point at the command that finds where the path came from")
+}

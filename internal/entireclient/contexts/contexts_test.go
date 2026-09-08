@@ -284,3 +284,29 @@ func TestModify_HoldsLockAcrossLoadAndSave(t *testing.T) {
 		t.Errorf("CurrentContext = %q, want %q (lost updates indicate non-atomic RMW)", got.CurrentContext, strconv.Itoa(n))
 	}
 }
+
+// The roots refuse a relative config dir, but only at the read. FilePath runs
+// several steps earlier and used to create the directory and let lockFile drop a
+// .lock inside it on the way to reporting the refusal, which is the mistake
+// itself: for a CLI run from a repository, ./<value> is inside the repository.
+func TestLoad_RefusesRelativeConfigDirBeforeCreatingIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if _, err := contexts.Load("relative-config"); err == nil {
+		t.Fatal("Load() = nil error, want a rejected override")
+	}
+	if _, err := os.Stat("relative-config"); err == nil {
+		t.Error("Load() created the directory it was refusing")
+	}
+}
+
+func TestSave_RefusesRelativeConfigDirBeforeCreatingIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if err := contexts.Save("relative-config", &contexts.File{}); err == nil {
+		t.Fatal("Save() = nil error, want a rejected override")
+	}
+	if _, err := os.Stat("relative-config"); err == nil {
+		t.Error("Save() created the directory it was refusing")
+	}
+}
