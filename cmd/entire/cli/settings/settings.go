@@ -1960,6 +1960,13 @@ func (s *EntireSettings) HasCheckpointRemoteKey() bool {
 // without it, the ownership signal this gates could be inherited from the very
 // upstream it is meant to distinguish.
 //
+// The DEEP (index AND HEAD) check, like the OPF command and unlike the layer
+// as a whole: this predicate overrides the checkpoint-remote ownership check
+// on both directions of checkpoint traffic, so being wrong means routing
+// session transcripts to a repository we cannot confirm is ours, not losing a
+// preference. The cost falls only on repos that actually have a local file
+// with the key, and the probe is memoized per process.
+//
 // Best-effort: an unreadable, malformed, or unverifiable local file reports
 // false, which is the conservative answer (callers then fall back to weaker
 // ownership signals).
@@ -1968,10 +1975,10 @@ func CheckpointRemoteIsLocalOnly(ctx context.Context) bool {
 	if err != nil || !exists {
 		return false
 	}
-	if classifyLocalSettings(ctx, path) != localOwn {
+	if !rawHasKey(raw, "strategy_options", "checkpoint_remote") {
 		return false
 	}
-	return rawHasKey(raw, "strategy_options", "checkpoint_remote")
+	return classifyLocalSettingsDeep(ctx, path) == localOwn
 }
 
 // GetCheckpointRemote returns the configured checkpoint remote.
