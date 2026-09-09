@@ -310,7 +310,9 @@ E2E tests:
 
 - `E2E_AGENT` - Agent to test with (default: `claude-code`)
 - `E2E_CLAUDE_MODEL` - Claude model to use (default: `haiku` for cost efficiency)
-- `E2E_TIMEOUT` - Timeout per prompt (default: `2m`)
+- `E2E_TIMEOUT` - Per-prompt timeout, overriding each runner's own default (e.g. `E2E_TIMEOUT=4m`)
+
+The per-prompt default is the runner's, not a single number: codex, copilot-cli and gemini use 60s, cursor 90s, opencode 2m, and claude-code, droid, pi, vogon and roger-roger impose no per-prompt bound at all — for those the scenario timeout passed to `ForEachAgent` is the only deadline. `E2E_TIMEOUT` sets a bound for every runner including those, and a per-test `agents.WithPromptTimeout(...)` overrides it. All ten resolve through `promptTimeout` in `e2e/agents/agent.go`; a runner that resolves its own is a build failure (`TestEveryRunPromptResolvesThroughPromptTimeout`). A malformed value is an error rather than a silent fall back to the default.
 
 ### Test Parallelization
 
