@@ -554,6 +554,63 @@ Opt out via any one of:
 - `"telemetry": false` in `.entire/settings.json` or `.entire/settings.local.json`.
 - `ENTIRE_TELEMETRY_OPTOUT=1` in the environment.
 
+## Why `external_agents` is local-only
+
+`external_agents` turns on the `$PATH` scan that looks for `entire-agent-*`
+binaries and runs each one's `info` subcommand, then keeps running the ones it
+registered for every hook thereafter. It is an execution grant, not a
+preference, so it is honored under exactly the same rule as the OPF
+[`command`](#why-command-is-local-only): only from `.entire/settings.local.json`,
+and only when that file is untracked in both the index and `HEAD`. Reading it
+from the committed `.entire/settings.json` would let an ordinary pull request
+turn on execution of whatever `entire-agent-*` binary it could get onto a
+developer's `$PATH`, and — as with `command` — one line of JSON does not read as
+executable to a reviewer. There is no prompt in front of this one at all.
+
+Rejection is a downgrade, never an error: discovery simply does not run.
+`entire status` names the setting and where it has to move, and the same reason
+is logged. The interactive setup flows (`entire enable`, `entire configure`,
+`entire agent add`, `entire plugin uninstall`) reach external agents regardless
+of the setting, so the remedy stays available from the commands that need it —
+and when one of them enables an external agent for you, it writes the setting to
+`.entire/settings.local.json`, which is where it takes effect.
+
+Every `$PATH` scanner in the CLI also drops non-absolute entries. A relative
+entry resolves against the process's working directory, which for a git hook is
+whatever repository the caller was standing in, so a file committed to that
+repository would otherwise be a binary Entire executes.
+
+## Why agent instruction fields are local-only
+
+`investigate.always_prompt`, every review `prompt` (per-agent and judge, in
+`review_profiles` and the legacy `review` map), and every review profile's
+`task` are placed verbatim in the prompts of agents that `entire investigate`
+and `entire review` spawn with approval checks disabled (claude-code's
+`bypassPermissions`, codex's `--dangerously-bypass-approvals-and-sandbox`). The
+prompt is the stated control for those spawns, so whoever writes these strings
+gets the last word in it. `task` and `prompt` are adjacent sections of the same
+composed prompt, so they are gated together — a gate on one alone would just
+move the attacker's text to the other field. Honoring any of them from the
+committed `.entire/settings.json` would let an ordinary pull request steer an
+approvals-disabled agent on every developer who pulls — the same delivery route
+as the OPF [`command`](#why-command-is-local-only), carrying instructions
+instead of argv.
+
+They are therefore honored only from layers that are this developer's own:
+clone-local review preferences (stored inside `.git/`, which a clone never
+populates) or `.entire/settings.local.json` verified untracked in both the
+index and `HEAD`. Rejection is a downgrade, never an error — a dropped task
+falls back to the built-in text for conventional profile names, and
+`entire review` / `entire investigate` print a one-line notice naming the
+dropped field and where it has to move (suppressed when the dropped task equals
+the built-in default, since that drop changes nothing).
+
+Deliberately not gated: `skills` (review validates every configured skill
+against the locally installed set before spawning, so free text there fails the
+run rather than reaching an agent), `agent` and `model` (registry keys and
+routing hints, not instruction text), and `review_default_profile` (it only
+selects among profiles whose instruction content is itself gated).
+
 ## Reporting a vulnerability
 
 For vulnerability disclosure, see [SECURITY.md](../SECURITY.md) at the repo root: email `security@entire.io`, expect acknowledgment within 48 hours and resolution of criticals within 90 days.
@@ -561,4 +618,4 @@ For vulnerability disclosure, see [SECURITY.md](../SECURITY.md) at the repo root
 ## Related
 
 - [Checkpoint commit signing](architecture/checkpoint-signing.md) — best-effort GPG/SSH signing of checkpoint commits, opt-out via `sign_checkpoint_commits: false`.
-- External agent plugins are arbitrary executables on `$PATH` invoked by the CLI; only install plugins you trust.
+- External agent plugins are arbitrary executables on `$PATH` invoked by the CLI; only install plugins you trust. Discovery is off unless you turn it on in `.entire/settings.local.json` — see [Why `external_agents` is local-only](#why-external_agents-is-local-only).
