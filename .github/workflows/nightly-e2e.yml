@@ -1,25 +1,20 @@
 name: Nightly Install Smoke
 
-# Every other E2E workflow tests a binary built from source in the same
-# checkout. This one installs the *published* nightly the way a user would
-# (brew / curl / PowerShell), points the existing E2E harness at that installed
-# binary via E2E_ENTIRE_BIN, and runs a single smoke test per agent on each OS.
-#
-# It answers one question: does the shipped nightly build still checkpoint real
-# agent work on Linux, macOS and Windows?
+# Every other E2E workflow builds the CLI from source. This one installs the
+# published nightly the way a user does and runs one smoke test per agent
+# against it, on each OS.
 
 on:
   schedule:
-    # 3h after nightly.yml cuts the tag at 06:00 UTC, so release.yml has
-    # published the artifacts this workflow installs.
+    # 3h after nightly.yml tags at 06:00, so release.yml has published.
     - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
       test:
         description: "Test name filter (regex)"
         required: false
-        # Keep in sync with the TEST_FILTER fallback in the job env: a
-        # scheduled run has no inputs, so that fallback is what it uses.
+        # Keep in sync with the TEST_FILTER fallback below, which is what a
+        # scheduled run uses.
         default: "TestMultiSessionSequential"
 
 concurrency:
@@ -29,55 +24,34 @@ concurrency:
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
-    # Derived, not guessed: ~3 min of install/checkout/setup, then up to six
-    # agent steps of timeout-minutes 15 each (section 5), then summary and
-    # upload. The previous 60 was below one hung agent's theoretical worst
-    # case, so a single hang could end the job with every later agent unrun.
+    # ~3 min setup + six agent steps of 15 each.
     timeout-minutes: 100
     permissions:
       contents: read
       actions: read
-      # Needed by the copilot-cli leg. GitHub does not allow matrix expressions
-      # in `permissions:`, and permissions are job-wide, so every step's
-      # GITHUB_TOKEN on every OS leg carries this scope. Three steps see the
-      # token: the dedicated copilot step (COPILOT_GITHUB_TOKEN) and the Linux
-      # and Windows install steps (GITHUB_TOKEN, so the installer's releases-API
-      # call is not 403-ed by the shared runner IP's 60/hour limit). The install
-      # steps add no exposure the job does not already accept: the installer
-      # picks — and on Linux runs — the binary every later step executes with
-      # the agent API keys and this same token, so whoever controls the script
-      # already holds everything the token guards. On this public repo the read
-      # scopes grant nothing anonymous access lacks; the token's only value is
-      # the org's Copilot request quota, and it expires when the job ends.
-      # Checkout runs with persist-credentials: false so it is not left in
-      # .git/config.
+      # For copilot-cli. Permissions are job-wide, so the install steps see
+      # this scope too — accepted: they install and run the binary every later
+      # step executes with the agent keys and this token, so withholding it
+      # there guards nothing. Public repo, so only the Copilot quota has value.
       copilot-requests: write
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
-      # The store a first-time `entire enable` writes (resolveFirstRunCheckpointBackend,
-      # cmd/entire/cli/setup.go). Unset, the harness pins the legacy git-branch store
-      # (e2e/tests/main_test.go), which no fresh install has — the opposite of what
-      # this workflow exists to test.
+      # What a first-run `entire enable` writes (setup.go). Unset, the harness
+      # pins legacy git-branch, which no fresh install has.
       E2E_CHECKPOINT_STORE: git-refs
       TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
-      # A native path, not $PWD: the agent steps run under Git Bash, where $PWD
-      # is /d/a/cli/cli, and E2E_ARTIFACT_DIR is read by the Go test binary,
-      # which resolves that leading slash against the current drive.
+      # Not $PWD: under Git Bash that is /d/a/cli/cli, which the Go test binary
+      # resolves against the current drive.
       ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
 
     steps:
-      # ----------------------------------------------------------------------
-      # 1. Install the published nightly CLI. No checkout yet: the ref we check
-      #    out is derived from the version of the binary installed here.
-      # ----------------------------------------------------------------------
-      # GITHUB_TOKEN: install.sh resolves the nightly tag through the releases
-      # API, and an unauthenticated call from a shared runner IP is 403-ed by
-      # the 60/hour limit long before this job starts — which the script then
-      # reports as "check your internet connection". install.sh:100 and
-      # install.ps1:219 both honour the variable.
+      # Install first, checkout second: the ref comes from the installed
+      # binary's version. GITHUB_TOKEN because the installers resolve the tag
+      # through the releases API, which 403s unauthenticated from a shared
+      # runner IP (reported as "check your internet connection").
       - name: Install nightly CLI (Linux)
         if: matrix.os == 'ubuntu-latest'
         env:
@@ -95,19 +69,8 @@ jobs:
           brew trust entireio/tap
           brew install --cask entire@nightly
 
-      # The nightly invocation documented in the README. install.ps1 uses Scoop
-      # for stable when it is available, but the bucket publishes stable only,
-      # so a nightly always takes the verified-release-archive path into
-      # $HOME\.local\bin. The script adds that directory to the *stored* user
-      # PATH, which later steps in this job do not re-read, hence GITHUB_PATH.
-      #
-      # No $ErrorActionPreference line needed in a pwsh step: the runner
-      # prepends `$ErrorActionPreference = 'stop'` to every powershell/pwsh
-      # script it runs (actions/runner, FixUpScriptContents in
-      # ScriptHandlerHelpers.cs). The two steps that set it anyway are kept:
-      # one of them fails closed through Write-Error, whose terminating-ness is
-      # exactly what the preference decides, so the line documents a dependency
-      # rather than restating the runner.
+      # The README's nightly invocation. The installer updates only the stored
+      # user PATH, which later steps do not re-read, hence GITHUB_PATH.
       - name: Install nightly CLI (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -117,10 +80,8 @@ jobs:
           iex "& {$(irm https://entire.io/install.ps1)} -Channel nightly"
           "$HOME\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      # ----------------------------------------------------------------------
-      # 2. Pin the checkout to the tag that produced the installed binary, so
-      #    the harness and the CLI under test come from one commit.
-      # ----------------------------------------------------------------------
+      # Pin the checkout to the tag that produced the installed binary, so the
+      # harness and the CLI under test come from one commit.
       - name: Resolve nightly tag and binary path (Unix)
         if: matrix.os != 'windows-latest'
         run: |
@@ -128,9 +89,8 @@ jobs:
           version_line=$(entire version | head -1)
           echo "$version_line"
           tag="v$(echo "$version_line" | awk '{print $3}')"
-          # Fail closed. A stable or unparseable version means the install
-          # resolved the wrong channel; silently testing main instead would
-          # hide exactly the skew this pin exists to remove.
+          # Fail closed: a stable or unparseable version means the install
+          # resolved the wrong channel.
           case "$tag" in
             v*-nightly.*) ;;
             *) echo "expected a v*-nightly.* version, got '$tag'" >&2; exit 1 ;;
@@ -158,17 +118,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.NIGHTLY_TAG }}
-          # Don't persist the (copilot-scoped) GITHUB_TOKEN in .git/config,
-          # where an agent process running in the checkout could read it.
+          # An agent process runs in this checkout; keep the token out of
+          # .git/config.
           persist-credentials: false
 
       - name: Setup mise
         uses: jdx/mise-action@f10502fc09dadecfefb962fff68ce77213930204 # v4
 
-      # ----------------------------------------------------------------------
-      # 3. Test dependencies. tmux is a hard preflight requirement of the e2e
-      #    TestMain on every non-Windows OS, even for headless tests.
-      # ----------------------------------------------------------------------
+      # TestMain's preflight requires tmux off Windows, even for headless tests.
       - name: Install tmux (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y tmux
@@ -177,19 +134,9 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: brew install tmux
 
-      # ----------------------------------------------------------------------
-      # 4. Agents. The per-OS list is limited to agents that actually install
-      #    on that OS.
-      #
-      #    Excluded everywhere:
-      #      gemini-cli   — since 0.57.0 it forces core.hooksPath='' on shell
-      #                     commands, so no checkpoint is ever recorded (same
-      #                     exclusion e2e.yml documents).
-      #      pi           — no CI installer.
-      #      vogon        — built in-tree, not a shipped agent.
-      #      roger-roger  — deterministic protocol fixture; only exercises the
-      #                     external-agent tests, not this smoke test.
-      # ----------------------------------------------------------------------
+      # Excluded everywhere: gemini-cli (forces core.hooksPath='' since 0.57.0,
+      # so nothing is checkpointed), pi (no CI installer), vogon and
+      # roger-roger (not shipped agents).
       - name: Install agent CLIs (Unix)
         if: matrix.os != 'windows-latest'
         run: |
@@ -197,26 +144,16 @@ jobs:
           curl -fsSL https://claude.ai/install.sh | bash
           curl https://cursor.com/install -fsS | bash
           curl -fsSL https://app.factory.ai/cli | sh
-          # opencode by npm rather than its install script, which resolves its
-          # version through an unauthenticated api.github.com call it gives no
-          # way to authenticate (plain `curl -s`, no token support) — so it is
-          # 403-ed by the shared runner IP's rate limit at random and reports
-          # it as "Failed to fetch version information". This is the same
-          # install the Windows leg uses.
+          # opencode by npm: its install script resolves its version through an
+          # unauthenticated api.github.com call it gives no way to authenticate,
+          # so it is rate-limited at random.
           npm install -g @openai/codex @github/copilot opencode-ai
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli" >> "$GITHUB_ENV"
 
-      # Everything that can run on Windows does. Only cursor-cli is missing,
-      # and for a structural reason rather than a packaging one: its E2E driver
-      # sends every prompt through tmux (e2e/agents/cursor_cli.go), because
-      # Cursor's headless -p mode does not fire the beforeSubmitPrompt and stop
-      # hooks, so nothing is checkpointed. There is no tmux on Windows.
-      #
-      # Each installer puts its binary somewhere different and updates only the
-      # *stored* user PATH, which later steps in this job do not re-read: claude
-      # and codex/copilot/opencode land in ~\.local\bin and the npm global
-      # prefix, droid in ~\bin. Hence the GITHUB_PATH lines.
+      # cursor-cli is absent: its E2E driver sends every prompt through tmux
+      # (e2e/agents/cursor_cli.go), because Cursor's headless -p mode fires no
+      # hooks — and there is no tmux on Windows.
       - name: Install agent CLIs (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -224,71 +161,35 @@ jobs:
           $ErrorActionPreference = "Stop"
           irm https://claude.ai/install.ps1 | iex
           npm install -g @openai/codex @github/copilot opencode-ai
-          # Stop does not cover native commands: a non-zero exit raises an
-          # error only when $PSNativeCommandUseErrorActionPreference is $true,
-          # and it defaults to $false. Nothing native follows npm today, so the
-          # runner's trailing `exit $LASTEXITCODE` would catch it — but only by
-          # accident of ordering, and with no message. Fail here, where the
-          # cause is named, and keep the guard correct if a native command is
-          # ever added after this line.
+          # Stop does not cover native commands ($PSNativeCommandUseError-
+          # ActionPreference defaults to $false), so npm's failure needs this.
           if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit $LASTEXITCODE)" }
-          # No such guard on the iex line above: that installer sets Stop
-          # itself, checks $LASTEXITCODE after every native command it runs, and
-          # exits non-zero on every failure path — and both a throw and an exit
-          # inside iex end this step (run 34130173877 failed this way on a 504
-          # from downloads.claude.ai). Verified against the script on 2026-09-09.
+          # The iex line needs no such guard: that installer throws or exits on
+          # every failure path, and both end this step. Verified 2026-09-09.
           "$HOME\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          # factoryai-droid is installed above but deliberately absent from
-          # this list. On Windows the test fails at
-          # "checkpoint state did not advance within 30s": droid commits, and
-          # no checkpoint is ever recorded. Measured in run 34131195807, where
-          # the same agent passed on Linux (27.5s) and macOS (34.2s) and the
-          # other four agents passed on Windows — and in run 34127634577,
-          # where it failed twice including the --rerun-fails retry. So it is
-          # a real defect in the droid hook path on Windows, not flake, and
-          # not something this workflow can fix by trying harder.
-          #
-          # It stays out so the leg reports on the release rather than on a
-          # known bug, and its installer is not run either — that would be a
-          # network install, and a way for this leg to go red, for an agent it
-          # does not test. Restoring means adding the name below plus
-          # `irm https://app.factory.ai/cli/windows | iex` and $HOME\bin on
-          # GITHUB_PATH, as the Unix step still does.
+          # factoryai-droid is left out, installer included: on Windows it
+          # fails "checkpoint state did not advance within 30s" while passing on
+          # Linux and macOS (runs 34131195807, 34127634577) — a real defect in
+          # its hook path. Restoring means this name plus
+          # `irm https://app.factory.ai/cli/windows | iex` and ~\bin on PATH.
           "AGENTS=claude-code codex copilot-cli opencode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      # ----------------------------------------------------------------------
-      # 5. Run the smoke test once per agent, sequentially, one step each. A
-      #    step is the only per-agent bound that works on all three runners:
-      #    macOS has no timeout(1), and the harness's own worst case is long —
-      #    up to 3 scenario attempts x 3 min (x2 for opencode), doubled by the
-      #    mise task's --rerun-fails=1 — so one hung agent in a single-step
-      #    loop would eat the job and take every later agent's verdict with
-      #    it. Each step therefore carries timeout-minutes (15: the slowest
-      #    pass measured in run 34131195807 was 2m40s, opencode on Windows),
-      #    runs even when an earlier one failed or timed out (`!cancelled()`,
-      #    not the default success()), and sees only its own agent's key.
-      #    Summarize reports an agent with no result row as failed, so a
-      #    killed step still shows up.
+      # One step per agent: a step timeout is the only per-agent bound that
+      # works on all three runners (macOS has no timeout(1)), and one hung agent
+      # in a shared loop would take every later agent's verdict with it.
+      # `!cancelled()` so a killed step does not skip the rest.
       #
-      #    Inside each step: `set +e`, not merely an absent -e — GitHub invokes
-      #    `shell: bash` as `bash --noprofile --norc -e -o pipefail`, so errexit
-      #    is already on and a failing bootstrap or test would end the step
-      #    before its result row is written (a failed bootstrap counts as a
-      #    failed agent, not a skipped one). A filter matching nothing exits 0
-      #    with "[no tests to run]", so a typo would report every agent as
-      #    passing; testreport already counts what ran, and `Total: 0` means
-      #    nothing was tested. Each agent gets its own artifact dir — the mise
-      #    task derives a single timestamped one otherwise and later agents
-      #    would overwrite earlier reports.
+      # In each body: `set +e` because GitHub already runs `shell: bash` with
+      # -e, which would end the step before its result row is written. The
+      # `Total: 0` check because a filter matching no test exits 0 with "[no
+      # tests to run]", which would report every agent as passing. Per-agent
+      # E2E_ARTIFACT_DIR because the mise task otherwise derives one shared dir
+      # and later agents overwrite earlier reports.
       #
-      #    E2E_ENTIRE_BIN (set above) is what makes this test the *installed*
-      #    nightly: mise-tasks/test/e2e/_default skips `mise run build` when it
-      #    is already set, and TestMain puts that binary's directory on PATH so
-      #    the git and agent hooks resolve to it too.
+      # E2E_ENTIRE_BIN (job env, set above) is what makes this the *installed*
+      # nightly: the mise task skips its build when it is set.
       #
-      #    The six run bodies are byte-identical; only AGENT and the key
-      #    differ. Keep them that way.
-      # ----------------------------------------------------------------------
+      # The six bodies are byte-identical; only AGENT and the key differ.
       - name: Smoke test claude-code
         if: ${{ !cancelled() && contains(env.AGENTS, 'claude-code') }}
         timeout-minutes: 15
@@ -368,8 +269,7 @@ jobs:
         shell: bash
         env:
           AGENT: factoryai-droid
-          # e2e/agents/droid.go writes ANTHROPIC_API_KEY into droid's BYOK
-          # settings; FACTORY_API_KEY is droid's own, passed as e2e.yml does.
+          # droid.go writes ANTHROPIC_API_KEY into droid's BYOK settings.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
         run: |
@@ -406,8 +306,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          # Absent when the job failed before the agent list was written
-          # (install, checkout, mise).
+          # Absent when the job failed before the agent list was written.
           [ -n "${AGENTS:-}" ] || { echo "no agent ran" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
           mkdir -p e2e/artifacts
           results=e2e/artifacts/results.txt
@@ -419,9 +318,8 @@ jobs:
             echo "| --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
           failed=0
-          # Driven by the agent list, not by the rows: a step killed by its
-          # timeout-minutes writes no row, and it must show as a failure
-          # rather than vanish from the table.
+          # Driven by the agent list, not the rows: a step killed by its
+          # timeout writes no row and must still show as a failure.
           for agent in $AGENTS; do
             rc=$(awk -v a="$agent" '$1 == a { print $2 }' "$results")
             case "$rc" in
@@ -442,7 +340,6 @@ jobs:
 
   notify-slack:
     runs-on: ubuntu-latest
-    # Posting to an incoming webhook needs no token at all.
     permissions: {}
     needs: [smoke]
     if: ${{ always() && needs.smoke.result == 'failure' && github.event_name == 'schedule' }}
