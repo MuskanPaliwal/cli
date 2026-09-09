@@ -1889,3 +1889,61 @@ func TestCheckGitHookSymlinks_SilentOnAPlainHooksDirectory(t *testing.T) {
 
 	assert.Empty(t, stdout.String())
 }
+
+// A vouched link is followed, so the components BENEATH it are the ones that can
+// still block an install. Stopping the scan at the vouched link reported the one
+// path that is fine and said nothing about the one that is not: scaffold
+// installation follows `.claude` and then refuses `.claude/skills`, so the user
+// saw a failed install and a doctor naming only the allowed link.
+func TestCheckAgentDirSymlinks_ScansBeneathAVouchedLink(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	t.Cleanup(osroot.ResetShared)
+	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs("", nil) })
+
+	dest := t.TempDir()
+	if err := os.Symlink(dest, filepath.Join(dir, claudeDirName)); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(dest, "skills")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	agent.SetVouchedSymlinkedDirs(dir, []string{claudeDirName})
+
+	cmd, stdout := newTestCmd(t)
+	checkAgentDirSymlinks(cmd)
+	got := stdout.String()
+
+	assert.Contains(t, got, "FOLLOWING SYMLINKS", "the vouched link is still reported as followed")
+	assert.Contains(t, got, claudeDirName+"/skills",
+		"the nested link that actually blocks installation must be reported too")
+	assert.Contains(t, got, "SYMLINKS PRESENT", "and reported as a fault, not as allowed")
+}
+
+// The common vouched case stays quiet about everything except the link it is
+// following: a clean tree beneath a vouched directory is not a finding.
+func TestCheckAgentDirSymlinks_VouchedLinkWithCleanTargetReportsOnlyTheLink(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	t.Cleanup(osroot.ResetShared)
+	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs("", nil) })
+
+	dest := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dest, "skills"), 0o750))
+	if err := os.Symlink(dest, filepath.Join(dir, claudeDirName)); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	agent.SetVouchedSymlinkedDirs(dir, []string{claudeDirName})
+
+	cmd, stdout := newTestCmd(t)
+	checkAgentDirSymlinks(cmd)
+	got := stdout.String()
+
+	assert.Contains(t, got, "FOLLOWING SYMLINKS")
+	assert.NotContains(t, got, "SYMLINKS PRESENT", "a clean target is not a fault")
+	assert.NotContains(t, got, "NOT READABLE")
+}

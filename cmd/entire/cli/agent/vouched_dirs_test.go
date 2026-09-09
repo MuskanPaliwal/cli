@@ -15,7 +15,7 @@ import (
 // the process expects. Not t.Parallel-safe: the policy is process-wide.
 func resetVouched(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs(nil) })
+	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs("", nil) })
 }
 
 // The name check is the boundary that keeps this from being a general
@@ -34,12 +34,13 @@ func TestSetVouchedSymlinkedDirs_RefusesAnythingButAnAgentConfigDirectory(t *tes
 		"",
 		".",
 	}
-	rejected := agent.SetVouchedSymlinkedDirs(forbidden)
+	worktree := t.TempDir()
+	rejected := agent.SetVouchedSymlinkedDirs(worktree, forbidden)
 	if len(rejected) != len(forbidden) {
 		t.Errorf("rejected %d of %d; every one of these must be unspellable: %v",
 			len(rejected), len(forbidden), rejected)
 	}
-	if got := agent.VouchedSymlinkedDirs(); len(got) != 0 {
+	if got := agent.VouchedSymlinkedDirs(worktree); len(got) != 0 {
 		t.Errorf("vouched = %v, want none accepted", got)
 	}
 }
@@ -47,17 +48,21 @@ func TestSetVouchedSymlinkedDirs_RefusesAnythingButAnAgentConfigDirectory(t *tes
 func TestSetVouchedSymlinkedDirs_AcceptsAgentDirectories(t *testing.T) {
 	resetVouched(t)
 
-	if rejected := agent.SetVouchedSymlinkedDirs([]string{".claude"}); len(rejected) != 0 {
+	root := t.TempDir()
+	if rejected := agent.SetVouchedSymlinkedDirs(root, []string{".claude"}); len(rejected) != 0 {
 		t.Fatalf("rejected %v, want .claude accepted", rejected)
 	}
-	if got := agent.VouchedSymlinkedDirs(); !slices.Equal(got, []string{".claude"}) {
+	if got := agent.VouchedSymlinkedDirs(root); !slices.Equal(got, []string{".claude"}) {
 		t.Errorf("vouched = %v, want [.claude]", got)
+	}
+	if got := agent.VouchedSymlinkedDirs(t.TempDir()); len(got) != 0 {
+		t.Errorf("vouched = %v for another worktree, want none", got)
 	}
 
 	// Replaces rather than accumulates, so a settings change that removes an
 	// entry stops the following in the same process.
-	agent.SetVouchedSymlinkedDirs(nil)
-	if got := agent.VouchedSymlinkedDirs(); len(got) != 0 {
+	agent.SetVouchedSymlinkedDirs(root, nil)
+	if got := agent.VouchedSymlinkedDirs(root); len(got) != 0 {
 		t.Errorf("vouched = %v after clearing, want none", got)
 	}
 }
@@ -84,7 +89,7 @@ func TestVouchableSymlinkedDirs_NeverIncludesAnEntireOwnedTree(t *testing.T) {
 // exactly as it did before the setting existed.
 func TestOpenHookConfig_StillRefusesAnUnvouchedSymlinkedDir(t *testing.T) {
 	resetVouched(t)
-	agent.SetVouchedSymlinkedDirs(nil)
+	agent.SetVouchedSymlinkedDirs("", nil)
 
 	worktree := t.TempDir()
 	dest := t.TempDir()
@@ -118,7 +123,7 @@ func TestOpenHookConfig_FollowsAVouchedSymlinkedDir(t *testing.T) {
 	if err := os.Symlink(dest, filepath.Join(worktree, ".claude")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	agent.SetVouchedSymlinkedDirs([]string{".claude"})
+	agent.SetVouchedSymlinkedDirs(worktree, []string{".claude"})
 
 	cfg, err := agent.OpenHookConfig(worktree, ".claude/settings.json")
 	if err != nil {
@@ -171,7 +176,7 @@ func TestOpenHookConfig_VouchedDirDoesNotVouchForLinksBeneathIt(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(dest, "extensions", "entire")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	agent.SetVouchedSymlinkedDirs([]string{".pi"})
+	agent.SetVouchedSymlinkedDirs(worktree, []string{".pi"})
 
 	cfg, err := agent.OpenHookConfig(worktree, ".pi/extensions/entire/index.ts")
 	if err != nil {
@@ -198,7 +203,7 @@ func TestOpenHookConfig_VouchedButDanglingIsAnError(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere"), filepath.Join(worktree, ".claude")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	agent.SetVouchedSymlinkedDirs([]string{".claude"})
+	agent.SetVouchedSymlinkedDirs(worktree, []string{".claude"})
 
 	_, err := agent.OpenHookConfig(worktree, ".claude/settings.json")
 	if err == nil {
@@ -222,11 +227,11 @@ func isSymlinkRefusal(err error) bool {
 func TestSetVouchedSymlinkedDirs_RefusesTheEntireOwnedDirectory(t *testing.T) {
 	resetVouched(t)
 
-	rejected := agent.SetVouchedSymlinkedDirs([]string{".pi/extensions/entire"})
+	rejected := agent.SetVouchedSymlinkedDirs(t.TempDir(), []string{".pi/extensions/entire"})
 	if len(rejected) != 1 {
 		t.Errorf("rejected = %v, want .pi/extensions/entire refused", rejected)
 	}
-	if got := agent.VouchedSymlinkedDirs(); len(got) != 0 {
+	if got := agent.VouchedSymlinkedDirs(""); len(got) != 0 {
 		t.Errorf("vouched = %v, want none", got)
 	}
 	if slices.Contains(agent.VouchableSymlinkedDirs(), ".pi/extensions/entire") {
@@ -254,7 +259,7 @@ func TestOpenHookConfig_VouchedPiExtensionsInstallsAndUninstalls(t *testing.T) {
 			if err := os.Symlink(dest, linkAt); err != nil {
 				t.Skipf("symlink not supported: %v", err)
 			}
-			agent.SetVouchedSymlinkedDirs([]string{vouch})
+			agent.SetVouchedSymlinkedDirs(worktree, []string{vouch})
 
 			cfg, err := agent.OpenHookConfig(worktree, ".pi/extensions/entire/index.ts")
 			if err != nil {
@@ -306,5 +311,76 @@ func TestRemoveDir_RefusesADirectoryEntireDidNotCreate(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "worktree root") {
 		t.Errorf("error = %q, must not report the worktree root for a named directory", err)
+	}
+}
+
+// The policy is a package global because the import direction forces it
+// (settings may import agent, not the reverse), so it is scoped to the worktree
+// it was loaded for. A process that loads settings for one tree and then writes
+// an agent config for another must not follow a link only the first vouched
+// for, and refusing is the safe direction: it degrades to the strict behaviour
+// rather than to following someone else's link.
+func TestOpenHookConfig_VouchIsScopedToItsWorktree(t *testing.T) {
+	resetVouched(t)
+
+	vouchedTree := t.TempDir()
+	otherTree := t.TempDir()
+	dest := t.TempDir()
+	if err := os.Symlink(dest, filepath.Join(otherTree, ".claude")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	// The grant belongs to a different worktree than the one being written.
+	agent.SetVouchedSymlinkedDirs(vouchedTree, []string{".claude"})
+
+	cfg, err := agent.OpenHookConfig(otherTree, ".claude/settings.json")
+	if err != nil {
+		t.Fatalf("OpenHookConfig() error = %v", err)
+	}
+	if err := cfg.Write([]byte("{}"), 0o600); !isSymlinkRefusal(err) {
+		t.Fatalf("Write() error = %v, want the link refused; the grant was for another worktree", err)
+	}
+	entries, readErr := os.ReadDir(dest)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("wrote %d entries through a link vouched for a different worktree", len(entries))
+	}
+}
+
+// "Following symlinked agent directories" must be true when printed. A user may
+// legitimately vouch for a path that is an ordinary directory, absent, or a
+// dangling link on this machine, and in none of those is Entire following
+// anything.
+func TestFollowedSymlinkedDirs_OnlyReportsActualLinks(t *testing.T) {
+	resetVouched(t)
+
+	worktree := t.TempDir()
+	// .claude: vouched and a real link -> followed.
+	if err := os.Symlink(t.TempDir(), filepath.Join(worktree, ".claude")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	// .codex: vouched but an ordinary directory -> not followed.
+	if err := os.MkdirAll(filepath.Join(worktree, ".codex"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// .cursor: vouched but absent -> not followed.
+	// .gemini: vouched but dangling -> not followed (and nothing is written there).
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere"), filepath.Join(worktree, ".gemini")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	agent.SetVouchedSymlinkedDirs(worktree, []string{".claude", ".codex", ".cursor", ".gemini"})
+
+	if got := agent.FollowedSymlinkedDirs(worktree); !slices.Equal(got, []string{".claude", ".gemini"}) {
+		t.Errorf("FollowedSymlinkedDirs() = %v, want only the paths that are symlinks on disk", got)
+	}
+	// The configuration is unchanged; the two answers are different questions.
+	if got := agent.VouchedSymlinkedDirs(worktree); len(got) != 4 {
+		t.Errorf("VouchedSymlinkedDirs() = %v, want the full configured set", got)
+	}
+	if got := agent.FollowedSymlinkedDirs(t.TempDir()); len(got) != 0 {
+		t.Errorf("FollowedSymlinkedDirs() = %v for another worktree, want none", got)
 	}
 }

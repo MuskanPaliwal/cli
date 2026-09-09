@@ -67,13 +67,16 @@ func RequireAbsoluteOverride(name, value string) error {
 // Config returns the per-user config directory.
 //
 // The string form cannot report a rejected override, so it returns whatever was
-// set. Every consumer that turns it into I/O is responsible for checking, and
-// there are four: this package's own roots, contexts, discovery, and the token
-// store. The first three open a root that refuses a relative directory; the
-// token store cannot, because it anchors on the dirname of a path the caller may
-// have named itself, so it calls ConfigDirChecked instead. An earlier version of
-// this comment listed only the middle two, and the token store was the one that
-// slipped past: bearer tokens at ./<value>/tokens.json.
+// set, and every consumer that turns one into I/O is responsible for learning
+// about a bad value BEFORE it creates a directory, takes a lock, or writes.
+//
+// Deliberately NOT a list of those consumers. Two successive revisions of this
+// comment enumerated them and both were wrong within a commit or two -- the
+// token store slipped past the first (bearer tokens at ./<value>/tokens.json)
+// and plugin_index past the second (an index clone and its lock file in the
+// working directory). A comment cannot fail when someone adds a caller.
+// TestUserDirConsumersAreAudited can, and does: every call site of Config() or
+// Cache() must appear in its ledger with the reason it is safe.
 //
 // Callers that only display the path are unaffected.
 func Config() string {
@@ -86,6 +89,16 @@ func Config() string {
 // message still has one.
 func ConfigDirChecked() (string, error) {
 	return configDir()
+}
+
+// CacheDirChecked is Cache for a caller that can report a rejected override.
+//
+// Needed for the same reason as its config twin: a consumer that creates a
+// directory or takes a lock before handing the path to something that opens a
+// root has to learn about a bad override BEFORE it creates anything, and the
+// string form cannot tell it. plugin_index was the consumer that needed it.
+func CacheDirChecked() (string, error) {
+	return cacheDir()
 }
 
 // configDir is Config with the override check, for the callers that can report.

@@ -809,19 +809,40 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 			continue
 		}
 		// Several candidates share a prefix (.claude, .claude/settings.json), so
-		// a symlinked .claude would otherwise be named once per candidate.
-		if _, dup := reported[name]; dup {
-			continue
+		// a symlinked .claude would otherwise be named once per candidate. The
+		// vouched branch below does its own recording, because it has two names
+		// to track: the followed link and whatever it finds beneath it.
+		if outcome != componentScanLinked || !slices.Contains(agent.VouchedSymlinkedDirs(worktreeRoot), name) {
+			if _, dup := reported[name]; dup {
+				continue
+			}
+			reported[name] = struct{}{}
 		}
-		reported[name] = struct{}{}
 		// A link the user vouched for in settings.local.json is followed, not
 		// refused, so reporting it as a fault would be wrong twice: it names a
 		// problem that is not one, and it hides the fact that Entire is writing
 		// somewhere other than where the path appears to lead. Reported below in
 		// its own section instead.
-		if outcome == componentScanLinked && slices.Contains(agent.VouchedSymlinkedDirs(), name) {
-			vouched = append(vouched, name)
-			continue
+		//
+		// And then the scan CONTINUES beneath it. Stopping here reported the one
+		// link that is fine and stayed silent about the one that is not: with
+		// `.claude` vouched and `.claude/skills` a link inside the target,
+		// scaffold installation follows the first and refuses the second, so the
+		// user saw a failed install and a doctor that named only the allowed
+		// link.
+		if outcome == componentScanLinked && slices.Contains(agent.VouchedSymlinkedDirs(worktreeRoot), name) {
+			if _, dup := reported[name]; !dup {
+				reported[name] = struct{}{}
+				vouched = append(vouched, name)
+			}
+			name, outcome = scanBeneathVouchedDir(worktreeRoot, candidate)
+			if outcome == componentScanClean {
+				continue
+			}
+			if _, dup := reported[name]; dup {
+				continue
+			}
+			reported[name] = struct{}{}
 		}
 		switch outcome {
 		case componentScanUnreadable:
@@ -941,7 +962,7 @@ func checkGitHookSymlinks(cmd *cobra.Command) {
 		if resolved {
 			fmt.Fprintln(w, "  Fix: point git at the target directly, which says the same thing without")
 			fmt.Fprintln(w, "  the indirection:")
-			fmt.Fprintf(w, "    git config core.hooksPath %s\n", target)
+			fmt.Fprintf(w, "    %s\n", strategy.HooksPathCommand(target))
 			fmt.Fprintln(w, "  or replace the link with a real directory.")
 		} else {
 			fmt.Fprintln(w, "  Fix: find where the path is set, then point git at a real directory:")
@@ -1061,6 +1082,35 @@ func agentSymlinkCheckPaths() []string {
 
 	slices.Sort(out)
 	return out
+}
+
+// scanBeneathVouchedDir continues the component scan inside a vouched symlinked
+// agent directory, returning what it finds as a worktree-relative name.
+//
+// The outer scan stops at the first symlink, which is the right answer when that
+// link is a fault. When it is one the user vouched for, the components below it
+// are still Entire's to check and still refused by MkdirAllNoSymlink, so the
+// scan has to resume from the link's target. agent.OpenAnchoredRoot is the same
+// resolution the writers use, so doctor reports on exactly the tree they act on.
+//
+// A vouched link that will not resolve is reported unreadable rather than
+// silently dropped: every write through it fails, which is precisely the state
+// worth naming.
+func scanBeneathVouchedDir(worktreeRoot, candidate string) (string, componentScanOutcome) {
+	innerRoot, innerName, err := agent.OpenAnchoredRoot(worktreeRoot, candidate)
+	if err != nil {
+		return candidate, componentScanUnreadable
+	}
+	if innerName == candidate {
+		// Nothing was followed after all, so the outer scan already had it.
+		return "", componentScanClean
+	}
+	found, outcome := scanForSymlinkedComponent(innerRoot, innerName)
+	if outcome == componentScanClean {
+		return "", componentScanClean
+	}
+	prefix := strings.TrimSuffix(candidate, "/"+innerName)
+	return prefix + "/" + found, outcome
 }
 
 // scanForSymlinkedComponent walks name one component at a time and reports the

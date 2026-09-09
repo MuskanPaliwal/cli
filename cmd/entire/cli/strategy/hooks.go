@@ -28,6 +28,9 @@ const entireHookMarker = "Entire CLI hooks"
 const GitHookBackupSuffix = ".pre-entire"
 
 const backupSuffix = GitHookBackupSuffix
+
+// goosWindows is runtime.GOOS on Windows.
+const goosWindows = "windows"
 const chainComment = "# Chain: run pre-existing hook"
 const missingEntireGitHookWarning = "[entire] Entire CLI is enabled but not installed or not on PATH. Skipping Entire Git hook; continuing. Installation guide: https://docs.entire.io/cli/installation#installation-methods"
 
@@ -243,6 +246,56 @@ func HooksDirLinkTarget(hooksDir string) (string, bool) {
 	return resolved, true
 }
 
+// HooksPathCommand renders the `git config core.hooksPath <dir>` remedy with dir
+// quoted so the line survives being pasted into a shell.
+//
+// Exported because doctor prints the same remedy, and printing it twice means
+// getting the quoting right twice. A hooks directory containing a space is
+// ordinary -- a macOS "Application Support" path, a Windows "C:\Users\First
+// Last\..." -- and unquoted it produces `git config core.hooksPath /tmp/my
+// hooks dir`, which git rejects with "error: no action specified" because it
+// sees four arguments. The remedy is presented as a command to paste, so it has
+// to be one.
+//
+// Quoted only when it needs to be, so the common clean path stays readable.
+func HooksPathCommand(dir string) string {
+	return "git config core.hooksPath " + shellQuoteForDisplay(dir)
+}
+
+// shellQuoteForDisplay quotes a path for a command line the USER will paste. It
+// is not for building an argv -- nothing here is executed, and a path that
+// reaches an exec goes as a separate argument instead (see CLAUDE.md's
+// "Never Put a Dynamic Value on a cmd.exe Line").
+//
+// The POSIX branch delegates to shellQuote, this file's existing quoter for the
+// #!/bin/sh hooks it generates, rather than repeating the escaping: single
+// quoting is total, since the only character with meaning inside a single-quoted
+// string is the closing quote. Windows shells have no equivalent, so double
+// quotes are used there, which is what cmd.exe and PowerShell both accept for a
+// path.
+//
+// Quoted only when it has to be, so the ordinary path stays readable.
+func shellQuoteForDisplay(s string) string {
+	if s != "" && !strings.ContainsFunc(s, needsShellQuote) {
+		return s
+	}
+	if runtime.GOOS == goosWindows {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return shellQuote(s)
+}
+
+// needsShellQuote reports a rune that is not safe bare in a shell word. An
+// allowlist, so a character nobody has considered is quoted rather than passed
+// through.
+func needsShellQuote(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	}
+	return !strings.ContainsRune(`_@%+=:,./-\`, r)
+}
+
 // symlinkedHooksDirError explains a refusal from hooksRootForInstall in terms of
 // the one setting that can produce it.
 //
@@ -266,8 +319,8 @@ func symlinkedHooksDirError(hooksDir string, err error) error {
 	return fmt.Errorf("git resolves the hooks directory to %s, which is a symlink to %s\n"+
 		refusal+
 		"Point git at the target directly instead:\n"+
-		"  git config core.hooksPath %s\n"+
-		"or replace the link with a real directory: %w", abs, target, target, err)
+		"  %s\n"+
+		"or replace the link with a real directory: %w", abs, target, HooksPathCommand(target), err)
 }
 
 // hookClassification is what is sitting at a managed hook's path.

@@ -18,8 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const goosWindows = "windows"
-
 // clearGlobalHooksPath overrides any global core.hooksPath setting so that
 // test repos use their default .git/hooks directory. Setting the local value
 // takes precedence over the global one.
@@ -2112,4 +2110,53 @@ func TestSymlinkedHooksDirError_RemedyIsPasteable(t *testing.T) {
 	assert.NotContains(t, msg, "its target", "never emit a command containing a placeholder")
 	assert.Contains(t, msg, "git config --show-origin --get-all core.hooksPath",
 		"with no target to name, point at the command that finds where the path came from")
+}
+
+// The remedy is a command the user pastes, so it has to survive being pasted.
+// A hooks directory containing a space is ordinary, and unquoted it produced
+// `git config core.hooksPath /tmp/my hooks dir`, which git rejects with
+// "error: no action specified" because it sees four arguments.
+func TestHooksPathCommand_QuotesWhatAShellWouldSplit(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == goosWindows {
+		assert.Equal(t, `git config core.hooksPath "C:\Users\First Last\hooks"`,
+			HooksPathCommand(`C:\Users\First Last\hooks`))
+		return
+	}
+
+	// The clean common case stays unquoted and readable.
+	assert.Equal(t, "git config core.hooksPath /home/u/.git-hooks",
+		HooksPathCommand("/home/u/.git-hooks"))
+
+	for _, tc := range []struct{ in, want string }{
+		{"/tmp/my hooks dir", `git config core.hooksPath '/tmp/my hooks dir'`},
+		{"/tmp/a;rm -rf b", `git config core.hooksPath '/tmp/a;rm -rf b'`},
+		{"/tmp/$(id)", `git config core.hooksPath '/tmp/$(id)'`},
+		{"/tmp/it's", `git config core.hooksPath '/tmp/it'\''s'`},
+	} {
+		assert.Equal(t, tc.want, HooksPathCommand(tc.in), "input %q", tc.in)
+	}
+}
+
+// And the error that carries it uses the same rendering, so the two places the
+// remedy is printed cannot disagree.
+func TestSymlinkedHooksDirError_UsesTheQuotedCommand(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == goosWindows {
+		t.Skip("POSIX quoting")
+	}
+
+	dir := t.TempDir()
+	realHooks := filepath.Join(dir, "real hooks")
+	require.NoError(t, os.MkdirAll(realHooks, 0o750))
+	link := filepath.Join(dir, "hooks")
+	if err := os.Symlink(realHooks, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	msg := symlinkedHooksDirError(link, osroot.ErrSymlinkedPath).Error()
+	assert.Contains(t, msg, HooksPathCommand(realHooks))
+	assert.NotContains(t, msg, "core.hooksPath "+realHooks,
+		"the bare unquoted path would be split by the shell the user pastes into")
 }

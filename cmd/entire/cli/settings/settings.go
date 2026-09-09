@@ -693,6 +693,18 @@ func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot strin
 	return filepath.Join(filepath.Clean(commonDir), ClonePreferencesFile), nil
 }
 
+// worktreeRootOfSettingsFile recovers the worktree root a settings path was
+// built from: settingsAbsPaths joins <root>/.entire/<file>, so the root is two
+// levels up. Used only as the KEY the vouched-symlink policy is scoped by, never
+// as a base for I/O, so the derived-path rule in CLAUDE.md does not apply -- an
+// inconsistent key costs a refused symlink, which is the safe direction.
+func worktreeRootOfSettingsFile(settingsFileAbs string) string {
+	if settingsFileAbs == "" {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(settingsFileAbs))
+}
+
 func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {
 	// Load base settings
 	settings, err := loadFromFile(settingsFileAbs)
@@ -737,7 +749,7 @@ func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs
 	// config, so it gets the same gate, and then installs the surviving set as
 	// the process-wide policy.
 	enforceSymlinkedAgentDirsTrust(ctx, settings, localSettingsFileAbs, localData)
-	applyVouchedAgentDirs(settings)
+	applyVouchedAgentDirs(settings, worktreeRootOfSettingsFile(settingsFileAbs))
 
 	// Re-validate after merge. Individual files are validated by loadFromFile,
 	// but mergeJSON patches fields independently and can produce combinations

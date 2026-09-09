@@ -89,18 +89,23 @@ func localSetsSymlinkedAgentDirs(data []byte) bool {
 // process whose settings change mid-run cannot keep following a link the user
 // has since removed from the file.
 //
+// worktreeRoot scopes the policy to the tree these settings came from. The
+// value is the settings file's grandparent, which is exactly what
+// settingsAbsPaths built the path from (<root>/.entire/settings.json), so the
+// key agent stores matches the worktreeRoot OpenHookConfig is later given.
+//
 // The name check inside SetVouchedSymlinkedDirs is a second, different
 // boundary from the trust gate above, and both are needed. The gate answers
 // "may this file grant anything"; the name check answers "is this path one an
 // agent config actually lives in", which is what stops a developer's own local
 // file from vouching for `.entire` or `.git/hooks` -- paths whose refusals are
 // not up for negotiation whoever is asking.
-func applyVouchedAgentDirs(s *EntireSettings) {
+func applyVouchedAgentDirs(s *EntireSettings, worktreeRoot string) {
 	if s == nil {
-		agent.SetVouchedSymlinkedDirs(nil)
+		agent.SetVouchedSymlinkedDirs(worktreeRoot, nil)
 		return
 	}
-	rejected := agent.SetVouchedSymlinkedDirs(s.AllowSymlinkedAgentDirs)
+	rejected := agent.SetVouchedSymlinkedDirs(worktreeRoot, s.AllowSymlinkedAgentDirs)
 	if len(rejected) == 0 {
 		return
 	}

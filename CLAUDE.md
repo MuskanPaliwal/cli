@@ -1061,6 +1061,18 @@ comments at each site say which case applies:
   path that was neither — leaving an extension pi still discovers. Reading
   either coordinate for both jobs gets one of them wrong.
 
+  **The policy is scoped to the worktree it was loaded for.** It has to be a
+  package global — `settings` may import `agent`, not the reverse, so the
+  package that owns the value pushes it in — and an unscoped global would mean
+  last-load-wins deciding for a process that loads settings for one tree and
+  writes an agent config for another. `SetVouchedSymlinkedDirs` records the
+  root, `AnchorWorktreePath` and the doctor/status reporting compare against it,
+  and a mismatch refuses (degrading to the strict behaviour, never to following
+  another tree's link). This is a different question from why `vouchableDirs` is
+  pinned: that is the set a user MAY name, which must not be widenable at
+  runtime; this is the set a user DID name, which is per-configuration and has
+  to come from somewhere mutable.
+
   Scope notes: vouching for `.claude` does **not** vouch for links inside it,
   since below the anchor everything is a name in a root again; the scaffolds go
   through the same anchor (`openScaffoldTarget`), because a vouched directory
@@ -1416,6 +1428,16 @@ which produced a plausible-looking absolute path out of the exact mistake being
 guarded against. Do not reintroduce it.
 
 Two rules about *where* the check goes, both learned by getting them wrong:
+
+- **Who checks is enforced, not enumerated.** `TestUserDirConsumersAreAudited`
+  requires every caller of `Config()`/`Cache()` to appear in a ledger with the
+  reason it is safe. Two successive doc comments tried to list the consumers
+  instead and both were wrong within a commit or two: the token store slipped
+  past the first (bearer tokens at `./<value>/tokens.json`) and `plugin_index`
+  past the second (an index clone and its lock file in the working directory).
+  Converting a caller to `ConfigDirChecked`/`CacheDirChecked` removes it from
+  the ledger, since it is then safe by construction; the list is meant to
+  shrink.
 
 - **It must precede every `MkdirAll`, not merely every root open.** Checking at
   the root is checking at the READ, and `contexts.FilePath` and

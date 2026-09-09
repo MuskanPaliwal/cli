@@ -181,14 +181,16 @@ func discoverSummaryProviderIfMissing(ctx context.Context, name types.AgentName)
 	return false
 }
 
-// autoSelectSummaryProvider builds a provider for an auto-selected candidate
-// (single-installed or non-interactive-first-of-many) and persists the choice
-// so subsequent runs don't re-decide. Persistence failure is surfaced as a
-// warning — not an error — because the selection is still usable in-process.
 // errSelectionNotPersistable reports a selection that is correct for this run
 // and must not be written down. See persistSummaryProviderSelection.
 var errSelectionNotPersistable = errors.New("selection is valid for this run but would not resolve on the next one")
 
+// autoSelectSummaryProvider builds a provider for an auto-selected candidate
+// (single-installed or non-interactive-first-of-many) and persists the choice
+// so subsequent runs don't re-decide. Persistence failure is surfaced as a
+// warning — not an error — because the selection is still usable in-process.
+// An external provider chosen without a human is the one case that persists
+// nothing at all; see persistSummaryProviderSelection.
 func autoSelectSummaryProvider(ctx context.Context, w io.Writer, name types.AgentName, reason string, origin summarySelectionOrigin) (*checkpointSummaryProvider, error) {
 	logging.Info(ctx, reason, "provider", string(name))
 	provider, err := buildCheckpointSummaryProvider(name, "")

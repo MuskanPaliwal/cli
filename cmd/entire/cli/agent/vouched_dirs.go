@@ -46,9 +46,31 @@ import (
 //   - The git hooks directory already has this escape hatch, and git owns it:
 //     `git config core.hooksPath <target>` says the same thing without the
 //     link. A second spelling would be ours to keep in step for no gain.
+//
+// The policy is process-global because the import direction forces it:
+// `settings` may import `agent`, `agent` may not import `settings`, so the
+// package that owns the value has to push it in. It is SCOPED to the worktree
+// it was loaded for, which is what keeps that from being a hazard.
+//
+// Without the scope the coupling is real even if nothing exploits it today: a
+// process that loads settings for worktree A and then writes an agent config
+// for worktree B would follow a link A vouched for and B did not, with
+// last-load-wins deciding. AnchorWorktreePath takes a worktreeRoot, so it can
+// simply refuse to apply a policy that was not loaded for that root -- and
+// refusing is the safe direction, since it degrades to the strict behaviour
+// rather than to following someone else's link.
+//
+// It is worth being precise about how this differs from vouchableDirs, which is
+// pinned rather than derived on the argument that a runtime-mutable registry is
+// the wrong thing to build a boundary on. That argument is about the set of
+// paths a user MAY name: it must not be widenable by anything at runtime. This
+// is the set a user DID name, which is per-configuration by nature and has to
+// come from somewhere mutable. The boundary is vouchableDirs; this is the
+// input it filters.
 var (
-	vouchedMu   sync.RWMutex
-	vouchedDirs []string
+	vouchedMu      sync.RWMutex
+	vouchedDirs    []string
+	vouchedForRoot string
 )
 
 // SetVouchedSymlinkedDirs installs the set of worktree-relative agent
@@ -65,7 +87,7 @@ var (
 // policy gets the strict behaviour. That direction is deliberate: forgetting
 // this call costs a refusal the user can act on, where the opposite default
 // would silently follow links nobody approved.
-func SetVouchedSymlinkedDirs(dirs []string) (rejected []string) {
+func SetVouchedSymlinkedDirs(worktreeRoot string, dirs []string) (rejected []string) {
 	vouchable := VouchableSymlinkedDirs()
 	accepted := make([]string, 0, len(dirs))
 	for _, d := range dirs {
@@ -82,16 +104,44 @@ func SetVouchedSymlinkedDirs(dirs []string) (rejected []string) {
 
 	vouchedMu.Lock()
 	vouchedDirs = accepted
+	vouchedForRoot = worktreeRoot
 	vouchedMu.Unlock()
 	return rejected
 }
 
-// VouchedSymlinkedDirs returns the accepted set, for doctor and status to
-// report what is being followed rather than leaving it invisible.
-func VouchedSymlinkedDirs() []string {
+// VouchedSymlinkedDirs returns the accepted set for worktreeRoot, for doctor
+// and status to report what is being followed rather than leaving it invisible.
+//
+// Scoped like the enforcement path, so a report can never name links that are
+// not in fact being followed here.
+func VouchedSymlinkedDirs(worktreeRoot string) []string {
 	vouchedMu.RLock()
 	defer vouchedMu.RUnlock()
+	if vouchedForRoot != worktreeRoot {
+		return nil
+	}
 	return slices.Clone(vouchedDirs)
+}
+
+// FollowedSymlinkedDirs is the subset of the vouched set that is a symlink on
+// disk right now, in worktreeRoot.
+//
+// Distinct from VouchedSymlinkedDirs, which reports the CONFIGURATION. A user
+// may legitimately vouch for `.claude` on a machine where it is an ordinary
+// directory, is absent, or is a dangling link, and in none of those cases is
+// Entire following anything. Saying "Following symlinked agent directories" for
+// a path that is a plain directory is simply false, so the user-facing report
+// asks this instead.
+func FollowedSymlinkedDirs(worktreeRoot string) []string {
+	var out []string
+	for _, dir := range VouchedSymlinkedDirs(worktreeRoot) {
+		info, err := os.Lstat(filepath.Join(worktreeRoot, filepath.FromSlash(dir)))
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		out = append(out, dir)
+	}
+	return out
 }
 
 // vouchableDirs is every worktree-relative directory a user may vouch for: each
@@ -170,11 +220,15 @@ func neverVouchable(dir string) bool {
 	return path.Base(dir) == entireOwnedDirName
 }
 
-// isVouched reports whether a worktree-relative directory has been vouched for.
-func isVouched(dir string) bool {
+// isVouched reports whether dir was vouched for IN worktreeRoot.
+//
+// The root comparison is the whole point: a policy loaded for another worktree
+// must not decide anything here. It is a plain string compare on the value the
+// caller was given, which is the same value settings resolved the policy for.
+func isVouched(worktreeRoot, dir string) bool {
 	vouchedMu.RLock()
 	defer vouchedMu.RUnlock()
-	return slices.Contains(vouchedDirs, dir)
+	return vouchedForRoot == worktreeRoot && slices.Contains(vouchedDirs, dir)
 }
 
 // AnchorWorktreePath resolves the directory to anchor a root on for a
@@ -211,7 +265,7 @@ func AnchorWorktreePath(worktreeRoot, relPath string) (baseDir, name string, fol
 		if lerr != nil || info.Mode()&os.ModeSymlink == 0 {
 			continue
 		}
-		if !isVouched(vouchName) {
+		if !isVouched(worktreeRoot, vouchName) {
 			continue
 		}
 		resolved, rerr := filepath.EvalSymlinks(onDisk)
