@@ -57,7 +57,10 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 		var err error
 		binPath, err = installMissingPlugin(ctx, rootCmd, pluginName)
 		if err != nil {
-			fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
+			var silent *SilentError
+			if !errors.As(silencePluginCancel(ctx, err), &silent) {
+				fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
+			}
 			return true, 1
 		}
 		if binPath == "" {

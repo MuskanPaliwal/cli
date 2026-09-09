@@ -253,7 +253,7 @@ func runRemoteInstall(ctx context.Context, cmd *cobra.Command, src installSource
 		// An untrusted source cannot proceed unconfirmed: automation never
 		// reaches this prompt, because the non-interactive path fails above
 		// with the --yes hint.
-		proceed, err := confirmInstallOrCancel(ctx, out,
+		proceed, err := confirmInstallOrCancel(ctx, errOut,
 			fmt.Sprintf("Install from %s? The repository is not listed in the plugin index.", redactURL(repoURL)),
 			flags.yes)
 		if err != nil || !proceed {
@@ -330,7 +330,7 @@ func installPlannedDeps(ctx context.Context, cmd *cobra.Command, reqs []PluginRe
 			fmt.Fprintf(out, "  %s  (%s)\n", a.Name, redactURL(a.RepoURL))
 		}
 	}
-	ok, err := confirmPluginAction(ctx, "Install them now?", flags.yes)
+	ok, err := confirmPluginAction(ctx, errOut, "Install them now?", flags.yes)
 	switch {
 	case errors.Is(err, errConfirmNeedsTerminal):
 		// Non-interactive without --yes: the main install already
@@ -380,19 +380,15 @@ var errConfirmNeedsTerminal = errors.New("confirmation required but no terminal 
 // non-interactive runs without --yes return errConfirmNeedsTerminal rather
 // than guessing. Prompt errors (including huh.ErrUserAborted on Ctrl+C/Esc)
 // are returned raw for callers to map via handleFormCancellation.
-func confirmPluginAction(ctx context.Context, prompt string, assumeYes bool) (bool, error) {
+func confirmPluginAction(ctx context.Context, out io.Writer, prompt string, assumeYes bool) (bool, error) {
 	if assumeYes {
 		return true, nil
 	}
 	if !interactive.CanPromptInteractively() {
 		return false, fmt.Errorf("%w (%s)", errConfirmNeedsTerminal, prompt)
 	}
-	confirmed := false
-	form := NewAccessibleForm(huh.NewGroup(
-		huh.NewConfirm().Title(prompt).Value(&confirmed),
-	))
-	if err := form.RunWithContext(ctx); err != nil {
-		// %w keeps huh.ErrUserAborted reachable for handleFormCancellation.
+	confirmed, err := runPluginConfirm(ctx, out, prompt, false)
+	if err != nil {
 		return false, fmt.Errorf("confirm: %w", err)
 	}
 	return confirmed, nil
@@ -405,7 +401,7 @@ func confirmPluginAction(ctx context.Context, prompt string, assumeYes bool) (bo
 // wrapped, and errConfirmNeedsTerminal propagates unchanged so the caller
 // decides whether an unattended run may proceed without an answer.
 func confirmInstallOrCancel(ctx context.Context, out io.Writer, prompt string, assumeYes bool) (bool, error) {
-	ok, err := confirmPluginAction(ctx, prompt, assumeYes)
+	ok, err := confirmPluginAction(ctx, out, prompt, assumeYes)
 	switch {
 	case errors.Is(err, errConfirmNeedsTerminal):
 		return false, err
@@ -755,7 +751,7 @@ in scripts and non-interactive runs.`,
 			// binary and links it onto PATH in one keystroke. The picker also
 			// only shows name and description, so the repository the binary
 			// actually comes from is named here for the first time.
-			out := cmd.OutOrStdout()
+			out := cmd.ErrOrStderr()
 			prompt := fmt.Sprintf("Install %q?", choice)
 			if entry := idx.Find(choice); entry != nil {
 				prompt = fmt.Sprintf("Install %q from %s?", choice, redactURL(entry.RepoURL))

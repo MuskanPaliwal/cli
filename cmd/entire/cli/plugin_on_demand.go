@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"charm.land/huh/v2"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
 )
@@ -21,11 +20,11 @@ func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name stri
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("install plugin: %w", err)
 	}
-	confirmed := true
-	form := NewAccessibleForm(huh.NewGroup(
-		huh.NewConfirm().Title(fmt.Sprintf("Install the entire-%s plugin?", name)).Value(&confirmed),
-	)).WithInput(rootCmd.InOrStdin()).WithOutput(rootCmd.ErrOrStderr())
-	if err := form.RunWithContext(ctx); err != nil {
+	confirmed, err := runPluginConfirm(ctx, rootCmd.ErrOrStderr(), fmt.Sprintf("Install the entire-%s plugin?", name), true)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", err
+		}
 		return "", handleFormCancellation(rootCmd.ErrOrStderr(), "Install", err)
 	}
 	if !confirmed {
@@ -43,6 +42,9 @@ func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name stri
 	cmd.SetErr(rootCmd.ErrOrStderr())
 	if err := onDemandPluginInstall(ctx, cmd, installSource{Kind: installFromIndex, Ref: name}, remoteInstallFlags{}); err != nil {
 		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("install plugin: %w", err)
 	}
 	installed, err := FindInstalledPlugin(name)
 	if err != nil {

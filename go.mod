@@ -50,7 +50,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/lastpersonlabs/goredact v0.1.0
+require (
+	github.com/lastpersonlabs/goredact v0.1.0
+	github.com/muesli/cancelreader v0.2.2
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -116,7 +119,6 @@ require (
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nwaples/rardecode/v2 v2.2.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect

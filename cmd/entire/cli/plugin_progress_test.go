@@ -40,7 +40,6 @@ func TestPluginInstallReportsStagesOnStderr(t *testing.T) { //nolint:paralleltes
 		"Fetching plugin metadata for v0.1.0...",
 		"Locating plugin release files...",
 		"Downloading plugin archive...",
-		"Verifying plugin checksum...",
 		"Installing entire-demo v0.1.0...",
 	}
 	if got, want := errOut.String(), strings.Join(stages, "\n")+"\n"; got != want {

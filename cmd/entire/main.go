@@ -81,6 +81,9 @@ func main() {
 	restorePATH := cli.PrependPluginBinDirToPATH(ctx)
 
 	if handled, code := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
+		if ctx.Err() != nil && procsignal.Load() != nil {
+			dieFromSignal(terminatingSignal())
+		}
 		cancel()
 		os.Exit(code)
 	}

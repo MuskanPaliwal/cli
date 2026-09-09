@@ -20,7 +20,7 @@ Rules, in order:
 
 ### Managed install directory
 
-Remote installs report index lookup, release metadata, download, checksum verification, and installation progress on stderr. Styled terminals show a spinner; non-terminal and accessibility output prints plain status lines as each step starts. Progress stops before confirmations and results, including when installation fails. The same reporting applies when `entire graph` offers to install its missing plugin and when installing dependencies.
+Remote installs report index lookup, release metadata, download (including checksum verification), and installation progress on stderr. Styled terminals show a spinner; non-terminal and accessibility output prints plain status lines as each step starts. Progress stops before confirmations and results, including when installation fails. The same reporting applies when `entire graph` offers to install its missing plugin and when installing dependencies. Asset-name probes share one download status per release. Confirmations read from the controlling terminal and render to the supplied output writer (stderr for on-demand installs and dependency prompts), preserving piped plugin input and output. EOF declines installation; cancellation stops the prompt and preserves signal termination.
 
 Users can drop binaries anywhere on `$PATH`, but a per-user managed directory is also automatically discovered:
 

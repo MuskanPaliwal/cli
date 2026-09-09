@@ -305,6 +305,7 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 		}
 		u := expandDownloadTemplate(meta.DownloadURL, name, tag, "")
 		stopLocate()
+		defer startPluginStep(ctx, "Downloading plugin archive...")()
 		return fetchAndVerify(ctx, u, assetNameFromURL(u), "", stagingDir)
 	}
 
@@ -327,6 +328,7 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 			continue
 		}
 		stopLocate()
+		defer startPluginStep(ctx, "Downloading plugin archive...")()
 		return fetchAndVerify(ctx, assetURL(asset), asset, digest, stagingDir)
 	}
 
@@ -340,8 +342,9 @@ func downloadPluginAsset(ctx context.Context, meta *PluginMetadata, repoURL, nam
 	// (errUnverifiedAsset, which an older tag wouldn't fix). Getting that
 	// wrong would report a missing release for a plugin that simply doesn't
 	// ship checksums.
+	stopLocate()
+	defer startPluginStep(ctx, "Downloading plugin archive...")()
 	for _, asset := range assetCandidates(name, tag) {
-		stopLocate()
 		fa, err := fetchAndVerify(ctx, assetURL(asset), asset, "", stagingDir)
 		switch {
 		case errors.Is(err, errAssetNotFound):
@@ -414,8 +417,6 @@ func httpGetSmall(ctx context.Context, rawURL string) ([]byte, error) {
 // command errors to stderr and a download failure is an ordinary event
 // (network hiccup, 5xx, checksum mismatch), not an exceptional one.
 func fetchAndVerify(ctx context.Context, rawURL, asset, wantDigest, stagingDir string) (*fetchedAsset, error) {
-	stopDownload := startPluginStep(ctx, "Downloading plugin archive...")
-	defer stopDownload()
 	stagingRoot, err := osroot.Shared(stagingDir)
 	if err != nil {
 		return nil, fmt.Errorf("open staging dir: %w", err)
@@ -475,11 +476,6 @@ func fetchAndVerify(ctx context.Context, rawURL, asset, wantDigest, stagingDir s
 	if n > maxPluginAssetSize {
 		_ = osroot.RemoveNoSymlinks(stagingRoot, asset) //nolint:errcheck // best-effort cleanup of a staging file we are already abandoning
 		return nil, fmt.Errorf("download %s: exceeds %d byte limit", redactURL(rawURL), int64(maxPluginAssetSize))
-	}
-	stopDownload()
-	if wantDigest != "" {
-		stopVerify := startPluginStep(ctx, "Verifying plugin checksum...")
-		defer stopVerify()
 	}
 	got := hex.EncodeToString(h.Sum(nil))
 	if wantDigest != "" && !strings.EqualFold(got, wantDigest) {
