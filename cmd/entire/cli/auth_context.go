@@ -109,14 +109,16 @@ func selectContextToUse(cmd *cobra.Command) (string, error) {
 			len(named), named[0].Name, strings.Join(contextNames(named), ", "))
 	}
 
+	header, options := contextPickerTable(named, current)
+
 	// Start the cursor on the context being replaced.
 	selected := current
 	form := NewAccessibleForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Switch the active login context").
-				Description("One context is active at a time; it supplies the identity for every authenticated operation.").
-				Options(contextSelectOptions(named, current)...).
+				Description("One context is active at a time; it supplies the identity for every authenticated operation.\n" + header).
+				Options(options...).
 				Value(&selected),
 		),
 	)
@@ -137,27 +139,49 @@ func selectContextToUse(cmd *cobra.Command) (string, error) {
 	return selected, nil
 }
 
-// contextSelectOptions builds the picker rows, one per saved context, valued by
-// context name and labelled with the handle and login server that tell two
-// similarly-named logins apart. The active one is marked, matching the "*"
-// column in `entire auth contexts`.
-func contextSelectOptions(all []*contexts.Context, current string) []huh.Option[string] {
-	options := make([]huh.Option[string], 0, len(all))
+// contextPickerTable lays the saved contexts out as the same aligned
+// CONTEXT/HANDLE/LOGIN SERVER columns `entire auth contexts` prints, returning
+// the header line and one option per context (valued by name, which is what
+// SetCurrentContext takes).
+//
+// The header is returned separately because it is not selectable: it goes in
+// the field description, above the options. Both are indented by
+// selectOptionIndent so the columns line up with the option text rather than
+// with huh's cursor.
+//
+// The active context is marked "(active)" in a trailing column rather than
+// with the table's leading "*". Two markers in the same place would read as
+// one: huh's "> " cursor already occupies the leading column and it *moves*,
+// while "(active)" states which context is in use — so the row you happen to
+// be sitting on would otherwise look like the current one.
+//
+// Labels carry no styling of their own. huh renders each row through its
+// selected/unselected option style, and a color embedded here would fight
+// that; the table's header/value styles are deliberately left to the
+// non-interactive listing.
+func contextPickerTable(all []*contexts.Context, current string) (string, []huh.Option[string]) {
+	header := []string{"CONTEXT", "HANDLE", "LOGIN SERVER", ""}
+
+	rows := make([][]string, 0, len(all))
 	for _, c := range all {
-		parts := []string{c.Name}
-		if c.Handle != "" {
-			parts = append(parts, c.Handle)
-		}
-		if c.CoreURL != "" {
-			parts = append(parts, c.CoreURL)
-		}
-		label := strings.Join(parts, " · ")
+		marker := ""
 		if c.Name == current {
-			label += " (active)"
+			marker = "(active)"
 		}
-		options = append(options, huh.NewOption(label, c.Name))
+		rows = append(rows, []string{
+			c.Name,
+			orDash(c.Handle),
+			orDash(c.CoreURL),
+			marker,
+		})
 	}
-	return options
+
+	lines := alignTableLines(header, rows)
+	options := make([]huh.Option[string], 0, len(all))
+	for i, c := range all {
+		options = append(options, huh.NewOption(lines[i+1], c.Name))
+	}
+	return selectOptionIndent + lines[0], options
 }
 
 // contextNames lists the context names, for the no-terminal error that points
@@ -249,8 +273,8 @@ func renderContextsTable(w io.Writer, all []*contexts.Context, current string) {
 		rows = append(rows, []string{
 			marker,
 			name,
-			sty.render(sty.value, fallback(c.Handle, placeholderDash)),
-			sty.render(sty.value, fallback(c.CoreURL, placeholderDash)),
+			sty.render(sty.value, orDash(c.Handle)),
+			sty.render(sty.value, orDash(c.CoreURL)),
 		})
 	}
 

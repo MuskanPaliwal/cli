@@ -395,10 +395,10 @@ func TestSelectContextToUse_NoTerminalNamesThePositional(t *testing.T) {
 	}
 }
 
-// TestContextSelectOptions pins the picker rows: one per context, valued by the
-// name SetCurrentContext takes, labelled with the handle and login server that
-// tell similarly-named logins apart, and exactly one marked active.
-func TestContextSelectOptions(t *testing.T) {
+// TestContextPickerTable pins the picker rows: one per context, valued by the
+// name SetCurrentContext takes, carrying the handle and login server that tell
+// similarly-named logins apart, and exactly one marked active.
+func TestContextPickerTable(t *testing.T) {
 	t.Parallel()
 
 	all := []*contexts.Context{
@@ -407,9 +407,15 @@ func TestContextSelectOptions(t *testing.T) {
 		{Name: "bare"},
 	}
 
-	options := contextSelectOptions(all, "staging")
+	header, options := contextPickerTable(all, "staging")
 	if len(options) != len(all) {
 		t.Fatalf("options = %d, want one per context (%d)", len(options), len(all))
+	}
+
+	for _, col := range []string{"CONTEXT", "HANDLE", "LOGIN SERVER"} {
+		if !strings.Contains(header, col) {
+			t.Errorf("header = %q, want column %q (the same ones `auth contexts` prints)", header, col)
+		}
 	}
 
 	var activeCount int
@@ -431,14 +437,73 @@ func TestContextSelectOptions(t *testing.T) {
 		t.Fatalf("want exactly one (active) row, got %d", activeCount)
 	}
 
-	// A context with no handle or login server renders as a bare name — no
-	// dangling separators for the fields it doesn't have.
-	if options[2].Key != "bare" {
-		t.Errorf("label for a handle-less, URL-less context = %q, want %q", options[2].Key, "bare")
+	// Missing handle / login server become the listing's placeholder dash, so
+	// the row keeps its columns instead of collapsing to a bare name.
+	if got := strings.Fields(options[2].Key); len(got) != 3 || got[0] != "bare" || got[1] != placeholderDash || got[2] != placeholderDash {
+		t.Errorf("row for a handle-less, URL-less context = %q, want name plus two %q placeholders", options[2].Key, placeholderDash)
 	}
 	if !strings.Contains(options[0].Key, "alice") || !strings.Contains(options[0].Key, "core-a.example.com") {
-		t.Errorf("label = %q, want the handle and login server", options[0].Key)
+		t.Errorf("row = %q, want the handle and login server", options[0].Key)
 	}
+}
+
+// TestContextPickerTable_ColumnsAlign pins the alignment that makes this a
+// table rather than three fields with spaces between them: every column starts
+// at the same offset in the header and in every row, and the header is
+// indented past huh's cursor so it sits above the option text.
+func TestContextPickerTable_ColumnsAlign(t *testing.T) {
+	t.Parallel()
+
+	all := []*contexts.Context{
+		{Name: "p", Handle: "a-very-long-handle", CoreURL: "https://short"},
+		{Name: "a-very-long-context-name", Handle: "b", CoreURL: "https://a-much-longer-login-server.example.com"},
+		{Name: "mid", Handle: "carol", CoreURL: "https://core.example.com"},
+	}
+
+	header, options := contextPickerTable(all, "mid")
+
+	if !strings.HasPrefix(header, selectOptionIndent+"CONTEXT") {
+		t.Fatalf("header = %q, want it indented by %q so it aligns with the option text", header, selectOptionIndent)
+	}
+
+	// Where each column starts in the header, minus the cursor indent (huh
+	// indents the rows itself). Anchored on the labels rather than on gaps,
+	// because "LOGIN SERVER" contains a space of its own.
+	bare := strings.TrimPrefix(header, selectOptionIndent)
+	want := make([]int, 0, 3)
+	for _, col := range []string{"CONTEXT", "HANDLE", "LOGIN SERVER"} {
+		at := strings.Index(bare, col)
+		if at < 0 {
+			t.Fatalf("header %q is missing column %q", header, col)
+		}
+		want = append(want, at)
+	}
+
+	// Test data has no spaces inside a cell, so a row's columns are its
+	// space-separated runs.
+	for _, opt := range options {
+		got := columnOffsets(opt.Key)
+		if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+			t.Errorf("row %q starts columns at %v, want the header's %v", opt.Key, got, want)
+		}
+	}
+}
+
+// columnOffsets returns the rune index at which each space-separated run in a
+// row begins, which is what has to match the header's column starts.
+func columnOffsets(line string) []int {
+	var offsets []int
+	inGap := true
+	for i, r := range []rune(line) {
+		switch {
+		case r == ' ':
+			inGap = true
+		case inGap:
+			offsets = append(offsets, i)
+			inGap = false
+		}
+	}
+	return offsets
 }
 
 // TestAuthUseCmd_ArgsAndSwitch pins the command surface: a name still switches
