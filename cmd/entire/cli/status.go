@@ -332,9 +332,12 @@ const checkpointSyncSourceDedicated = "dedicated"
 // drift. Everything here reads local state only (settings, .git/config, local
 // refs, the push queue) — status must stay network-free.
 type checkpointSyncInfo struct {
+	// PushDisabled reflects the explicit automatic-push setting, not every
+	// possible reason checkpoint sync might fail.
+	PushDisabled bool
 	// Remote is the elected git remote name, or the org/repo slug in
-	// dedicated checkpoint_remote mode. Empty when nothing resolved (no
-	// remotes configured, or the fail-closed case).
+	// dedicated checkpoint_remote mode. Empty when pushing is disabled or
+	// nothing resolved (no remotes configured, or the fail-closed case).
 	Remote string
 	// Source is config|observed|default|sole|first (resolver values) or
 	// "dedicated".
@@ -354,6 +357,10 @@ type checkpointSyncInfo struct {
 }
 
 func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpointSyncInfo {
+	if s.IsPushSessionsDisabled() {
+		return checkpointSyncInfo{PushDisabled: true}
+	}
+
 	elected, err := strategy.ResolveCheckpointSyncRemote(ctx)
 	if err != nil {
 		// Fail-closed: checkpoint_push_remote names a remote that does not
@@ -426,13 +433,15 @@ func countUnpushedCheckpointsForStatus(ctx context.Context, remoteName string) i
 	return n
 }
 
-// writeCheckpointSyncLines appends the checkpoint sync destination line (and
-// the unpushed counter, when non-zero) to the enabled status block. Rendered
-// whenever something resolved: an elected remote, a dedicated store, or the
-// fail-closed misconfiguration. No remotes configured -> no lines.
+// writeCheckpointSyncLines reports disabled automatic pushing or the checkpoint
+// sync destination (and the unpushed counter, when non-zero) in the enabled status
+// block. With pushing enabled, no remotes configured means no lines.
 func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *EntireSettings, sty statusStyles) {
 	info := computeCheckpointSyncInfo(ctx, s)
 	switch {
+	case info.PushDisabled:
+		b.WriteString("\n  Automatic checkpoint pushing: disabled (push_sessions=false)")
+		return
 	case info.Err != "":
 		b.WriteString("\n")
 		b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
@@ -851,6 +860,11 @@ type statusJSON struct {
 	// CodexHooks reports effective discovery/trust warnings separately from
 	// current-checkout installation and freshness semantics.
 	CodexHooks *codexHooksStatusJSON `json:"codex_hooks,omitempty"`
+	// CheckpointPushDisabled is emitted only when Entire is enabled and the
+	// effective push_sessions setting is false. Its absence does not guarantee
+	// that a push can succeed. Sync destination, error, and count fields are
+	// omitted while pushing is disabled.
+	CheckpointPushDisabled bool `json:"checkpoint_push_disabled,omitempty"`
 	// CheckpointSyncRemote is the elected checkpoint sync remote name, or the
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named
 	// checkpoint_remote, which is the existing GitHub-coupled setting.
@@ -947,6 +961,7 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		// Same computation as the text path (writeCheckpointSyncLines);
 		// empty fields drop out via omitempty when nothing resolved.
 		syncInfo := computeCheckpointSyncInfo(ctx, s)
+		result.CheckpointPushDisabled = syncInfo.PushDisabled
 		result.CheckpointSyncRemote = syncInfo.Remote
 		result.CheckpointSyncRemoteSource = syncInfo.Source
 		result.CheckpointSyncError = syncInfo.Err

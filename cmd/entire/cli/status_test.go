@@ -26,6 +26,7 @@ import (
 	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
@@ -2287,6 +2288,208 @@ func TestRunStatus_PrintsBothReviewAndInvestigation(t *testing.T) {
 }
 
 // --- Checkpoint sync visibility (single-remote gate observability) ---
+
+func TestRunStatus_CheckpointPushDisabled(t *testing.T) {
+	testCheckpointPushDisabledFork(t, false)
+}
+
+func TestRunStatusJSON_CheckpointPushDisabled(t *testing.T) {
+	testCheckpointPushDisabledFork(t, true)
+}
+
+func testCheckpointPushDisabledFork(t *testing.T, jsonOutput bool) {
+	t.Helper()
+	// setupTestRepo changes CWD and git-config isolation changes process env.
+	testutil.IsolateGitConfigEnv(t)
+	setupTestRepo(t)
+	writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false,"checkpoint_push_remote":"fork"}}`)
+	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	testutil.AddRemote(t, ".", "fork", "https://github.com/user/repo.git")
+	head := checkpointSyncTestCommit(t, "a.txt", "one")
+	testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
+	assertCheckpointPushDisabledStatus(t, jsonOutput, false)
+}
+
+func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool) {
+	t.Helper()
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, detailed, jsonOutput); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+	t.Logf("status output:\n%s", stdout.String())
+	if jsonOutput {
+		var result map[string]json.RawMessage
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		for _, key := range []string{"enabled", "checkpoint_push_disabled"} {
+			raw, exists := result[key]
+			if !exists {
+				t.Errorf("missing %s", key)
+				continue
+			}
+			var value bool
+			if err := json.Unmarshal(raw, &value); err != nil || !value {
+				t.Errorf("%s = %s, want true (decode error: %v)", key, raw, err)
+			}
+		}
+		for _, key := range []string{"checkpoint_sync_remote", "checkpoint_sync_remote_source", "checkpoint_sync_error", "unpushed_checkpoints", "checkpoint_remote_ignored", "checkpoint_remote_ignored_reason"} {
+			if value, exists := result[key]; exists {
+				t.Errorf("disabled pushing must omit %s, got %s", key, value)
+			}
+		}
+		return
+	}
+	if !strings.Contains(stdout.String(), "Automatic checkpoint pushing: disabled (push_sessions=false)") {
+		t.Error("missing automatic checkpoint pushing disabled message")
+	}
+	for _, unwanted := range []string{"Checkpoints sync to:", "Checkpoints NOT syncing:", "not yet", "next 'git push", "is not in use:"} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Errorf("disabled pushing must not show %q", unwanted)
+		}
+	}
+}
+
+func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
+	// These subtests mutate CWD and environment and cannot run in parallel.
+	for _, backend := range []string{"git-branch", "git-refs"} {
+		for _, tc := range []struct {
+			name    string
+			options string
+			origin  string
+		}{
+			{"origin", "", "https://github.com/org/repo.git"},
+			{"explicit_fork", `,"checkpoint_push_remote":"fork"`, "https://github.com/org/repo.git"},
+			{"dedicated", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/org/repo.git"},
+			{"inherited_dedicated_rejected", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/other/repo.git"},
+			{"no_remotes", "", ""},
+			{"missing_configured_remote", `,"checkpoint_push_remote":"gone"`, "https://github.com/org/repo.git"},
+		} {
+			t.Run(backend+"/"+tc.name, func(t *testing.T) {
+				testutil.IsolateGitConfigEnv(t)
+				setupTestRepo(t)
+				writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false`+tc.options+`},"checkpoints":{"primary":{"type":"`+backend+`"}}}`)
+				if tc.origin != "" {
+					testutil.AddRemote(t, ".", "origin", tc.origin)
+				}
+				if tc.name == "explicit_fork" {
+					testutil.AddRemote(t, ".", "fork", "https://github.com/user/repo.git")
+				}
+				head := checkpointSyncTestCommit(t, "a.txt", "one")
+				testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				queue := checkpoint.NewPushQueue(filepath.Join(cwd, ".git"))
+				if backend == "git-refs" {
+					for _, ref := range []string{"refs/entire/checkpoints/aa/bb0000000001", "refs/entire/checkpoints/aa/bb0000000002"} {
+						if err := queue.Enqueue(plumbing.ReferenceName(ref)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				before, err := queue.Peek()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, jsonOutput := range []bool{false, true} {
+					assertCheckpointPushDisabledStatus(t, jsonOutput, false)
+					after, err := queue.Peek()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !slices.Equal(before, after) {
+						t.Errorf("status changed pending queue: before=%v after=%v", before, after)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunStatus_CheckpointPushDisabledSettingsPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		shared   string
+		local    string
+		disabled bool
+	}{
+		{"local_false_overrides_shared_true", `{"enabled":true,"strategy_options":{"push_sessions":true}}`, `{"strategy_options":{"push_sessions":false}}`, true},
+		{"local_true_overrides_shared_false", `{"enabled":true,"strategy_options":{"push_sessions":false}}`, `{"strategy_options":{"push_sessions":true}}`, false},
+		{"absent", `{"enabled":true}`, "", false},
+		{"explicit_true", `{"enabled":true,"strategy_options":{"push_sessions":true}}`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.IsolateGitConfigEnv(t)
+			setupTestRepo(t)
+			writeSettings(t, tc.shared)
+			if tc.local != "" {
+				testutil.WriteFile(t, ".", ".entire/settings.local.json", tc.local)
+			}
+			testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+			head := checkpointSyncTestCommit(t, "a.txt", "one")
+			testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
+			for _, jsonOutput := range []bool{false, true} {
+				if tc.disabled {
+					assertCheckpointPushDisabledStatus(t, jsonOutput, true)
+					continue
+				}
+				var stdout bytes.Buffer
+				if err := runStatus(context.Background(), &stdout, false, jsonOutput); err != nil {
+					t.Fatal(err)
+				}
+				if jsonOutput {
+					var result map[string]json.RawMessage
+					if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+						t.Fatal(err)
+					}
+					if _, exists := result["checkpoint_push_disabled"]; exists {
+						t.Errorf("enabled pushing must omit checkpoint_push_disabled: %s", stdout.String())
+					}
+					if string(result["checkpoint_sync_remote"]) != `"origin"` || string(result["checkpoint_sync_remote_source"]) != `"default"` || string(result["unpushed_checkpoints"]) != "1" {
+						t.Errorf("enabled pushing lost existing destination/counter fields: %s", stdout.String())
+					}
+				} else if strings.Contains(stdout.String(), "Automatic checkpoint pushing:") || !strings.Contains(stdout.String(), "Checkpoints sync to: origin") || !strings.Contains(stdout.String(), "next 'git push origin'") {
+					t.Errorf("enabled pushing changed existing output: %s", stdout.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRunStatus_CheckpointPushDisabledAbsentWithoutEnabledEntire(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings string
+	}{
+		{"entire_disabled", `{"enabled":false,"strategy_options":{"push_sessions":false}}`},
+		{"not_set_up", ""},
+		{"invalid_settings", `{"enabled":true,"strategy_options":{"push_sessions":false},`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.IsolateGitConfigEnv(t)
+			setupTestRepo(t)
+			if tc.settings != "" {
+				writeSettings(t, tc.settings)
+			}
+			for _, jsonOutput := range []bool{false, true} {
+				var stdout bytes.Buffer
+				err := runStatus(context.Background(), &stdout, false, jsonOutput)
+				if tc.name == "invalid_settings" && !jsonOutput {
+					if err == nil || !strings.Contains(err.Error(), "failed to load settings") {
+						t.Fatalf("invalid text settings error = %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(stdout.String(), "checkpoint_push_disabled") || strings.Contains(stdout.String(), "Automatic checkpoint pushing:") {
+					t.Errorf("inactive Entire must omit disabled-pushing status: %s", stdout.String())
+				}
+			}
+		})
+	}
+}
 
 // checkpointSyncTestCommit creates a commit in the cwd test repo and returns
 // its hash. setupTestRepo leaves the repo without commits, and both the v1
