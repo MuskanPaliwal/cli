@@ -408,6 +408,20 @@ func TestSaveStep_CheckpointSubagentAlwaysDerivedFromSessionCumulative(t *testin
 	require.Equal(t, 150, checkpointSubIn(), "second nil step must not re-subtract baseline")
 }
 
+func TestLiveSubagentsDir_OnlyEnablesFullScanWhenDirectoryExists(t *testing.T) {
+	t.Parallel()
+
+	transcriptDir := t.TempDir()
+	sessionID := "claude-session-123"
+	transcriptPath := filepath.Join(transcriptDir, sessionID+".jsonl")
+	ag := claudecode.NewClaudeCodeAgent()
+
+	require.Empty(t, liveSubagentsDir(ag, transcriptPath, sessionID))
+	subagentsDir := paths.SubagentsDir(transcriptDir, sessionID)
+	require.NoError(t, os.MkdirAll(subagentsDir, 0o755))
+	require.Equal(t, subagentsDir, liveSubagentsDir(ag, transcriptPath, sessionID))
+}
+
 func TestCalculateLiveTranscriptTokenUsage_RescopesSubagentCumulativeTotal(t *testing.T) {
 	t.Parallel()
 
@@ -423,26 +437,35 @@ func TestCalculateLiveTranscriptTokenUsage_RescopesSubagentCumulativeTotal(t *te
 	require.NoError(t, os.WriteFile(subagentPath, []byte(`{"type":"assistant","uuid":"a-sub","message":{"id":"msg_sub","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":200,"output_tokens":20}}}
 `), 0o644))
 
-	state := &SessionState{SessionID: sessionID}
+	ag := claudecode.NewClaudeCodeAgent()
+	state := &SessionState{SessionID: sessionID, AgentType: agent.AgentTypeClaudeCode}
 	usage := calculateLiveTranscriptTokenUsage(
-		t.Context(), claudecode.NewClaudeCodeAgent(), mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
+		t.Context(), ag, mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
 	require.NotNil(t, usage)
 	require.NotNil(t, usage.SubagentTokens)
 	require.Equal(t, 200, usage.SubagentTokens.InputTokens)
 	require.Equal(t, 20, usage.SubagentTokens.OutputTokens)
+	require.NotNil(t, state.TokenUsage)
+	require.Equal(t, 200, state.TokenUsage.SubagentTokens.InputTokens,
+		"session state must retain the cumulative snapshot for the next baseline")
 
-	state.SubagentTokensBaseline = usage.SubagentTokens
+	applyBackfilledSessionTokenUsage(t.Context(), ag, state, mainTranscript, usage)
+	require.Equal(t, 200, state.TokenUsage.SubagentTokens.InputTokens,
+		"main-token backfill must not replace the cumulative snapshot with the checkpoint delta")
+	state.RebaselineSubagentTokens()
 	require.NoError(t, os.WriteFile(subagentPath, []byte(`{"type":"assistant","uuid":"a-sub","message":{"id":"msg_sub","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":260,"output_tokens":35}}}
 `), 0o644))
 
 	nextUsage := calculateLiveTranscriptTokenUsage(
-		t.Context(), claudecode.NewClaudeCodeAgent(), mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
+		t.Context(), ag, mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
 	require.NotNil(t, nextUsage)
 	require.NotNil(t, nextUsage.SubagentTokens)
 	require.Equal(t, 60, nextUsage.SubagentTokens.InputTokens,
 		"second checkpoint must not re-report the first checkpoint's subagent input")
 	require.Equal(t, 15, nextUsage.SubagentTokens.OutputTokens,
 		"second checkpoint must not re-report the first checkpoint's subagent output")
+	require.Equal(t, 260, state.TokenUsage.SubagentTokens.InputTokens,
+		"session state must advance to the latest cumulative snapshot")
 }
 
 // TestCondenseSessionByID_CapturesSubagentBaselineViaRealResetPath drives a REAL
