@@ -227,7 +227,7 @@ session state without scanning the parent transcript as the child. The older
 Copilot does not create standalone child transcript files. Task metadata therefore
 records transcript unavailability and never probes the generic Claude-style
 `agent-<id>.jsonl` layout. Per-child token breakdown is also unavailable at hook time:
-`session.shutdown.agentMetrics` is authoritative but is appended only after
+`session.shutdown.modelMetrics` is authoritative but is appended only after
 `sessionEnd` returns. Entire leaves child token usage unset rather than misclassifying
 Copilot's total-only completion value.
 

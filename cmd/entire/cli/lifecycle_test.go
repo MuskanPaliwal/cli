@@ -3422,8 +3422,11 @@ func TestHandleLifecycleSubagentEnd_CorrelatedCompletionCreatesDistinctRecord(t 
 	require.Len(t, state.TaskRecords, 1)
 	assert.Equal(t, firstCompletedAt, state.TaskRecords[0].CompletedAt)
 
+	endedAt := time.Now()
 	require.NoError(t, strategy.MutateSessionState(ctx, sessionID, func(s *strategy.SessionState) error {
-		s.Phase = session.PhaseEnded
+		// Persist the legacy/partially-written ended shape: EndedAt is set even
+		// though Phase has not transitioned yet.
+		s.EndedAt = &endedAt
 		return nil
 	}))
 	late := finalSubagentEvent(sessionID, "toolu_copilot_late", "late-child")

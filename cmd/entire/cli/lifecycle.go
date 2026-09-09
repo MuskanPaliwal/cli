@@ -1391,7 +1391,7 @@ func handleSubagentStopFinal(logCtx context.Context, ag agent.Agent, event *agen
 	}
 
 	marker := state.FindTaskRecord(event.ToolUseID)
-	if event.CompletionWithoutLaunch && state.Phase == session.PhaseEnded {
+	if event.CompletionWithoutLaunch && state.IsEnded() {
 		logging.Info(logCtx, "skipping completion-only subagent capture: parent session already ended",
 			slog.String("session_id", event.SessionID),
 			slog.String("tool_use_id", event.ToolUseID))
