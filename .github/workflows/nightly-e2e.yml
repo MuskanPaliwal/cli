@@ -24,8 +24,9 @@ concurrency:
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
-    # ~3 min setup + six agent steps of 15 each.
-    timeout-minutes: 100
+    # Observed 6m30s-8m40s per leg. 60 leaves ~7x headroom while bounding how
+    # long a stuck nightly hides: the verdict only arrives at Summarize.
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
@@ -182,6 +183,13 @@ jobs:
       # in a shared loop would take every later agent's verdict with it.
       # `!cancelled()` so a killed step does not skip the rest.
       #
+      # 20 minutes is sized from the harness's retry ceiling, not from the
+      # observed 23s-2m40s: runForAgents gives each scenario attempt
+      # 3 min x the agent's TimeoutMultiplier and allows 3 attempts, so a
+      # transient-error restart chain it is designed to recover from takes up to
+      # 18 min for the 2.0x agents (opencode, factoryai-droid). A tighter bound
+      # would kill a recovering run and report it as a failure.
+      #
       # In each body: `set +e` because GitHub already runs `shell: bash` with
       # -e, which would end the step before its result row is written. The
       # `Total: 0` check because a filter matching no test exits 0 with "[no
@@ -195,7 +203,7 @@ jobs:
       # The six bodies are byte-identical; only AGENT and the key differ.
       - name: Smoke test claude-code
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' claude-code ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: claude-code
@@ -213,7 +221,7 @@ jobs:
 
       - name: Smoke test opencode
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' opencode ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: opencode
@@ -231,7 +239,7 @@ jobs:
 
       - name: Smoke test codex
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' codex ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: codex
@@ -250,7 +258,7 @@ jobs:
 
       - name: Smoke test cursor-cli
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' cursor-cli ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: cursor-cli
@@ -268,7 +276,7 @@ jobs:
 
       - name: Smoke test factoryai-droid
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' factoryai-droid ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: factoryai-droid
@@ -288,7 +296,7 @@ jobs:
 
       - name: Smoke test copilot-cli
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' copilot-cli ') }}
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           AGENT: copilot-cli
