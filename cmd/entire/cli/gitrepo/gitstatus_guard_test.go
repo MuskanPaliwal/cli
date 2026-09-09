@@ -104,24 +104,29 @@ func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 }
 
 type safeGitDiffCall struct {
+	path     string
 	fragment string
 	reason   string
 }
 
-// safeGitDiffCalls is an explicit file-and-shape allowlist. Matching only the
-// line containing "diff" is intentional: a wrapped argv separates that line
-// from exec.Command, so requiring an invocation marker would make the guard
-// silently miss exactly the call it exists to prevent.
-var safeGitDiffCalls = map[string]safeGitDiffCall{
-	"cmd/entire/cli/experts_cmd.go": {
+// safeGitDiffCalls is an explicit file-and-shape allowlist. It is a slice so
+// one file can contain several independently justified "diff" literals.
+// Matching only the line containing "diff" is intentional: a wrapped argv
+// separates that line from exec.Command, so requiring an invocation marker
+// would make the guard silently miss exactly the call it exists to prevent.
+var safeGitDiffCalls = []safeGitDiffCall{
+	{
+		path:     "cmd/entire/cli/experts_cmd.go",
 		fragment: `"--cached"`,
 		reason:   "compares the index to HEAD and never reads the worktree",
 	},
-	"cmd/entire/cli/review/scope.go": {
+	{
+		path:     "cmd/entire/cli/review/scope.go",
 		fragment: `baseRef+"...HEAD"`,
 		reason:   "compares two commits and never reads the worktree",
 	},
-	"cmd/entire/cli/strategy/manual_commit_hooks.go": {
+	{
+		path:     "cmd/entire/cli/strategy/manual_commit_hooks.go",
 		fragment: `"--cached"`,
 		reason:   "compares the index to HEAD and never reads the worktree",
 	},
@@ -141,7 +146,7 @@ func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
 	out := testutil.GitGrepGuard(t, root, "-n", "--", `"diff"`,
 		"--", ":(glob)cmd/**/*.go", ":(glob)internal/**/*.go")
 
-	seen := make(map[string]bool)
+	seen := make([]bool, len(safeGitDiffCalls))
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
@@ -153,17 +158,23 @@ func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
 		if strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testutil/") {
 			continue
 		}
-		allowed, ok := safeGitDiffCalls[path]
-		if !ok || !strings.Contains(rest, allowed.fragment) {
-			t.Errorf("worktree-comparing git diff can rewrite the index even with --no-optional-locks:\n  %s\n"+
-				"Use a non-refreshing primitive such as git hash-object or git diff-index instead.", line)
-			continue
+		matched := false
+		for i, allowed := range safeGitDiffCalls {
+			if path == allowed.path && strings.Contains(rest, allowed.fragment) {
+				seen[i] = true
+				matched = true
+			}
 		}
-		seen[path] = true
+		if !matched {
+			t.Errorf("worktree-comparing git diff can rewrite the index even with --no-optional-locks:\n  %s\n"+
+				"Use a non-refreshing primitive such as git hash-object or git diff-index, or add a justified "+
+				"allowlist entry if this line is not a worktree-comparing Git invocation.", line)
+		}
 	}
-	for path, allowed := range safeGitDiffCalls {
-		if !seen[path] {
-			t.Errorf("safe git diff allowlist entry is stale: %s (%s)", path, allowed.reason)
+	for i, allowed := range safeGitDiffCalls {
+		if !seen[i] {
+			t.Errorf("safe git diff allowlist entry is stale: %s containing %q (%s)",
+				allowed.path, allowed.fragment, allowed.reason)
 		}
 	}
 }

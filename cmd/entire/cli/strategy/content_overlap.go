@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log/slog"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
@@ -582,7 +583,14 @@ func requiresConfinedWorktreeHash(worktreeRoot, filePath string, commitMode file
 		return true
 	}
 	info, err := root.Lstat(name)
-	return err != nil || !info.Mode().IsRegular()
+	return err != nil || requiresConfinedWorktreeMode(info.Mode())
+}
+
+func requiresConfinedWorktreeMode(mode fs.FileMode) bool {
+	// Windows uses ModeIrregular for OneDrive Files On-Demand placeholders.
+	// Mask it so placeholder files still receive Git's clean-filter handling,
+	// while every substantive non-regular type remains confined.
+	return mode.Type()&^fs.ModeIrregular != 0
 }
 
 // workingTreeMatchesBlob checks whether the raw file representation hashes to

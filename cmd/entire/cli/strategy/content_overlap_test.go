@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -499,6 +500,30 @@ func TestFilesWithRemainingAgentChanges_ComparesWorktreeToCommitNotIndex(t *test
 	committedFiles := map[string]struct{}{"config.go": {}}
 	remaining := filesWithRemainingAgentChanges(t.Context(), repo, shadowBranch, commit, []string{"config.go"}, committedFiles)
 	assert.Equal(t, []string{"config.go"}, remaining)
+}
+
+func TestRequiresConfinedWorktreeModeAllowsWindowsCloudPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode fs.FileMode
+		want bool
+	}{
+		{name: "regular", mode: 0, want: false},
+		{name: "cloud placeholder file", mode: fs.ModeIrregular, want: false},
+		{name: "directory", mode: fs.ModeDir, want: true},
+		{name: "cloud placeholder directory", mode: fs.ModeDir | fs.ModeIrregular, want: true},
+		{name: "symlink", mode: fs.ModeSymlink, want: true},
+		{name: "symlink irregular", mode: fs.ModeSymlink | fs.ModeIrregular, want: true},
+		{name: "named pipe", mode: fs.ModeNamedPipe, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, requiresConfinedWorktreeMode(tt.mode))
+		})
+	}
 }
 
 func TestWorkingTreeMatchesBlobSymlinkHashesTheTargetPath(t *testing.T) {
