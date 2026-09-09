@@ -399,12 +399,12 @@ Tests that spawn the real `entire` or `git` binary need the child to be non-inte
    product decision rather than a detection fix.
 4. `CI=<non-empty-non-false>` → false.
 5. Controlling-terminal probe — `/dev/tty` on Unix, `CONIN$` + `CONOUT$` on
-   Windows. On Unix, a terminal held in raw mode (canonical input off) belongs
-   to a full-screen TUI that spawned us, not to a shell we can prompt: TUI git
-   clients (lazygit, gitui, tig) run `git commit` as a child while owning the
-   screen, so the hook inherits a `/dev/tty` it must not prompt on. The mode
-   check fails open when it cannot read the mode. See `interactive/tty_*.go`
-   and `interactive/rawmode_unix.go` for the platform split and rationale.
+   Windows. A terminal held in raw mode (canonical/line input off) belongs to a
+   full-screen TUI that spawned us, not to a shell we can prompt: TUI git clients
+   (lazygit, gitui, tig) run `git commit` as a child while owning the screen, so
+   the hook inherits the same terminal it must not prompt on. The mode check
+   fails open when it cannot read the mode. See `interactive/tty_*.go` and
+   `interactive/rawmode_{unix,windows}.go` for the platform split and rationale.
 
 For subprocesses spawning the real `entire` binary (e2e, integration tests, `entire` calling itself from a hook), prefer `execx.NonInteractive` over env-var plumbing:
 

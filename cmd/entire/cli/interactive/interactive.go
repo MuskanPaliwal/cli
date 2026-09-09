@@ -26,14 +26,14 @@ const EnvTestTTY = "ENTIRE_TEST_TTY"
 // Precedence (first match wins):
 //  1. EnvTestTTY=1 forces interactive ON; any other non-empty value forces OFF.
 //  2. testing.Testing() — `go test` runs default to OFF so in-process tests
-//     don't hang on developer terminals that happen to have a real /dev/tty.
+//     don't hang on developer terminals that have a real controlling terminal.
 //     Subprocess tests must spawn via execx.NonInteractive (or set EnvTestTTY).
 //  3. Agent sentinels — vendor-set by agent subprocesses.
 //  4. CI=<non-empty-non-false> — de-facto CI convention.
 //  5. Platform-specific controlling-terminal probe, plus its terminal mode on
 //     platforms that expose one: a terminal held in raw mode belongs to a
 //     full-screen TUI (lazygit, gitui, tig, …) that spawned us, not to a shell
-//     we can prompt. See rawmode_unix.go.
+//     we can prompt. See rawmode_unix.go and rawmode_windows.go.
 func CanPromptInteractively() bool {
 	if v := os.Getenv(EnvTestTTY); v != "" {
 		return v == "1"
