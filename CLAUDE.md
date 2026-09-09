@@ -1068,7 +1068,14 @@ comments at each site say which case applies:
   writes an agent config for another. `SetVouchedSymlinkedDirs` records the
   root, `AnchorWorktreePath` and the doctor/status reporting compare against it,
   and a mismatch refuses (degrading to the strict behaviour, never to following
-  another tree's link). This is a different question from why `vouchableDirs` is
+  another tree's link). The key is **canonicalized and typed**
+  (`agent.worktreeKey`, built only by `keyFor`), so a raw path cannot be
+  compared against a stored key — that does not compile. The first version
+  compared plain strings and silently disabled the feature on Windows: readers
+  pass git's `--show-toplevel` (`C:/repo`) while settings derives its root
+  through `entiredir.PathTo`, whose `filepath.Join` rewrites it (`C:\repo`).
+  One directory, two spellings, never equal, and every symptom looked exactly
+  like an absent grant. This is a different question from why `vouchableDirs` is
   pinned: that is the set a user MAY name, which must not be widenable at
   runtime; this is the set a user DID name, which is per-configuration and has
   to come from somewhere mutable.

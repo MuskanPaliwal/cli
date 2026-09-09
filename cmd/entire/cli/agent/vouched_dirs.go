@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -70,8 +71,52 @@ import (
 var (
 	vouchedMu      sync.RWMutex
 	vouchedDirs    []string
-	vouchedForRoot string
+	vouchedForRoot worktreeKey
 )
+
+// worktreeKey is a canonicalized worktree root, and a distinct TYPE so that a
+// raw path cannot be compared against a stored key by accident: assigning or
+// comparing a plain string here does not compile, so every comparison has to go
+// through keyFor.
+//
+// That is not decoration. The first version stored a plain string and compared
+// it directly, which silently disabled the whole feature on Windows: git's
+// `rev-parse --show-toplevel` prints forward slashes (C:/repo), while the
+// settings side reaches the same directory through entiredir.PathTo, whose
+// filepath.Join rewrites it to C:\repo. The two spellings name one directory
+// and compare unequal, so a verified local grant never applied and hook
+// install, scaffolding, doctor and status all went on refusing the link -- with
+// no diagnostic, because "refused" is also what an absent grant looks like.
+type worktreeKey string
+
+// goosWindows is runtime.GOOS on Windows.
+const goosWindows = "windows"
+
+// keyFor canonicalizes a worktree root for comparison.
+//
+// Abs (which also Cleans) settles relative spellings and redundant components;
+// ToSlash settles the separator, which is the one that actually bit; and
+// Windows paths are lowered because the filesystem is case-insensitive there,
+// so two spellings differing only in case are the same directory and must not
+// key differently.
+//
+// Symlinks are deliberately NOT resolved. Both producers reach this through
+// git's --show-toplevel, which has already resolved them, so an EvalSymlinks
+// here would buy nothing and could fail on a tree being torn down.
+func keyFor(worktreeRoot string) worktreeKey {
+	if worktreeRoot == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(worktreeRoot)
+	if err != nil {
+		abs = filepath.Clean(worktreeRoot)
+	}
+	key := filepath.ToSlash(abs)
+	if runtime.GOOS == goosWindows {
+		key = strings.ToLower(key)
+	}
+	return worktreeKey(key)
+}
 
 // SetVouchedSymlinkedDirs installs the set of worktree-relative agent
 // directories whose symlinks may be followed, replacing any previous set, and
@@ -104,7 +149,7 @@ func SetVouchedSymlinkedDirs(worktreeRoot string, dirs []string) (rejected []str
 
 	vouchedMu.Lock()
 	vouchedDirs = accepted
-	vouchedForRoot = worktreeRoot
+	vouchedForRoot = keyFor(worktreeRoot)
 	vouchedMu.Unlock()
 	return rejected
 }
@@ -117,7 +162,7 @@ func SetVouchedSymlinkedDirs(worktreeRoot string, dirs []string) (rejected []str
 func VouchedSymlinkedDirs(worktreeRoot string) []string {
 	vouchedMu.RLock()
 	defer vouchedMu.RUnlock()
-	if vouchedForRoot != worktreeRoot {
+	if vouchedForRoot != keyFor(worktreeRoot) {
 		return nil
 	}
 	return slices.Clone(vouchedDirs)
@@ -223,12 +268,13 @@ func neverVouchable(dir string) bool {
 // isVouched reports whether dir was vouched for IN worktreeRoot.
 //
 // The root comparison is the whole point: a policy loaded for another worktree
-// must not decide anything here. It is a plain string compare on the value the
-// caller was given, which is the same value settings resolved the policy for.
+// must not decide anything here. It compares CANONICAL keys, never the raw
+// strings -- the two sides reach the same directory by different routes and
+// spell it differently on Windows. See worktreeKey.
 func isVouched(worktreeRoot, dir string) bool {
 	vouchedMu.RLock()
 	defer vouchedMu.RUnlock()
-	return vouchedForRoot == worktreeRoot && slices.Contains(vouchedDirs, dir)
+	return vouchedForRoot == keyFor(worktreeRoot) && slices.Contains(vouchedDirs, dir)
 }
 
 // AnchorWorktreePath resolves the directory to anchor a root on for a
