@@ -82,6 +82,10 @@ type EntireSettings struct {
 	// Unexported so it never serializes. Surfaced via LocalLayerRejection.
 	localLayerRejection string
 
+	// symlinkedAgentDirsRejection records why some or all of
+	// allow_symlinked_agent_dirs was dropped.
+	symlinkedAgentDirsRejection string
+
 	// externalAgentsRejection records why an external_agents grant was
 	// dropped by the trust gate, for the consumer to report. Unexported so it
 	// never serializes — a rejected grant must not be written back to disk as
@@ -163,6 +167,22 @@ type EntireSettings struct {
 	// other than Load() (LoadFromFile, LoadFromBytes) get the ungated value
 	// and must not scan $PATH on it.
 	ExternalAgents bool `json:"external_agents,omitempty"`
+
+	// AllowSymlinkedAgentDirs lists worktree-relative agent config directories
+	// (".claude", ".codex/…") whose symlinks Entire may follow instead of
+	// refusing. Defaults to empty, which is the strict behaviour.
+	//
+	// A list rather than a boolean, on purpose: a flag would disable the whole
+	// class, where naming a path is the user saying which arrangement is theirs.
+	// Entries are checked against the directories actually derivable from the
+	// agents' hook-config paths, so `.entire` and `.git/hooks` cannot be
+	// spelled here at all.
+	//
+	// Following a link means writing where it points, so Load() honors this only
+	// from an untracked .entire/settings.local.json, the same gate as
+	// ExternalAgents. See enforceSymlinkedAgentDirsTrust and
+	// agent.SetVouchedSymlinkedDirs.
+	AllowSymlinkedAgentDirs []string `json:"allow_symlinked_agent_dirs,omitempty"`
 
 	// SummaryGeneration stores provider preferences for explain --generate.
 	// This is separate from strategy_options.summarize, which controls
@@ -532,6 +552,19 @@ func (s *EntireSettings) ExternalAgentsRejection() (reason string, rejected bool
 	return s.externalAgentsRejection, true
 }
 
+// SymlinkedAgentDirsRejection reports why Load dropped some or all of
+// allow_symlinked_agent_dirs, and whether a rejection happened.
+//
+// Surfaced for the same reason as ExternalAgentsRejection: without it, a grant
+// that was refused and a setting the user never wrote look identical from the
+// outside, since both end with Entire refusing the link.
+func (s *EntireSettings) SymlinkedAgentDirsRejection() (reason string, rejected bool) {
+	if s == nil || s.symlinkedAgentDirsRejection == "" {
+		return "", false
+	}
+	return s.symlinkedAgentDirsRejection, true
+}
+
 // InvestigateConfig returns the configured investigate config. Returns nil
 // when no configuration is present; callers should check IsZero (or guard
 // for nil) to decide whether configuration is present.
@@ -660,6 +693,18 @@ func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot strin
 	return filepath.Join(filepath.Clean(commonDir), ClonePreferencesFile), nil
 }
 
+// worktreeRootOfSettingsFile recovers the worktree root a settings path was
+// built from: settingsAbsPaths joins <root>/.entire/<file>, so the root is two
+// levels up. Used only as the KEY the vouched-symlink policy is scoped by, never
+// as a base for I/O, so the derived-path rule in CLAUDE.md does not apply -- an
+// inconsistent key costs a refused symlink, which is the safe direction.
+func worktreeRootOfSettingsFile(settingsFileAbs string) string {
+	if settingsFileAbs == "" {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(settingsFileAbs))
+}
+
 func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {
 	// Load base settings
 	settings, err := loadFromFile(settingsFileAbs)
@@ -700,6 +745,11 @@ func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs
 	// same gate.
 	enforceOPFCommandTrust(ctx, settings, localSettingsFileAbs, localData)
 	enforceExternalAgentsTrust(ctx, settings, localSettingsFileAbs, localData)
+	// allow_symlinked_agent_dirs decides where Entire writes an agent's hook
+	// config, so it gets the same gate, and then installs the surviving set as
+	// the process-wide policy.
+	enforceSymlinkedAgentDirsTrust(ctx, settings, localSettingsFileAbs, localData)
+	applyVouchedAgentDirs(settings, worktreeRootOfSettingsFile(settingsFileAbs))
 
 	// Re-validate after merge. Individual files are validated by loadFromFile,
 	// but mergeJSON patches fields independently and can produce combinations
@@ -1342,6 +1392,29 @@ func mergeScalarFields(settings *EntireSettings, raw map[string]json.RawMessage)
 	if err := mergeRawInt(raw, "summary_timeout_seconds", &settings.SummaryTimeoutSeconds); err != nil {
 		return err
 	}
+	if err := mergeRawStringSlice(raw, "allow_symlinked_agent_dirs", &settings.AllowSymlinkedAgentDirs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// mergeRawStringSlice replaces dst when key is present, rather than appending.
+//
+// Replacement is the only sensible merge for allow_symlinked_agent_dirs: the
+// list is the complete set of directories this developer vouches for, and
+// appending would let the project layer contribute entries to a grant only the
+// local layer is trusted to make. An explicit empty list therefore means
+// "vouch for nothing", which is a thing a user can want to say.
+func mergeRawStringSlice(raw map[string]json.RawMessage, key string, dst *[]string) error {
+	v, ok := raw[key]
+	if !ok {
+		return nil
+	}
+	var parsed []string
+	if err := json.Unmarshal(v, &parsed); err != nil {
+		return fmt.Errorf("parsing %s: %w", key, err)
+	}
+	*dst = parsed
 	return nil
 }
 

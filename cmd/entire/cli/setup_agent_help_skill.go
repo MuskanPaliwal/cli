@@ -55,11 +55,11 @@ func scaffoldAgentHelpSkill(ctx context.Context, ag agent.Agent) (managedScaffol
 		return managedScaffoldResult{}, fmt.Errorf("resolve worktree root: %w", err)
 	}
 
-	root, err := openScaffoldRoot(repoRoot)
+	target, err := openScaffoldTarget(repoRoot, relPath)
 	if err != nil {
 		return managedScaffoldResult{}, err
 	}
-	return writeManagedScaffold(root, relPath, content, isManagedAgentHelpSkill)
+	return writeManagedScaffold(target, content, isManagedAgentHelpSkill)
 }
 
 func isManagedAgentHelpSkill(data []byte) bool {

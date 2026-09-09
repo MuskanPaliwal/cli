@@ -147,6 +147,27 @@ func runStatusDetailed(ctx context.Context, w io.Writer, sty statusStyles, setti
 			reason, settings.EntireSettingsLocalFile)
 	}
 
+	// Same reasoning for allow_symlinked_agent_dirs: a refused grant and a
+	// setting nobody wrote both end in Entire refusing the link, so without
+	// this the two are indistinguishable from the outside.
+	if reason, rejected := effectiveSettings.SymlinkedAgentDirsRejection(); rejected {
+		fmt.Fprintf(w, "  allow_symlinked_agent_dirs is ignored: %s\n  move it to %s, and keep that file out of version control\n",
+			reason, settings.EntireSettingsLocalFile)
+	}
+
+	// And say what IS being followed. A link Entire writes through is worth
+	// stating plainly every time, not only when something is wrong with it.
+	//
+	// FollowedSymlinkedDirs, not VouchedSymlinkedDirs: the latter is the
+	// configuration, and a vouched path that is an ordinary directory, absent,
+	// or a dangling link is not something Entire is following. Scoped to this
+	// worktree too, so the report can never name links followed somewhere else.
+	if repoRoot, rootErr := paths.WorktreeRoot(ctx); rootErr == nil {
+		if followed := agent.FollowedSymlinkedDirs(repoRoot); len(followed) > 0 {
+			fmt.Fprintf(w, "  Following symlinked agent directories: %s\n", strings.Join(followed, ", "))
+		}
+	}
+
 	// Show local settings if it exists. LoadFromFile is ungated, so this
 	// renders the file's own contents — say so when the loader ignored them,
 	// or the display contradicts the settings actually in effect.

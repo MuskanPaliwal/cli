@@ -457,6 +457,45 @@ Before pushing commits or otherwise sending code changes to any remote, run `mis
 - Lint errors → run `mise run lint` and fix issues
 - Test failures → run `mise run test` and fix
 
+### Source-Level Guard Tests
+
+Four tests scan this repo's own source with `git grep` to enforce an invariant
+the compiler cannot: `TestRootBasesAreTrusted` (root bases are trusted paths),
+`TestTranscriptReadsOnlyShrink` (the unconfined transcript-read ratchet),
+`TestGitStatusCallSitesPassNoOptionalLocks`, and
+`TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent`.
+
+**They all go through `testutil.GitGrepGuard`, which owns three flags.** Each was
+missing from at least one guard, and the same one was missing from three:
+
+- `--untracked`. `git grep` searches the INDEX. Every one of these guards has
+  "someone just added a file" as its subject, so the file it most needs to see is
+  the one not yet staged. Two failure shapes were worse than a miss: the
+  hook-config guard compares two sets built from the same blind grep, so a new
+  agent package calling `OpenHookConfig` without declaring `HookConfigRelPath`
+  was absent from both and the comparison *passed*; and the root-base guard's
+  staleness half reported a just-added entry as STALE, telling the author to
+  delete the entry that legitimised their new root.
+- `--no-color`. `color.ui`/`color.grep` set to `always` colorizes into a pipe and
+  the escapes land in the **filename** field. True of `-l` too, which looks
+  immune. Guards then either misparse (read as staleness, #2248) or compare
+  garbage to garbage while their "did we match anything" assertion still passes.
+- Repo-selector scrubbing. Git exports `GIT_DIR`/`GIT_WORK_TREE` to hooks and
+  they outrank `cmd.Dir`, so a `go test` under a hook or `git rebase --exec`
+  scanned a different repository. `RunGit`'s isolation does **not** cover this:
+  it filters `GIT_CONFIG_*` only.
+
+Two rules for writing one:
+
+- **A pathspec restricted to `*.go`, so an unparseable path can be fatal.** The
+  `git status` guard passed a bare `cmd internal`, which also matched testdata
+  `.jsonl` and a `.md`, so its non-`.go` branch had to `continue` — and that
+  skip was the only thing between colorized output and a guard that silently
+  checked nothing.
+- **Fail on zero matches.** A detection pattern that goes stale otherwise passes
+  forever. `GitGrepGuard` does this itself; the `checked == 0` tallies are the
+  second half of the same idea.
+
 ### Code Duplication Prevention
 
 Before implementing Go code, use `/go:discover-related` to find existing utilities and patterns that might be reusable.
@@ -788,7 +827,7 @@ Don't use `fmt.Print*` for operational messages (checkpoint saves, hook invocati
 
 ### The Root Anchors
 
-Entire does filesystem I/O in seven trees, and each has one package that owns a
+Entire does filesystem I/O in eight trees, and each has one package that owns a
 shared `*os.Root` over it. **Never assemble a path into one of these and hand it
 to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 
@@ -799,6 +838,7 @@ to `os.ReadFile`/`os.WriteFile`/`os.MkdirAll`/`os.ReadDir`/`filepath.Walk`.**
 | the working tree | `worktreedir` | worktree root |
 | an agent's hook config | `agent.HookConfigFile` | worktree root (`.claude/`, `.cursor/`, `.gemini/`, `.github/hooks/`, `.factory/`, `.codex/`, `.opencode/plugins/`, `.pi/extensions/entire/`) |
 | an agent's session store | `agent.SessionStore` | the agent's own `GetSessionDir` |
+| the active git hooks dir | `strategy.hooksRootForInstall` / `ForRemoval` | `git rev-parse --git-path hooks`, absolutized |
 | per-user config / cache | `userdirs.ConfigRoot` / `CacheRoot` | `$ENTIRE_CONFIG_DIR` else `~/.config/entire`; `$XDG_CACHE_HOME/entire` else `~/.cache/entire` |
 | managed plugin tree | `pluginRoot` (`plugin_store.go`) | `pluginParentDir()` — `$ENTIRE_PLUGIN_DIR`, `%LOCALAPPDATA%`, or `$XDG_DATA_HOME` |
 
@@ -897,6 +937,47 @@ comments at each site say which case applies:
 - An agent's session store is where a hook payload's session ID becomes a path,
   via the agent's own `ResolveSessionFile`. `SessionStore.SessionFile` converts
   the result back to a name inside the store and **rejects** an ID that left it.
+- The git hooks directory holds no untrusted *name* — the five hook filenames are
+  compile-time constants — so it is anchored for the opposite reason: what is at
+  those names arrived from somewhere else. It was the last tree Entire wrote to
+  with bare `os.ReadFile`/`os.WriteFile` on a joined path, so a symlink at
+  `.git/hooks/pre-push` was read through and then *written* through, replacing
+  whatever the link named with a shell script. `hooksRootForInstall` refuses a
+  link at the directory (git's own `--git-path hooks` answer, which `core.hooksPath` can put
+  anywhere, which is why no other anchor reaches it); the four reads go through
+  `osroot.ReadFileNoFollow`; and the write is `jsonutil.WriteFileAtomicIn`,
+  whose rename **replaces** a leaf link rather than following it.
+  `osroot.OpenFileNoFollow` is not the tool for that write — it rejects
+  `O_TRUNC` by design, precisely to push truncating writes onto the rename.
+  A symlinked hook is then classified as *foreign* rather than as absent, so it
+  is backed up to `<hook>.pre-entire` and chained to exactly as a foreign script
+  would be: refusing to read through someone's link must not mean silently
+  discarding it.
+
+  **The directory refusal is install-only, and that asymmetry is load-bearing.**
+  `hooksRootForRemoval` resolves the link and anchors on its target; only
+  `hooksRootForInstall` refuses. Removal deletes files carrying Entire's marker
+  and renames back the backups Entire itself made, so it acts only on files
+  Entire created and the redirect costs nothing. Sharing one function cost a
+  great deal: `entire disable` exited non-zero forever with no other uninstall
+  path, and `gitHookStateInHooksDir` reported `GitHooksAbsent`, which sent
+  `EnsureSetup` to `InstallGitHook` and failed **every agent turn** on the same
+  refusal. A refusal a user can neither act on nor uninstall past is worse than
+  the redirect it declines to follow.
+
+  **A hook that cannot be READ is never replaced.** `classifyExistingHook`
+  identifies absent / ours / foreign positively and returns an error for
+  anything else, because the write is `jsonutil.WriteFileAtomicIn` and
+  `rename(2)` needs no permission on the target at all: a mode-0000 hook was
+  classified "not foreign", got no backup, and was silently destroyed. The
+  in-place truncating write this replaced failed loudly with `EACCES`, so
+  switching to the rename (correct, for symlinks) turned a loud failure into
+  data loss. Removal treats the same case as present-and-not-ours, so a backup
+  is not renamed over it either, and warns rather than erroring so uninstall
+  still finishes. `doctor`'s `checkGitHookSymlinks` reports both conditions, and
+  it is a separate function from `checkAgentDirSymlinks` because that one scans
+  worktree-relative paths through the worktree root and `core.hooksPath` can
+  name a directory outside the worktree entirely.
 
 **Rules that are load-bearing rather than stylistic:**
 
@@ -937,6 +1018,80 @@ comments at each site say which case applies:
   naming pi. Its uninstall is also the one caller of
   `HookConfigFile.RemoveDir`, because pi discovers extensions by directory, so
   removing only the file would leave a half-uninstalled extension behind.
+
+  **One escape hatch, and only for these directories.**
+  `allow_symlinked_agent_dirs` in `.entire/settings.local.json` names
+  worktree-relative agent config directories whose symlinks Entire follows
+  instead of refusing, anchoring its root on the resolved target
+  (`agent.AnchorWorktreePath` / `OpenAnchoredRoot`). It exists because a
+  dotfile-managed `.claude` (chezmoi, stow, yadm) is an ordinary setup among
+  exactly the people who run coding agents, and the previous answer was "stop
+  managing it that way".
+
+  Three properties make it a hatch rather than a hole, and all three are load
+  bearing:
+
+  - **A list, not a boolean.** A flag would disable the class; naming a path is
+    the user saying which arrangement is theirs.
+  - **Two independent boundaries.** `enforceSymlinkedAgentDirsTrust` answers
+    "may this FILE grant anything" with the same untracked-and-verified gate as
+    the OPF command and `external_agents` (a repository that could both ship the
+    link and vouch for it is the whole attack). `agent.SetVouchedSymlinkedDirs`
+    then answers "is this PATH one an agent config lives under", against a
+    pinned list plus a structural `neverVouchable` rule, so `.entire` and
+    `.git/hooks` are unspellable *even from a verified local file*.
+  - **Pinned, not derived.** `agent.vouchableDirs` was first derived from
+    `AllHookConfigRelPaths()`, which is wrong twice: that registry is mutable at
+    runtime, so an external plugin could widen what a user may vouch for, and it
+    is empty in a binary that has not imported the agent packages, so the set
+    silently collapsed depending on the caller's import graph.
+    `TestVouchableDirsMatchTheBuiltInAgents` (in the `cli` package, where every
+    built-in agent is registered) fails on drift in both directions.
+
+  **The Entire-owned directory is not vouchable, and `RemoveDir` reads the
+  worktree-relative name.** `.pi/extensions/entire` is the one directory Entire
+  both creates *and* deletes, so it cannot also be a link the user manages;
+  `neverVouchable` refuses any path whose base is `entire`, and the pinned list
+  omits it. `HookConfigFile` therefore carries **two coordinates** — `name`
+  (root-relative, for I/O) and `relName` (worktree-relative, for decisions) —
+  the same split `entiredir.Name` draws. `RemoveDir` decides on `relName` and
+  removes on `name`: deciding on the root-relative name let a vouch for
+  `.pi/extensions/entire` anchor the root *on* that directory, collapse the name
+  to `index.ts`, and refuse with "refusing to remove the worktree root" about a
+  path that was neither — leaving an extension pi still discovers. Reading
+  either coordinate for both jobs gets one of them wrong.
+
+  **The policy is scoped to the worktree it was loaded for.** It has to be a
+  package global — `settings` may import `agent`, not the reverse, so the
+  package that owns the value pushes it in — and an unscoped global would mean
+  last-load-wins deciding for a process that loads settings for one tree and
+  writes an agent config for another. `SetVouchedSymlinkedDirs` records the
+  root, `AnchorWorktreePath` and the doctor/status reporting compare against it,
+  and a mismatch refuses (degrading to the strict behaviour, never to following
+  another tree's link). The key is **canonicalized and typed**
+  (`agent.worktreeKey`, built only by `keyFor`), so a raw path cannot be
+  compared against a stored key — that does not compile. The first version
+  compared plain strings and silently disabled the feature on Windows: readers
+  pass git's `--show-toplevel` (`C:/repo`) while settings derives its root
+  through `entiredir.PathTo`, whose `filepath.Join` rewrites it (`C:\repo`).
+  One directory, two spellings, never equal, and every symptom looked exactly
+  like an absent grant. This is a different question from why `vouchableDirs` is
+  pinned: that is the set a user MAY name, which must not be widenable at
+  runtime; this is the set a user DID name, which is per-configuration and has
+  to come from somewhere mutable.
+
+  Scope notes: vouching for `.claude` does **not** vouch for links inside it,
+  since below the anchor everything is a name in a root again; the scaffolds go
+  through the same anchor (`openScaffoldTarget`), because a vouched directory
+  that hook installation follows and scaffolding refuses leaves `entire enable`
+  half-applied across two directories; and a vouched but *unresolvable* link is
+  an error, not a quiet fall back to refusing. `entire status` prints what is
+  being followed and any rejected entries, and `doctor` reports the link under
+  FOLLOWING SYMLINKS rather than as a fault. `.entire`, the settings files, and
+  the git hooks directory are deliberately excluded — the settings case is
+  circular (a symlinked `settings.local.json` vouching for symlinked settings
+  files authorizes itself) and the hooks case already has git's own
+  `core.hooksPath`.
 
   The config FILE is refused too, not just its parents: the merge READ would
   otherwise pull the link target's contents into
@@ -992,9 +1147,6 @@ comments at each site say which case applies:
 
 **Deliberately not rooted**, with the reason:
 
-- **`.git/hooks`** — `GetHooksDir` honours `core.hooksPath`, so the directory is
-  often not `.git`-resident at all, and the hook filenames are compile-time
-  constants. No untrusted name to contain.
 - **Global/system git config** — `checkpoint/configloader.go` installs a
   *symlink-following* `billy.Basic` on purpose. `os.Root` documents that
   "symbolic links must not be absolute" unconditionally, so go-git's default
@@ -1013,7 +1165,8 @@ comments at each site say which case applies:
   largest gap left**, so do not read it as settled. The WRITE half is contained
   — every agent's `WriteSession` goes through `agent.WriteSessionFile` and
   `SessionStore`, which rejects a `SessionRef` outside the agent's session
-  directory — while the eight `os.ReadFile(sessionRef)` reads are not, and the
+  directory — while the `os.ReadFile(sessionRef)` reads are not (the count is
+  pinned per file by `agent.TestTranscriptReadsOnlyShrink`), and the
   read is what pulls transcript content into checkpoints. Closing it is a
   protocol change rather than a refactor, which is why it is scoped separately;
   the shape it wants is `HookInput.RepoPath` plus the same
@@ -1021,6 +1174,15 @@ comments at each site say which case applies:
   it by anchoring a root on `filepath.Dir(sessionRef)` — that is the derived
   base the rule above refuses, and it would contain nothing while looking like
   it did.
+
+  `TestTranscriptReadsOnlyShrink` (`agent/transcript_read_guard_test.go`) is a
+  **ratchet** over that set: it pins the per-file count of
+  `os.ReadFile(sessionRef)`-shaped reads and fails the build when one grows or a
+  new file appears, and equally when a listed one goes away without its entry
+  following. Growth is the regression it exists to stop — a new agent
+  integration copies the nearest existing one, so the shape spreads by
+  imitation — and a stale entry is the slower failure, since the count is the
+  only record of how much of the gap is left.
 - **Global/system git config** — see the config-loader bullet above; that is the
   one place rooting is actively wrong.
 - **A directory the caller is about to create, replace, or delete** — creating,
@@ -1249,11 +1411,72 @@ the same rule; they are one helper because two copies is how they drifted.
 necessarily the file that executes. The check lives at the exec, not at the
 caller, so it also covers the exported `New`.
 
-`pluginParentDir` (`plugin_store.go`) applies the same absoluteness rule to
-every directory override it reads — `ENTIRE_PLUGIN_DIR`, `XDG_DATA_HOME`,
-`LOCALAPPDATA` — via `requireAbsPluginParent`, rather than leaving the platform
-two to `osroot` and to `main.go`'s `PATH` restore. Those backstops hold, but
-they state the invariant two layers from where it is decided.
+**A per-user directory override must be absolute**, and there is one
+implementation of that rule: `userdirs.RequireAbsoluteOverride`. A relative
+value resolves against the working directory, so the same environment names a
+different directory in every process — usually one inside whatever repository
+the command ran from. It covers all three trees an override can redirect:
+`pluginParentDir` (`ENTIRE_PLUGIN_DIR`, `XDG_DATA_HOME`, `LOCALAPPDATA` — a
+tree whose `bin` subdirectory `main.go` prepends to `$PATH`), and the config and
+cache directories (`ENTIRE_CONFIG_DIR`, `XDG_CACHE_HOME`), which hold the login
+tokens and the discovery caches. Leaving it to `osroot` (which refuses a
+relative root open) and to `main.go`'s `PATH` restore was not wrong, but each
+backstop answers a question of its own, two layers from where this one is
+decided.
+
+Rejecting beats falling through to the platform default: for the config
+directory that default is the developer's REAL `~/.config/entire`, so quietly
+substituting it for a test harness's mistyped override is worse than an error.
+`userdirs.Config()`/`Cache()` cannot report — too many callers only want the
+string — so **every consumer that turns one into I/O checks, and there are
+four**: `userdirs`' own roots, `contexts`, `discovery`, and the token store.
+The first three used to launder a relative directory through `filepath.Abs`,
+which produced a plausible-looking absolute path out of the exact mistake being
+guarded against. Do not reintroduce it.
+
+Two rules about *where* the check goes, both learned by getting them wrong:
+
+- **Who checks is enforced, not enumerated.** `TestUserDirConsumersAreAudited`
+  requires every caller of `Config()`/`Cache()` to appear in a ledger with the
+  reason it is safe. Two successive doc comments tried to list the consumers
+  instead and both were wrong within a commit or two: the token store slipped
+  past the first (bearer tokens at `./<value>/tokens.json`) and `plugin_index`
+  past the second (an index clone and its lock file in the working directory).
+  Converting a caller to `ConfigDirChecked`/`CacheDirChecked` removes it from
+  the ledger, since it is then safe by construction; the list is meant to
+  shrink.
+
+- **It must precede every `MkdirAll`, not merely every root open.** Checking at
+  the root is checking at the READ, and `contexts.FilePath` and
+  `withCacheFileLock` run several steps earlier: they created `./<value>` and
+  dropped a `.lock` inside it on the way to reporting the refusal, which is the
+  mistake itself. `resolveUserRoot` already had this right; the other two did
+  not.
+- **A root whose base is DERIVED cannot enforce this, so its owner must check
+  for itself.** The token store is the fourth consumer, and it does open a root
+  — the claim that it had none was wrong. `fileStore.dir` anchors on
+  `filepath.Dir` of its own path, one of the two places the root-base rule
+  permits a derived base (`ENTIRE_TOKEN_STORE_PATH` names a file the caller
+  chose), and gets there through `filepath.Abs`. That `Abs` is precisely why the
+  root can never refuse a relative config dir: it launders `./relative-config`
+  into a plausible absolute path *before* the root exists, which is the same
+  laundering removed from `contexts` and `discovery`. So the store calls
+  `userdirs.ConfigDirChecked` and carries the error on `fileStore.pathErr`,
+  reported by `dir` and `ensureDir` ahead of any filesystem access — verified
+  through `Get`/`Set`/`Delete`, not just the resolver. Left out, it put bearer
+  tokens at `./<value>/tokens.json`. An explicit `ENTIRE_TOKEN_STORE_PATH` is
+  deliberately still exempt: the user named that file.
+
+- **Only a USER-supplied override is refused; Entire's own fallback is
+  absolutized.** `userdirs.ownFallbackDir` resolves the home-relative default
+  that `configDir`/`cacheDir` produce when `os.UserHomeDir` fails, because by
+  the time a consumer sees a plain string it can no longer tell a value the user
+  set from one Entire made up — and refusing both was a regression: on a machine
+  with no resolvable home (no `HOME`, an odd container, a service account) every
+  command touching a saved login or a discovery cache began failing with advice
+  about a variable the user had never set. There is nothing for them to fix
+  there, and a cwd-relative directory that works beats a hard failure, so the
+  distinction is drawn in the one place that still has the information.
 
 **The OPF `command` is the deliberate exception, and stays one.**
 `redaction.openai_privacy_filter.command` becomes `argv[0]` of an
@@ -1298,6 +1521,26 @@ Key files: `cmd/entire/cli/browser_open_windows.go` (ShellExecute, the
 avoid-the-shell side) and `cmd/entire/cli/agent/hook_command.go`
 (`escapeWindowsCMD`, the third-party-exec side). Each doc comment points at the
 other.
+
+**The auto-updater's `sh -c` is a considered exception, and it is enforced
+rather than asserted.** `versioncheck.realRunInstaller` (unix only) runs the
+update command through a shell, which the rule above would otherwise forbid. It
+is allowed because there is no dynamic value in it: on unix
+`UpdateCommandForCurrentBinary` returns one of five compile-time literals, and
+the binary's path and version choose *between* them and never appear *in* them —
+while the shell is load-bearing for the fallback, which is a pipeline
+(`curl … | bash`). The tempting next change is exactly the one that breaks this:
+interpolating a channel or a version into the command.
+`TestUpdateCommandIsAlwaysALiteral` (in `versioncheck_unix_test.go`) drives every
+unix install manager and channel with adversarial paths and versions and fails
+when the result is not a known string. A command that genuinely needs a runtime
+value must be built and run as argv, not added to that set.
+
+Windows is deliberately outside that invariant rather than an exception to it:
+`fallbackInstallCommand` there interpolates the running binary's directory into
+`-InstallDir`, and it is safe to because Windows never *runs* the command —
+`realRunInstaller` is unimplemented there, so the string is only ever printed
+for the user to paste.
 
 ### Control-Plane Core Resolution (which core am I talking to?)
 
@@ -1452,6 +1695,22 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
   which raw-writes the single key to the local file whatever `--local`/`--project`
   said about the rest — writing it into the project file produces a setting the
   user can read back and that never takes effect.
+  **The grant also gates `summary_generation.provider`**, which is the other
+  place a tracked file names a binary to execute: `discoverSummaryProviderIfMissing`
+  resolves an unregistered provider by name, so `{"summary_generation":
+  {"provider": "evil"}}` in a pull request was enough to run
+  `entire-agent-evil info` on whoever pulled it and ran `entire explain`.
+  Resolving by name rather than sweeping `$PATH` bounds the blast radius to one
+  binary; it does not make it zero. The check sits *after* the
+  already-registered early return, so a committed `"provider": "claude-code"`
+  is unaffected — the gate lands only on the external case — and the
+  unresolvable-provider error gains a line naming the grant, since "unknown
+  summary provider" about a plugin that is plainly installed is not actionable.
+  A dedicated `enforceSummaryProviderTrust` beside the other two gates would let
+  a developer name an external provider in their own `settings.local.json`
+  without granting the `$PATH` sweep; that is a real want, but it costs a third
+  settings-layer classification and a third rejection channel, so it waits until
+  someone asks for the combination.
 - **A tracked `.entire/settings.local.json` is ignored wholesale**: the local layer's premise is that it is per-clone and per-developer (it is gitignored, `entire enable --local` writes it, and `CheckpointRemoteIsLocalOnly` treats presence there as proof the developer chose it). `.gitignore` does not apply to an already-tracked path, so a committed one arrives by cloning and would override project settings for everyone. `loadMergedSettings` drops the layer when the file is **proven** tracked, records `EntireSettings.LocalLayerRejection()`, and the redaction consumer prints it with the `git rm --cached` fix. It never errors — one committed file must not brick `status`/`doctor`. Two deliberately opposite failure directions, expressed as the three-state `localTrust` (`localUnverifiable` is the zero value so a forgotten assignment fails safe): an *unverifiable* repo keeps the layer (losing all local settings is worse than the risk) but still drops the exec-bearing settings, OPF `command` and `external_agents` (being wrong there means running someone else's binary); *no* repository counts as proof of locality. `CheckpointRemoteIsLocalOnly` reads the raw file outside the loader, so it repeats the check itself.
 - Safe to use on main/master since it never modifies commit history
 
