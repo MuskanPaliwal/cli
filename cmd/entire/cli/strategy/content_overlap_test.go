@@ -436,13 +436,21 @@ func TestFilesWithRemainingAgentChanges_AutocrlfNormalizedWorkingTree(t *testing
 
 	workingTreeContent := "package main\r\n\r\nimport \"fmt\"\r\n\r\nfunc main() {\r\n\tfmt.Println(\"hello world\")\r\n\tfmt.Println(\"goodbye world\")\r\n}\r\n"
 	testutil.WriteFile(t, dir, "src/main.go", workingTreeContent)
-	testutil.GitAdd(t, dir, "src/main.go")
-	testutil.GitCommit(t, dir, "Commit normalized content")
+	testutil.RunGit(t, dir, "add", "--", "src/main.go")
+	testutil.RunGit(t, dir, "commit", "-m", "Commit normalized content")
 
 	head, err := repo.Head()
 	require.NoError(t, err)
 	commit, err := repo.CommitObject(head.Hash())
 	require.NoError(t, err)
+	committedFile, err := commit.File("src/main.go")
+	require.NoError(t, err)
+	committedContent, err := committedFile.Contents()
+	require.NoError(t, err)
+	assert.NotContains(t, committedContent, "\r\n", "native git add must normalize the committed blob to LF")
+	diskContent, err := os.ReadFile(filepath.Join(dir, "src", "main.go"))
+	require.NoError(t, err)
+	assert.Equal(t, workingTreeContent, string(diskContent), "the working tree must retain CRLF bytes")
 
 	shadowBranch := checkpoint.ShadowBranchNameForCommit("crlf123", "e3b0c4")
 	committedFiles := map[string]struct{}{"src/main.go": {}}
