@@ -103,11 +103,34 @@ func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	}
 }
 
+type safeGitDiffCall struct {
+	fragment string
+	reason   string
+}
+
+// safeGitDiffCalls is an explicit file-and-shape allowlist. Matching only the
+// line containing "diff" is intentional: a wrapped argv separates that line
+// from exec.Command, so requiring an invocation marker would make the guard
+// silently miss exactly the call it exists to prevent.
+var safeGitDiffCalls = map[string]safeGitDiffCall{
+	"cmd/entire/cli/experts_cmd.go": {
+		fragment: `"--cached"`,
+		reason:   "compares the index to HEAD and never reads the worktree",
+	},
+	"cmd/entire/cli/review/scope.go": {
+		fragment: `baseRef+"...HEAD"`,
+		reason:   "compares two commits and never reads the worktree",
+	},
+	"cmd/entire/cli/strategy/manual_commit_hooks.go": {
+		fragment: `"--cached"`,
+		reason:   "compares the index to HEAD and never reads the worktree",
+	},
+}
+
 // TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex prevents native `git diff
 // <tree> -- <paths>` from entering hook paths. Unlike `git status`, Git's diff
 // builtin refreshes and rewrites a stat-stale index even under
-// --no-optional-locks. Index-only `git diff --cached` does not inspect the
-// worktree and is allowed.
+// --no-optional-locks. Index-only and two-tree diffs are allowlisted above.
 func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
 	t.Parallel()
 
@@ -118,7 +141,7 @@ func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
 	out := testutil.GitGrepGuard(t, root, "-n", "--", `"diff"`,
 		"--", ":(glob)cmd/**/*.go", ":(glob)internal/**/*.go")
 
-	var checked int
+	seen := make(map[string]bool)
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
@@ -127,18 +150,21 @@ func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
 		if !ok || !strings.HasSuffix(path, ".go") {
 			t.Fatalf("cannot parse git grep output; expected `path:line:content`, got:\n  %s", line)
 		}
-		if strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testutil/") || !containsAnyMarker(rest) {
+		if strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testutil/") {
 			continue
 		}
-		checked++
-		if strings.Contains(rest, `"--cached"`) || strings.Contains(rest, `+"...HEAD"`) {
-			continue // index-only or two-commit comparison; neither reads the worktree
+		allowed, ok := safeGitDiffCalls[path]
+		if !ok || !strings.Contains(rest, allowed.fragment) {
+			t.Errorf("worktree-comparing git diff can rewrite the index even with --no-optional-locks:\n  %s\n"+
+				"Use a non-refreshing primitive such as git hash-object or git diff-index instead.", line)
+			continue
 		}
-		t.Errorf("worktree-comparing git diff can rewrite the index even with --no-optional-locks:\n  %s\n"+
-			"Use a non-refreshing primitive such as git hash-object or git diff-index instead.", line)
+		seen[path] = true
 	}
-	if checked == 0 {
-		t.Error("guard matched no git diff invocations; the detection pattern has gone stale")
+	for path, allowed := range safeGitDiffCalls {
+		if !seen[path] {
+			t.Errorf("safe git diff allowlist entry is stale: %s (%s)", path, allowed.reason)
+		}
 	}
 }
 

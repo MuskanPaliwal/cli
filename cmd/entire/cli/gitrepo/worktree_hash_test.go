@@ -98,6 +98,18 @@ func TestHashWorktreeFilesDoesNotRewriteStatStaleIndex(t *testing.T) {
 	}
 }
 
+func TestHashWorktreeFilesDoesNotRetrySpawnFailurePerPath(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	_, err := hashWorktreeFiles(t.Context(), t.TempDir(), []string{"one", "two", "three"}, gitHashObjectPathBudget)
+	if err == nil {
+		t.Fatal("expected git spawn failure")
+	}
+	if got := strings.Count(err.Error(), "git hash-object"); got != 1 {
+		t.Fatalf("git hash-object errors = %d, want one batch failure: %v", got, err)
+	}
+}
+
 func TestHashWorktreeFilesKeepsSuccessfulHashesWhenOnePathFails(t *testing.T) {
 	t.Parallel()
 	dir := initWorktreeHashRepo(t)

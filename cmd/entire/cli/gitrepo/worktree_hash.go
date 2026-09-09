@@ -16,9 +16,11 @@ import (
 // hook process blocked indefinitely.
 const WorktreeContentHashBudget = 5 * time.Second
 
-// HashWorktreeFiles returns the Git blob hash of each working-tree file after
-// applying Git's path-specific clean filters. Large path sets are split across
-// commands so an oversized argv cannot fail before Git inspects anything.
+// HashWorktreeFiles returns the Git blob hash of each regular working-tree file
+// after applying Git's path-specific clean filters. Git hash-object follows
+// symlinks, so callers comparing Git symlink blobs must handle those separately.
+// Large path sets are split across commands so an oversized argv cannot fail
+// before Git inspects anything.
 //
 // The paths must be repository-relative. They are file operands, not pathspecs,
 // so names containing pathspec magic are interpreted literally. The returned
@@ -54,7 +56,8 @@ func hashWorktreeFiles(
 		// A missing or unreadable file fails the whole hash-object invocation.
 		// Retry that batch one file at a time so its neighbours keep their
 		// filter-aware hashes instead of all dropping to the raw-byte fallback.
-		if len(batch) == 1 || ctx.Err() != nil {
+		var exitErr *exec.ExitError
+		if len(batch) == 1 || ctx.Err() != nil || !errors.As(err, &exitErr) {
 			errs = append(errs, err)
 			continue
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/worktreedir"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
@@ -450,6 +451,7 @@ func filesWithRemainingAgentChanges(
 		index      int
 		path       string
 		commitHash plumbing.Hash
+		commitMode filemode.FileMode
 		shadowHash plumbing.Hash
 	}
 	keep := make([]bool, len(filesTouched))
@@ -502,6 +504,7 @@ func filesWithRemainingAgentChanges(
 			index:      i,
 			path:       filePath,
 			commitHash: commitFile.Hash,
+			commitMode: commitFile.Mode,
 			shadowHash: shadowFile.Hash,
 		})
 	}
@@ -510,12 +513,17 @@ func filesWithRemainingAgentChanges(
 	if worktreeRoot != "" && len(candidates) > 0 {
 		paths := make([]string, 0, len(candidates))
 		for _, candidate := range candidates {
-			paths = append(paths, candidate.path)
+			// hash-object follows symlinks and hashes target content, while a Git
+			// symlink blob stores the target path. Compare either side of a mode
+			// mismatch through the confined fallback instead.
+			if !requiresConfinedWorktreeHash(worktreeRoot, candidate.path, candidate.commitMode) {
+				paths = append(paths, candidate.path)
+			}
 		}
 		var err error
 		worktreeHashes, err = gitrepo.HashWorktreeFiles(ctx, worktreeRoot, paths)
 		if err != nil {
-			logging.Warn(logCtx, "native git could not hash every carry-forward candidate; using filter-unaware raw hashes for failed files",
+			logging.Warn(logCtx, "native git could not hash every carry-forward candidate; checking failed paths conservatively without clean filters",
 				slog.String("error", err.Error()),
 			)
 		}
@@ -526,7 +534,7 @@ func filesWithRemainingAgentChanges(
 		if worktreeHash, ok := worktreeHashes[candidate.path]; ok {
 			workingTreeClean = worktreeHash == candidate.commitHash
 		} else if worktreeRoot != "" {
-			workingTreeClean = workingTreeMatchesBlob(worktreeRoot, candidate.path, candidate.commitHash)
+			workingTreeClean = workingTreeMatchesBlob(worktreeRoot, candidate.path, candidate.commitMode, candidate.commitHash)
 		}
 		if workingTreeClean {
 			logging.Debug(logCtx, "filesWithRemainingAgentChanges: content differs from shadow but working tree is clean, skipping",
@@ -561,9 +569,26 @@ func filesWithRemainingAgentChanges(
 	return remaining
 }
 
-// workingTreeMatchesBlob checks whether the raw file bytes hash to commitHash.
-// It is the filter-unaware fallback for when native git diff cannot run.
-func workingTreeMatchesBlob(worktreeRoot, filePath string, commitHash plumbing.Hash) bool {
+func requiresConfinedWorktreeHash(worktreeRoot, filePath string, commitMode filemode.FileMode) bool {
+	if commitMode == filemode.Symlink {
+		return true
+	}
+	root, err := worktreedir.OpenAt(worktreeRoot)
+	if err != nil {
+		return true
+	}
+	name, err := worktreedir.Name(worktreeRoot, filePath)
+	if err != nil {
+		return true
+	}
+	info, err := root.Lstat(name)
+	return err != nil || !info.Mode().IsRegular()
+}
+
+// workingTreeMatchesBlob checks whether the raw file representation hashes to
+// commitHash. It is the filter-unaware fallback for when native Git cannot hash
+// a regular file and the symlink-aware path for Git symlink blobs.
+func workingTreeMatchesBlob(worktreeRoot, filePath string, commitMode filemode.FileMode, commitHash plumbing.Hash) bool {
 	root, err := worktreedir.OpenAt(worktreeRoot)
 	if err != nil {
 		return false
@@ -572,9 +597,18 @@ func workingTreeMatchesBlob(worktreeRoot, filePath string, commitHash plumbing.H
 	if err != nil {
 		return false
 	}
-	diskContent, err := osroot.ReadFileNoFollow(root, name)
-	if err != nil {
-		return false
+	var diskContent []byte
+	if commitMode == filemode.Symlink {
+		target, readErr := root.Readlink(name)
+		if readErr != nil {
+			return false
+		}
+		diskContent = []byte(target)
+	} else {
+		diskContent, err = osroot.ReadFileNoFollow(root, name)
+		if err != nil {
+			return false
+		}
 	}
 	of := config.SHA1
 	if commitHash.Size() == config.SHA256.Size() {

@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -498,6 +499,25 @@ func TestFilesWithRemainingAgentChanges_ComparesWorktreeToCommitNotIndex(t *test
 	committedFiles := map[string]struct{}{"config.go": {}}
 	remaining := filesWithRemainingAgentChanges(t.Context(), repo, shadowBranch, commit, []string{"config.go"}, committedFiles)
 	assert.Equal(t, []string{"config.go"}, remaining)
+}
+
+func TestWorkingTreeMatchesBlobSymlinkHashesTheTargetPath(t *testing.T) {
+	testutil.SkipWithoutSymlinks(t)
+	t.Parallel()
+
+	dir := t.TempDir()
+	const target = "real.txt"
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, "link.txt")))
+	h := plumbing.NewHasher(config.SHA1, plumbing.BlobObject, int64(len(target)))
+	_, err := h.Write([]byte(target))
+	require.NoError(t, err)
+
+	assert.True(t, requiresConfinedWorktreeHash(dir, "link.txt", filemode.Symlink))
+	assert.True(t, requiresConfinedWorktreeHash(dir, "link.txt", filemode.Regular),
+		"a working-tree symlink must not be sent to hash-object even if the commit is regular")
+	assert.True(t, workingTreeMatchesBlob(dir, "link.txt", filemode.Symlink, h.Sum()))
+	assert.False(t, workingTreeMatchesBlob(dir, "link.txt", filemode.Regular, h.Sum()),
+		"a symlink must not compare clean against a regular-file commit")
 }
 
 // TestFilesWithRemainingAgentChanges_NoShadowBranch tests fallback to file-level subtraction.

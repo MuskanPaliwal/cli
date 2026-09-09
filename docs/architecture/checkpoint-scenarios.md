@@ -222,7 +222,9 @@ The carry-forward logic uses **content-aware comparison** to determine which fil
 The working-tree hash is computed by native Git so `core.autocrlf`, Git LFS,
 `ident`, and custom clean filters do not create phantom differences. If Git
 cannot hash a path, carry-forward falls back conservatively to a confined raw
-byte comparison and records a warning.
+representation comparison and records a warning. Symlink blobs always take the
+confined path because `git hash-object` follows the link rather than hashing its
+target-path string.
 
 This enables splitting changes within a single file across multiple commits (see Scenario 7).
 
