@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -405,6 +406,43 @@ func TestSaveStep_CheckpointSubagentAlwaysDerivedFromSessionCumulative(t *testin
 	require.Equal(t, 150, checkpointSubIn(), "nil step must not re-subtract baseline")
 	save(nil)
 	require.Equal(t, 150, checkpointSubIn(), "second nil step must not re-subtract baseline")
+}
+
+func TestCalculateLiveTranscriptTokenUsage_RescopesSubagentCumulativeTotal(t *testing.T) {
+	t.Parallel()
+
+	transcriptDir := t.TempDir()
+	sessionID := "claude-session-123"
+	subagentsDir := paths.SubagentsDir(transcriptDir, sessionID)
+	require.NoError(t, os.MkdirAll(subagentsDir, 0o755))
+
+	mainTranscript := []byte(`{"type":"assistant","uuid":"a-main","message":{"id":"msg_main","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_task1","name":"Task","input":{"description":"write helper","prompt":"write helper"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"user","uuid":"u-main","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_task1","content":"agentId: sub1"}]}}
+`)
+	subagentPath := filepath.Join(subagentsDir, paths.AgentTranscriptFileName("sub1"))
+	require.NoError(t, os.WriteFile(subagentPath, []byte(`{"type":"assistant","uuid":"a-sub","message":{"id":"msg_sub","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":200,"output_tokens":20}}}
+`), 0o644))
+
+	state := &SessionState{SessionID: sessionID}
+	usage := calculateLiveTranscriptTokenUsage(
+		t.Context(), claudecode.NewClaudeCodeAgent(), mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
+	require.NotNil(t, usage)
+	require.NotNil(t, usage.SubagentTokens)
+	require.Equal(t, 200, usage.SubagentTokens.InputTokens)
+	require.Equal(t, 20, usage.SubagentTokens.OutputTokens)
+
+	state.SubagentTokensBaseline = usage.SubagentTokens
+	require.NoError(t, os.WriteFile(subagentPath, []byte(`{"type":"assistant","uuid":"a-sub","message":{"id":"msg_sub","type":"message","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":260,"output_tokens":35}}}
+`), 0o644))
+
+	nextUsage := calculateLiveTranscriptTokenUsage(
+		t.Context(), claudecode.NewClaudeCodeAgent(), mainTranscript, state, filepath.Join(transcriptDir, sessionID+".jsonl"))
+	require.NotNil(t, nextUsage)
+	require.NotNil(t, nextUsage.SubagentTokens)
+	require.Equal(t, 60, nextUsage.SubagentTokens.InputTokens,
+		"second checkpoint must not re-report the first checkpoint's subagent input")
+	require.Equal(t, 15, nextUsage.SubagentTokens.OutputTokens,
+		"second checkpoint must not re-report the first checkpoint's subagent output")
 }
 
 // TestCondenseSessionByID_CapturesSubagentBaselineViaRealResetPath drives a REAL

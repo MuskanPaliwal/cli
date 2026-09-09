@@ -1141,11 +1141,6 @@ func hasTokenUsageData(usage *agent.TokenUsage) bool {
 // Copies rather than mutates: applyBackfilledSessionTokenUsage can adopt the
 // checkpoint usage as state.TokenUsage (Copilot CLI), so mutating in place would
 // overwrite the cumulative with a window delta.
-//
-// Known gap: a mid-turn commit that condenses before any SaveStep in the window has
-// no CheckpointTokenUsage to draw on, so it records no subagent tokens. The live
-// path could resolve a subagents dir from session state (as review/manifest.go
-// does) and rescope against SubagentTokensBaseline; deferred, not blocked.
 func withSubagentTokensFrom(usage, src *agent.TokenUsage) *agent.TokenUsage {
 	if usage == nil || usage.SubagentTokens != nil || src == nil || src.SubagentTokens == nil {
 		return usage
@@ -1510,15 +1505,32 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 	// extract them from offset 0; consumers can filter by checkpoint_transcript_start
 	// if they only render the checkpoint-scoped slice.
 	if len(data.Transcript) > 0 {
-		// subagentsDir="" for the cost reason in extractSessionData above — but NOT
-		// for the cleanup reason: this is the live mid-turn path, where the subagent
-		// transcripts are still on disk. It is the one place the gap noted on
-		// withSubagentTokensFrom could be closed by reading them.
-		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, state.CheckpointTranscriptStart, "")
+		// Unlike the shadow path, a live mid-turn condensation can still read the
+		// subagent transcripts. Their total is cumulative, so rescope it against the
+		// baseline captured after the previous checkpoint before storing it.
+		data.TokenUsage = calculateLiveTranscriptTokenUsage(ctx, ag, data.Transcript, state, transcriptPath)
 		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, 0)
 	}
 
 	return data, nil
+}
+
+func calculateLiveTranscriptTokenUsage(
+	ctx context.Context,
+	ag agent.Agent,
+	transcript []byte,
+	state *SessionState,
+	transcriptPath string,
+) *agent.TokenUsage {
+	subagentsDir := paths.SubagentsDir(filepath.Dir(transcriptPath), state.SessionID)
+	usage := agent.CalculateTokenUsage(ctx, ag, transcript, state.CheckpointTranscriptStart, subagentsDir)
+	if usage == nil || usage.SubagentTokens == nil {
+		return usage
+	}
+
+	scoped := *usage
+	scoped.SubagentTokens = types.SubtractTokenUsage(usage.SubagentTokens, state.SubagentTokensBaseline)
+	return &scoped
 }
 
 // countTranscriptItems counts lines (JSONL) or messages (JSON) in a transcript.
