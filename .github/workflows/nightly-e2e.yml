@@ -27,7 +27,11 @@ concurrency:
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Derived, not guessed: ~3 min of install/checkout/setup, then up to six
+    # agent steps of timeout-minutes 15 each (section 5), then summary and
+    # upload. The previous 60 was below one hung agent's theoretical worst
+    # case, so a single hang could end the job with every later agent unrun.
+    timeout-minutes: 100
     permissions:
       contents: read
       actions: read
@@ -56,6 +60,11 @@ jobs:
       # (e2e/tests/main_test.go), which no fresh install has — the opposite of what
       # this workflow exists to test.
       E2E_CHECKPOINT_STORE: git-refs
+      TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
+      # A native path, not $PWD: the agent steps run under Git Bash, where $PWD
+      # is /d/a/cli/cli, and E2E_ARTIFACT_DIR is read by the Go test binary,
+      # which resolves that leading slash against the current drive.
+      ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
 
     steps:
       # ----------------------------------------------------------------------
@@ -240,102 +249,182 @@ jobs:
           "AGENTS=claude-code codex copilot-cli opencode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # ----------------------------------------------------------------------
-      # 5. Run the smoke test once per agent, sequentially. Each agent gets its
-      #    own artifact dir — the mise task derives a single timestamped one
-      #    otherwise and later agents would overwrite earlier reports.
+      # 5. Run the smoke test once per agent, sequentially, one step each. A
+      #    step is the only per-agent bound that works on all three runners:
+      #    macOS has no timeout(1), and the harness's own worst case is long —
+      #    up to 3 scenario attempts x 3 min (x2 for opencode), doubled by the
+      #    mise task's --rerun-fails=1 — so one hung agent in a single-step
+      #    loop would eat the job and take every later agent's verdict with
+      #    it. Each step therefore carries timeout-minutes (15: the slowest
+      #    pass measured in run 34131195807 was 2m40s, opencode on Windows),
+      #    runs even when an earlier one failed or timed out (`!cancelled()`,
+      #    not the default success()), and sees only its own agent's key.
+      #    Summarize reports an agent with no result row as failed, so a
+      #    killed step still shows up.
+      #
+      #    Inside each step: `set +e`, not merely an absent -e — GitHub invokes
+      #    `shell: bash` as `bash --noprofile --norc -e -o pipefail`, so errexit
+      #    is already on and a failing bootstrap or test would end the step
+      #    before its result row is written (a failed bootstrap counts as a
+      #    failed agent, not a skipped one). A filter matching nothing exits 0
+      #    with "[no tests to run]", so a typo would report every agent as
+      #    passing; testreport already counts what ran, and `Total: 0` means
+      #    nothing was tested. Each agent gets its own artifact dir — the mise
+      #    task derives a single timestamped one otherwise and later agents
+      #    would overwrite earlier reports.
       #
       #    E2E_ENTIRE_BIN (set above) is what makes this test the *installed*
       #    nightly: mise-tasks/test/e2e/_default skips `mise run build` when it
       #    is already set, and TestMain puts that binary's directory on PATH so
       #    the git and agent hooks resolve to it too.
       #
-      #    copilot-cli runs in its own step below so that the GitHub token it
-      #    needs never appears in the environment of the other agents.
+      #    The six run bodies are byte-identical; only AGENT and the key
+      #    differ. Keep them that way.
       # ----------------------------------------------------------------------
-      - name: Run smoke test per agent
+      - name: Smoke test claude-code
+        if: ${{ !cancelled() && contains(env.AGENTS, 'claude-code') }}
+        timeout-minutes: 15
         shell: bash
         env:
-          TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
-          # A native path, not $PWD: these steps run under Git Bash, where $PWD
-          # is /d/a/cli/cli, and E2E_ARTIFACT_DIR is read by the Go test binary,
-          # which resolves that leading slash against the current drive.
-          ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
+          AGENT: claude-code
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
         run: |
-          # set +e, not merely an absent -e: GitHub invokes `shell: bash` as
-          # `bash --noprofile --norc -e -o pipefail`, so errexit is already on
-          # and a failing agent aborts the loop, loses its own result line, and
-          # skips every agent after it.
           set +e
           set -uo pipefail
           mkdir -p e2e/artifacts
-          : > e2e/artifacts/results.txt
-          for agent in $AGENTS; do
-            [ "$agent" = "copilot-cli" ] && continue
-            echo "::group::$agent"
-            # The same per-agent scoping e2e.yml gets from its matrix-conditional
-            # E2E_CODEX_MODEL: only codex is pinned, every other agent gets the
-            # empty value, which e2e/agents/codex.go reads as its default.
-            codex_model=""
-            [ "$agent" = "codex" ] && codex_model="gpt-5.4-mini"
-            # A failed bootstrap counts as a failed agent, not a skipped one.
-            go run ./e2e/bootstrap "$agent" &&
-              E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$agent" E2E_CODEX_MODEL="$codex_model" \
-                mise run test:e2e --agent "$agent" "$TEST_FILTER"
-            rc=$?
-            # A filter matching nothing exits 0 with "[no tests to run]", so a
-            # typo would report every agent as passing. testreport already
-            # counts what ran; no rows means nothing was tested.
-            grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$agent/report.txt" 2>/dev/null && rc=1
-            echo "$agent $rc" >> e2e/artifacts/results.txt
-            echo "::endgroup::"
-          done
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
-      - name: Run smoke test for copilot-cli
-        if: contains(env.AGENTS, 'copilot-cli')
+      - name: Smoke test opencode
+        if: ${{ !cancelled() && contains(env.AGENTS, 'opencode') }}
+        timeout-minutes: 15
         shell: bash
         env:
-          TEST_FILTER: ${{ github.event.inputs.test || 'TestMultiSessionSequential' }}
-          ARTIFACT_ROOT: ${{ github.workspace }}/e2e/artifacts
+          AGENT: opencode
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p e2e/artifacts
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
+
+      - name: Smoke test codex
+        if: ${{ !cancelled() && contains(env.AGENTS, 'codex') }}
+        timeout-minutes: 15
+        shell: bash
+        env:
+          AGENT: codex
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          E2E_CODEX_MODEL: gpt-5.4-mini
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p e2e/artifacts
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
+
+      - name: Smoke test cursor-cli
+        if: ${{ !cancelled() && contains(env.AGENTS, 'cursor-cli') }}
+        timeout-minutes: 15
+        shell: bash
+        env:
+          AGENT: cursor-cli
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p e2e/artifacts
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
+
+      - name: Smoke test factoryai-droid
+        if: ${{ !cancelled() && contains(env.AGENTS, 'factoryai-droid') }}
+        timeout-minutes: 15
+        shell: bash
+        env:
+          AGENT: factoryai-droid
+          # e2e/agents/droid.go writes ANTHROPIC_API_KEY into droid's BYOK
+          # settings; FACTORY_API_KEY is droid's own, passed as e2e.yml does.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p e2e/artifacts
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
+
+      # The job's GITHUB_TOKEN reaches copilot as COPILOT_GITHUB_TOKEN. With
+      # the two install steps, this is the only place it is exposed — see the
+      # permissions block.
+      - name: Smoke test copilot-cli
+        if: ${{ !cancelled() && contains(env.AGENTS, 'copilot-cli') }}
+        timeout-minutes: 15
+        shell: bash
+        env:
+          AGENT: copilot-cli
           COPILOT_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
           set -uo pipefail
           mkdir -p e2e/artifacts
-          go run ./e2e/bootstrap copilot-cli &&
-            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/copilot-cli" \
-              mise run test:e2e --agent copilot-cli "$TEST_FILTER"
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
           rc=$?
-          # Same "nothing ran" guard as the loop above.
-          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/copilot-cli/report.txt" 2>/dev/null && rc=1
-          echo "copilot-cli $rc" >> e2e/artifacts/results.txt
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Summarize
         if: always()
         shell: bash
         run: |
           set -uo pipefail
-          failed=0
-          # Absent when the job failed before any agent ran (e.g. install).
-          [ -f e2e/artifacts/results.txt ] || { echo "no agent ran" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          # Absent when the job failed before the agent list was written
+          # (install, checkout, mise).
+          [ -n "${AGENTS:-}" ] || { echo "no agent ran" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          mkdir -p e2e/artifacts
+          results=e2e/artifacts/results.txt
+          [ -f "$results" ] || : > "$results"
           {
             echo "### ${{ matrix.os }} — \`${NIGHTLY_TAG:-unknown}\`"
             echo ""
             echo "| agent | result |"
             echo "| --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
-          while read -r agent rc; do
-            [ -z "$agent" ] && continue
-            if [ "$rc" = "0" ]; then
-              echo "| $agent | ✅ pass |" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "| $agent | ❌ fail (exit $rc) |" >> "$GITHUB_STEP_SUMMARY"
-              failed=1
-            fi
-          done < e2e/artifacts/results.txt
+          failed=0
+          # Driven by the agent list, not by the rows: a step killed by its
+          # timeout-minutes writes no row, and it must show as a failure
+          # rather than vanish from the table.
+          for agent in $AGENTS; do
+            rc=$(awk -v a="$agent" '$1 == a { print $2 }' "$results")
+            case "$rc" in
+              0) echo "| $agent | ✅ pass |" >> "$GITHUB_STEP_SUMMARY" ;;
+              "") echo "| $agent | ❌ no result (step timed out or was killed) |" >> "$GITHUB_STEP_SUMMARY"; failed=1 ;;
+              *) echo "| $agent | ❌ fail (exit $rc) |" >> "$GITHUB_STEP_SUMMARY"; failed=1 ;;
+            esac
+          done
           exit "$failed"
 
       - name: Upload artifacts
