@@ -345,6 +345,12 @@ type checkpointSyncInfo struct {
 	// when none, when counting failed, or when the count would be a lie
 	// (dedicated URL mode on the git-branch backend).
 	Unpushed int
+	// IgnoredRemote and IgnoredReason report a configured checkpoint_remote
+	// that the ownership check rejected as inherited with the clone. Both
+	// reads and pushes then fall back to the elected remote, and status is
+	// where a user finds out why — the hooks only log the rejection.
+	IgnoredRemote string
+	IgnoredReason string
 }
 
 func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpointSyncInfo {
@@ -386,11 +392,26 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		}
 	}
 
-	return checkpointSyncInfo{
+	info := checkpointSyncInfo{
 		Remote:   elected.Name,
 		Source:   string(elected.Source),
 		Unpushed: countUnpushedCheckpointsForStatus(ctx, elected.Name),
 	}
+	// A configured checkpoint_remote that did not enable above is being
+	// ignored. When the ownership check is what rejected it, say so: this is
+	// the one trust-gate rejection a user otherwise experiences only as
+	// checkpoints vanishing. Local-only, like everything else here.
+	// Accepted divergence: this verdict votes with the push identity set
+	// (origin + push URLs of the elected remote), while a fetch votes with its
+	// read candidate, so a push-only owner mismatch shows "not in use" here
+	// even though a lead-less fetch still resolves the checkpoint remote.
+	if s.GetCheckpointRemote() != nil {
+		if repo, reason, inherited := checkpointremote.InheritedCheckpointRemote(ctx, s, elected.Name); inherited {
+			info.IgnoredRemote = repo
+			info.IgnoredReason = reason
+		}
+	}
+	return info
 }
 
 // countUnpushedCheckpointsForStatus counts best-effort: status must never fail
@@ -429,6 +450,12 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 		case string(strategy.SyncRemoteSourceObserved):
 			b.WriteString(sty.render(sty.dim, " (follows your branch's push destination)"))
 		}
+	}
+	if info.IgnoredRemote != "" {
+		b.WriteString("\n")
+		b.WriteString(sty.render(sty.yellow,
+			"  ! checkpoint_remote "+info.IgnoredRemote+" is not in use: "+info.IgnoredReason+
+				". If this checkpoint repo is yours, set checkpoint_remote in .entire/settings.local.json."))
 	}
 	if info.Unpushed > 0 {
 		b.WriteString("\n  ")
@@ -831,6 +858,11 @@ type statusJSON struct {
 	CheckpointSyncRemoteSource string `json:"checkpoint_sync_remote_source,omitempty"` // config|observed|default|sole|first|dedicated
 	CheckpointSyncError        string `json:"checkpoint_sync_error,omitempty"`         // fail-closed message
 	UnpushedCheckpoints        int    `json:"unpushed_checkpoints,omitempty"`
+	// CheckpointRemoteIgnored/-Reason report a configured checkpoint_remote the
+	// ownership check rejected as inherited with the clone (reads and pushes
+	// fall back to the elected remote). Mirrors the text path's warning line.
+	CheckpointRemoteIgnored       string `json:"checkpoint_remote_ignored,omitempty"`
+	CheckpointRemoteIgnoredReason string `json:"checkpoint_remote_ignored_reason,omitempty"`
 	// SecretScanners lists the enabled engines when non-default; omitted when default.
 	SecretScanners []string `json:"secret_scanners,omitempty"`
 	Error          string   `json:"error,omitempty"`
@@ -919,6 +951,8 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		result.CheckpointSyncRemoteSource = syncInfo.Source
 		result.CheckpointSyncError = syncInfo.Err
 		result.UnpushedCheckpoints = syncInfo.Unpushed
+		result.CheckpointRemoteIgnored = syncInfo.IgnoredRemote
+		result.CheckpointRemoteIgnoredReason = syncInfo.IgnoredReason
 
 		if store, err := session.NewStateStore(ctx); err == nil {
 			if states, err := store.List(ctx); err == nil {

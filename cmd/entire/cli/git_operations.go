@@ -588,7 +588,11 @@ func FetchMetadataFromCheckpointRemote(ctx context.Context) error {
 	if !configured {
 		return errors.New("no checkpoint_remote configured")
 	}
-	checkpointURL, err := remote.FetchURL(ctx)
+	// The elected remote joins FetchURL's ownership vote (see
+	// strategy.LeadCheckpointReadRemote). Safe here because a checkpoint_remote
+	// is confirmed configured, so the lead never selects the fetch target on
+	// the no-config path.
+	checkpointURL, err := remote.FetchURL(ctx, remote.FetchURLOptions{LeadReadRemote: strategy.LeadCheckpointReadRemote(ctx)})
 	if err != nil {
 		return fmt.Errorf("checkpoint_remote configured but could not resolve URL: %w", err)
 	}
@@ -672,7 +676,13 @@ func listCheckpointRefsOnRemote(ctx context.Context, candidateTimeout time.Durat
 		return nil, nil
 	}
 	if s.GetCheckpointRemote() != nil {
-		url, err := remote.FetchURL(ctx, remote.FetchURLOptions{WorktreeRoot: worktreeRoot})
+		// The elected remote joins FetchURL's ownership vote (see
+		// strategy.LeadCheckpointReadRemote); guarded by the configured
+		// checkpoint_remote above.
+		url, err := remote.FetchURL(ctx, remote.FetchURLOptions{
+			WorktreeRoot:   worktreeRoot,
+			LeadReadRemote: strategy.LeadCheckpointReadRemote(ctx),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("resolve checkpoint remote URL: %w", err)
 		}
