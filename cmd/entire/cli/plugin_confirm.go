@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -32,7 +33,8 @@ func runPluginConfirm(ctx context.Context, out io.Writer, prompt string, default
 	if err != nil {
 		return false, err
 	}
-	defer input.Close()
+	closeInput := sync.OnceFunc(func() { _ = input.Close() })
+	defer closeInput()
 	answer := defaultYes
 	form := NewAccessibleForm(huh.NewGroup(huh.NewConfirm().Title(prompt).Value(&answer))).WithOutput(out).WithInput(input)
 	if IsAccessibleMode() {
@@ -49,7 +51,7 @@ func runPluginConfirm(ctx context.Context, out io.Writer, prompt string, default
 				// Some platforms cannot cancel reads on a separately opened
 				// terminal. This descriptor belongs to the prompt, so closing
 				// it is safe and also releases a blocked read.
-				_ = input.Close()
+				closeInput()
 			}
 			close(cancelled)
 		})
