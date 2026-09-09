@@ -3,12 +3,12 @@ package strategy
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -423,39 +423,25 @@ func TestFilesWithRemainingAgentChanges_AutocrlfNormalizedWorkingTree(t *testing
 	t.Parallel()
 	dir := setupGitRepo(t)
 
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
+	defer repo.Close()
 
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v failed: %s", args, string(out))
-	}
-
-	runGit("config", "core.autocrlf", "true")
+	testutil.RunGit(t, dir, "config", "core.autocrlf", "true")
 
 	shadowContent := []byte("package main\r\n\r\nimport \"fmt\"\r\n\r\nfunc main() {\r\n\tfmt.Println(\"hello world\")\n\tfmt.Println(\"goodbye world\")\n}\n")
 	createShadowBranchWithContent(t, repo, "crlf123", "e3b0c4", map[string][]byte{
 		"src/main.go": shadowContent,
 	})
 
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0o755))
-	workingTreeContent := []byte("package main\r\n\r\nimport \"fmt\"\r\n\r\nfunc main() {\r\n\tfmt.Println(\"hello world\")\r\n\tfmt.Println(\"goodbye world\")\r\n}\r\n")
-	testFile := filepath.Join(dir, "src", "main.go")
-	require.NoError(t, os.WriteFile(testFile, workingTreeContent, 0o644))
+	workingTreeContent := "package main\r\n\r\nimport \"fmt\"\r\n\r\nfunc main() {\r\n\tfmt.Println(\"hello world\")\r\n\tfmt.Println(\"goodbye world\")\r\n}\r\n"
+	testutil.WriteFile(t, dir, "src/main.go", workingTreeContent)
+	testutil.GitAdd(t, dir, "src/main.go")
+	testutil.GitCommit(t, dir, "Commit normalized content")
 
-	wt, err := repo.Worktree()
+	head, err := repo.Head()
 	require.NoError(t, err)
-	_, err = wt.Add("src/main.go")
-	require.NoError(t, err)
-	headCommit, err := wt.Commit("Commit normalized content", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
-	})
-	require.NoError(t, err)
-
-	commit, err := repo.CommitObject(headCommit)
+	commit, err := repo.CommitObject(head.Hash())
 	require.NoError(t, err)
 
 	shadowBranch := checkpoint.ShadowBranchNameForCommit("crlf123", "e3b0c4")
@@ -463,10 +449,44 @@ func TestFilesWithRemainingAgentChanges_AutocrlfNormalizedWorkingTree(t *testing
 
 	// Git reports no diff here even though the on-disk bytes are CRLF and the
 	// committed blob is LF-normalized under core.autocrlf=true.
-	runGit("diff", "--exit-code", "--", "src/main.go")
+	testutil.RunGit(t, dir, "diff", "--exit-code", "--", "src/main.go")
 
-	remaining := filesWithRemainingAgentChanges(context.Background(), repo, shadowBranch, commit, []string{"src/main.go"}, committedFiles)
+	remaining := filesWithRemainingAgentChanges(t.Context(), repo, shadowBranch, commit, []string{"src/main.go"}, committedFiles)
 	assert.Empty(t, remaining, "autocrlf-only working tree differences should not be carried forward")
+}
+
+func TestFilesWithRemainingAgentChanges_ComparesWorktreeToCommitNotIndex(t *testing.T) {
+	t.Parallel()
+	dir := setupGitRepo(t)
+
+	repo, err := gitrepo.OpenPath(dir)
+	require.NoError(t, err)
+	defer repo.Close()
+
+	createShadowBranchWithContent(t, repo, "idx1234", "e3b0c4", map[string][]byte{
+		"config.go": []byte("agent content\n"),
+	})
+
+	testutil.WriteFile(t, dir, "config.go", "committed replacement\n")
+	testutil.GitAdd(t, dir, "config.go")
+	testutil.GitCommit(t, dir, "Replace config")
+
+	head, err := repo.Head()
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+
+	// Move both the index and working tree past the commit. A plain `git diff`
+	// reports clean because it compares these two, but carry-forward must compare
+	// the working tree with the commit that was just created.
+	testutil.WriteFile(t, dir, "config.go", "next staged change\n")
+	testutil.GitAdd(t, dir, "config.go")
+	testutil.RunGit(t, dir, "diff", "--exit-code", "--", "config.go")
+
+	shadowBranch := checkpoint.ShadowBranchNameForCommit("idx1234", "e3b0c4")
+	committedFiles := map[string]struct{}{"config.go": {}}
+	remaining := filesWithRemainingAgentChanges(t.Context(), repo, shadowBranch, commit, []string{"config.go"}, committedFiles)
+	assert.Equal(t, []string{"config.go"}, remaining)
 }
 
 // TestFilesWithRemainingAgentChanges_NoShadowBranch tests fallback to file-level subtraction.
