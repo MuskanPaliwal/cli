@@ -104,10 +104,14 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
+          # Stop is what makes the Write-Error below terminating. The runner
+          # prepends it too, but this step depends on it, so it says so.
           $ErrorActionPreference = "Stop"
-          entire version
-          $version = (entire version | Select-Object -First 1).Split(" ")[2]
-          $tag = "v$version"
+          $versionLine = (entire version | Select-Object -First 1)
+          Write-Host $versionLine
+          $tag = "v$($versionLine.Split(' ')[2])"
+          # Fail closed: a stable or unparseable version means the install
+          # resolved the wrong channel.
           if ($tag -notlike "v*-nightly.*") {
             Write-Error "expected a v*-nightly.* version, got '$tag'"
           }
@@ -158,7 +162,6 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
           irm https://claude.ai/install.ps1 | iex
           npm install -g @openai/codex @github/copilot opencode-ai
           # Stop does not cover native commands ($PSNativeCommandUseError-
@@ -191,7 +194,7 @@ jobs:
       #
       # The six bodies are byte-identical; only AGENT and the key differ.
       - name: Smoke test claude-code
-        if: ${{ !cancelled() && contains(env.AGENTS, 'claude-code') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' claude-code ') }}
         timeout-minutes: 15
         shell: bash
         env:
@@ -209,7 +212,7 @@ jobs:
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Smoke test opencode
-        if: ${{ !cancelled() && contains(env.AGENTS, 'opencode') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' opencode ') }}
         timeout-minutes: 15
         shell: bash
         env:
@@ -227,7 +230,7 @@ jobs:
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Smoke test codex
-        if: ${{ !cancelled() && contains(env.AGENTS, 'codex') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' codex ') }}
         timeout-minutes: 15
         shell: bash
         env:
@@ -246,7 +249,7 @@ jobs:
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Smoke test cursor-cli
-        if: ${{ !cancelled() && contains(env.AGENTS, 'cursor-cli') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' cursor-cli ') }}
         timeout-minutes: 15
         shell: bash
         env:
@@ -264,7 +267,7 @@ jobs:
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Smoke test factoryai-droid
-        if: ${{ !cancelled() && contains(env.AGENTS, 'factoryai-droid') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' factoryai-droid ') }}
         timeout-minutes: 15
         shell: bash
         env:
@@ -284,7 +287,7 @@ jobs:
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
       - name: Smoke test copilot-cli
-        if: ${{ !cancelled() && contains(env.AGENTS, 'copilot-cli') }}
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' copilot-cli ') }}
         timeout-minutes: 15
         shell: bash
         env:
