@@ -32,10 +32,19 @@ jobs:
       contents: read
       actions: read
       # Needed by the copilot-cli leg. GitHub does not allow matrix expressions
-      # in `permissions:`, so the scope is granted to every OS leg's
-      # GITHUB_TOKEN. The token is only ever placed in an environment a copilot
-      # process can see by the dedicated copilot step below, and checkout runs
-      # with persist-credentials: false so it is not left in .git/config.
+      # in `permissions:`, and permissions are job-wide, so every step's
+      # GITHUB_TOKEN on every OS leg carries this scope. Three steps see the
+      # token: the dedicated copilot step (COPILOT_GITHUB_TOKEN) and the Linux
+      # and Windows install steps (GITHUB_TOKEN, so the installer's releases-API
+      # call is not 403-ed by the shared runner IP's 60/hour limit). The install
+      # steps add no exposure the job does not already accept: the installer
+      # picks — and on Linux runs — the binary every later step executes with
+      # the agent API keys and this same token, so whoever controls the script
+      # already holds everything the token guards. On this public repo the read
+      # scopes grant nothing anonymous access lacks; the token's only value is
+      # the org's Copilot request quota, and it expires when the job ends.
+      # Checkout runs with persist-credentials: false so it is not left in
+      # .git/config.
       copilot-requests: write
     strategy:
       fail-fast: false
@@ -57,7 +66,8 @@ jobs:
       # API, and an unauthenticated call from a shared runner IP is 403-ed by
       # the 60/hour limit long before this job starts — which the script then
       # reports as "check your internet connection". install.sh:100 and
-      # install.ps1:219 both honour the variable.
+      # install.ps1:219 both honour the variable. The token carries the copilot
+      # scope; the permissions block above says why that is acceptable here.
       - name: Install nightly CLI (Linux)
         if: matrix.os == 'ubuntu-latest'
         env:
@@ -206,6 +216,11 @@ jobs:
           # and it defaults to $false. npm is not this step's last command, so
           # without this its failure is masked by whatever runs after it.
           if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit $LASTEXITCODE)" }
+          # No such guard on the two iex lines. Each installer sets Stop itself,
+          # checks $LASTEXITCODE after every native command it runs, and exits
+          # non-zero on every failure path — and both a throw and an exit inside
+          # iex end this step (run 34130173877 failed this way on a 504 from
+          # downloads.claude.ai). Verified against both scripts on 2026-09-09.
           irm https://app.factory.ai/cli/windows | iex
           "$HOME\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$HOME\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
