@@ -18,6 +18,8 @@ on:
       test:
         description: "Test name filter (regex)"
         required: false
+        # Keep in sync with the TEST_FILTER fallback in the job env: a
+        # scheduled run has no inputs, so that fallback is what it uses.
         default: "TestMultiSessionSequential"
 
 concurrency:
@@ -75,8 +77,7 @@ jobs:
       # API, and an unauthenticated call from a shared runner IP is 403-ed by
       # the 60/hour limit long before this job starts — which the script then
       # reports as "check your internet connection". install.sh:100 and
-      # install.ps1:219 both honour the variable. The token carries the copilot
-      # scope; the permissions block above says why that is acceptable here.
+      # install.ps1:219 both honour the variable.
       - name: Install nightly CLI (Linux)
         if: matrix.os == 'ubuntu-latest'
         env:
@@ -103,7 +104,10 @@ jobs:
       # No $ErrorActionPreference line needed in a pwsh step: the runner
       # prepends `$ErrorActionPreference = 'stop'` to every powershell/pwsh
       # script it runs (actions/runner, FixUpScriptContents in
-      # ScriptHandlerHelpers.cs), so the steps that set it are restating it.
+      # ScriptHandlerHelpers.cs). The two steps that set it anyway are kept:
+      # one of them fails closed through Write-Error, whose terminating-ness is
+      # exactly what the preference decides, so the line documents a dependency
+      # rather than restating the runner.
       - name: Install nightly CLI (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -121,9 +125,9 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
-          entire version
-          version=$(entire version | head -1 | awk '{print $3}')
-          tag="v$version"
+          version_line=$(entire version | head -1)
+          echo "$version_line"
+          tag="v$(echo "$version_line" | awk '{print $3}')"
           # Fail closed. A stable or unparseable version means the install
           # resolved the wrong channel; silently testing main instead would
           # hide exactly the skew this pin exists to remove.
@@ -222,17 +226,18 @@ jobs:
           npm install -g @openai/codex @github/copilot opencode-ai
           # Stop does not cover native commands: a non-zero exit raises an
           # error only when $PSNativeCommandUseErrorActionPreference is $true,
-          # and it defaults to $false. npm is not this step's last command, so
-          # without this its failure is masked by whatever runs after it.
+          # and it defaults to $false. Nothing native follows npm today, so the
+          # runner's trailing `exit $LASTEXITCODE` would catch it — but only by
+          # accident of ordering, and with no message. Fail here, where the
+          # cause is named, and keep the guard correct if a native command is
+          # ever added after this line.
           if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit $LASTEXITCODE)" }
-          # No such guard on the two iex lines. Each installer sets Stop itself,
-          # checks $LASTEXITCODE after every native command it runs, and exits
-          # non-zero on every failure path — and both a throw and an exit inside
-          # iex end this step (run 34130173877 failed this way on a 504 from
-          # downloads.claude.ai). Verified against both scripts on 2026-09-09.
-          irm https://app.factory.ai/cli/windows | iex
+          # No such guard on the iex line above: that installer sets Stop
+          # itself, checks $LASTEXITCODE after every native command it runs, and
+          # exits non-zero on every failure path — and both a throw and an exit
+          # inside iex end this step (run 34130173877 failed this way on a 504
+          # from downloads.claude.ai). Verified against the script on 2026-09-09.
           "$HOME\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "$HOME\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           # factoryai-droid is installed above but deliberately absent from
           # this list. On Windows the test fails at
           # "checkpoint state did not advance within 30s": droid commits, and
@@ -244,8 +249,11 @@ jobs:
           # not something this workflow can fix by trying harder.
           #
           # It stays out so the leg reports on the release rather than on a
-          # known bug. The installer line above is kept so restoring it is a
-          # one-word change once the hook path is fixed.
+          # known bug, and its installer is not run either — that would be a
+          # network install, and a way for this leg to go red, for an agent it
+          # does not test. Restoring means adding the name below plus
+          # `irm https://app.factory.ai/cli/windows | iex` and $HOME\bin on
+          # GITHUB_PATH, as the Unix step still does.
           "AGENTS=claude-code codex copilot-cli opencode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # ----------------------------------------------------------------------
@@ -375,9 +383,6 @@ jobs:
           grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
           echo "$AGENT $rc" >> e2e/artifacts/results.txt
 
-      # The job's GITHUB_TOKEN reaches copilot as COPILOT_GITHUB_TOKEN. With
-      # the two install steps, this is the only place it is exposed — see the
-      # permissions block.
       - name: Smoke test copilot-cli
         if: ${{ !cancelled() && contains(env.AGENTS, 'copilot-cli') }}
         timeout-minutes: 15
