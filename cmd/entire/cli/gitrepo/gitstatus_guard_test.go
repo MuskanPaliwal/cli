@@ -103,6 +103,45 @@ func TestGitStatusCallSitesPassNoOptionalLocks(t *testing.T) {
 	}
 }
 
+// TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex prevents native `git diff
+// <tree> -- <paths>` from entering hook paths. Unlike `git status`, Git's diff
+// builtin refreshes and rewrites a stat-stale index even under
+// --no-optional-locks. Index-only `git diff --cached` does not inspect the
+// worktree and is allowed.
+func TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex(t *testing.T) {
+	t.Parallel()
+
+	root, found := testutil.GitGrepGuardRepoRoot(t)
+	if !found {
+		return
+	}
+	out := testutil.GitGrepGuard(t, root, "-n", "--", `"diff"`,
+		"--", ":(glob)cmd/**/*.go", ":(glob)internal/**/*.go")
+
+	var checked int
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		path, rest, ok := strings.Cut(line, ":")
+		if !ok || !strings.HasSuffix(path, ".go") {
+			t.Fatalf("cannot parse git grep output; expected `path:line:content`, got:\n  %s", line)
+		}
+		if strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/testutil/") || !containsAnyMarker(rest) {
+			continue
+		}
+		checked++
+		if strings.Contains(rest, `"--cached"`) || strings.Contains(rest, `+"...HEAD"`) {
+			continue // index-only or two-commit comparison; neither reads the worktree
+		}
+		t.Errorf("worktree-comparing git diff can rewrite the index even with --no-optional-locks:\n  %s\n"+
+			"Use a non-refreshing primitive such as git hash-object or git diff-index instead.", line)
+	}
+	if checked == 0 {
+		t.Error("guard matched no git diff invocations; the detection pattern has gone stale")
+	}
+}
+
 func containsAnyMarker(line string) bool {
 	for _, m := range gitInvocationMarkers {
 		if strings.Contains(line, m) {

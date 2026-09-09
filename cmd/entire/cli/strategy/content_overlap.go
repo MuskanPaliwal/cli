@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -507,23 +506,16 @@ func filesWithRemainingAgentChanges(
 		})
 	}
 
-	var (
-		changedFiles map[string]struct{}
-		gitDiffOK    bool
-	)
+	worktreeHashes := make(map[string]plumbing.Hash)
 	if worktreeRoot != "" && len(candidates) > 0 {
 		paths := make([]string, 0, len(candidates))
 		for _, candidate := range candidates {
 			paths = append(paths, candidate.path)
 		}
-		diffCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var err error
-		changedFiles, err = gitrepo.ChangedWorktreeFiles(diffCtx, worktreeRoot, headCommit.Hash, paths)
-		cancel()
-		if err == nil {
-			gitDiffOK = true
-		} else {
-			logging.Debug(logCtx, "filesWithRemainingAgentChanges: git diff failed, falling back to raw blob hashes",
+		worktreeHashes, err = gitrepo.HashWorktreeFiles(ctx, worktreeRoot, paths)
+		if err != nil {
+			logging.Warn(logCtx, "native git could not hash every carry-forward candidate; using filter-unaware raw hashes for failed files",
 				slog.String("error", err.Error()),
 			)
 		}
@@ -531,9 +523,8 @@ func filesWithRemainingAgentChanges(
 
 	for _, candidate := range candidates {
 		workingTreeClean := false
-		if gitDiffOK {
-			_, changed := changedFiles[candidate.path]
-			workingTreeClean = !changed
+		if worktreeHash, ok := worktreeHashes[candidate.path]; ok {
+			workingTreeClean = worktreeHash == candidate.commitHash
 		} else if worktreeRoot != "" {
 			workingTreeClean = workingTreeMatchesBlob(worktreeRoot, candidate.path, candidate.commitHash)
 		}

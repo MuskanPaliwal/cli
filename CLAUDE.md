@@ -1451,6 +1451,17 @@ mitigation. Output is byte-identical either way. The write fires on
 mtime-moved-but-content-identical files — the ordinary aftermath of an agent
 turn, a formatter, or an editor save — not on content edits.
 
+**The flag does not disable the equivalent refresh in worktree-comparing `git
+diff`.** `builtin/diff.c`'s `refresh_index_quietly()` does not consult
+`use_optional_locks()`: measured on Git 2.50.1, both `git diff <tree> --
+<paths>` and `git --no-optional-locks diff <tree> -- <paths>` rewrote a
+stat-stale index. `git diff --cached` and a two-tree diff do not read the
+worktree and are unaffected. Hook code needing exact clean-filtered content
+uses `git hash-object`; `git diff-index` is also non-refreshing but can report a
+stat-dirty, content-identical file as changed. The source guard
+`TestGitWorktreeDiffCallSitesDoNotRefreshTheIndex` prevents the unsafe form from
+being introduced on the hook path.
+
 That refresh is git working as designed, and running `git status` is not itself
 a mistake. The reason we always drop the write is that **Entire never benefits
 from it**: every call site reads the porcelain output once and discards it, so

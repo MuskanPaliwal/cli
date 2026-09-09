@@ -463,6 +463,9 @@ func TestFilesWithRemainingAgentChanges_AutocrlfNormalizedWorkingTree(t *testing
 	assert.Empty(t, remaining, "autocrlf-only working tree differences should not be carried forward")
 }
 
+// TestFilesWithRemainingAgentChanges_ComparesWorktreeToCommitNotIndex is a
+// design pin: it passes with the raw-hash fallback too, but fails if the native
+// Git check is simplified to an index-relative bare `git diff`.
 func TestFilesWithRemainingAgentChanges_ComparesWorktreeToCommitNotIndex(t *testing.T) {
 	t.Parallel()
 	dir := setupGitRepo(t)
