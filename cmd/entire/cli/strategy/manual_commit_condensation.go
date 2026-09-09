@@ -368,6 +368,11 @@ func (s *ManualCommitStrategy) materializeTaskRecords(
 			StartedAt:       record.StartedAt,
 			CompletedAt:     record.CompletedAt,
 		}
+		if record.TranscriptUnavailable {
+			payload.TranscriptUnavailableReason = taskTranscriptReasonUnresolvable
+			payloads = append(payloads, payload)
+			continue
+		}
 
 		// Candidate transcript paths, tried in order: the agent-declared path
 		// first, then the agent-layout fallback — declared paths are

@@ -884,6 +884,34 @@ func TestCondenseSession_MaterializesCompletedTaskRecord_RegressionFor2058(t *te
 	require.Empty(t, state.TaskRecords, "completed task record must be removed after materialization")
 }
 
+func TestCondenseSession_TranscriptUnavailableDoesNotProbeGenericLayout(t *testing.T) {
+	const (
+		sessionID = "2026-09-03-copilot-no-child-transcript"
+		toolUseID = "toolu_copilot_no_transcript"
+		agentID   = "24d8773a-06e8-435c-9257-8ccb89a54f33"
+	)
+	repo, state := setupCondensableSessionWithTranscript(t, sessionID)
+	coincidental := filepath.Join(filepath.Dir(state.TranscriptPath), "agent-"+agentID+".jsonl")
+	require.NoError(t, os.WriteFile(coincidental, []byte(`{"secret":"must not be attributed"}`), 0o600))
+	state.TaskRecords = []session.TaskRecord{{
+		ToolUseID:             toolUseID,
+		AgentID:               agentID,
+		StartedAt:             time.Now(),
+		CompletedAt:           time.Now(),
+		TranscriptUnavailable: true,
+	}}
+	require.NoError(t, SaveSessionState(context.Background(), state))
+
+	checkpointID := id.MustCheckpointID("aabbccddaa09")
+	_, err := (&ManualCommitStrategy{}).CondenseSession(context.Background(), repo, checkpointID, state, nil)
+	require.NoError(t, err)
+	_, found := checkpointTaskFile(t, repo, checkpointID, "tasks/"+toolUseID+"/agent-"+agentID+".jsonl")
+	require.False(t, found)
+	taskJSON, found := checkpointTaskFile(t, repo, checkpointID, "tasks/"+toolUseID+"/task.json")
+	require.True(t, found)
+	require.Contains(t, taskJSON, taskTranscriptReasonUnresolvable)
+}
+
 // TestCondenseSession_InFlightTaskRecord_TranscriptSoFarStoredRecordSurvives
 // covers the in-flight half of the materializer contract: a record with
 // CompletedAt still zero has its transcript-so-far stored (every checkpoint
