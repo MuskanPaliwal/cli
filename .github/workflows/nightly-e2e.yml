@@ -250,7 +250,12 @@ jobs:
             go run ./e2e/bootstrap "$agent" &&
               E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$agent" \
                 mise run test:e2e --agent "$agent" "$TEST_FILTER"
-            echo "$agent $?" >> e2e/artifacts/results.txt
+            rc=$?
+            # A filter matching nothing exits 0 with "[no tests to run]", so a
+            # typo would report every agent as passing. testreport already
+            # counts what ran; no rows means nothing was tested.
+            grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$agent/report.txt" 2>/dev/null && rc=1
+            echo "$agent $rc" >> e2e/artifacts/results.txt
             echo "::endgroup::"
           done
 
@@ -268,7 +273,10 @@ jobs:
           go run ./e2e/bootstrap copilot-cli &&
             E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/copilot-cli" \
               mise run test:e2e --agent copilot-cli "$TEST_FILTER"
-          echo "copilot-cli $?" >> e2e/artifacts/results.txt
+          rc=$?
+          # Same "nothing ran" guard as the loop above.
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/copilot-cli/report.txt" 2>/dev/null && rc=1
+          echo "copilot-cli $rc" >> e2e/artifacts/results.txt
 
       - name: Summarize
         if: always()
