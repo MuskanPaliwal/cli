@@ -27,7 +27,7 @@ func TestMaybeRunPlugin_MissingGraphNonInteractive(t *testing.T) { //nolint:para
 	root := newTestRoot()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph", "search", "hello"})
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"graph", "search", "hello"})
 	if !handled || code != 1 {
 		t.Fatalf("handled=%v code=%d, want true, 1", handled, code)
 	}
@@ -98,7 +98,7 @@ func TestMaybeRunPlugin_InstallGraphAndRun(t *testing.T) { //nolint:paralleltest
 			data := strings.NewReader("plugin data\n")
 			root.SetIn(data)
 			args := []string{"graph", "search", "two words", "--json", "--", "$(untouched)", ""}
-			handled, code := MaybeRunPlugin(ctx, root, args)
+			handled, code, _ := MaybeRunPlugin(ctx, root, args)
 			if !handled || code != tc.wantCode {
 				t.Fatalf("handled=%v code=%d, want true, %d; stderr=%s", handled, code, tc.wantCode, &stderr)
 			}
@@ -141,7 +141,7 @@ func TestMaybeRunPlugin_GraphInstalledSkipsPrompt(t *testing.T) { //nolint:paral
 	root := newTestRoot()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph", "--help"})
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"graph", "--help"})
 	if !handled || code != 0 || stderr.Len() != 0 {
 		t.Fatalf("handled=%v code=%d stderr=%q", handled, code, stderr.String())
 	}
@@ -199,7 +199,7 @@ func TestMaybeRunPlugin_GraphInManagedDirIsRunNotReinstalled(t *testing.T) { //n
 	root := newTestRoot()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph", "search", "hello"})
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"graph", "search", "hello"})
 	if !handled || code != 0 {
 		t.Fatalf("handled=%v code=%d, want true, 0; stderr=%s", handled, code, &stderr)
 	}
@@ -235,7 +235,7 @@ func TestMaybeRunPlugin_AnnouncementNeverEchoesArguments(t *testing.T) { //nolin
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
 	args := []string{"graph", "--token", "s3cr3t", "\x1b[1A\x1b[2Kforged", "line\nbreak"}
-	if handled, code := MaybeRunPlugin(t.Context(), root, args); !handled || code != 0 {
+	if handled, code, _ := MaybeRunPlugin(t.Context(), root, args); !handled || code != 0 {
 		t.Fatalf("handled=%v code=%d; stderr=%s", handled, code, &stderr)
 	}
 	if !strings.Contains(stderr.String(), "Running entire-graph\n") {
@@ -286,7 +286,7 @@ func TestMaybeRunPlugin_BrokenManagedEntryReportsARemedy(t *testing.T) { //nolin
 	root := newTestRoot()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph", "search"})
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"graph", "search"})
 	if !handled || code != 1 {
 		t.Fatalf("handled=%v code=%d, want true, 1; stderr=%s", handled, code, &stderr)
 	}

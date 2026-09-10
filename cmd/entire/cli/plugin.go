@@ -47,6 +47,13 @@ const onDemandInstallPluginName = "graph"
 // deliberately not a valid exit status — os.Exit(-1) truncates to 255 — so
 // main.go re-raises the signal instead of exiting with it. -1 is already what
 // exec.ExitError.ExitCode() reports for a signalled child.
+//
+// MaybeRunPlugin's killedBy return says WHICH signal, when it is knowable.
+// The two are separate because they have different sources: the exit code
+// comes from the child's wait status, while the signal may have reached only
+// the child (`kill -TERM` at the plugin, SIGPIPE from a closed pipe) or only
+// this process (a Ctrl-C during the on-demand install, where there is no
+// child yet).
 const ExitPluginSignalled = -1
 
 // postPluginVersionCheck is a test seam for the version-check notice that
@@ -61,12 +68,17 @@ var postPluginVersionCheck = versioncheck.CheckAndNotify
 // signal interrupted an on-demand install before it ran; the caller turns
 // that into a re-raised signal rather than an exit status.
 //
+// killedBy is the signal the plugin was killed by, when the platform reports
+// one. It is nil for an ordinary exit, on Windows, and for an install
+// interrupted before any child existed — in that last case the signal is the
+// one this process received, which the caller already has.
+//
 // Telemetry and the version-check notice mirror Cobra's PersistentPostRun
 // behavior for built-ins: both fire only on a successful (exit-0) run.
-func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int) {
+func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) (handled bool, exitCode int, killedBy os.Signal) {
 	binPath, pluginArgs, ok := resolvePlugin(rootCmd, args)
 	if !ok {
-		return false, 0
+		return false, 0, nil
 	}
 	pluginName := args[0]
 	if binPath == "" {
@@ -77,15 +89,17 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 			if errors.As(silencePluginCancel(ctx, err), &silent) {
 				// A signal interrupted the install. Report it as a signal
 				// rather than a plain failure so main.go re-raises it: a
-				// shell breaks an enclosing loop only on WIFSIGNALED.
-				return true, ExitPluginSignalled
+				// shell breaks an enclosing loop only on WIFSIGNALED. No
+				// child ran, so there is no child signal to name — the
+				// caller falls back to the one it received.
+				return true, ExitPluginSignalled, nil
 			}
 			fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
-			return true, 1
+			return true, 1, nil
 		}
 		if binPath == "" {
 			// The command was not executed because installation was declined.
-			return true, 1
+			return true, 1, nil
 		}
 		// Say what is happening now: the install may have taken a while, and
 		// it is the reason the user is still waiting.
@@ -99,7 +113,7 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 		// is the same hazard hasTerminalControlChars exists for.
 		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running %s%s\n", pluginBinaryPrefix, pluginName)
 	}
-	exitCode = runPlugin(ctx, pluginName, binPath, pluginArgs)
+	exitCode, killedBy = runPlugin(ctx, pluginName, binPath, pluginArgs)
 	if exitCode == 0 {
 		maybeTrackPluginInvocation(ctx, pluginName)
 		// Stderr, matching the built-in PersistentPostRun: the plugin's own
@@ -112,7 +126,7 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 			postPluginVersionCheck(ctx, os.Stderr, versioninfo.Version)
 		}
 	}
-	return true, exitCode
+	return true, exitCode, killedBy
 }
 
 // maybeTrackPluginInvocation fires telemetry only for plugins on the
@@ -223,7 +237,7 @@ func isAgentProtocolBinary(binPath string) bool {
 // On context cancellation the child gets SIGINT (with a 5s grace before the
 // runtime falls back to SIGKILL) so plugins can clean up. Terminal signals
 // reach the child directly via the shared process group.
-func runPlugin(ctx context.Context, pluginName, binPath string, args []string) int {
+func runPlugin(ctx context.Context, pluginName, binPath string, args []string) (exitCode int, killedBy os.Signal) {
 	cmd := exec.CommandContext(ctx, binPath, args...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
@@ -267,14 +281,16 @@ func runPlugin(ctx context.Context, pluginName, binPath string, args []string) i
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			// A signalled child reports -1, i.e. ExitPluginSignalled: it is
-			// not an exit status, so main.go re-raises the signal rather than
-			// letting os.Exit truncate it to 255.
-			return exitErr.ExitCode()
+			// not an exit status, so the caller re-raises the signal rather
+			// than letting os.Exit truncate it to 255. Which signal comes
+			// from the wait status, because it need not be one this process
+			// received — see pluginTerminatingSignal.
+			return exitErr.ExitCode(), pluginTerminatingSignal(exitErr.ProcessState)
 		}
 		// Prefix with the plugin name so users can tell parent vs child
 		// errors apart in mixed stderr.
 		fmt.Fprintf(os.Stderr, "Failed to run plugin %s: %v\n", filepath.Base(binPath), err)
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }

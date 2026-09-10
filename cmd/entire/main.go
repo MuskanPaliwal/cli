@@ -80,26 +80,40 @@ func main() {
 	// inherits the prepended PATH so it can spawn sibling managed plugins.
 	restorePATH := cli.PrependPluginBinDirToPATH(ctx)
 
-	if handled, code := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
+	if handled, code, killedBy := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
 		cancel()
 		if code == cli.ExitPluginSignalled {
 			// The plugin was terminated by a signal, or a signal interrupted
 			// the on-demand install before it ran. Re-raise so the shell sees
-			// WIFSIGNALED and an enclosing loop breaks on one Ctrl-C.
+			// WIFSIGNALED: an enclosing loop breaks on one Ctrl-C, and the
+			// conventional 128+signum reaches whoever ran us.
 			//
 			// Gated on the plugin's own outcome rather than on a signal
 			// having fired somewhere in this process: Ctrl-C reaches the whole
 			// foreground process group, so a plugin that handles it itself and
 			// exits with a meaningful code (a TUI quitting on Ctrl-C exits 0)
 			// must keep that code instead of being reported as killed.
-			if procsignal.Load() != nil {
+			switch {
+			case killedBy != nil:
+				// The child's own signal, which is not necessarily one we
+				// received: `kill -TERM` aimed at the plugin must still exit
+				// 143, and a SIGPIPE from `entire graph | head -1` must still
+				// exit 141. Preferred over ours so the external command's
+				// outcome is what propagates.
+				dieFromSignal(killedBy)
+			case procsignal.Load() != nil:
+				// No child signal to name — the on-demand install was
+				// interrupted before any child existed — so die from what we
+				// were sent.
 				dieFromSignal(terminatingSignal())
+			default:
+				// -1 with no signal on either side. Windows reports a killed
+				// child as an ordinary exit code, so it never lands here;
+				// anything that does is unaccounted for, and -1 is not an
+				// exit status (os.Exit would truncate it to 255), so report a
+				// plain failure rather than inventing a signal.
+				os.Exit(1)
 			}
-			// Killed by a signal we never received ourselves — an external
-			// kill, or a crash. There is no signal to re-raise, and -1 is not
-			// an exit status (os.Exit would truncate it to 255), so report a
-			// plain failure. The child has already said what happened.
-			os.Exit(1)
 		}
 		os.Exit(code)
 	}
