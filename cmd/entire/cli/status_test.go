@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2333,7 +2334,7 @@ func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool)
 				t.Errorf("%s = %s, want true (decode error: %v)", key, raw, err)
 			}
 		}
-		for _, key := range []string{"checkpoint_sync_remote", "checkpoint_sync_remote_source", "checkpoint_sync_error", "unpushed_checkpoints", "checkpoint_remote_ignored", "checkpoint_remote_ignored_reason"} {
+		for _, key := range []string{"checkpoint_sync_remote", "checkpoint_sync_remote_source", "unpushed_checkpoints"} {
 			if value, exists := result[key]; exists {
 				t.Errorf("disabled pushing must omit %s, got %s", key, value)
 			}
@@ -2343,7 +2344,7 @@ func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool)
 	if !strings.Contains(stdout.String(), "Automatic checkpoint pushing: disabled (push_sessions=false)") {
 		t.Error("missing automatic checkpoint pushing disabled message")
 	}
-	for _, unwanted := range []string{"Checkpoints sync to:", "Checkpoints NOT syncing:", "not yet", "next 'git push", "is not in use:"} {
+	for _, unwanted := range []string{"Checkpoints sync to:", "Checkpoints NOT syncing:", "not yet", "next 'git push"} {
 		if strings.Contains(stdout.String(), unwanted) {
 			t.Errorf("disabled pushing must not show %q", unwanted)
 		}
@@ -2393,6 +2394,17 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				s, err := LoadEntireSettings(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				info := computeCheckpointSyncInfo(t.Context(), s)
+				if (info.Err != "") != (tc.name == "missing_configured_remote") || (info.IgnoredRemote != "") != (tc.name == "inherited_dedicated_rejected") {
+					t.Errorf("unexpected remote diagnostics: %+v", info)
+				}
+				if !info.PushDisabled || info.Remote != "" || info.Source != "" || info.Unpushed != 0 {
+					t.Errorf("disabled pushing must preserve diagnostics without push destination/count: %+v", info)
+				}
 				for _, jsonOutput := range []bool{false, true} {
 					assertCheckpointPushDisabledStatus(t, jsonOutput, false)
 					after, err := queue.Peek()
@@ -2402,6 +2414,67 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 					if !slices.Equal(before, after) {
 						t.Errorf("status changed pending queue: before=%v after=%v", before, after)
 					}
+				}
+			})
+		}
+	}
+}
+
+// Not parallel: setupTestRepo changes CWD and isolates process environment.
+func TestRunStatus_CheckpointDiagnosticsWithPushDisabled(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, options, key, text string
+		}{
+			{"inherited", `"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "checkpoint_remote_ignored", "org/checkpoints"},
+			{"missing", `"checkpoint_push_remote":"gone"`, "checkpoint_sync_error", `checkpoint_push_remote "gone"`},
+		} {
+			label := "pushing_enabled/" + tc.name
+			pushSetting := strconv.FormatBool(!disabled)
+			if disabled {
+				label = "pushing_disabled/" + tc.name
+			}
+			t.Run(label, func(t *testing.T) {
+				testutil.IsolateGitConfigEnv(t)
+				setupTestRepo(t)
+				writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":`+pushSetting+`,`+tc.options+`}}`)
+				testutil.AddRemote(t, ".", "origin", "https://github.com/other/repo.git")
+				for _, mode := range []struct {
+					name           string
+					detailed, json bool
+				}{{"text", false, false}, {"detailed", true, false}, {"json", false, true}} {
+					t.Run(mode.name, func(t *testing.T) {
+						var out bytes.Buffer
+						if err := runStatus(t.Context(), &out, mode.detailed, mode.json); err != nil {
+							t.Fatal(err)
+						}
+						if mode.json {
+							var result map[string]json.RawMessage
+							if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+								t.Fatal(err)
+							}
+							var diagnostic string
+							if err := json.Unmarshal(result[tc.key], &diagnostic); err != nil || !strings.Contains(diagnostic, tc.text) {
+								t.Errorf("missing %s diagnostic: %s", tc.key, out.String())
+							}
+							if tc.name == "inherited" && !strings.Contains(string(result["checkpoint_remote_ignored_reason"]), "differs from checkpoint owner") {
+								t.Errorf("missing rejection reason: %s", out.String())
+							}
+							if disabled {
+								var pushDisabled bool
+								if err := json.Unmarshal(result["checkpoint_push_disabled"], &pushDisabled); err != nil || !pushDisabled {
+									t.Errorf("missing disabled flag: %s", out.String())
+								}
+							}
+							return
+						}
+						if !strings.Contains(out.String(), tc.text) || (tc.name == "inherited" && !strings.Contains(out.String(), "is not in use:")) {
+							t.Errorf("missing remote diagnostic: %s", out.String())
+						}
+						if disabled && (!strings.Contains(out.String(), "Automatic checkpoint pushing: disabled") || strings.Contains(out.String(), "Checkpoints NOT syncing:")) {
+							t.Errorf("diagnostic must coexist with disabled pushing, not claim a push failure: %s", out.String())
+						}
+					})
 				}
 			})
 		}
@@ -2432,7 +2505,9 @@ func TestRunStatus_CheckpointPushDisabledSettingsPrecedence(t *testing.T) {
 			testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
 			for _, jsonOutput := range []bool{false, true} {
 				if tc.disabled {
-					assertCheckpointPushDisabledStatus(t, jsonOutput, true)
+					// --detailed and --json are mutually exclusive: only text
+					// exercises the detailed settings view.
+					assertCheckpointPushDisabledStatus(t, jsonOutput, !jsonOutput)
 					continue
 				}
 				var stdout bytes.Buffer

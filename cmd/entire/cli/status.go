@@ -357,9 +357,9 @@ type checkpointSyncInfo struct {
 }
 
 func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpointSyncInfo {
-	if s.IsPushSessionsDisabled() {
-		return checkpointSyncInfo{PushDisabled: true}
-	}
+	info := checkpointSyncInfo{PushDisabled: s.IsPushSessionsDisabled()}
+	// Remote configuration diagnostics also explain checkpoint read behavior.
+	// Disabling uploads suppresses push promises and counts, not these warnings.
 
 	elected, err := strategy.ResolveCheckpointSyncRemote(ctx)
 	if err != nil {
@@ -370,10 +370,11 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		// configured, the gate's dedicated exemption may still sync checkpoint
 		// data even while this fail-closed warning is shown, since there is no
 		// elected remote left to probe PushURL against here.
-		return checkpointSyncInfo{Err: err.Error()}
+		info.Err = err.Error()
+		return info
 	}
 	if elected.Name == "" {
-		return checkpointSyncInfo{} // no remotes configured: show nothing
+		return info // no remotes configured: only report disabled pushing, if set
 	}
 
 	// Dedicated checkpoint_remote mode is reported only when PushURL derives
@@ -386,7 +387,11 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 	// PushURL differently than this elected-remote probe does.
 	if cr := s.GetCheckpointRemote(); cr != nil {
 		if _, enabled, purlErr := checkpointremote.PushURL(ctx, elected.Name); purlErr == nil && enabled {
-			info := checkpointSyncInfo{Remote: cr.Repo, Source: checkpointSyncSourceDedicated}
+			if info.PushDisabled {
+				return info
+			}
+			info.Remote = cr.Repo
+			info.Source = checkpointSyncSourceDedicated
 			// The unpushed counter is meaningful here only on the git-refs
 			// backend (push-queue length is local and accurate). The
 			// git-branch comparison is omitted: pushes to a raw URL update
@@ -399,10 +404,10 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		}
 	}
 
-	info := checkpointSyncInfo{
-		Remote:   elected.Name,
-		Source:   string(elected.Source),
-		Unpushed: countUnpushedCheckpointsForStatus(ctx, elected.Name),
+	if !info.PushDisabled {
+		info.Remote = elected.Name
+		info.Source = string(elected.Source)
+		info.Unpushed = countUnpushedCheckpointsForStatus(ctx, elected.Name)
 	}
 	// A configured checkpoint_remote that did not enable above is being
 	// ignored. When the ownership check is what rejected it, say so: this is
@@ -440,8 +445,12 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 	info := computeCheckpointSyncInfo(ctx, s)
 	switch {
 	case info.PushDisabled:
-		b.WriteString("\n  Automatic checkpoint pushing: disabled (push_sessions=false)")
-		return
+		b.WriteString("\n  Automatic checkpoint pushing: disabled")
+		b.WriteString(sty.render(sty.dim, " (push_sessions=false)"))
+		if info.Err != "" {
+			b.WriteString("\n")
+			b.WriteString(sty.render(sty.yellow, "  ! Checkpoint remote configuration: "+info.Err))
+		}
 	case info.Err != "":
 		b.WriteString("\n")
 		b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
