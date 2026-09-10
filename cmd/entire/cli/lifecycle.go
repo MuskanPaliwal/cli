@@ -2196,11 +2196,15 @@ func tryAdoptEnv(ctx context.Context, state *session.State, expectedAgent string
 	spec.apply(ctx, state, envAgent)
 }
 
+// sessionKindLabelReview is the human label for a review session, shared by
+// env adoption and the trail resume summary.
+const sessionKindLabelReview = "review"
+
 // adoptReviewEnv tags the session as a review session when ENTIRE_REVIEW_*
 // env vars are present on the current process.
 func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent string) {
 	tryAdoptEnv(ctx, state, expectedAgent, envAdoptionSpec{
-		kindLabel:      "review",
+		kindLabel:      sessionKindLabelReview,
 		envSession:     review.EnvSession,
 		envAgent:       review.EnvAgent,
 		envStartingSHA: review.EnvStartingSHA,

@@ -74,6 +74,13 @@ linters:
     - whitespace
     - wrapcheck
   settings:
+    goconst:
+      # golangci-lint 2.13 (goconst upgrade) began scanning composite literals,
+      # which turned map-literal keys and test fixtures into ~2.3k findings that
+      # 2.11 never reported. Both knobs restore the prior scope rather than
+      # adopting a stricter linter as a side effect of a Go toolchain bump.
+      ignore-tests: true
+      ignore-map-keys: true
     gosec:
       excludes:
         - G204 # subprocess with variables is expected for git/opencode CLI wrappers

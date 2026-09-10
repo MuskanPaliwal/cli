@@ -449,7 +449,7 @@ func warnIfShadowsBuiltin(cmd *cobra.Command, name string) {
 
 func newPluginListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
+		Use:   cmdList,
 		Short: "List plugins installed in the managed directory",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runPluginList(cmd.OutOrStdout())

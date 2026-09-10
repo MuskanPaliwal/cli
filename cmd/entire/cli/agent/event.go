@@ -248,5 +248,5 @@ func ReadHookInputRawLimited(stdin io.Reader, limit int64) (json.RawMessage, err
 // instead of blocking on a read that will never complete (issue #1398).
 func StdinLooksInteractive(r io.Reader) bool {
 	f, ok := r.(*os.File)
-	return ok && term.IsTerminal(int(f.Fd())) //nolint:gosec // G115: uintptr->int is safe for fd
+	return ok && term.IsTerminal(int(f.Fd()))
 }
