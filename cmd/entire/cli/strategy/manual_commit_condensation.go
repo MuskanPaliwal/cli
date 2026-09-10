@@ -324,12 +324,12 @@ const (
 // be resolved or read still produces a payload — with TranscriptUnavailableReason
 // set instead of a Transcript — so the pointer is never silently dropped.
 //
-// A record with an unsafe or empty ToolUseID, or one whose AgentID is unsafe
-// or empty at the point a transcript would be written, is skipped entirely —
+// A record with an unsafe or empty ToolUseID or AgentID is skipped entirely —
 // no payload at all, not even a reason-only one: an unsafe ToolUseID has no
 // safe tasks/<id>/ directory to put a task.json under in the first place, and
-// an empty/unsafe AgentID would corrupt the agent-<id>.jsonl filename (see
-// writeTaskRecordEntries, which re-validates as a last resort). This must
+// an empty/unsafe AgentID cannot be stored safely and would corrupt the
+// agent-<id>.jsonl filename (see writeTaskRecordEntries, which re-validates as
+// a last resort). This must
 // never wedge condensation — a poisoned record produces zero payloads, not an
 // error, and the caller's normal completed-record removal
 // (resetCheckpointWindow) still drops it once completed, since a record that
@@ -357,6 +357,13 @@ func (s *ManualCommitStrategy) materializeTaskRecords(
 			)
 			continue
 		}
+		if record.AgentID == "" || validation.ValidateAgentID(record.AgentID) != nil {
+			logging.Warn(logCtx, "skipping task record: unsafe or missing agent_id",
+				slog.String("session_id", state.SessionID),
+				slog.String("tool_use_id", record.ToolUseID),
+			)
+			continue
+		}
 
 		payload := cpkg.TaskPayload{
 			ToolUseID:       record.ToolUseID,
@@ -367,6 +374,11 @@ func (s *ManualCommitStrategy) materializeTaskRecords(
 			TokenUsage:      record.TokenUsage,
 			StartedAt:       record.StartedAt,
 			CompletedAt:     record.CompletedAt,
+		}
+		if record.TranscriptUnavailable {
+			payload.TranscriptUnavailableReason = taskTranscriptReasonUnresolvable
+			payloads = append(payloads, payload)
+			continue
 		}
 
 		// Candidate transcript paths, tried in order: the agent-declared path
@@ -384,19 +396,6 @@ func (s *ManualCommitStrategy) materializeTaskRecords(
 		if len(candidates) == 0 {
 			payload.TranscriptUnavailableReason = taskTranscriptReasonUnresolvable
 			payloads = append(payloads, payload)
-			continue
-		}
-
-		// A transcript is about to be read and, if valid, stored as
-		// agent-<agent-id>.jsonl — the agent ID becomes part of that path, so
-		// it must be present and path-safe before going any further. Skip the
-		// WHOLE record rather than merely omitting the transcript: this is
-		// the same "poisoned identifier" shape as the ToolUseID check above.
-		if record.AgentID == "" || validation.ValidateAgentID(record.AgentID) != nil {
-			logging.Warn(logCtx, "skipping task record: unsafe or missing agent_id",
-				slog.String("session_id", state.SessionID),
-				slog.String("tool_use_id", record.ToolUseID),
-			)
 			continue
 		}
 
