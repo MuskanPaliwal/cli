@@ -1407,8 +1407,9 @@ func handleSubagentStopFinal(logCtx context.Context, ag agent.Agent, event *agen
 		// unclaimed skip is either the expected foreground dedup, a duplicate
 		// event, or a misintegrated agent that sets Final without ever
 		// emitting the launch-time marker — worth surfacing over Debug. A
-		// CompletionWithoutLaunch event is the explicit exception handled above.
-		if event.SubagentID != "" || event.SubagentTranscriptPath != "" {
+		// CompletionWithoutLaunch event is an explicit exception: it requires
+		// no launch marker, and duplicate completions are expected.
+		if !event.CompletionWithoutLaunch && (event.SubagentID != "" || event.SubagentTranscriptPath != "") {
 			logging.Warn(logCtx, "no in-flight marker for completed subagent — foreground dedup, a duplicate event, or a misintegrated agent setting Final without launch markers",
 				slog.String("session_id", event.SessionID),
 				slog.String("tool_use_id", event.ToolUseID),
