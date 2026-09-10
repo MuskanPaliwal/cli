@@ -3017,8 +3017,7 @@
           "id",
           "name",
           "region",
-          "createdAt",
-          "capabilities"
+          "createdAt"
         ],
         "type": "object"
       },
@@ -3283,8 +3282,7 @@
           "ownerType",
           "ownerId",
           "region",
-          "createdAt",
-          "capabilities"
+          "createdAt"
         ],
         "type": "object"
       },
@@ -3655,11 +3653,6 @@
             "type": "string"
           },
           "permission": {
-            "enum": [
-              "read",
-              "write",
-              "admin"
-            ],
             "type": "string"
           },
           "placements": {
@@ -3693,8 +3686,6 @@
           "clusterSlug",
           "name",
           "full_name",
-          "org",
-          "provider",
           "visibility",
           "placements"
         ],

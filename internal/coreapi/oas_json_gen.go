@@ -23326,6 +23326,39 @@ func (s *OptOrg) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes OrgCapabilities as json.
+func (o OptOrgCapabilities) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes OrgCapabilities from json.
+func (o *OptOrgCapabilities) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptOrgCapabilities to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptOrgCapabilities) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptOrgCapabilities) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes Project as json.
 func (o OptProject) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -23355,6 +23388,39 @@ func (s OptProject) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptProject) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ProjectCapabilities as json.
+func (o OptProjectCapabilities) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes ProjectCapabilities from json.
+func (o *OptProjectCapabilities) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptProjectCapabilities to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptProjectCapabilities) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptProjectCapabilities) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -23454,39 +23520,6 @@ func (s OptRepoCapabilities) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptRepoCapabilities) UnmarshalJSON(data []byte) error {
-	d := jx.DecodeBytes(data)
-	return s.Decode(d)
-}
-
-// Encode encodes RepoIndexEntryPermission as json.
-func (o OptRepoIndexEntryPermission) Encode(e *jx.Encoder) {
-	if !o.Set {
-		return
-	}
-	e.Str(string(o.Value))
-}
-
-// Decode decodes RepoIndexEntryPermission from json.
-func (o *OptRepoIndexEntryPermission) Decode(d *jx.Decoder) error {
-	if o == nil {
-		return errors.New("invalid: unable to decode OptRepoIndexEntryPermission to nil")
-	}
-	o.Set = true
-	if err := o.Value.Decode(d); err != nil {
-		return err
-	}
-	return nil
-}
-
-// MarshalJSON implements stdjson.Marshaler.
-func (s OptRepoIndexEntryPermission) MarshalJSON() ([]byte, error) {
-	e := jx.Encoder{}
-	s.Encode(&e)
-	return e.Bytes(), nil
-}
-
-// UnmarshalJSON implements stdjson.Unmarshaler.
-func (s *OptRepoIndexEntryPermission) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -23610,8 +23643,10 @@ func (s *Org) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("capabilities")
-		s.Capabilities.Encode(e)
+		if s.Capabilities.Set {
+			e.FieldStart("capabilities")
+			s.Capabilities.Encode(e)
+		}
 	}
 	{
 		e.FieldStart("createdAt")
@@ -23675,8 +23710,8 @@ func (s *Org) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"$schema\"")
 			}
 		case "capabilities":
-			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
+				s.Capabilities.Reset()
 				if err := s.Capabilities.Decode(d); err != nil {
 					return err
 				}
@@ -23763,7 +23798,7 @@ func (s *Org) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00111110,
+		0b00111100,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -25325,8 +25360,10 @@ func (s *Project) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("capabilities")
-		s.Capabilities.Encode(e)
+		if s.Capabilities.Set {
+			e.FieldStart("capabilities")
+			s.Capabilities.Encode(e)
+		}
 	}
 	{
 		e.FieldStart("createdAt")
@@ -25400,8 +25437,8 @@ func (s *Project) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"$schema\"")
 			}
 		case "capabilities":
-			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
+				s.Capabilities.Reset()
 				if err := s.Capabilities.Decode(d); err != nil {
 					return err
 				}
@@ -25510,7 +25547,7 @@ func (s *Project) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
-		0b10111110,
+		0b10111100,
 		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
@@ -28330,8 +28367,10 @@ func (s *RepoIndexEntry) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("org")
-		e.Str(s.Org)
+		if s.Org.Set {
+			e.FieldStart("org")
+			s.Org.Encode(e)
+		}
 	}
 	{
 		if s.Permission.Set {
@@ -28354,8 +28393,10 @@ func (s *RepoIndexEntry) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("provider")
-		e.Str(s.Provider)
+		if s.Provider.Set {
+			e.FieldStart("provider")
+			s.Provider.Encode(e)
+		}
 	}
 	{
 		if s.PushedAt.Set {
@@ -28581,11 +28622,9 @@ func (s *RepoIndexEntry) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"openPrCount\"")
 			}
 		case "org":
-			requiredBitSet[1] |= 1 << 7
 			if err := func() error {
-				v, err := d.Str()
-				s.Org = string(v)
-				if err != nil {
+				s.Org.Reset()
+				if err := s.Org.Decode(d); err != nil {
 					return err
 				}
 				return nil
@@ -28631,11 +28670,9 @@ func (s *RepoIndexEntry) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"primaries\"")
 			}
 		case "provider":
-			requiredBitSet[2] |= 1 << 3
 			if err := func() error {
-				v, err := d.Str()
-				s.Provider = string(v)
-				if err != nil {
+				s.Provider.Reset()
+				if err := s.Provider.Decode(d); err != nil {
 					return err
 				}
 				return nil
@@ -28696,8 +28733,8 @@ func (s *RepoIndexEntry) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [3]uint8{
 		0b10101000,
-		0b10100011,
-		0b01001010,
+		0b00100011,
+		0b01000010,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -28797,48 +28834,6 @@ func (s RepoIndexEntryAdditional) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *RepoIndexEntryAdditional) UnmarshalJSON(data []byte) error {
-	d := jx.DecodeBytes(data)
-	return s.Decode(d)
-}
-
-// Encode encodes RepoIndexEntryPermission as json.
-func (s RepoIndexEntryPermission) Encode(e *jx.Encoder) {
-	e.Str(string(s))
-}
-
-// Decode decodes RepoIndexEntryPermission from json.
-func (s *RepoIndexEntryPermission) Decode(d *jx.Decoder) error {
-	if s == nil {
-		return errors.New("invalid: unable to decode RepoIndexEntryPermission to nil")
-	}
-	v, err := d.StrBytes()
-	if err != nil {
-		return err
-	}
-	// Try to use constant string.
-	switch RepoIndexEntryPermission(v) {
-	case RepoIndexEntryPermissionRead:
-		*s = RepoIndexEntryPermissionRead
-	case RepoIndexEntryPermissionWrite:
-		*s = RepoIndexEntryPermissionWrite
-	case RepoIndexEntryPermissionAdmin:
-		*s = RepoIndexEntryPermissionAdmin
-	default:
-		*s = RepoIndexEntryPermission(v)
-	}
-
-	return nil
-}
-
-// MarshalJSON implements stdjson.Marshaler.
-func (s RepoIndexEntryPermission) MarshalJSON() ([]byte, error) {
-	e := jx.Encoder{}
-	s.Encode(&e)
-	return e.Bytes(), nil
-}
-
-// UnmarshalJSON implements stdjson.Unmarshaler.
-func (s *RepoIndexEntryPermission) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

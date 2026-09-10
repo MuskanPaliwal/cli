@@ -194,7 +194,7 @@ func filterSecurityRequirements(reqs []any) []any {
 var readModelEnumFields = map[string][]string{
 	"Repo":             {"objectFormat", "provider", "state", "visibility"},
 	"RepoIDResolution": {"provider"},
-	"RepoIndexEntry":   {"provider"},
+	"RepoIndexEntry":   {"permission", "provider"},
 	"RepoReference":    {"provider"},
 	"RepoResolution":   {"provider"},
 }
@@ -205,7 +205,10 @@ var readModelEnumFields = map[string][]string{
 // predates the field, or a test fake that omits it, still decodes. A field
 // the CLI starts reading must leave this list.
 var readModelOptionalFields = map[string][]string{
-	"Repo": {"capabilities", "provider"},
+	"Org":            {"capabilities"},
+	"Project":        {"capabilities"},
+	"Repo":           {"capabilities", "provider"},
+	"RepoIndexEntry": {"org", "provider"},
 }
 
 // loosenReadModelRequired removes each field named in readModelOptionalFields

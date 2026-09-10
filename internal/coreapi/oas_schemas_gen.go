@@ -10239,6 +10239,52 @@ func (o OptOrg) Or(d Org) Org {
 	return d
 }
 
+// NewOptOrgCapabilities returns new OptOrgCapabilities with value set to v.
+func NewOptOrgCapabilities(v OrgCapabilities) OptOrgCapabilities {
+	return OptOrgCapabilities{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptOrgCapabilities is optional OrgCapabilities.
+type OptOrgCapabilities struct {
+	Value OrgCapabilities
+	Set   bool
+}
+
+// IsSet returns true if OptOrgCapabilities was set.
+func (o OptOrgCapabilities) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptOrgCapabilities) Reset() {
+	var v OrgCapabilities
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptOrgCapabilities) SetTo(v OrgCapabilities) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptOrgCapabilities) Get() (v OrgCapabilities, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptOrgCapabilities) Or(d OrgCapabilities) OrgCapabilities {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptProject returns new OptProject with value set to v.
 func NewOptProject(v Project) OptProject {
 	return OptProject{
@@ -10279,6 +10325,52 @@ func (o OptProject) Get() (v Project, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptProject) Or(d Project) Project {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptProjectCapabilities returns new OptProjectCapabilities with value set to v.
+func NewOptProjectCapabilities(v ProjectCapabilities) OptProjectCapabilities {
+	return OptProjectCapabilities{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptProjectCapabilities is optional ProjectCapabilities.
+type OptProjectCapabilities struct {
+	Value ProjectCapabilities
+	Set   bool
+}
+
+// IsSet returns true if OptProjectCapabilities was set.
+func (o OptProjectCapabilities) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptProjectCapabilities) Reset() {
+	var v ProjectCapabilities
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptProjectCapabilities) SetTo(v ProjectCapabilities) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptProjectCapabilities) Get() (v ProjectCapabilities, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptProjectCapabilities) Or(d ProjectCapabilities) ProjectCapabilities {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -10417,52 +10509,6 @@ func (o OptRepoCapabilities) Get() (v RepoCapabilities, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptRepoCapabilities) Or(d RepoCapabilities) RepoCapabilities {
-	if v, ok := o.Get(); ok {
-		return v
-	}
-	return d
-}
-
-// NewOptRepoIndexEntryPermission returns new OptRepoIndexEntryPermission with value set to v.
-func NewOptRepoIndexEntryPermission(v RepoIndexEntryPermission) OptRepoIndexEntryPermission {
-	return OptRepoIndexEntryPermission{
-		Value: v,
-		Set:   true,
-	}
-}
-
-// OptRepoIndexEntryPermission is optional RepoIndexEntryPermission.
-type OptRepoIndexEntryPermission struct {
-	Value RepoIndexEntryPermission
-	Set   bool
-}
-
-// IsSet returns true if OptRepoIndexEntryPermission was set.
-func (o OptRepoIndexEntryPermission) IsSet() bool { return o.Set }
-
-// Reset unsets value.
-func (o *OptRepoIndexEntryPermission) Reset() {
-	var v RepoIndexEntryPermission
-	o.Value = v
-	o.Set = false
-}
-
-// SetTo sets value to v.
-func (o *OptRepoIndexEntryPermission) SetTo(v RepoIndexEntryPermission) {
-	o.Set = true
-	o.Value = v
-}
-
-// Get returns value and boolean that denotes whether value was set.
-func (o OptRepoIndexEntryPermission) Get() (v RepoIndexEntryPermission, ok bool) {
-	if !o.Set {
-		return v, false
-	}
-	return o.Value, true
-}
-
-// Or returns value if set, or given parameter if does not.
-func (o OptRepoIndexEntryPermission) Or(d RepoIndexEntryPermission) RepoIndexEntryPermission {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -10610,13 +10656,13 @@ func (o OptURI) Or(d url.URL) url.URL {
 // Ref: #/components/schemas/Org
 type Org struct {
 	// A URL to the JSON Schema for this object.
-	Schema               OptURI          `json:"$schema"`
-	Capabilities         OrgCapabilities `json:"capabilities"`
-	CreatedAt            time.Time       `json:"createdAt"`
-	ID                   string          `json:"id"`
-	Name                 string          `json:"name"`
-	Region               string          `json:"region"`
-	WorkosOrganizationId OptString       `json:"workosOrganizationId"`
+	Schema               OptURI             `json:"$schema"`
+	Capabilities         OptOrgCapabilities `json:"capabilities"`
+	CreatedAt            time.Time          `json:"createdAt"`
+	ID                   string             `json:"id"`
+	Name                 string             `json:"name"`
+	Region               string             `json:"region"`
+	WorkosOrganizationId OptString          `json:"workosOrganizationId"`
 	AdditionalProps      OrgAdditional
 }
 
@@ -10626,7 +10672,7 @@ func (s *Org) GetSchema() OptURI {
 }
 
 // GetCapabilities returns the value of Capabilities.
-func (s *Org) GetCapabilities() OrgCapabilities {
+func (s *Org) GetCapabilities() OptOrgCapabilities {
 	return s.Capabilities
 }
 
@@ -10666,7 +10712,7 @@ func (s *Org) SetSchema(val OptURI) {
 }
 
 // SetCapabilities sets the value of Capabilities.
-func (s *Org) SetCapabilities(val OrgCapabilities) {
+func (s *Org) SetCapabilities(val OptOrgCapabilities) {
 	s.Capabilities = val
 }
 
@@ -11288,15 +11334,15 @@ func (s *PatchRepoCIWebhookInputBodyAdditional) init() PatchRepoCIWebhookInputBo
 // Ref: #/components/schemas/Project
 type Project struct {
 	// A URL to the JSON Schema for this object.
-	Schema          OptURI              `json:"$schema"`
-	Capabilities    ProjectCapabilities `json:"capabilities"`
-	CreatedAt       time.Time           `json:"createdAt"`
-	ID              string              `json:"id"`
-	Name            string              `json:"name"`
-	OwnerId         string              `json:"ownerId"`
-	OwnerName       OptString           `json:"ownerName"`
-	OwnerType       ProjectOwnerType    `json:"ownerType"`
-	Region          string              `json:"region"`
+	Schema          OptURI                 `json:"$schema"`
+	Capabilities    OptProjectCapabilities `json:"capabilities"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name"`
+	OwnerId         string                 `json:"ownerId"`
+	OwnerName       OptString              `json:"ownerName"`
+	OwnerType       ProjectOwnerType       `json:"ownerType"`
+	Region          string                 `json:"region"`
 	AdditionalProps ProjectAdditional
 }
 
@@ -11306,7 +11352,7 @@ func (s *Project) GetSchema() OptURI {
 }
 
 // GetCapabilities returns the value of Capabilities.
-func (s *Project) GetCapabilities() ProjectCapabilities {
+func (s *Project) GetCapabilities() OptProjectCapabilities {
 	return s.Capabilities
 }
 
@@ -11356,7 +11402,7 @@ func (s *Project) SetSchema(val OptURI) {
 }
 
 // SetCapabilities sets the value of Capabilities.
-func (s *Project) SetCapabilities(val ProjectCapabilities) {
+func (s *Project) SetCapabilities(val OptProjectCapabilities) {
 	s.Capabilities = val
 }
 
@@ -12427,20 +12473,20 @@ type RepoIndexEntry struct {
 	FullName    string   `json:"full_name"`
 	ID          string   `json:"id"`
 	// Deprecated: schema marks this property as deprecated.
-	Jurisdiction    string                      `json:"jurisdiction"`
-	Language        OptString                   `json:"language"`
-	LastActivityAt  OptDateTime                 `json:"lastActivityAt"`
-	LastPushedAt    OptDateTime                 `json:"lastPushedAt"`
-	Name            string                      `json:"name"`
-	OpenPrCount     OptInt64                    `json:"openPrCount"`
-	Org             string                      `json:"org"`
-	Permission      OptRepoIndexEntryPermission `json:"permission"`
-	Placements      []RepoPlacement             `json:"placements"`
-	Primaries       OptRepoPrimaries            `json:"primaries"`
-	Provider        string                      `json:"provider"`
-	PushedAt        OptDateTime                 `json:"pushedAt"`
-	Stars           OptInt64                    `json:"stars"`
-	Visibility      string                      `json:"visibility"`
+	Jurisdiction    string           `json:"jurisdiction"`
+	Language        OptString        `json:"language"`
+	LastActivityAt  OptDateTime      `json:"lastActivityAt"`
+	LastPushedAt    OptDateTime      `json:"lastPushedAt"`
+	Name            string           `json:"name"`
+	OpenPrCount     OptInt64         `json:"openPrCount"`
+	Org             OptString        `json:"org"`
+	Permission      OptString        `json:"permission"`
+	Placements      []RepoPlacement  `json:"placements"`
+	Primaries       OptRepoPrimaries `json:"primaries"`
+	Provider        OptString        `json:"provider"`
+	PushedAt        OptDateTime      `json:"pushedAt"`
+	Stars           OptInt64         `json:"stars"`
+	Visibility      string           `json:"visibility"`
 	AdditionalProps RepoIndexEntryAdditional
 }
 
@@ -12520,12 +12566,12 @@ func (s *RepoIndexEntry) GetOpenPrCount() OptInt64 {
 }
 
 // GetOrg returns the value of Org.
-func (s *RepoIndexEntry) GetOrg() string {
+func (s *RepoIndexEntry) GetOrg() OptString {
 	return s.Org
 }
 
 // GetPermission returns the value of Permission.
-func (s *RepoIndexEntry) GetPermission() OptRepoIndexEntryPermission {
+func (s *RepoIndexEntry) GetPermission() OptString {
 	return s.Permission
 }
 
@@ -12540,7 +12586,7 @@ func (s *RepoIndexEntry) GetPrimaries() OptRepoPrimaries {
 }
 
 // GetProvider returns the value of Provider.
-func (s *RepoIndexEntry) GetProvider() string {
+func (s *RepoIndexEntry) GetProvider() OptString {
 	return s.Provider
 }
 
@@ -12640,12 +12686,12 @@ func (s *RepoIndexEntry) SetOpenPrCount(val OptInt64) {
 }
 
 // SetOrg sets the value of Org.
-func (s *RepoIndexEntry) SetOrg(val string) {
+func (s *RepoIndexEntry) SetOrg(val OptString) {
 	s.Org = val
 }
 
 // SetPermission sets the value of Permission.
-func (s *RepoIndexEntry) SetPermission(val OptRepoIndexEntryPermission) {
+func (s *RepoIndexEntry) SetPermission(val OptString) {
 	s.Permission = val
 }
 
@@ -12660,7 +12706,7 @@ func (s *RepoIndexEntry) SetPrimaries(val OptRepoPrimaries) {
 }
 
 // SetProvider sets the value of Provider.
-func (s *RepoIndexEntry) SetProvider(val string) {
+func (s *RepoIndexEntry) SetProvider(val OptString) {
 	s.Provider = val
 }
 
@@ -12693,54 +12739,6 @@ func (s *RepoIndexEntryAdditional) init() RepoIndexEntryAdditional {
 		*s = m
 	}
 	return m
-}
-
-type RepoIndexEntryPermission string
-
-const (
-	RepoIndexEntryPermissionRead  RepoIndexEntryPermission = "read"
-	RepoIndexEntryPermissionWrite RepoIndexEntryPermission = "write"
-	RepoIndexEntryPermissionAdmin RepoIndexEntryPermission = "admin"
-)
-
-// AllValues returns all RepoIndexEntryPermission values.
-func (RepoIndexEntryPermission) AllValues() []RepoIndexEntryPermission {
-	return []RepoIndexEntryPermission{
-		RepoIndexEntryPermissionRead,
-		RepoIndexEntryPermissionWrite,
-		RepoIndexEntryPermissionAdmin,
-	}
-}
-
-// MarshalText implements encoding.TextMarshaler.
-func (s RepoIndexEntryPermission) MarshalText() ([]byte, error) {
-	switch s {
-	case RepoIndexEntryPermissionRead:
-		return []byte(s), nil
-	case RepoIndexEntryPermissionWrite:
-		return []byte(s), nil
-	case RepoIndexEntryPermissionAdmin:
-		return []byte(s), nil
-	default:
-		return nil, errors.Errorf("invalid value: %q", s)
-	}
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler.
-func (s *RepoIndexEntryPermission) UnmarshalText(data []byte) error {
-	switch RepoIndexEntryPermission(data) {
-	case RepoIndexEntryPermissionRead:
-		*s = RepoIndexEntryPermissionRead
-		return nil
-	case RepoIndexEntryPermissionWrite:
-		*s = RepoIndexEntryPermissionWrite
-		return nil
-	case RepoIndexEntryPermissionAdmin:
-		*s = RepoIndexEntryPermissionAdmin
-		return nil
-	default:
-		return errors.Errorf("invalid value: %q", data)
-	}
 }
 
 // Ref: #/components/schemas/RepoPlacement
