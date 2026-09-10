@@ -234,7 +234,7 @@ named `<noun>_group.go` and `<noun>_<verb>.go` respectively.
 
 ## Tech Stack
 
-- Language: Go 1.26.x
+- Language: Go 1.27.x (`go.mod` pins the 1.27.1 minimum)
 - Build tool: mise, go modules
 - Linting: golangci-lint
 
