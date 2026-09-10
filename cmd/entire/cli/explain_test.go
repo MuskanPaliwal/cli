@@ -16,6 +16,11 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -29,10 +34,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/redact"
-	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/stretchr/testify/require"
 )
 
 func TestNewExplainCmd(t *testing.T) {
@@ -636,7 +637,6 @@ func writeTemporaryCheckpointForExplainTest(t *testing.T) string {
 		BaseCommit:        initialCommit.String()[:7],
 		ModifiedFiles:     []string{"temp.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "temporary checkpoint with code changes",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@example.com",
@@ -971,7 +971,14 @@ func TestMaybeCompactExternalTranscriptForSummary_RedactsExternalOutput(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(tmpDir, ".entire", "settings.json"),
-		[]byte(`{"enabled":true,"external_agents":true}`),
+		[]byte(`{"enabled":true}`),
+		0o644,
+	))
+	// external_agents lives in the local file: it grants execution of
+	// entire-agent-* binaries on $PATH, so the loader honors it only there.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.local.json"),
+		[]byte(`{"external_agents":true}`),
 		0o644,
 	))
 
@@ -2203,7 +2210,14 @@ func setupExternalTranscriptExplainRepo(t *testing.T) (*git.Repository, string) 
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(tmpDir, ".entire", "settings.json"),
-		[]byte(`{"enabled":true,"external_agents":true}`),
+		[]byte(`{"enabled":true}`),
+		0o644,
+	))
+	// external_agents lives in the local file: it grants execution of
+	// entire-agent-* binaries on $PATH, so the loader honors it only there.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.local.json"),
+		[]byte(`{"external_agents":true}`),
 		0o644,
 	))
 
@@ -2293,7 +2307,6 @@ func writeExternalTemporaryCheckpointForExplainTest(
 		BaseCommit:        head.Hash().String()[:7],
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "temporary external checkpoint",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@example.com",
@@ -2487,6 +2500,42 @@ func TestFormatTranscriptBytes_PiNativeJSONL(t *testing.T) {
 	require.Contains(t, output, "[User] Review this trail")
 	require.Contains(t, output, "[Assistant] The trail needs two fixes.")
 	require.NotContains(t, output, "(failed to parse transcript)")
+}
+
+func TestFormatTranscriptBytes_SanitizesTerminalSequences(t *testing.T) {
+	t.Parallel()
+
+	// Transcript content is agent and user influenced and is rendered straight
+	// to the reader's terminal, so CSI and OSC sequences must be stripped
+	// whole at this display boundary while tabs and newlines survive.
+	piJSONL := []byte(`{"type":"session","version":3,"id":"pi-session","cwd":"/tmp/repo"}
+{"type":"message","id":"m1","parentId":null,"timestamp":"2026-07-25T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"one \u001b[31mred\u001b[0m\u001b]0;title\u0007 two\tthree\nfour"}]}}
+`)
+
+	output := formatTranscriptBytes(piJSONL, "", agent.AgentTypePi)
+	require.NotContains(t, output, "\x1b")
+	require.NotContains(t, output, "[31m")
+	require.Contains(t, output, "one red two\tthree\nfour")
+}
+
+func TestFormatTranscriptBytes_SanitizesFallbackText(t *testing.T) {
+	t.Parallel()
+
+	output := formatTranscriptBytes(nil, "plain \x1b[31mred\x1b[0m text", agent.AgentTypeClaudeCode)
+	require.Equal(t, "plain red text\n", output)
+}
+
+// The default explain body (stored AI summary, extracted intent) is the same
+// trust class as transcript content, and the non-color path returns the
+// markdown source without a renderer in between, so the sanitizer must be in
+// renderExplainBody itself.
+func TestRenderExplainBody_SanitizesTerminalSequencesOnNonColorPath(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	got := renderExplainBody(&buf, "## Summary\n\nplain \x1b[31mred\x1b[0m\x1b]0;title\x07 text")
+	require.NotContains(t, got, "\x1b")
+	require.Contains(t, got, "plain red text")
 }
 
 func TestRunExplainCheckpoint_FullFallsBackWhenExternalCompactionFails(t *testing.T) {
@@ -3688,7 +3737,6 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "First checkpoint (baseline)",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@test.com",
@@ -3709,7 +3757,6 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
 		MetadataDir:       ".entire/metadata/" + sessionID,
-		MetadataDirAbs:    metadataDir,
 		CommitMessage:     "Second checkpoint with code changes",
 		AuthorName:        "Test",
 		AuthorEmail:       "test@test.com",
@@ -3809,12 +3856,10 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 
 	writeCheckpoints := func(sessionID, worktreeID string) {
 		t.Helper()
-		metaDirAbs := filepath.Join(tmpDir, ".entire", "metadata", sessionID)
 		// Baseline
 		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
-			MetadataDirAbs: metaDirAbs, CommitMessage: "baseline", AuthorName: "Test",
 			AuthorEmail: "test@test.com", IsFirstCheckpoint: true,
 		}); err != nil {
 			t.Fatalf("WriteTemporary baseline error: %v", err)
@@ -3826,7 +3871,6 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
-			MetadataDirAbs: metaDirAbs, CommitMessage: "code changes", AuthorName: "Test",
 			AuthorEmail: "test@test.com", IsFirstCheckpoint: false,
 		}); err != nil {
 			t.Fatalf("WriteTemporary code changes error: %v", err)
@@ -4418,12 +4462,7 @@ func TestRunExplain_SessionFlagFiltersListView(t *testing.T) {
 		{"config", "user.name", "Test User"},
 		{"commit", "--allow-empty", "-m", "init"},
 	} {
-		cmd := exec.CommandContext(context.Background(), "git", args...)
-		cmd.Dir = tmp
-		cmd.Env = testutil.GitIsolatedEnv()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+		testutil.RunGit(t, tmp, args...)
 	}
 	t.Chdir(tmp)
 

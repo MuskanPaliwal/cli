@@ -169,9 +169,9 @@ func (c *ClaudeCodeAgent) WriteSession(_ context.Context, session *agent.AgentSe
 		return errors.New("session has no native data to write")
 	}
 
-	// Write the raw JSONL data
-	if err := os.WriteFile(session.SessionRef, session.NativeData, 0o600); err != nil {
-		return fmt.Errorf("failed to write transcript: %w", err)
+	// Write the raw JSONL data through Claude Code's own session store.
+	if err := agent.WriteSessionFile(c, session, session.NativeData, 0o600); err != nil {
+		return fmt.Errorf("write transcript: %w", err)
 	}
 
 	return nil
@@ -312,3 +312,9 @@ func (c *ClaudeCodeAgent) LaunchCmd(ctx context.Context, initialPrompt string) (
 	cmd.Env = os.Environ()
 	return cmd, nil
 }
+
+// CallerSessionEnvVar names the variable holding the session ID Claude Code
+// publishes into the environment of the processes it spawns. A nested session
+// gets its own ID rather than its parent's, so this names the session actually
+// running the caller.
+func (c *ClaudeCodeAgent) CallerSessionEnvVar() string { return "CLAUDE_CODE_SESSION_ID" }

@@ -142,8 +142,8 @@ func (c *CopilotCLIAgent) WriteSession(_ context.Context, session *agent.AgentSe
 		return errors.New("session has no native data to write")
 	}
 
-	if err := os.WriteFile(session.SessionRef, session.NativeData, 0o600); err != nil {
-		return fmt.Errorf("failed to write transcript: %w", err)
+	if err := agent.WriteSessionFile(c, session, session.NativeData, 0o600); err != nil {
+		return fmt.Errorf("write transcript: %w", err)
 	}
 
 	return nil
@@ -176,3 +176,8 @@ func (c *CopilotCLIAgent) ChunkTranscript(_ context.Context, content []byte, max
 func (c *CopilotCLIAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
 	return agent.ReassembleJSONL(chunks), nil
 }
+
+// CallerSessionEnvVar names the variable holding the session ID Copilot CLI
+// publishes into the environment of the processes it spawns — the same ID that
+// names the session's directory under Copilot's session-state store.
+func (c *CopilotCLIAgent) CallerSessionEnvVar() string { return "COPILOT_AGENT_SESSION_ID" }

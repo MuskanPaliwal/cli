@@ -246,7 +246,10 @@ func TestParseHookEvent_UnknownTurnRolloutPreservesRootLifecycle(t *testing.T) {
 				pathJSON = `"` + rolloutPath + `"`
 			}
 			logDir := t.TempDir()
-			logger, err := logging.New(logging.Config{Dir: logDir, Level: slog.LevelDebug})
+			logger, err := logging.New(logging.Config{
+				Root: func() (*os.Root, error) { return os.OpenRoot(logDir) },
+				Dir:  "logs", Level: slog.LevelDebug,
+			})
 			require.NoError(t, err)
 			ctx := logging.WithLogger(context.Background(), logger)
 			input := `{"session_id":"root-session-1","turn_id":"turn-1","transcript_path":` + pathJSON + `,"model":"gpt-5","prompt":"do work"}`
@@ -265,7 +268,7 @@ func TestParseHookEvent_UnknownTurnRolloutPreservesRootLifecycle(t *testing.T) {
 			}
 			require.NoError(t, logger.Close())
 
-			logData, err := os.ReadFile(filepath.Join(logDir, "entire.log"))
+			logData, err := os.ReadFile(filepath.Join(logDir, "logs", "entire.log"))
 			require.NoError(t, err)
 			logText := string(logData)
 			require.Contains(t, logText, "codex: preserved root lifecycle event because rollout ownership is unverified")

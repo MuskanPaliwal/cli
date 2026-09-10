@@ -1781,28 +1781,16 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 	env.T.Helper()
 
-	ctx := env.T.Context()
-
 	bareDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(bareDir); err == nil {
 		bareDir = resolved
 	}
 
 	// Initialize bare repo
-	cmd := exec.CommandContext(ctx, "git", "init", "--bare")
-	cmd.Dir = bareDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to init bare repo: %v\n%s", err, output)
-	}
+	testutil.RunGit(env.T, bareDir, "init", "--bare")
 
 	// Add as remote
-	cmd = exec.CommandContext(ctx, "git", "remote", "add", remoteName, bareDir)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to add remote %s: %v\n%s", remoteName, err, output)
-	}
+	testutil.RunGit(env.T, env.RepoDir, "remote", "add", remoteName, bareDir)
 
 	env.setGitConfigBaseline()
 
@@ -1814,8 +1802,6 @@ func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 // The clone checks out the same branch as the current env's HEAD.
 func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 	env.T.Helper()
-
-	ctx := env.T.Context()
 
 	cloneDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(cloneDir); err == nil {
@@ -1833,11 +1819,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 		cloneArgs = append(cloneArgs, "--branch", currentBranch)
 	}
 	cloneArgs = append(cloneArgs, bareDir, cloneDir)
-	cmd := exec.CommandContext(ctx, "git", cloneArgs...)
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to clone from %s: %v\n%s", bareDir, err, output)
-	}
+	testutil.RunGit(env.T, "", cloneArgs...)
 
 	// Configure git user (clone doesn't inherit local config from the bare repo)
 	for _, kv := range [][2]string{
@@ -1845,12 +1827,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 		{"user.email", "test@example.com"},
 		{"commit.gpgsign", "false"},
 	} {
-		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
-		cmd.Dir = cloneDir
-		cmd.Env = testutil.GitIsolatedEnv()
-		if output, err := cmd.CombinedOutput(); err != nil {
-			env.T.Fatalf("failed to set git config %s: %v\n%s", kv[0], err, output)
-		}
+		testutil.RunGit(env.T, cloneDir, "config", kv[0], kv[1])
 	}
 
 	claudeProjectDir := env.T.TempDir()

@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 	"sort"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/tuiutil"
 )
 
 const DefaultProfileName = "general"
@@ -113,6 +113,33 @@ func selectReviewProfile(s *settings.EntireSettings, override string) (string, s
 		return "", settings.ReviewProfileConfig{}, fmt.Errorf("review profile %q has no configured agents", name)
 	}
 	return name, cfg, nil
+}
+
+// notifyDroppedReviewPrompts reports review prompt fields the settings loader
+// dropped as untrusted (see settings.enforceAgentPromptTrust), scoped to the
+// profile about to run plus the legacy review map it may have been built from.
+// Without the notice, a configured per-agent preamble that silently stops
+// applying is indistinguishable from one nobody wrote. The field path embeds
+// profile and worker names from the settings file, so it goes through the
+// shared single-line display sanitizer.
+func notifyDroppedReviewPrompts(w io.Writer, s *settings.EntireSettings, profileName string) {
+	for _, rej := range s.AgentPromptRejections() {
+		if !strings.HasPrefix(rej.Field, "review_profiles."+profileName+".") &&
+			!strings.HasPrefix(rej.Field, "review.") {
+			continue
+		}
+		// A dropped task that matches the built-in text for this profile name
+		// changes nothing: profileTask falls back to exactly that text. The
+		// non-interactive first-run setup persists the built-in task into the
+		// project file, so without this check every default setup would be
+		// nagged about a drop with no effect.
+		if rej.Field == "review_profiles."+profileName+".task" &&
+			strings.TrimSpace(rej.Value) == profileTask(profileName, settings.ReviewProfileConfig{}) {
+			continue
+		}
+		fmt.Fprintf(w, "Note: %s is configured but not applied: %s. Set it in .entire/settings.local.json or clone-local review preferences to use it.\n",
+			tuiutil.SanitizeDisplayText(rej.Field), rej.Reason)
+	}
 }
 
 func applyLegacyReviewProfileFallback(s *settings.EntireSettings) {
@@ -568,16 +595,9 @@ func writeRawReviewProfiles(path string, raw map[string]json.RawMessage, profile
 		}
 		raw["review_default_profile"] = defJSON
 	}
-	// SaveProjectRaw writes the given path atomically (temp file + rename in the
-	// same dir) but does not create the directory, so ensure .entire/ exists
-	// for repos that haven't been enabled yet.
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return fmt.Errorf("create settings dir %s: %w", dir, err)
-		}
-	}
 	// SaveProjectRaw is path-generic despite the name, so it also serves the
-	// local settings file.
+	// local settings file. It writes through the shared .entire root and creates
+	// the directory, so a repo that has not been enabled yet needs nothing here.
 	if err := settings.SaveProjectRaw(path, raw); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

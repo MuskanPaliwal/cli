@@ -673,8 +673,8 @@ func (c *CodexAgent) WriteSession(_ context.Context, session *agent.AgentSession
 	}
 
 	dataToWrite := SanitizePortableTranscript(session.NativeData)
-	if err := os.WriteFile(session.SessionRef, dataToWrite, 0o600); err != nil {
-		return fmt.Errorf("failed to write transcript: %w", err)
+	if err := agent.WriteSessionFile(c, session, dataToWrite, 0o600); err != nil {
+		return fmt.Errorf("write transcript: %w", err)
 	}
 
 	return nil
@@ -760,3 +760,12 @@ func findRolloutBySessionID(codexHome, agentSessionID string) string {
 
 	return ""
 }
+
+// CallerSessionEnvVar names the variable holding the session ID Codex
+// publishes into the environment of the processes it spawns.
+//
+// Codex publishes two IDs and this is the root-session identity, shared by
+// every descendant thread — the one session state is keyed on. CODEX_THREAD_ID
+// is deliberately unused: it follows forks and subagent threads, so it names a
+// transcript file rather than a session.
+func (c *CodexAgent) CallerSessionEnvVar() string { return "CODEX_SESSION_ID" }
