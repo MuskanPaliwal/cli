@@ -353,6 +353,17 @@ type checkpointSyncInfo struct {
 	Source string
 	// Err is the fail-closed misconfiguration message from the resolver.
 	Err string
+	// ReadFallback is the remote checkpoint READS fall open to when the
+	// election failed, so Err is set and nothing was elected. Deliberately
+	// not folded into Remote: that field means "the elected remote", and on
+	// this path there is none — reporting a fallback there would misstate
+	// checkpoint_sync_remote to JSON consumers.
+	//
+	// Populated only while pushing is disabled, where status is the sole
+	// surface naming the read source. With pushing enabled the headline is
+	// the broken setting and the user's next move is to fix it, so that
+	// output is left as it was.
+	ReadFallback string
 	// Unpushed approximates checkpoints not yet on the sync destination; 0
 	// when none, when counting failed, or when the count would be a lie
 	// (dedicated URL mode on the git-branch backend).
@@ -378,6 +389,14 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		// data even while this fail-closed warning is shown, since there is no
 		// elected remote left to probe PushURL against here.
 		info.Err = err.Error()
+		// Reads fail OPEN where the election failed closed (see
+		// strategy.CheckpointReadRemotes), so something may still be serving
+		// them. Asked of the resolver rather than reproducing its fallback
+		// rule here; it re-runs the election, which is why this is on the
+		// error path only, and it stays local-only like the rest of status.
+		if info.PushDisabled {
+			info.ReadFallback = strategy.LeadCheckpointReadRemote(ctx)
+		}
 		return info
 	}
 	if elected.Name == "" {
@@ -470,6 +489,14 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 		// pushed: name the misconfiguration without claiming a lost sync.
 		if info.PushDisabled {
 			b.WriteString(sty.render(sty.yellow, "  ! Checkpoint remote configuration: "+info.Err))
+			// Same label as the resolved case — to the reader it is one
+			// question, "where do checkpoints come from" — with the suffix
+			// saying this one was not chosen, it was fallen back to.
+			if info.ReadFallback != "" {
+				b.WriteString(destination)
+				b.WriteString(sty.render(sty.cyan, info.ReadFallback))
+				b.WriteString(sty.render(sty.dim, " (fallback; nothing was elected)"))
+			}
 		} else {
 			b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
 		}
@@ -926,7 +953,12 @@ type statusJSON struct {
 	CheckpointSyncRemote       string `json:"checkpoint_sync_remote,omitempty"`
 	CheckpointSyncRemoteSource string `json:"checkpoint_sync_remote_source,omitempty"` // config|observed|default|sole|first|dedicated
 	CheckpointSyncError        string `json:"checkpoint_sync_error,omitempty"`         // fail-closed message
-	UnpushedCheckpoints        int    `json:"unpushed_checkpoints,omitempty"`
+	// CheckpointReadFallback is the remote reads fall open to when the
+	// election failed (checkpoint_sync_error is then set and
+	// checkpoint_sync_remote is absent, because nothing was elected). Emitted
+	// only alongside checkpoint_push_disabled.
+	CheckpointReadFallback string `json:"checkpoint_read_fallback,omitempty"`
+	UnpushedCheckpoints    int    `json:"unpushed_checkpoints,omitempty"`
 	// CheckpointRemoteIgnored/-Reason report a configured checkpoint_remote the
 	// ownership check rejected as inherited with the clone (reads and pushes
 	// fall back to the elected remote). Mirrors the text path's warning line.
@@ -1020,6 +1052,7 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		result.CheckpointSyncRemote = syncInfo.Remote
 		result.CheckpointSyncRemoteSource = syncInfo.Source
 		result.CheckpointSyncError = syncInfo.Err
+		result.CheckpointReadFallback = syncInfo.ReadFallback
 		result.UnpushedCheckpoints = syncInfo.Unpushed
 		result.CheckpointRemoteIgnored = syncInfo.IgnoredRemote
 		result.CheckpointRemoteIgnoredReason = syncInfo.IgnoredReason

@@ -423,11 +423,12 @@ func TestMultiPushURL_DestinationNoteSurfaces(t *testing.T) {
 				})
 			},
 			want: []string{
-				"2 remotes", "single elected remote", "entire status",
+				// One string proving the note still renders its body; the
+				// case above already covers that body in full.
+				"single elected remote",
 				"Automatic checkpoint pushing is disabled (push_sessions=false)",
 				// Substrings must not straddle the note's line wrapping.
 				"they would go if you re-enabled it",
-				"checkpoints are read from meanwhile",
 			},
 			absent: []string{
 				"checkpoints are waiting for it",
