@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -23,6 +24,8 @@ const (
 	protectionLevelProtected = "protected"
 	protectionLevelMergeOnly = "server-side merge only"
 	protectionEmpty          = "Nothing is protected yet."
+	protectionMirrorNote     = "GitHub mirror: branch protection is governed by the upstream repository. " +
+		"Its default branch is always protected on Entire; no rules can be added here."
 	// headBranchPattern is the server's pattern for "whatever branch HEAD
 	// points at"; it follows a default-branch rename.
 	headBranchPattern = "HEAD"
@@ -89,16 +92,35 @@ func newRepoProtectionListCmd() *cobra.Command {
 		Short: "Show a repository's branch-protection rules",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreList(cmd, protectionEmpty, protectionColumns, protectionRow, func(ctx context.Context, c *coreapi.Client) ([]branchRule, error) {
+			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				repoID, err := resolveRepoRef(ctx, c, args[0], project)
 				if err != nil {
-					return nil, err
+					return err
+				}
+				repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
+				if err != nil {
+					return err
 				}
 				out, err := c.GetBranchProtection(ctx, coreapi.GetBranchProtectionParams{RepoId: repoID})
 				if err != nil {
-					return nil, err
+					return err
 				}
-				return branchRulesFromWire(out), nil
+				rules := branchRulesFromWire(out)
+				if jsonRequested(cmd) {
+					return printJSON(cmd.OutOrStdout(), rules)
+				}
+				if len(rules) == 0 {
+					// A GitHub mirror always reads as empty: its rules are the
+					// upstream's, and the data plane protects its default branch
+					// regardless. "Nothing is protected" would misstate both.
+					if repo.Provider.Or("") == providerGitHub {
+						fmt.Fprintln(cmd.OutOrStdout(), protectionMirrorNote)
+						return nil
+					}
+					fmt.Fprintln(cmd.OutOrStdout(), protectionEmpty)
+					return nil
+				}
+				return printTable(cmd.OutOrStdout(), protectionColumns, rules, protectionRow)
 			})
 		},
 	}

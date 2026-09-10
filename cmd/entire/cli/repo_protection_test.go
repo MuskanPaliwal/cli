@@ -48,13 +48,25 @@ func TestProtectionRow(t *testing.T) {
 // applies PATCH bodies with the server's upsert-by-ref rule so a test sees the
 // same resulting list the real core would return.
 type fakeProtectionServer struct {
-	mu      sync.Mutex
-	rules   []coreapi.BranchRule
-	patches []coreapi.UpdateBranchProtectionInputBody
+	mu       sync.Mutex
+	provider string // the repo's provider as GET /repos/{id} reports it
+	rules    []coreapi.BranchRule
+	patches  []coreapi.UpdateBranchProtectionInputBody
 }
 
 func (f *fakeProtectionServer) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/"+testProtectionRepoULID {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if err := printJSON(w, &coreapi.Repo{
+				ID: testProtectionRepoULID, Name: "web", OwningProjectId: testProjectULID,
+				Provider: coreapi.NewOptString(f.provider),
+			}); err != nil {
+				t.Errorf("encode repo response: %v", err)
+			}
+			return
+		}
 		if r.URL.Path != "/api/v1/repos/"+testProtectionRepoULID+"/branch-protection" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -129,7 +141,7 @@ func (f *fakeProtectionServer) apply(body coreapi.UpdateBranchProtectionInputBod
 // Not parallel: swaps the package-level activeCoreClient seam.
 func newProtectionFixture(t *testing.T, rules ...coreapi.BranchRule) *fakeProtectionServer {
 	t.Helper()
-	fake := &fakeProtectionServer{rules: rules}
+	fake := &fakeProtectionServer{provider: "entire", rules: rules}
 	srv := httptest.NewServer(fake.handler(t))
 	t.Cleanup(srv.Close)
 	prev := activeCoreClient
@@ -168,6 +180,21 @@ func TestRepoProtection_ListEmpty(t *testing.T) {
 	out, err = execRepoProtection(t, "list", testProtectionRepoULID, "--json")
 	require.NoError(t, err)
 	assert.Equal(t, "[]", strings.TrimSpace(out), "an empty list is a JSON array, not null")
+}
+
+// A GitHub mirror reads as empty from core, but "nothing is protected" would
+// misstate it: its default branch is always protected and its rules are the
+// upstream's. --json keeps the plain array for scripts.
+func TestRepoProtection_ListOnMirrorExplains(t *testing.T) {
+	fake := newProtectionFixture(t)
+	fake.provider = providerGitHub
+	out, err := execRepoProtection(t, "list", testProtectionRepoULID)
+	require.NoError(t, err)
+	assert.Equal(t, protectionMirrorNote+"\n", out)
+
+	out, err = execRepoProtection(t, "list", testProtectionRepoULID, "--json")
+	require.NoError(t, err)
+	assert.Equal(t, "[]", strings.TrimSpace(out))
 }
 
 func TestRepoProtection_ListShowsLevels(t *testing.T) {
