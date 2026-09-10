@@ -97,36 +97,61 @@ func newRepoProtectionListCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
-				if err != nil {
-					return err
-				}
 				out, err := c.GetBranchProtection(ctx, coreapi.GetBranchProtectionParams{RepoId: repoID})
 				if err != nil {
 					return err
 				}
 				rules := branchRulesFromWire(out)
-				if jsonRequested(cmd) {
-					return printJSON(cmd.OutOrStdout(), rules)
-				}
-				if len(rules) == 0 {
-					// A GitHub mirror always reads as empty: its rules are the
-					// upstream's, and the data plane protects its default branch
-					// regardless. "Nothing is protected" would misstate both.
-					if repo.Provider.Or("") == providerGitHub {
-						fmt.Fprintln(cmd.OutOrStdout(), protectionMirrorNote)
-						return nil
+				if len(rules) > 0 {
+					// Only the empty list needs the repo's provider, so the
+					// common case costs one round trip rather than two.
+					if jsonRequested(cmd) {
+						return printJSON(cmd.OutOrStdout(), rules)
 					}
-					fmt.Fprintln(cmd.OutOrStdout(), protectionEmpty)
-					return nil
+					return printTable(cmd.OutOrStdout(), protectionColumns, rules, protectionRow)
 				}
-				return printTable(cmd.OutOrStdout(), protectionColumns, rules, protectionRow)
+				return reportNoProtectionRules(ctx, cmd, c, repoID)
 			})
 		},
 	}
 	bindRepoProjectFlag(cmd, &project)
 	addJSONFlag(cmd)
 	return cmd
+}
+
+// reportNoProtectionRules renders an empty rule list. A GitHub mirror always
+// reads as empty — its rules are the upstream's, and the data plane protects
+// its default branch regardless — so "nothing is protected" would misstate
+// both, and the caller is told which kind of empty this is.
+//
+// The caveat reaches --json callers too, on stderr: stdout stays the bare
+// array a script parses, but a script concluding "no rules ⇒ nothing is
+// protected" is wrong on a mirror, which is the misreading the note exists to
+// prevent. That makes the note advisory for --json and load-bearing for the
+// human rendering, so a failed provider lookup is fatal only to the latter —
+// the branch-protection answer is already in hand, and a script must not lose
+// its array because a secondary lookup flaked.
+func reportNoProtectionRules(ctx context.Context, cmd *cobra.Command, c *coreapi.Client, repoID string) error {
+	mirror := false
+	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
+	switch {
+	case err != nil && !jsonRequested(cmd):
+		return err
+	case err == nil:
+		mirror = repo.Provider.Or("") == repoProviderGitHub
+	}
+	if jsonRequested(cmd) {
+		if mirror {
+			fmt.Fprintln(cmd.ErrOrStderr(), protectionMirrorNote)
+		}
+		return printJSON(cmd.OutOrStdout(), []branchRule{})
+	}
+	if mirror {
+		fmt.Fprintln(cmd.OutOrStdout(), protectionMirrorNote)
+		return nil
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), protectionEmpty)
+	return nil
 }
 
 func newRepoProtectionAddCmd() *cobra.Command {

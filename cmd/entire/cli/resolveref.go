@@ -23,9 +23,21 @@ import (
 // providerGitHub is the identity-provider slug for GitHub-backed accounts, the
 // provider half of a qualified grantee handle like "github:alice". GitHub is the
 // only provider with backing accounts today; other slugs resolve once they exist
-// server-side. (Distinct from setup.go's checkpointProviderGitHub, which names
-// the checkpoint hosting provider — same string, unrelated concern.)
+// server-side.
+//
+// Three unrelated concerns spell GitHub the same way, and each keeps its own
+// constant so a rename upstream moves one of them rather than all three: this
+// one (which account provider backs a grantee), repoProviderGitHub below (which
+// forge backs a repository), and setup.go's checkpointProviderGitHub (which
+// service hosts a repo's checkpoints).
 const providerGitHub = "github"
+
+// repoProviderGitHub is the value of a repository's `provider` field when the
+// repo is a GitHub mirror rather than Entire-native; the wire enum is
+// "github" | "entire". It answers "which forge backs this repo", which is a
+// different question from providerGitHub's "which provider backs this account"
+// — see the note there.
+const repoProviderGitHub = "github"
 
 // projectRefClient and repoRefClient are the narrow control-plane surfaces the
 // name resolvers need. Keeping the helpers on interfaces lets repo-scoped

@@ -52,11 +52,18 @@ type fakeProtectionServer struct {
 	provider string // the repo's provider as GET /repos/{id} reports it
 	rules    []coreapi.BranchRule
 	patches  []coreapi.UpdateBranchProtectionInputBody
+	// repoGets counts GET /repos/{id}. Only the empty-list rendering needs
+	// the provider, so every other path must leave this at zero — see
+	// TestRepoProtection_LooksUpTheRepoOnlyForAnEmptyList.
+	repoGets int
 }
 
 func (f *fakeProtectionServer) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/"+testProtectionRepoULID {
+			f.mu.Lock()
+			f.repoGets++
+			f.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			if err := printJSON(w, &coreapi.Repo{
@@ -160,6 +167,12 @@ func rulesView(rs []coreapi.BranchRule) []branchRule {
 
 func execRepoProtection(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()
+	stdout, _, err = execRepoProtectionBothStreams(t, args...)
+	return stdout, err
+}
+
+func execRepoProtectionBothStreams(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	parent := &cobra.Command{Use: "repo"}
 	addControlPlaneFlags(parent)
 	parent.AddCommand(newRepoProtectionCmd())
@@ -168,7 +181,7 @@ func execRepoProtection(t *testing.T, args ...string) (stdout string, err error)
 	parent.SetErr(&errOut)
 	parent.SetArgs(append([]string{"protection"}, args...))
 	err = parent.ExecuteContext(t.Context())
-	return out.String(), err
+	return out.String(), errOut.String(), err
 }
 
 func TestRepoProtection_ListEmpty(t *testing.T) {
@@ -184,17 +197,42 @@ func TestRepoProtection_ListEmpty(t *testing.T) {
 
 // A GitHub mirror reads as empty from core, but "nothing is protected" would
 // misstate it: its default branch is always protected and its rules are the
-// upstream's. --json keeps the plain array for scripts.
+// upstream's. --json keeps the plain array on stdout so a script still parses
+// it, and puts the caveat on stderr — a script concluding "no rules ⇒ nothing
+// is protected" is wrong on a mirror, which is what the note exists to say.
 func TestRepoProtection_ListOnMirrorExplains(t *testing.T) {
 	fake := newProtectionFixture(t)
-	fake.provider = providerGitHub
+	fake.provider = repoProviderGitHub
 	out, err := execRepoProtection(t, "list", testProtectionRepoULID)
 	require.NoError(t, err)
 	assert.Equal(t, protectionMirrorNote+"\n", out)
 
-	out, err = execRepoProtection(t, "list", testProtectionRepoULID, "--json")
+	out, errOut, err := execRepoProtectionBothStreams(t, "list", testProtectionRepoULID, "--json")
 	require.NoError(t, err)
-	assert.Equal(t, "[]", strings.TrimSpace(out))
+	assert.Equal(t, "[]", strings.TrimSpace(out), "stdout stays a bare array")
+	assert.Equal(t, protectionMirrorNote+"\n", errOut, "the caveat reaches --json callers on stderr")
+}
+
+// The provider is needed only to render an empty list, so a list that has
+// rules — and a --json render of one — costs a single round trip. A repo
+// lookup here would also be a second way for `list` to fail after the
+// branch-protection answer is already in hand.
+func TestRepoProtection_LooksUpTheRepoOnlyForAnEmptyList(t *testing.T) {
+	fake := newProtectionFixture(t, coreapi.BranchRule{Ref: "HEAD"})
+
+	_, err := execRepoProtection(t, "list", testProtectionRepoULID)
+	require.NoError(t, err)
+	_, err = execRepoProtection(t, "list", testProtectionRepoULID, "--json")
+	require.NoError(t, err)
+	assert.Zero(t, fake.repoGets, "a non-empty list must not fetch the repo")
+
+	_, err = execRepoProtection(t, "remove", testProtectionRepoULID, "HEAD")
+	require.NoError(t, err)
+	assert.Zero(t, fake.repoGets, "add/remove render their own result and never need the provider")
+
+	_, err = execRepoProtection(t, "list", testProtectionRepoULID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fake.repoGets, "the empty rendering is the one branch that needs it")
 }
 
 func TestRepoProtection_ListShowsLevels(t *testing.T) {
