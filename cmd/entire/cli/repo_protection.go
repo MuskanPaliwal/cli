@@ -23,9 +23,19 @@ var protectionColumns = []string{"BRANCH", "LEVEL"}
 const (
 	protectionLevelProtected = "protected"
 	protectionLevelMergeOnly = "server-side merge only"
-	protectionEmpty          = "Nothing is protected yet."
-	protectionMirrorNote     = "GitHub mirror: branch protection is governed by the upstream repository. " +
+	// protectionEmpty asserts that nothing protects this repository, so it
+	// is printed only for a provider positively known to be Entire-native.
+	protectionEmpty      = "Nothing is protected yet."
+	protectionMirrorNote = "GitHub mirror: branch protection is governed by the upstream repository. " +
 		"Its default branch is always protected on Entire; no rules can be added here."
+	// protectionUnknownNote covers every empty list whose provider was not
+	// established: absent (an older core), a value this build does not know
+	// (a forge added later), or a lookup that failed. Each of those is
+	// "we could not find out", which is not the same as "nothing is
+	// protected" — see reportNoProtectionRules.
+	protectionUnknownNote = "No branch-protection rules are set here on Entire. This repository's " +
+		"provider could not be determined, so whether protection is governed elsewhere is unknown; " +
+		"a mirror's rules are its upstream's."
 	// headBranchPattern is the server's pattern for "whatever branch HEAD
 	// points at"; it follows a default-branch rename.
 	headBranchPattern = "HEAD"
@@ -119,38 +129,53 @@ func newRepoProtectionListCmd() *cobra.Command {
 	return cmd
 }
 
-// reportNoProtectionRules renders an empty rule list. A GitHub mirror always
-// reads as empty — its rules are the upstream's, and the data plane protects
-// its default branch regardless — so "nothing is protected" would misstate
-// both, and the caller is told which kind of empty this is.
+// reportNoProtectionRules renders an empty rule list, naming which kind of
+// empty it is. A GitHub mirror always reads as empty — its rules are the
+// upstream's, and the data plane protects its default branch regardless — so
+// "nothing is protected" would misstate it.
+//
+// All three outcomes are identified positively, and "native" is not the else
+// of "mirror". `provider` is optional (an older core omits it) and open
+// (`readModelEnumFields` drops its enum, so a forge added later decodes
+// verbatim), and in JSON mode the lookup may fail outright. Every one of
+// those is "we could not find out", which is not evidence that nothing is
+// protected — treating it as such is how an unqualified "Nothing is
+// protected yet." would come to hide a mirror's upstream rules. Only
+// repoProviderEntire earns that sentence; everything else gets
+// protectionUnknownNote.
 //
 // The caveat reaches --json callers too, on stderr: stdout stays the bare
 // array a script parses, but a script concluding "no rules ⇒ nothing is
-// protected" is wrong on a mirror, which is the misreading the note exists to
-// prevent. That makes the note advisory for --json and load-bearing for the
-// human rendering, so a failed provider lookup is fatal only to the latter —
-// the branch-protection answer is already in hand, and a script must not lose
-// its array because a secondary lookup flaked.
+// protected" is wrong on a mirror, which is the misreading the note exists
+// to prevent. That makes the note advisory for --json and load-bearing for
+// the human rendering, so a failed provider lookup is fatal only to the
+// latter — the branch-protection answer is already in hand, and a script
+// must not lose its array because a secondary lookup flaked. It is still
+// told, with the reason, rather than handed a silent [].
 func reportNoProtectionRules(ctx context.Context, cmd *cobra.Command, c *coreapi.Client, repoID string) error {
-	mirror := false
+	note := protectionUnknownNote
 	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
 	switch {
-	case err != nil && !jsonRequested(cmd):
-		return err
-	case err == nil:
-		mirror = repo.Provider.Or("") == repoProviderGitHub
+	case err != nil:
+		if !jsonRequested(cmd) {
+			return err
+		}
+		note = fmt.Sprintf("%s (looking it up failed: %v)", protectionUnknownNote, err)
+	case repo.Provider.Or("") == repoProviderGitHub:
+		note = protectionMirrorNote
+	case repo.Provider.Or("") == repoProviderEntire:
+		note = "" // the one case that positively establishes "native".
 	}
 	if jsonRequested(cmd) {
-		if mirror {
-			fmt.Fprintln(cmd.ErrOrStderr(), protectionMirrorNote)
+		if note != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), note)
 		}
 		return printJSON(cmd.OutOrStdout(), []branchRule{})
 	}
-	if mirror {
-		fmt.Fprintln(cmd.OutOrStdout(), protectionMirrorNote)
-		return nil
+	if note == "" {
+		note = protectionEmpty
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), protectionEmpty)
+	fmt.Fprintln(cmd.OutOrStdout(), note)
 	return nil
 }
 
@@ -173,6 +198,10 @@ func newRepoProtectionAddCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return err
 			}
+			// protectionEmpty asserts the repo is native, which list has to
+			// establish but this verb gets for free: add and remove share one
+			// PATCH, the server refuses it on a mirror, so reaching the render
+			// at all means the write landed on a repo that accepts rules.
 			return runCoreList(cmd, protectionEmpty, protectionColumns, protectionRow, func(ctx context.Context, c *coreapi.Client) ([]branchRule, error) {
 				repoID, err := resolveRepoRef(ctx, c, args[0], project)
 				if err != nil {
@@ -211,6 +240,10 @@ func newRepoProtectionRemoveCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return err
 			}
+			// protectionEmpty asserts the repo is native, which list has to
+			// establish but this verb gets for free: add and remove share one
+			// PATCH, the server refuses it on a mirror, so reaching the render
+			// at all means the write landed on a repo that accepts rules.
 			return runCoreList(cmd, protectionEmpty, protectionColumns, protectionRow, func(ctx context.Context, c *coreapi.Client) ([]branchRule, error) {
 				repoID, err := resolveRepoRef(ctx, c, args[0], project)
 				if err != nil {

@@ -56,6 +56,9 @@ type fakeProtectionServer struct {
 	// the provider, so every other path must leave this at zero — see
 	// TestRepoProtection_LooksUpTheRepoOnlyForAnEmptyList.
 	repoGets int
+	// repoGetFails makes GET /repos/{id} 500, so the empty rendering has to
+	// cope with never learning the provider at all.
+	repoGetFails bool
 }
 
 func (f *fakeProtectionServer) handler(t *testing.T) http.HandlerFunc {
@@ -63,13 +66,23 @@ func (f *fakeProtectionServer) handler(t *testing.T) http.HandlerFunc {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/"+testProtectionRepoULID {
 			f.mu.Lock()
 			f.repoGets++
+			fails, provider := f.repoGetFails, f.provider
 			f.mu.Unlock()
+			if fails {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			if err := printJSON(w, &coreapi.Repo{
+			repo := &coreapi.Repo{
 				ID: testProtectionRepoULID, Name: "web", OwningProjectId: testProjectULID,
-				Provider: coreapi.NewOptString(f.provider),
-			}); err != nil {
+			}
+			// An empty provider stands in for a core that predates the
+			// field: it must be absent from the body, not sent as "".
+			if provider != "" {
+				repo.Provider = coreapi.NewOptString(provider)
+			}
+			if err := printJSON(w, repo); err != nil {
 				t.Errorf("encode repo response: %v", err)
 			}
 			return
@@ -148,7 +161,7 @@ func (f *fakeProtectionServer) apply(body coreapi.UpdateBranchProtectionInputBod
 // Not parallel: swaps the package-level activeCoreClient seam.
 func newProtectionFixture(t *testing.T, rules ...coreapi.BranchRule) *fakeProtectionServer {
 	t.Helper()
-	fake := &fakeProtectionServer{provider: "entire", rules: rules}
+	fake := &fakeProtectionServer{provider: repoProviderEntire, rules: rules}
 	srv := httptest.NewServer(fake.handler(t))
 	t.Cleanup(srv.Close)
 	prev := activeCoreClient
@@ -298,4 +311,58 @@ func TestRepoProtection_NameNeedsProject(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--project")
 	assert.Empty(t, fake.patches)
+}
+
+// "Nothing is protected yet." asserts that nothing protects this repository,
+// so it needs the provider to be positively "entire". `provider` is optional
+// (an older core omits it) and open (its enum is stripped, so a forge added
+// later decodes verbatim), and the lookup can fail outright — each of those
+// is "we could not find out", and answering it with the native sentence is
+// how an empty list would come to hide a mirror's upstream rules.
+func TestRepoProtection_EmptyListNeedsAPositivelyNativeProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider string
+		getFails bool
+		want     string
+	}{
+		{name: "native", provider: repoProviderEntire, want: protectionEmpty},
+		{name: "mirror", provider: repoProviderGitHub, want: protectionMirrorNote},
+		{name: "absent", provider: "", want: protectionUnknownNote},
+		{name: "unknown forge", provider: "gitlab", want: protectionUnknownNote},
+		{name: "lookup failed", provider: repoProviderEntire, getFails: true, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newProtectionFixture(t)
+			fake.provider = tc.provider
+			fake.repoGetFails = tc.getFails
+
+			out, err := execRepoProtection(t, "list", testProtectionRepoULID)
+			if tc.getFails {
+				// The note is load-bearing for the human rendering, so a
+				// provider we could not read is an error rather than a
+				// sentence that might be wrong.
+				require.Error(t, err, "a failed lookup must not be rendered as an answer")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want+"\n", out)
+			}
+
+			// --json keeps stdout a bare array either way, and puts whatever
+			// qualification applies on stderr — including the reason the
+			// provider is unknown, rather than a silent [].
+			out, errOut, err := execRepoProtectionBothStreams(t, "list", testProtectionRepoULID, "--json")
+			require.NoError(t, err, "a script must not lose its array to a secondary lookup")
+			assert.Equal(t, "[]", strings.TrimSpace(out))
+			switch {
+			case tc.getFails:
+				assert.Contains(t, errOut, protectionUnknownNote)
+				assert.Contains(t, errOut, "looking it up failed", "the reason is reported, not just the doubt")
+			case tc.want == protectionEmpty:
+				assert.Empty(t, errOut, "a positively native repo needs no qualification")
+			default:
+				assert.Equal(t, tc.want+"\n", errOut)
+			}
+		})
+	}
 }

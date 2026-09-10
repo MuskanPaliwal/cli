@@ -32,12 +32,18 @@ import (
 // service hosts a repo's checkpoints).
 const providerGitHub = "github"
 
-// repoProviderGitHub is the value of a repository's `provider` field when the
-// repo is a GitHub mirror rather than Entire-native; the wire enum is
-// "github" | "entire". It answers "which forge backs this repo", which is a
-// different question from providerGitHub's "which provider backs this account"
-// — see the note there.
-const repoProviderGitHub = "github"
+// repoProviderGitHub and repoProviderEntire are the values of a repository's
+// `provider` field; the wire enum is "github" | "entire". They answer "which
+// forge backs this repo", which is a different question from providerGitHub's
+// "which provider backs this account" — see the note there.
+//
+// The field is optional and open on the client (normalize.go drops it from
+// `required` and strips its enum), so a caller must test for the value it
+// wants and treat everything else as unknown rather than as the other one.
+const (
+	repoProviderGitHub = "github"
+	repoProviderEntire = "entire"
+)
 
 // projectRefClient and repoRefClient are the narrow control-plane surfaces the
 // name resolvers need. Keeping the helpers on interfaces lets repo-scoped

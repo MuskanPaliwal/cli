@@ -65,11 +65,13 @@ sends them, then tighten.
 **Workaround:** `spec/normalize.go` (`loosenReadModelRequired`, allowlist
 `readModelOptionalFields`) drops the listed fields from `required`. The new
 `provider` and `RepoIndexEntry.permission` enums are also in
-`readModelEnumFields`, since the CLI displays them or tests a single value
-and treats every other as "not that one" (`repo protection list` compares
-`Repo.provider` against `"github"`). Remove an entry when the CLI needs the
-field to be *present* to be correct — reading it through its `Opt` accessor
-with a safe default is not that.
+`readModelEnumFields`, since the CLI displays them or tests for the values it
+knows and treats everything else as unknown (`repo protection list` tests
+`Repo.provider` for `"github"` and `"entire"` separately, with a third
+rendering for anything else — an absent or unrecognized provider must not
+fall into either known value's branch). Remove an entry when the CLI needs
+the field to be *present* to be correct — reading it through its `Opt`
+accessor with a safe default is not that.
 
 Locked in by `TestListRepos_UnsentRequiredReadFieldsDecode` and
 `TestListOrgsAndProjects_UnsentCapabilitiesDecode` in `client_test.go`.

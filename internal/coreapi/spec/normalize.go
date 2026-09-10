@@ -28,11 +28,12 @@
 // readModelEnumFields). ogen turns an enum field into a named type with a
 // strict Validate() that the response decoder calls unconditionally, so a
 // single unknown value the server adds later (a new repo state, say) fails
-// the whole list/get request. These fields are display-only on the client —
-// nothing branches on them — so we model them as open strings: unknown
-// values decode and print verbatim instead of aborting the request. Only
-// response read models are loosened; request-body enums stay strict so we
-// still reject a bad value we are about to send.
+// the whole list/get request. The client treats these as open sets rather
+// than closed ones — it prints them, or tests for the values it knows and
+// treats everything else as unknown — so we model them as open strings:
+// unknown values decode and pass through instead of aborting the request.
+// Only response read models are loosened; request-body enums stay strict so
+// we still reject a bad value we are about to send.
 //
 // Transform 2b (forward- and backward-compat, non-load-bearing read-model
 // fields): drop selected fields from a read model's "required" list (see
@@ -223,13 +224,14 @@ func filterSecurityRequirements(reqs []any) ([]any, error) {
 // readModelEnumFields lists the response read-model schema fields whose
 // "enum" constraint is dropped by loosenReadModelEnums, keyed by component
 // schema name. The client treats these as open sets: it prints them, or
-// tests one value and treats every other as "not that one", so a value the
-// server adds later must pass through rather than fail the whole request in
-// ogen's Validate(). Repo.provider is the branching case — `repo protection
-// list` compares it against "github" and any other value, known or not,
-// simply is not a mirror. A field whose *unknown* values the CLI would have
-// to handle differently does not belong here; it belongs in a switch with an
-// explicit default.
+// tests for the specific values it knows and treats everything else as
+// unknown, so a value the server adds later must pass through rather than
+// fail the whole request in ogen's Validate(). Repo.provider is the
+// branching case — `repo protection list` tests for "github" and "entire"
+// separately and has a third rendering for anything else, because each of
+// its two known values licenses a different claim and neither is the else
+// of the other. A field whose unknown values would silently take a known
+// value's branch does not belong here.
 //
 // Only response read models belong here. Request-body schemas (e.g.
 // SetRepoVisibilityInputBody) keep their enums so we still reject a bad
