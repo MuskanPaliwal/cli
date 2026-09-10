@@ -51,6 +51,39 @@ loosened; request-body enums stay strict. Locked in by
 `TestListProjectRepos_UnknownEnumValuesPassThrough` in `client_test.go`.
 Retire the allowlist entries as upstream loosens the corresponding fields.
 
+## 2b. New read-model fields ship as `required`
+
+**Symptom:** `Repo.provider` and `Repo.capabilities` were added as
+`required`. ogen's decoder then fails the whole response when a field is
+absent, so a core that predates the field, or a mixed-version roll, breaks
+every `repo list` and repo-get call in a client that never reads either
+field.
+
+**Fix upstream:** add read-model fields as optional until every deployment
+sends them, then tighten.
+
+**Workaround:** `spec/normalize.go` (`loosenReadModelRequired`, allowlist
+`readModelOptionalFields`) drops the listed fields from `required`.
+`Repo.provider` is also in `readModelEnumFields`, since it is a display-only
+enum. Remove an entry when the CLI starts reading the field.
+
+## 3. Every operation advertises the interactive login schemes
+
+**Symptom:** the spec lists four security alternatives on every operation
+(`oauth2`, `oidc`, `bearerAuth`, `sessionAuth`). `oauth2` and `oidc`
+describe how a browser or device obtains a token; a client that already
+holds a bearer never drives them. ogen has no generator for `openIdConnect`
+and aborts on it, so the spec cannot be consumed as published.
+
+**Fix upstream:** advertise `oauth2`/`oidc` in `components.securitySchemes`
+for documentation, but list only `bearerAuth` and `sessionAuth` as the
+per-operation requirements, since those are what a request actually carries.
+
+**Workaround:** `spec/normalize.go` (`dropInteractiveSecurity`,
+`interactiveSecuritySchemes`) removes the two schemes from the components
+and from every security list, so the generated `SecuritySource` keeps the
+`BearerAuth` and `SessionAuth` methods the client implements.
+
 <!-- Resolved upstream and removed:
   - Nullable arrays (`"type": ["array","null"]`) — entiredb now emits
     non-nullable arrays (`"type": "array"`, absent ⇒ `[]`), so the

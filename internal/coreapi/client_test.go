@@ -263,8 +263,9 @@ func TestListProjectRepos_UnknownEnumValuesPassThrough(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		// Values the current spec's enums did NOT allow.
-		if _, err := w.Write([]byte(`{"repos":[{"id":"01H000000000000000000000A1","owningProjectId":"01H000000000000000000000P1","name":"demo","state":"archiving","visibility":"internal","objectFormat":"sha512"}]}`)); err != nil {
+		// Values the current spec's enums did NOT allow, and no
+		// "capabilities": a required-but-unread field must not be needed.
+		if _, err := w.Write([]byte(`{"repos":[{"id":"01H000000000000000000000A1","owningProjectId":"01H000000000000000000000P1","name":"demo","state":"archiving","visibility":"internal","objectFormat":"sha512","provider":"gitlab"}]}`)); err != nil {
 			t.Errorf("writing test response: %v", err)
 		}
 	}))
