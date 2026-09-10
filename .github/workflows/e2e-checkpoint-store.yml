@@ -27,6 +27,10 @@ on:
           - git-branch
           - git-refs
 
+# Deny by default: matrix-setup needs no token at all, and the job that does
+# declares exactly what it uses.
+permissions: {}
+
 jobs:
   # Build the agent matrix dynamically: a single selected agent, or all of them
   # when the input is left empty.

@@ -14,6 +14,11 @@ on:
         required: true
         default: "TestInteractiveMultiStep"
 
+# Least privilege: the single job only checks out the repository. The agent API
+# keys it needs are repository secrets, not GITHUB_TOKEN scopes.
+permissions:
+  contents: read
+
 jobs:
   e2e-isolated:
     runs-on: ubuntu-latest
