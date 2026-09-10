@@ -338,11 +338,11 @@ type checkpointSyncInfo struct {
 	// It suppresses nothing else in this struct, because nothing else is a
 	// push promise. The elected remote stays the checkpoint READ source
 	// (strategy.CheckpointReadRemotesWithElection never consults
-	// push_sessions), the unpushed count is the only signal that local-only
-	// checkpoint data is accumulating, and the remote-configuration
-	// diagnostics explain read behavior too. Disabling uploads therefore
-	// changes how the renderers PHRASE these fields, not whether they are
-	// populated — see writeCheckpointSyncLines.
+	// push_sessions), the unpushed count is the only signal that checkpoint
+	// data is not reaching the elected destination, and the
+	// remote-configuration diagnostics explain read behavior too. Disabling
+	// uploads therefore changes how the renderers PHRASE these fields, not
+	// whether they are populated — see writeCheckpointSyncLines.
 	PushDisabled bool
 	// Remote is the elected git remote name, or the org/repo slug in
 	// dedicated checkpoint_remote mode. Empty when nothing resolved (no
@@ -455,6 +455,12 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 	if info.PushDisabled {
 		b.WriteString("\n  Automatic checkpoint pushing: disabled")
 		b.WriteString(sty.render(sty.dim, " (push_sessions=false)"))
+		// Names the remote reads resolve to FIRST, not the whole chain:
+		// CheckpointReadRemotes also appends origin as a legacy tier when it
+		// is configured and is not already the elected remote. Rendering the
+		// chain would mean either restating its rule here (which then drifts
+		// from the resolver) or a second election call, and the label does
+		// not claim exclusivity — "read from", never "only".
 		destination = "\n  Checkpoints read from: "
 	}
 	switch {
@@ -501,9 +507,16 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 // mode has no git remote to name (and only reaches here on the git-refs
 // backend), so it drops the remote-name phrasing.
 //
-// With pushing disabled the count is not pending anything, so it says what the
-// number actually is — local-only checkpoint data, which keeps growing because
-// push_sessions gates pushing and not checkpoint creation.
+// With pushing disabled the count is not pending anything, so the future tense
+// goes — but the phrasing must not overclaim in the other direction either.
+// Unpushed is measured against the ELECTED destination only (a tracking-ref
+// comparison on git-branch, the push queue on git-refs), which says nothing
+// about whether these checkpoints reached some other remote earlier; the read
+// chain's legacy origin tier is exactly that case, and stale tracking state
+// over-reports too. So it says what the number supports — not on that one
+// destination — and never that the data exists nowhere else. Getting this
+// backwards would falsely reassure someone asking whether checkpoint data has
+// left the machine.
 func formatUnpushedCheckpointsLine(info checkpointSyncInfo) string {
 	noun := "checkpoints"
 	pronoun := "they sync"
@@ -512,7 +525,10 @@ func formatUnpushedCheckpointsLine(info checkpointSyncInfo) string {
 		pronoun = "it syncs"
 	}
 	if info.PushDisabled {
-		return fmt.Sprintf("%d %s stored locally only", info.Unpushed, noun)
+		if info.Source == checkpointSyncSourceDedicated {
+			return fmt.Sprintf("%d %s not pushed to the checkpoint remote", info.Unpushed, noun)
+		}
+		return fmt.Sprintf("%d %s not on %s", info.Unpushed, noun, info.Remote)
 	}
 	if info.Source == checkpointSyncSourceDedicated {
 		return fmt.Sprintf("%d %s not yet pushed", info.Unpushed, noun)
@@ -898,9 +914,11 @@ type statusJSON struct {
 	//
 	// No other field is omitted or suppressed when it is set: read it as
 	// requalifying the fields below rather than removing them.
-	// CheckpointSyncRemote is then the remote checkpoints are READ from,
-	// UnpushedCheckpoints counts checkpoint data held only locally, and the
-	// error and ignored-remote diagnostics apply to reads as well.
+	// CheckpointSyncRemote is then the remote checkpoints are READ from, and
+	// the error and ignored-remote diagnostics apply to reads as well.
+	// UnpushedCheckpoints keeps its own meaning either way: checkpoints not
+	// present on THAT destination, which is not a claim that they exist
+	// nowhere else.
 	CheckpointPushDisabled bool `json:"checkpoint_push_disabled,omitempty"`
 	// CheckpointSyncRemote is the elected checkpoint sync remote name, or the
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named

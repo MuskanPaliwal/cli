@@ -2370,7 +2370,7 @@ func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool,
 }
 
 // Not parallel: setupTestRepo changes CWD and isolates process environment.
-func TestRunStatus_CheckpointPushDisabledNamesReadSourceAndLocalCount(t *testing.T) {
+func TestRunStatus_CheckpointPushDisabledNamesReadSourceAndCount(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)
 	writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false}}`)
@@ -2380,17 +2380,25 @@ func TestRunStatus_CheckpointPushDisabledNamesReadSourceAndLocalCount(t *testing
 
 	// With pushing off, status is the only surface naming where checkpoint
 	// reads resolve (CheckpointReadRemotesWithElection never consults
-	// push_sessions) and the only one reporting that checkpoint data is
-	// piling up locally — push_sessions gates pushing, not checkpoint
+	// push_sessions) and the only one reporting that checkpoint data is not
+	// reaching the destination — push_sessions gates pushing, not checkpoint
 	// creation. Both must be phrased without promising a push.
 	var text bytes.Buffer
 	if err := runStatus(t.Context(), &text, false, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("status output:\n%s", text.String())
-	for _, want := range []string{"Checkpoints read from: origin", "1 checkpoint stored locally only"} {
+	for _, want := range []string{"Checkpoints read from: origin", "1 checkpoint not on origin"} {
 		if !strings.Contains(text.String(), want) {
 			t.Errorf("missing %q: %s", want, text.String())
+		}
+	}
+	// The count compares against the elected destination only, so it must not
+	// be phrased as proof the data exists nowhere else — a false reassurance
+	// about checkpoint data having left the machine.
+	for _, unwanted := range []string{"stored locally only", "local only", "only locally"} {
+		if strings.Contains(text.String(), unwanted) {
+			t.Errorf("count must not claim local-only storage (%q): %s", unwanted, text.String())
 		}
 	}
 
@@ -2403,7 +2411,7 @@ func TestRunStatus_CheckpointPushDisabledNamesReadSourceAndLocalCount(t *testing
 		t.Fatal(err)
 	}
 	if string(result["checkpoint_sync_remote"]) != `"origin"` || string(result["unpushed_checkpoints"]) != "1" {
-		t.Errorf("disabled pushing dropped read destination or local-only count: %s", jsonOut.String())
+		t.Errorf("disabled pushing dropped read destination or unpushed count: %s", jsonOut.String())
 	}
 }
 
@@ -2467,8 +2475,8 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 				if !info.PushDisabled || info.Remote != tc.wantRemote || info.Source != tc.wantSource {
 					t.Errorf("disabled pushing must still resolve the read destination %q/%q: %+v", tc.wantRemote, tc.wantSource, info)
 				}
-				// The counter is the only signal that local-only checkpoint
-				// data is accumulating, so it survives disabled pushing
+				// The counter is the only signal that checkpoint data is not
+				// reaching the destination, so it survives disabled pushing
 				// wherever it is meaningful at all. Dedicated URL mode on
 				// git-branch has no tracking ref to compare against and stays
 				// uncounted, as it does with pushing enabled.
