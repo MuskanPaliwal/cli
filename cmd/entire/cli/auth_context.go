@@ -139,44 +139,20 @@ func selectContextToUse(cmd *cobra.Command) (string, error) {
 	return selected, nil
 }
 
-// contextPickerTable lays the saved contexts out as the same aligned
-// CONTEXT/HANDLE/LOGIN SERVER columns `entire auth contexts` prints, returning
-// the header line and one option per context (valued by name, which is what
-// SetCurrentContext takes).
+// contextPickerTable lays the saved contexts out as the picker's rows: the
+// same table `entire auth contexts` prints, built by contextTableLines, with
+// each row valued by context name (which is what SetCurrentContext takes).
 //
 // The header is returned separately because it is not selectable: it goes in
-// the field description, above the options. Both are indented by
-// selectOptionIndent so the columns line up with the option text rather than
-// with huh's cursor.
+// the field description, above the options, indented by selectOptionIndent so
+// the columns line up with the option text rather than with huh's cursor.
 //
-// The active context is marked "(active)" in a trailing column rather than
-// with the table's leading "*". Two markers in the same place would read as
-// one: huh's "> " cursor already occupies the leading column and it *moves*,
-// while "(active)" states which context is in use — so the row you happen to
-// be sitting on would otherwise look like the current one.
-//
-// Labels carry no styling of their own. huh renders each row through its
-// selected/unselected option style, and a color embedded here would fight
-// that; the table's header/value styles are deliberately left to the
-// non-interactive listing.
+// Rows carry no styling. huh renders each through its selected/unselected
+// option style, and a color embedded here would fight it — so the styles go in
+// unset, which authTableStyles already treats as "render plain text".
 func contextPickerTable(all []*contexts.Context, current string) (string, []huh.Option[string]) {
-	header := []string{"CONTEXT", "HANDLE", "LOGIN SERVER", ""}
+	lines := contextTableLines(authTableStyles{}, all, current)
 
-	rows := make([][]string, 0, len(all))
-	for _, c := range all {
-		marker := ""
-		if c.Name == current {
-			marker = "(active)"
-		}
-		rows = append(rows, []string{
-			c.Name,
-			orDash(c.Handle),
-			orDash(c.CoreURL),
-			marker,
-		})
-	}
-
-	lines := alignTableLines(header, rows)
 	options := make([]huh.Option[string], 0, len(all))
 	for i, c := range all {
 		options = append(options, huh.NewOption(lines[i+1], c.Name))
@@ -248,35 +224,56 @@ func runAuthContexts(w io.Writer) error {
 	return nil
 }
 
-// renderContextsTable prints the saved login contexts as a styled, aligned
-// table with column headers. The active context is flagged with "*" in the
-// leading column. Purely local data — no network, no timestamps — so it
-// reuses the auth-table styles but only the header/name/value/accent slots.
-func renderContextsTable(w io.Writer, all []*contexts.Context, current string) {
-	sty := newAuthTableStyles(w)
+// activeContextMarker flags the context in use. It sits in a trailing column
+// in both the listing and the picker, rather than as a leading "*": huh draws
+// its cursor in the leading column and the cursor *moves*, so a marker there
+// would make whichever row you are sitting on read as the current one. The
+// listing follows the picker so the two render identically, and so the word
+// matches the one shell completion already appends.
+const activeContextMarker = "(active)"
 
+// contextTableLines lays the saved contexts out in aligned CONTEXT / HANDLE /
+// LOGIN SERVER columns, with activeContextMarker in a trailing column on the
+// context in use, and returns the header line followed by one line per
+// context.
+//
+// One function because `entire auth contexts` and the `entire auth use` picker
+// print the same table; they differ only in styling, and sty carries that. An
+// unset authTableStyles renders every cell plain, which is what the picker
+// passes.
+func contextTableLines(sty authTableStyles, all []*contexts.Context, current string) []string {
 	header := []string{
-		"", // active marker
 		sty.render(sty.header, "CONTEXT"),
 		sty.render(sty.header, "HANDLE"),
 		sty.render(sty.header, "LOGIN SERVER"),
+		"", // the marker column heads itself
 	}
 
 	rows := make([][]string, 0, len(all))
 	for _, c := range all {
-		marker := " "
+		marker := ""
 		name := sty.render(sty.value, c.Name)
 		if c.Name == current {
-			marker = sty.render(sty.id, "*")
+			marker = sty.render(sty.id, activeContextMarker)
 			name = sty.render(sty.name, c.Name)
 		}
 		rows = append(rows, []string{
-			marker,
 			name,
 			sty.render(sty.value, orDash(c.Handle)),
 			sty.render(sty.value, orDash(c.CoreURL)),
+			marker,
 		})
 	}
 
-	renderAlignedTable(w, header, rows)
+	return alignTableLines(header, rows)
+}
+
+// renderContextsTable prints the saved login contexts as a styled, aligned
+// table with column headers. Purely local data — no network, no timestamps —
+// so it reuses the auth-table styles but only the header/name/value/accent
+// slots.
+func renderContextsTable(w io.Writer, all []*contexts.Context, current string) {
+	for _, line := range contextTableLines(newAuthTableStyles(w), all, current) {
+		fmt.Fprintln(w, line)
+	}
 }

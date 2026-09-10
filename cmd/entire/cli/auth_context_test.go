@@ -181,8 +181,8 @@ func TestRunAuthContexts(t *testing.T) {
 			t.Fatalf("listing = %q, want column header %q", got, hdr)
 		}
 	}
-	if !strings.Contains(got, "*") {
-		t.Fatalf("listing = %q, want an active-context marker", got)
+	if !strings.Contains(got, activeContextMarker) {
+		t.Fatalf("listing = %q, want the active context flagged %q", got, activeContextMarker)
 	}
 	if !strings.Contains(got, "core.example.com") {
 		t.Fatalf("listing = %q, want context core.example.com", got)
@@ -485,6 +485,42 @@ func TestContextPickerTable_ColumnsAlign(t *testing.T) {
 		got := columnOffsets(opt.Key)
 		if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 			t.Errorf("row %q starts columns at %v, want the header's %v", opt.Key, got, want)
+		}
+	}
+}
+
+// TestContextTableMatchesPicker pins what one builder buys: `entire auth
+// contexts` and the `entire auth use` picker print the same table, down to the
+// column widths and the trailing "(active)". A column added to one cannot go
+// missing from the other, and the marker cannot drift back to two spellings.
+// The picker's rows are indented by huh's cursor gutter; nothing else differs.
+func TestContextTableMatchesPicker(t *testing.T) {
+	t.Parallel()
+
+	all := []*contexts.Context{
+		{Name: "prod", Handle: "alice", CoreURL: "https://core-a.example.com"},
+		{Name: "staging", Handle: "bob", CoreURL: "https://a-much-longer-login-server.example.com"},
+		{Name: "bare"},
+	}
+
+	// A bytes.Buffer is not a terminal, so the listing renders unstyled — the
+	// only difference the picker's rows would otherwise have.
+	var listing bytes.Buffer
+	renderContextsTable(&listing, all, "staging")
+	want := strings.Split(strings.TrimRight(listing.String(), "\n"), "\n")
+
+	header, options := contextPickerTable(all, "staging")
+	got := []string{strings.TrimPrefix(header, selectOptionIndent)}
+	for _, opt := range options {
+		got = append(got, opt.Key)
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("picker rendered %d lines, listing %d:\npicker:  %q\nlisting: %q", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d:\npicker  = %q\nlisting = %q", i, got[i], want[i])
 		}
 	}
 }
