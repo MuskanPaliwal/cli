@@ -567,7 +567,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	} else {
 		// Refill only the subagent total the recompute dropped. Runs after
 		// applyBackfilledSessionTokenUsage, which needs the usage without it.
-		sessionData.TokenUsage = withSubagentTokensFrom(sessionData.TokenUsage, state.CheckpointTokenUsage)
+		sessionData.TokenUsage = fillMissingSubagentTokensFrom(sessionData.TokenUsage, state.CheckpointTokenUsage)
 	}
 
 	// Backfill the model from the transcript for agents that don't report it via
@@ -1126,36 +1126,37 @@ func hasTokenUsageData(usage *agent.TokenUsage) bool {
 	return hasTokenUsageData(usage.SubagentTokens)
 }
 
-// withSubagentTokensFrom fills usage's SubagentTokens from src when usage has none
-// of its own, returning a copy. It exists because the transcript recompute runs
-// with subagentsDir="" and so always yields a nil SubagentTokens (see
-// extractSessionData), which would otherwise replace a total already computed.
+// fillMissingSubagentTokensFrom fills destination's SubagentTokens from source
+// only when destination has none, returning a copy. It exists because the
+// transcript recompute runs with subagentsDir="" and so always yields nil
+// SubagentTokens (see extractSessionData), which would otherwise replace a total
+// already computed.
 //
 // Condensation sources the fill from state.CheckpointTokenUsage, which SaveStep
 // already rescoped to this window, so committed checkpoints stay summable rather
 // than each re-reporting the session total. It copies rather than mutating a
 // value that session state may also reference.
-func withSubagentTokensFrom(usage, src *agent.TokenUsage) *agent.TokenUsage {
-	if usage == nil || usage.SubagentTokens != nil || src == nil || src.SubagentTokens == nil {
-		return usage
+func fillMissingSubagentTokensFrom(destination, source *agent.TokenUsage) *agent.TokenUsage {
+	if destination == nil || destination.SubagentTokens != nil || source == nil || source.SubagentTokens == nil {
+		return destination
 	}
-	filled := *usage
-	filled.SubagentTokens = src.SubagentTokens
+	filled := *destination
+	filled.SubagentTokens = source.SubagentTokens
 	return &filled
 }
 
-// withCumulativeSubagentTokensFrom replaces usage's nested total with src's.
-// Session state needs the latest cumulative snapshot even when checkpointUsage
+// replaceSubagentTokensFrom replaces destination's nested total with source's.
+// Session state needs the latest cumulative snapshot even when checkpoint usage
 // carries a baseline-scoped delta; checkpoint metadata keeps the delta.
-func withCumulativeSubagentTokensFrom(usage, src *agent.TokenUsage) *agent.TokenUsage {
-	if src == nil || src.SubagentTokens == nil {
-		return usage
+func replaceSubagentTokensFrom(destination, source *agent.TokenUsage) *agent.TokenUsage {
+	if source == nil || source.SubagentTokens == nil {
+		return destination
 	}
-	if usage == nil {
-		usage = &agent.TokenUsage{}
+	if destination == nil {
+		destination = &agent.TokenUsage{}
 	}
-	filled := *usage
-	filled.SubagentTokens = src.SubagentTokens
+	filled := *destination
+	filled.SubagentTokens = source.SubagentTokens
 	return &filled
 }
 
@@ -1166,7 +1167,7 @@ func withCumulativeSubagentTokensFrom(usage, src *agent.TokenUsage) *agent.Token
 // resetCheckpointWindow captures the next window's baseline from
 // state.TokenUsage.SubagentTokens after CondenseSession returns, so letting the
 // backfill drop it would make the baseline nil and the next checkpoint re-report
-// the full cumulative subagent total. withCumulativeSubagentTokensFrom therefore
+// the full cumulative subagent total. replaceSubagentTokensFrom therefore
 // replaces the backfill's nested value from state without mutating checkpointUsage,
 // which remains the checkpoint-scoped value written to metadata.
 func applyBackfilledSessionTokenUsage(ctx context.Context, ag agent.Agent, state *SessionState, transcript []byte, checkpointUsage *agent.TokenUsage) {
@@ -1174,7 +1175,7 @@ func applyBackfilledSessionTokenUsage(ctx context.Context, ag agent.Agent, state
 	if backfillUsage == nil {
 		return
 	}
-	state.TokenUsage = withCumulativeSubagentTokensFrom(backfillUsage, state.TokenUsage)
+	state.TokenUsage = replaceSubagentTokensFrom(backfillUsage, state.TokenUsage)
 }
 
 // sessionStateBackfillTokenUsage returns the best session-level token usage to
@@ -1471,7 +1472,7 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 		// condensation for a subagent-heavy session — and would still yield a
 		// cumulative snapshot needing the same rescoping SaveStep already did.
 		// CondenseSession fills the already-rescoped window total in instead;
-		// see withSubagentTokensFrom.
+		// see fillMissingSubagentTokensFrom.
 		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, checkpointTranscriptStart, "")
 		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, 0)
 	}
@@ -1480,7 +1481,8 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 }
 
 // extractSessionDataFromLiveTranscript extracts session data directly from the live transcript file.
-// This is used for mid-session commits where no shadow branch exists yet.
+// This is used for mid-session commits when no shadow branch resolves. That is
+// usually before SaveStep, but can also be a recovery path for stale state.
 func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.Context, state *SessionState) (*ExtractedSessionData, error) {
 	data := &ExtractedSessionData{}
 
@@ -1531,7 +1533,7 @@ func calculateLiveTranscriptTokenUsage(
 	state *SessionState,
 	transcriptPath string,
 ) *agent.TokenUsage {
-	subagentsDir := liveSubagentsDir(ag, transcriptPath, state.SessionID)
+	subagentsDir := liveSubagentsDir(ag, state, transcriptPath)
 	usage := agent.CalculateTokenUsage(ctx, ag, transcript, state.CheckpointTranscriptStart, subagentsDir)
 	if usage == nil || usage.SubagentTokens == nil {
 		return usage
@@ -1540,23 +1542,37 @@ func calculateLiveTranscriptTokenUsage(
 	// Keep the cumulative value on session state so resetCheckpointWindow can
 	// advance the baseline after this condensation. Only the returned checkpoint
 	// value is scoped against the prior baseline.
-	state.TokenUsage = withCumulativeSubagentTokensFrom(state.TokenUsage, usage)
+	state.TokenUsage = replaceSubagentTokensFrom(state.TokenUsage, usage)
 	scoped := *usage
 	scoped.SubagentTokens = types.SubtractTokenUsage(usage.SubagentTokens, state.SubagentTokensBaseline)
+	if !hasTokenUsageData(scoped.SubagentTokens) {
+		// A zero delta is absence, not a checkpoint subagent total. Keeping an
+		// all-zero pointer would both change the JSON shape and prevent the normal
+		// SaveStep-computed window delta from filling this value later.
+		scoped.SubagentTokens = nil
+	}
 	return &scoped
 }
 
-func liveSubagentsDir(ag agent.Agent, transcriptPath, sessionID string) string {
+func liveSubagentsDir(ag agent.Agent, state *SessionState, transcriptPath string) string {
+	if state.SessionID == "" || (state.CheckpointTokenUsage != nil && state.CheckpointTokenUsage.SubagentTokens != nil) {
+		return ""
+	}
+	if _, ok := agent.AsSubagentAwareExtractor(ag); !ok {
+		return ""
+	}
+
 	sessionDir := filepath.Dir(transcriptPath)
-	subagentsDir := paths.SubagentsDir(sessionDir, sessionID)
+	subagentsDir := paths.SubagentsDir(sessionDir, state.SessionID)
 	store, err := agent.OpenSessionStoreAt(ag, sessionDir)
 	if err != nil {
 		return ""
 	}
 	name, err := store.Name(subagentsDir)
-	if err != nil || !store.Exists(name) {
-		// Preserve CalculateTokenUsage's cheap main-transcript-only path for the
-		// common case where the agent created no subagent directory.
+	if err != nil || !store.IsDir(name) {
+		// Preserve CalculateTokenUsage's cheap main-transcript-only path when no
+		// real subagent directory exists. Refuse symlinked path components rather
+		// than sending an agent or plugin to read through one.
 		return ""
 	}
 	return subagentsDir
