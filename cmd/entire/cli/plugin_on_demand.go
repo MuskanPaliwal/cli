@@ -14,6 +14,21 @@ import (
 var onDemandPluginInstall = runRemoteInstall
 
 func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name string) (string, error) {
+	// The plugin may already be in the managed directory and merely
+	// unreachable through PATH: a local-dev symlink whose target moved, or a
+	// managed bin dir that could not be prepended at startup. Offering to
+	// install over it is a dead end — installRepoAtTag refuses an existing
+	// install without --force, so the user answers Yes, waits for three
+	// network round-trips and gets "already installed; use --force to
+	// replace". Execute the managed entry instead, which is what this
+	// function's own return contract promises below.
+	//
+	// A listing error falls through to the install rather than failing here:
+	// the install path reads the same directory and reports the problem in
+	// terms of what it was trying to do.
+	if installed, err := FindInstalledPlugin(name); err == nil && installed != nil {
+		return installed.Path, nil
+	}
 	if !interactive.CanPromptInteractively() {
 		return "", fmt.Errorf("the entire-%s plugin is not installed; run 'entire plugin install %s' and retry", name, name)
 	}

@@ -541,7 +541,11 @@ manifest upgrades need; local-dev symlink installs are skipped. Plugins
 installed with --pin are skipped until reinstalled without the pin.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			// Upgrading does the same network work as installing — list tags,
+			// fetch metadata, download, place the binary — so it reports the
+			// same stages. Without this the startPluginStep calls on that path
+			// are no-ops, because progress travels on the context.
+			ctx := withPluginProgress(cmd.Context(), cmd.ErrOrStderr())
 			out := cmd.OutOrStdout()
 			var names []string
 			switch {
@@ -739,7 +743,9 @@ in scripts and non-interactive runs.`,
 				huh.NewSelect[string]().Title("Install a plugin").Options(options...).Value(&choice),
 			))
 			if err := form.RunWithContext(ctx); err != nil {
-				return handleFormCancellation(cmd.OutOrStdout(), "Browse", err)
+				// Stderr, like the confirmation below it: stdout carries the
+				// install result and nothing else.
+				return handleFormCancellation(cmd.ErrOrStderr(), "Browse", err)
 			}
 			if choice == "" {
 				return nil

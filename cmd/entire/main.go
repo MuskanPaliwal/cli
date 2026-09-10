@@ -81,10 +81,26 @@ func main() {
 	restorePATH := cli.PrependPluginBinDirToPATH(ctx)
 
 	if handled, code := cli.MaybeRunPlugin(ctx, rootCmd, os.Args[1:]); handled {
-		if ctx.Err() != nil && procsignal.Load() != nil {
-			dieFromSignal(terminatingSignal())
-		}
 		cancel()
+		if code == cli.ExitPluginSignalled {
+			// The plugin was terminated by a signal, or a signal interrupted
+			// the on-demand install before it ran. Re-raise so the shell sees
+			// WIFSIGNALED and an enclosing loop breaks on one Ctrl-C.
+			//
+			// Gated on the plugin's own outcome rather than on a signal
+			// having fired somewhere in this process: Ctrl-C reaches the whole
+			// foreground process group, so a plugin that handles it itself and
+			// exits with a meaningful code (a TUI quitting on Ctrl-C exits 0)
+			// must keep that code instead of being reported as killed.
+			if procsignal.Load() != nil {
+				dieFromSignal(terminatingSignal())
+			}
+			// Killed by a signal we never received ourselves — an external
+			// kill, or a crash. There is no signal to re-raise, and -1 is not
+			// an exit status (os.Exit would truncate it to 255), so report a
+			// plain failure. The child has already said what happened.
+			os.Exit(1)
+		}
 		os.Exit(code)
 	}
 	restorePATH()

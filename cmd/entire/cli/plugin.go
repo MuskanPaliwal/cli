@@ -36,6 +36,19 @@ const (
 // disk (`entire upgrade` → entire-upgrade).
 const selfUpdatePluginName = "upgrade"
 
+// onDemandInstallPluginName is the one missing plugin the dispatcher offers to
+// install rather than falling through to Cobra's unknown-command path. Kept as
+// a named constant beside the other plugin names the dispatcher special-cases,
+// so the set is readable in one place.
+const onDemandInstallPluginName = "graph"
+
+// ExitPluginSignalled reports that a plugin was terminated by a signal, or
+// that a signal interrupted an on-demand install before the plugin ran. It is
+// deliberately not a valid exit status — os.Exit(-1) truncates to 255 — so
+// main.go re-raises the signal instead of exiting with it. -1 is already what
+// exec.ExitError.ExitCode() reports for a signalled child.
+const ExitPluginSignalled = -1
+
 // postPluginVersionCheck is a test seam for the version-check notice that
 // fires after a successful plugin run.
 var postPluginVersionCheck = versioncheck.CheckAndNotify
@@ -43,7 +56,10 @@ var postPluginVersionCheck = versioncheck.CheckAndNotify
 // MaybeRunPlugin returns (true, exitCode) when an external command was
 // resolved and run. On launch failure (e.g. missing executable bit)
 // returns (true, 1) after printing to stderr. On no-match returns
-// (false, 0) so the caller can fall through to Cobra.
+// (false, 0) so the caller can fall through to Cobra. exitCode is
+// ExitPluginSignalled when the plugin was killed by a signal, or when a
+// signal interrupted an on-demand install before it ran; the caller turns
+// that into a re-raised signal rather than an exit status.
 //
 // Telemetry and the version-check notice mirror Cobra's PersistentPostRun
 // behavior for built-ins: both fire only on a successful (exit-0) run.
@@ -58,16 +74,25 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 		binPath, err = installMissingPlugin(ctx, rootCmd, pluginName)
 		if err != nil {
 			var silent *SilentError
-			if !errors.As(silencePluginCancel(ctx, err), &silent) {
-				fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
+			if errors.As(silencePluginCancel(ctx, err), &silent) {
+				// A signal interrupted the install. Report it as a signal
+				// rather than a plain failure so main.go re-raises it: a
+				// shell breaks an enclosing loop only on WIFSIGNALED.
+				return true, ExitPluginSignalled
 			}
+			fmt.Fprintln(rootCmd.ErrOrStderr(), RenderUserFacingError(err))
 			return true, 1
 		}
 		if binPath == "" {
 			// The command was not executed because installation was declined.
 			return true, 1
 		}
-		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running plugin with command: %s\n", strings.Join(pluginArgs, " "))
+		// Name the command that is about to run: the install may have taken a
+		// while, and it is the reason the user is still waiting. The command
+		// itself is part of the line — printing only the arguments left a
+		// bare "Running plugin with command:" for `entire graph`.
+		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running %s\n",
+			strings.Join(append([]string{rootCmd.Name(), pluginName}, pluginArgs...), " "))
 	}
 	exitCode = runPlugin(ctx, pluginName, binPath, pluginArgs)
 	if exitCode == 0 {
@@ -102,8 +127,9 @@ func maybeTrackPluginInvocation(ctx context.Context, pluginName string) {
 	telemetry.TrackPluginDetached(pluginName, s.Enabled, versioninfo.Version)
 }
 
-// resolvePlugin returns an empty binary path for a missing graph plugin so
-// the dispatcher can offer installation. Other missing names fall through.
+// resolvePlugin returns an empty binary path for a missing
+// onDemandInstallPluginName so the dispatcher can offer installation. Other
+// missing names fall through.
 func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, pluginArgs []string, ok bool) {
 	if len(args) == 0 {
 		return "", nil, false
@@ -133,7 +159,7 @@ func resolvePlugin(rootCmd *cobra.Command, args []string) (binPath string, plugi
 		if p, found := findInaccessiblePlugin(binName); found {
 			return p, args[1:], true
 		}
-		if name == "graph" && errors.Is(err, exec.ErrNotFound) {
+		if name == onDemandInstallPluginName && errors.Is(err, exec.ErrNotFound) {
 			return "", args[1:], true
 		}
 		return "", nil, false
@@ -235,6 +261,9 @@ func runPlugin(ctx context.Context, pluginName, binPath string, args []string) i
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			// A signalled child reports -1, i.e. ExitPluginSignalled: it is
+			// not an exit status, so main.go re-raises the signal rather than
+			// letting os.Exit truncate it to 255.
 			return exitErr.ExitCode()
 		}
 		// Prefix with the plugin name so users can tell parent vs child

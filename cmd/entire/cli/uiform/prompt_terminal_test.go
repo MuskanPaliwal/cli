@@ -5,6 +5,7 @@ package uiform
 import (
 	"context"
 	"io"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,11 @@ import (
 	"charm.land/huh/v2"
 	"github.com/creack/pty"
 )
+
+// clearedFromFirstRow matches a cursor-up over the rendered form followed by
+// an erase to the end of the display — CUU then ED0, the pair that removes an
+// answered prompt. The row count is left open on purpose; see the assertion.
+var clearedFromFirstRow = regexp.MustCompile(`\x1b\[[0-9]+A\x1b\[J`)
 
 // An empty Form.View is not enough: the renderer must move back over the
 // question before erasing it. Exercise the actual terminal output, because
@@ -61,9 +67,15 @@ func TestConfirmationClearsPromptAfterAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	transcript := <-output
-	// This fixed-width, five-row form ends with the cursor on its help row.
-	// Clearing from that row alone leaves the question and choices visible.
-	if !strings.Contains(transcript, "\x1b[4A\x1b[J") {
+	// The form ends with the cursor on its help row, so erasing from there
+	// alone leaves the question and choices visible: the renderer has to move
+	// back up over the form first, then erase to the end of the display.
+	//
+	// The number of rows is deliberately not pinned. It is a property of the
+	// form's height, which a field, theme or terminal-width change moves, and
+	// a literal "\x1b[4A\x1b[J" fails such a change with a message about
+	// prompt clearing — which is not what broke.
+	if !clearedFromFirstRow.MatchString(transcript) {
 		t.Fatalf("completed prompt was not erased from its first row: %q", transcript)
 	}
 	if !answer {

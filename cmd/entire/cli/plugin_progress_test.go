@@ -49,3 +49,42 @@ func TestPluginInstallReportsStagesOnStderr(t *testing.T) { //nolint:paralleltes
 		t.Fatalf("stdout should contain only the install result: %q", out.String())
 	}
 }
+
+// Progress travels on the context, so a command that does the network work
+// without opting in reports nothing. `plugin upgrade` list tags, fetches
+// metadata, downloads and places a binary exactly as `plugin install` does,
+// and the stages were silent there until the command opted in.
+func TestPluginUpgradeReportsStagesOnStderr(t *testing.T) { //nolint:paralleltest // isolates managed plugins and index cache
+	withIsolatedPluginEnv(t)
+	withIndexCache(t)
+	repoURL, _ := newDemoPluginRepo(t, []string{remoteTestTagOld}, "0.1.0")
+	if _, err := InstallPluginFromRepo(t.Context(), repoURL, "", RemoteInstallOptions{}); err != nil {
+		t.Fatalf("InstallPluginFromRepo: %v", err)
+	}
+	srv := pluginReleaseServer(t, "0.1.0", "0.2.0")
+	updateRepoMetadata(t, repoURL, fmt.Sprintf("name: demo\ndownload_url: \"%s/dl/{tag}/{asset}\"\n", srv.URL))
+	gitTag(t, repoURL, remoteTestTagMid)
+
+	cmd := newPluginUpgradeCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetContext(t.Context())
+	cmd.SetArgs([]string{"demo"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{
+		"Finding latest plugin release...",
+		"Fetching plugin metadata for " + remoteTestTagMid + "...",
+		"Downloading plugin archive...",
+		"Installing entire-demo " + remoteTestTagMid + "...",
+	} {
+		if !strings.Contains(errOut.String(), stage) {
+			t.Errorf("missing %q in upgrade progress: %q", stage, errOut.String())
+		}
+	}
+	if !strings.Contains(out.String(), remoteTestTagOld+" → "+remoteTestTagMid) {
+		t.Errorf("stdout should carry the upgrade result: %q", out.String())
+	}
+}
