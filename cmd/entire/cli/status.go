@@ -334,10 +334,19 @@ const checkpointSyncSourceDedicated = "dedicated"
 type checkpointSyncInfo struct {
 	// PushDisabled reflects the explicit automatic-push setting, not every
 	// possible reason checkpoint sync might fail.
+	//
+	// It suppresses nothing else in this struct, because nothing else is a
+	// push promise. The elected remote stays the checkpoint READ source
+	// (strategy.CheckpointReadRemotesWithElection never consults
+	// push_sessions), the unpushed count is the only signal that local-only
+	// checkpoint data is accumulating, and the remote-configuration
+	// diagnostics explain read behavior too. Disabling uploads therefore
+	// changes how the renderers PHRASE these fields, not whether they are
+	// populated — see writeCheckpointSyncLines.
 	PushDisabled bool
 	// Remote is the elected git remote name, or the org/repo slug in
-	// dedicated checkpoint_remote mode. Empty when pushing is disabled or
-	// nothing resolved (no remotes configured, or the fail-closed case).
+	// dedicated checkpoint_remote mode. Empty when nothing resolved (no
+	// remotes configured, or the fail-closed case).
 	Remote string
 	// Source is config|observed|default|sole|first (resolver values) or
 	// "dedicated".
@@ -358,8 +367,6 @@ type checkpointSyncInfo struct {
 
 func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpointSyncInfo {
 	info := checkpointSyncInfo{PushDisabled: s.IsPushSessionsDisabled()}
-	// Remote configuration diagnostics also explain checkpoint read behavior.
-	// Disabling uploads suppresses push promises and counts, not these warnings.
 
 	elected, err := strategy.ResolveCheckpointSyncRemote(ctx)
 	if err != nil {
@@ -387,9 +394,6 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 	// PushURL differently than this elected-remote probe does.
 	if cr := s.GetCheckpointRemote(); cr != nil {
 		if _, enabled, purlErr := checkpointremote.PushURL(ctx, elected.Name); purlErr == nil && enabled {
-			if info.PushDisabled {
-				return info
-			}
 			info.Remote = cr.Repo
 			info.Source = checkpointSyncSourceDedicated
 			// The unpushed counter is meaningful here only on the git-refs
@@ -404,11 +408,9 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		}
 	}
 
-	if !info.PushDisabled {
-		info.Remote = elected.Name
-		info.Source = string(elected.Source)
-		info.Unpushed = countUnpushedCheckpointsForStatus(ctx, elected.Name)
-	}
+	info.Remote = elected.Name
+	info.Source = string(elected.Source)
+	info.Unpushed = countUnpushedCheckpointsForStatus(ctx, elected.Name)
 	// A configured checkpoint_remote that did not enable above is being
 	// ignored. When the ownership check is what rejected it, say so: this is
 	// the one trust-gate rejection a user otherwise experiences only as
@@ -438,30 +440,44 @@ func countUnpushedCheckpointsForStatus(ctx context.Context, remoteName string) i
 	return n
 }
 
-// writeCheckpointSyncLines reports disabled automatic pushing or the checkpoint
-// sync destination (and the unpushed counter, when non-zero) in the enabled status
-// block. With pushing enabled, no remotes configured means no lines.
+// writeCheckpointSyncLines reports the checkpoint sync destination (and the
+// unpushed counter, when non-zero) in the enabled status block, prefixed by the
+// disabled-pushing line when automatic pushing is off. No remotes configured
+// means no destination line either way.
+//
+// Every phrase that promises a push is conditioned on info.PushDisabled: with
+// pushing off the elected remote is still the read source and the counter still
+// reports local-only data, so the lines are reworded rather than dropped —
+// status is the only surface that names either.
 func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *EntireSettings, sty statusStyles) {
 	info := computeCheckpointSyncInfo(ctx, s)
-	switch {
-	case info.PushDisabled:
+	destination := "\n  Checkpoints sync to: "
+	if info.PushDisabled {
 		b.WriteString("\n  Automatic checkpoint pushing: disabled")
 		b.WriteString(sty.render(sty.dim, " (push_sessions=false)"))
-		if info.Err != "" {
-			b.WriteString("\n")
-			b.WriteString(sty.render(sty.yellow, "  ! Checkpoint remote configuration: "+info.Err))
-		}
+		destination = "\n  Checkpoints read from: "
+	}
+	switch {
 	case info.Err != "":
 		b.WriteString("\n")
-		b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
+		// A fail-closed election is not a push failure when nothing is being
+		// pushed: name the misconfiguration without claiming a lost sync.
+		if info.PushDisabled {
+			b.WriteString(sty.render(sty.yellow, "  ! Checkpoint remote configuration: "+info.Err))
+		} else {
+			b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
+		}
 	case info.Remote == "":
-		return
+		// No remotes configured: nothing resolved, and the diagnostics and
+		// counter below are empty by construction on this path.
 	case info.Source == checkpointSyncSourceDedicated:
-		b.WriteString("\n  Checkpoints sync to: ")
+		b.WriteString(destination)
 		b.WriteString(sty.render(sty.cyan, "dedicated checkpoint remote ("+info.Remote+")"))
 	default:
-		b.WriteString("\n  Checkpoints sync to: ")
+		b.WriteString(destination)
 		b.WriteString(sty.render(sty.cyan, info.Remote))
+		// Both suffixes describe how the remote was ELECTED, which is what
+		// picks the read source too, so they hold with pushing disabled.
 		switch info.Source {
 		case string(strategy.SyncRemoteSourceConfig):
 			b.WriteString(sty.render(sty.dim, " (set by checkpoint_push_remote)"))
@@ -484,12 +500,19 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 // formatUnpushedCheckpointsLine phrases the unpushed counter. Dedicated URL
 // mode has no git remote to name (and only reaches here on the git-refs
 // backend), so it drops the remote-name phrasing.
+//
+// With pushing disabled the count is not pending anything, so it says what the
+// number actually is — local-only checkpoint data, which keeps growing because
+// push_sessions gates pushing and not checkpoint creation.
 func formatUnpushedCheckpointsLine(info checkpointSyncInfo) string {
 	noun := "checkpoints"
 	pronoun := "they sync"
 	if info.Unpushed == 1 {
 		noun = "checkpoint"
 		pronoun = "it syncs"
+	}
+	if info.PushDisabled {
+		return fmt.Sprintf("%d %s stored locally only", info.Unpushed, noun)
 	}
 	if info.Source == checkpointSyncSourceDedicated {
 		return fmt.Sprintf("%d %s not yet pushed", info.Unpushed, noun)
@@ -871,8 +894,13 @@ type statusJSON struct {
 	CodexHooks *codexHooksStatusJSON `json:"codex_hooks,omitempty"`
 	// CheckpointPushDisabled is emitted only when Entire is enabled and the
 	// effective push_sessions setting is false. Its absence does not guarantee
-	// that a push can succeed. Sync destination, error, and count fields are
-	// omitted while pushing is disabled.
+	// that a push can succeed.
+	//
+	// No other field is omitted or suppressed when it is set: read it as
+	// requalifying the fields below rather than removing them.
+	// CheckpointSyncRemote is then the remote checkpoints are READ from,
+	// UnpushedCheckpoints counts checkpoint data held only locally, and the
+	// error and ignored-remote diagnostics apply to reads as well.
 	CheckpointPushDisabled bool `json:"checkpoint_push_disabled,omitempty"`
 	// CheckpointSyncRemote is the elected checkpoint sync remote name, or the
 	// org/repo slug in dedicated checkpoint_remote mode. Deliberately not named

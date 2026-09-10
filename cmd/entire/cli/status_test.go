@@ -2308,10 +2308,13 @@ func testCheckpointPushDisabledFork(t *testing.T, jsonOutput bool) {
 	testutil.AddRemote(t, ".", "fork", "https://github.com/user/repo.git")
 	head := checkpointSyncTestCommit(t, "a.txt", "one")
 	testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
-	assertCheckpointPushDisabledStatus(t, jsonOutput, false)
+	assertCheckpointPushDisabledStatus(t, jsonOutput, false, "fork")
 }
 
-func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool) {
+// assertCheckpointPushDisabledStatus asserts the disabled-pushing report:
+// wantRemote is the checkpoint read destination status must still name ("" when
+// nothing resolved), and no phrasing may survive that promises a push.
+func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool, wantRemote string) {
 	t.Helper()
 	var stdout bytes.Buffer
 	if err := runStatus(context.Background(), &stdout, detailed, jsonOutput); err != nil {
@@ -2334,10 +2337,19 @@ func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool)
 				t.Errorf("%s = %s, want true (decode error: %v)", key, raw, err)
 			}
 		}
-		for _, key := range []string{"checkpoint_sync_remote", "checkpoint_sync_remote_source", "unpushed_checkpoints"} {
-			if value, exists := result[key]; exists {
-				t.Errorf("disabled pushing must omit %s, got %s", key, value)
+		// The elected remote is still the read source, so the destination
+		// fields stay populated; only the phrasing around them changes.
+		gotRemote := ""
+		if raw, exists := result["checkpoint_sync_remote"]; exists {
+			if err := json.Unmarshal(raw, &gotRemote); err != nil {
+				t.Fatalf("checkpoint_sync_remote decode error = %v", err)
 			}
+		}
+		if gotRemote != wantRemote {
+			t.Errorf("checkpoint_sync_remote = %q, want %q: %s", gotRemote, wantRemote, stdout.String())
+		}
+		if _, exists := result["checkpoint_sync_remote_source"]; exists != (wantRemote != "") {
+			t.Errorf("checkpoint_sync_remote_source presence = %v, want %v: %s", exists, wantRemote != "", stdout.String())
 		}
 		return
 	}
@@ -2349,6 +2361,50 @@ func assertCheckpointPushDisabledStatus(t *testing.T, jsonOutput, detailed bool)
 			t.Errorf("disabled pushing must not show %q", unwanted)
 		}
 	}
+	if wantRemote != "" && !strings.Contains(stdout.String(), "Checkpoints read from: ") {
+		t.Errorf("disabled pushing must still name the read destination %q: %s", wantRemote, stdout.String())
+	}
+	if wantRemote == "" && strings.Contains(stdout.String(), "Checkpoints read from: ") {
+		t.Errorf("nothing resolved, so no read destination may be named: %s", stdout.String())
+	}
+}
+
+// Not parallel: setupTestRepo changes CWD and isolates process environment.
+func TestRunStatus_CheckpointPushDisabledNamesReadSourceAndLocalCount(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	setupTestRepo(t)
+	writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false}}`)
+	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	head := checkpointSyncTestCommit(t, "a.txt", "one")
+	testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
+
+	// With pushing off, status is the only surface naming where checkpoint
+	// reads resolve (CheckpointReadRemotesWithElection never consults
+	// push_sessions) and the only one reporting that checkpoint data is
+	// piling up locally — push_sessions gates pushing, not checkpoint
+	// creation. Both must be phrased without promising a push.
+	var text bytes.Buffer
+	if err := runStatus(t.Context(), &text, false, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("status output:\n%s", text.String())
+	for _, want := range []string{"Checkpoints read from: origin", "1 checkpoint stored locally only"} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("missing %q: %s", want, text.String())
+		}
+	}
+
+	var jsonOut bytes.Buffer
+	if err := runStatus(t.Context(), &jsonOut, false, true); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(jsonOut.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if string(result["checkpoint_sync_remote"]) != `"origin"` || string(result["unpushed_checkpoints"]) != "1" {
+		t.Errorf("disabled pushing dropped read destination or local-only count: %s", jsonOut.String())
+	}
 }
 
 func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
@@ -2358,13 +2414,19 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 			name    string
 			options string
 			origin  string
+			// wantRemote is the read destination status must still report with
+			// pushing disabled; wantSource is its provenance ("" when nothing
+			// resolved). Populating them is the point: the elected remote stays
+			// the checkpoint read source when push_sessions is false.
+			wantRemote string
+			wantSource string
 		}{
-			{"origin", "", "https://github.com/org/repo.git"},
-			{"explicit_fork", `,"checkpoint_push_remote":"fork"`, "https://github.com/org/repo.git"},
-			{"dedicated", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/org/repo.git"},
-			{"inherited_dedicated_rejected", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/other/repo.git"},
-			{"no_remotes", "", ""},
-			{"missing_configured_remote", `,"checkpoint_push_remote":"gone"`, "https://github.com/org/repo.git"},
+			{"origin", "", "https://github.com/org/repo.git", "origin", "default"},
+			{"explicit_fork", `,"checkpoint_push_remote":"fork"`, "https://github.com/org/repo.git", "fork", "config"},
+			{"dedicated", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/org/repo.git", "org/checkpoints", checkpointSyncSourceDedicated},
+			{"inherited_dedicated_rejected", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/other/repo.git", "origin", "default"},
+			{"no_remotes", "", "", "", ""},
+			{"missing_configured_remote", `,"checkpoint_push_remote":"gone"`, "https://github.com/org/repo.git", "", ""},
 		} {
 			t.Run(backend+"/"+tc.name, func(t *testing.T) {
 				testutil.IsolateGitConfigEnv(t)
@@ -2402,11 +2464,21 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 				if (info.Err != "") != (tc.name == "missing_configured_remote") || (info.IgnoredRemote != "") != (tc.name == "inherited_dedicated_rejected") {
 					t.Errorf("unexpected remote diagnostics: %+v", info)
 				}
-				if !info.PushDisabled || info.Remote != "" || info.Source != "" || info.Unpushed != 0 {
-					t.Errorf("disabled pushing must preserve diagnostics without push destination/count: %+v", info)
+				if !info.PushDisabled || info.Remote != tc.wantRemote || info.Source != tc.wantSource {
+					t.Errorf("disabled pushing must still resolve the read destination %q/%q: %+v", tc.wantRemote, tc.wantSource, info)
+				}
+				// The counter is the only signal that local-only checkpoint
+				// data is accumulating, so it survives disabled pushing
+				// wherever it is meaningful at all. Dedicated URL mode on
+				// git-branch has no tracking ref to compare against and stays
+				// uncounted, as it does with pushing enabled.
+				wantCount := tc.wantRemote != "" &&
+					(tc.wantSource != checkpointSyncSourceDedicated || backend != "git-branch")
+				if (info.Unpushed > 0) != wantCount {
+					t.Errorf("unpushed count = %d, want counted: %v (%+v)", info.Unpushed, wantCount, info)
 				}
 				for _, jsonOutput := range []bool{false, true} {
-					assertCheckpointPushDisabledStatus(t, jsonOutput, false)
+					assertCheckpointPushDisabledStatus(t, jsonOutput, false, tc.wantRemote)
 					after, err := queue.Peek()
 					if err != nil {
 						t.Fatal(err)
@@ -2507,7 +2579,7 @@ func TestRunStatus_CheckpointPushDisabledSettingsPrecedence(t *testing.T) {
 				if tc.disabled {
 					// --detailed and --json are mutually exclusive: only text
 					// exercises the detailed settings view.
-					assertCheckpointPushDisabledStatus(t, jsonOutput, !jsonOutput)
+					assertCheckpointPushDisabledStatus(t, jsonOutput, !jsonOutput, "origin")
 					continue
 				}
 				var stdout bytes.Buffer

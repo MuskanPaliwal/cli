@@ -406,6 +406,27 @@ func TestMultiPushURL_DestinationNoteSurfaces(t *testing.T) {
 			want:   []string{"2 remotes", "single elected remote", "entire status"},
 			absent: []string{"follow whichever remote", "always looks at origin"},
 		},
+		{
+			// The note tells the user to run `entire status` for the elected
+			// destination, and describes where a push delivers checkpoints —
+			// both of which read as promises when push_sessions is false and
+			// nothing is pushed at all. The note still applies (the
+			// destination decides where checkpoints are READ from), so it is
+			// qualified rather than suppressed.
+			name: "several remotes, pushing disabled",
+			setup: func(env *TestEnv) {
+				env.SetupNamedBareRemote("backup")
+				env.PatchSettings(map[string]any{
+					"strategy_options": map[string]any{"push_sessions": false},
+				})
+			},
+			want: []string{
+				"2 remotes", "single elected remote", "entire status",
+				"Automatic checkpoint pushing is disabled (push_sessions=false)",
+				"where they are read from today",
+			},
+			absent: []string{"checkpoints are waiting for it"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -51,6 +51,12 @@ type remoteTopology struct {
 	// primaryIsRefs reports whether the git-refs backend is active, which
 	// decides what a fanning-out remote means for checkpoints.
 	primaryIsRefs bool
+	// pushDisabled reports that push_sessions is off, which makes every claim
+	// below about where a push delivers checkpoints conditional: nothing is
+	// pushed at all. Read as a caveat on the note, not a reason to suppress
+	// it — the destination still decides where checkpoints are read from, and
+	// it is still what a user pins with checkpoint_remote.
+	pushDisabled bool
 }
 
 // inspectRemoteTopology reads the repo's remotes and checkpoint configuration.
@@ -91,6 +97,11 @@ func inspectRemoteTopology(ctx context.Context) remoteTopology {
 
 	if cpCfg, err := settings.LoadCheckpointsConfig(ctx); err == nil {
 		t.primaryIsRefs = checkpoint.PrimaryIsRefs(cpCfg)
+	}
+	// Best-effort like everything else here: an unreadable settings file reads
+	// as "pushing enabled", which is the note this code has always printed.
+	if s, err := settings.Load(ctx); err == nil {
+		t.pushDisabled = s.IsPushSessionsDisabled()
 	}
 
 	return t
@@ -144,6 +155,15 @@ func (t remoteTopology) describeCheckpointDestination(w io.Writer, header string
 
 	fmt.Fprintln(w, header)
 
+	// Said first, because it qualifies every "pushes to" below. The note is
+	// still worth printing: the destination decides where checkpoints are read
+	// from, and re-enabling pushing is one setting away.
+	if t.pushDisabled {
+		fmt.Fprintln(w, "  Automatic checkpoint pushing is disabled (push_sessions=false), so no")
+		fmt.Fprintln(w, "  checkpoints are pushed anywhere right now. The destination below is where")
+		fmt.Fprintln(w, "  they would go, and where they are read from today.")
+	}
+
 	for _, d := range t.destinations {
 		if !d.fansOut() {
 			continue
@@ -170,8 +190,8 @@ func (t remoteTopology) describeCheckpointDestination(w io.Writer, header string
 		fmt.Fprintf(w, "  This repo has %d remotes (%s).\n", len(names), strings.Join(names, ", "))
 		fmt.Fprintln(w, "    Checkpoints sync to a single elected remote — not to whichever one you")
 		fmt.Fprintln(w, "    push to. A push to any other remote carries your code but no session")
-		fmt.Fprintln(w, "    history. Run `entire status` to see the elected destination and how many")
-		fmt.Fprintln(w, "    checkpoints are waiting for it.")
+		fmt.Fprintln(w, "    history. Run `entire status` to see the elected destination and how much")
+		fmt.Fprintln(w, "    checkpoint data has not reached it.")
 	}
 
 	fmt.Fprintln(w, "  To pin one repository for checkpoints, set checkpoint_remote in")
