@@ -31,6 +31,10 @@ concurrency:
   group: e2e-tests
   cancel-in-progress: true
 
+# Deny by default: matrix-setup needs no token at all, and the three jobs that
+# do need one declare exactly what they use.
+permissions: {}
+
 jobs:
   # Build the matrix dynamically so workflow_dispatch can select a single agent.
   matrix-setup:
@@ -172,12 +176,16 @@ jobs:
   e2e-windows:
     if: inputs.agent == '' || inputs.agent == 'claude-code'
     uses: ./.github/workflows/e2e-windows.yml
+    permissions:
+      contents: read
     with:
       test: ${{ inputs.test }}
     secrets: inherit
 
   notify-slack:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     needs: [e2e-tests, e2e-windows]
     if: ${{ always() && (needs.e2e-tests.result == 'failure' || needs.e2e-windows.result == 'failure') && github.event_name == 'push' }}
     steps:

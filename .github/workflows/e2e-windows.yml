@@ -19,6 +19,12 @@ concurrency:
   group: e2e-windows-tests
   cancel-in-progress: true
 
+# Least privilege: this job only checks out the repository. Called via
+# `workflow_call` from e2e.yml, whose calling job must therefore grant at least
+# `contents: read` — a reusable workflow can never hold more than its caller.
+permissions:
+  contents: read
+
 jobs:
   e2e-windows:
     runs-on: windows-latest
