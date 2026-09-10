@@ -85,9 +85,12 @@ the commands are always runnable in every build.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
   native repo's branch-protection rules through core's
   `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
-  PATCH each (`addRules` upserts by ref, so re-adding a branch changes its
-  level), never a read-modify-write of the list; a short branch name expands
-  to `refs/heads/`, `HEAD` and `refs/...` pass through. The `mirror` subtree is
+  PATCH each (`addRules` upserts by ref), never a read-modify-write of the
+  list. `add` sends `serverSideMergeOnly` only when the flag was given: the
+  server keeps an existing rule's level when it is absent, so re-adding a
+  branch without the flag never lowers it and `--server-side-merge-only=false`
+  is the explicit way down. A short branch name expands to `refs/heads/`,
+  `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
   exception: `mirror use` repoints the *current clone's* git remote at a mirror
   (local git config only — it creates nothing server-side). Interactively it

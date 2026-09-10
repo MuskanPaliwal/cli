@@ -136,8 +136,9 @@ func (f *fakeProtectionServer) apply(body coreapi.UpdateBranchProtectionInputBod
 		if removed {
 			continue
 		}
+		// Like the server: an entry without a level keeps the rule's.
 		for _, a := range body.AddRules {
-			if a.Ref == r.Ref {
+			if a.Ref == r.Ref && a.ServerSideMergeOnly.IsSet() {
 				r.ServerSideMergeOnly = a.ServerSideMergeOnly
 			}
 		}
@@ -268,9 +269,9 @@ func TestRepoProtection_ListShowsLevels(t *testing.T) {
 	assert.Equal(t, []branchRule{{Ref: "HEAD", ServerSideMergeOnly: true}, {Ref: "refs/heads/release/*"}}, got)
 }
 
-// add expands a short branch name, sends the level as given, and re-adding a
-// branch changes its level in place; remove sends only removeRefs. Each verb
-// prints the resulting rules.
+// add expands a short branch name and sends a level only when the flag was
+// given, so re-adding a branch without it can never lower the rule; remove
+// sends only removeRefs. Each verb prints the resulting rules.
 func TestRepoProtection_AddAndRemove(t *testing.T) {
 	fake := newProtectionFixture(t, coreapi.BranchRule{Ref: "HEAD"})
 
@@ -278,7 +279,7 @@ func TestRepoProtection_AddAndRemove(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fake.patches, 1)
 	assert.Equal(t, []branchRule{{Ref: "refs/heads/release/*"}}, rulesView(fake.patches[0].AddRules))
-	assert.True(t, fake.patches[0].AddRules[0].ServerSideMergeOnly.IsSet(), "the level is always sent explicitly")
+	assert.False(t, fake.patches[0].AddRules[0].ServerSideMergeOnly.IsSet(), "no flag, no level on the wire")
 	assert.Empty(t, fake.patches[0].RemoveRefs)
 	assert.Contains(t, out, "refs/heads/release/*")
 
@@ -286,17 +287,33 @@ func TestRepoProtection_AddAndRemove(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fake.patches, 2)
 	assert.Equal(t, []branchRule{{Ref: "HEAD", ServerSideMergeOnly: true}}, rulesView(fake.patches[1].AddRules))
+	assert.True(t, fake.patches[1].AddRules[0].ServerSideMergeOnly.IsSet())
 	assert.Contains(t, out, protectionLevelMergeOnly)
 	assert.Equal(t, []branchRule{
 		{Ref: "HEAD", ServerSideMergeOnly: true},
 		{Ref: "refs/heads/release/*"},
 	}, rulesView(fake.rules), "re-adding HEAD raised its level in place")
 
-	out, err = execRepoProtection(t, "remove", testProtectionRepoULID, "HEAD")
+	// The regression the CLI review caught: an add that only names the branch
+	// must not lower it. Lowering takes the flag set to false.
+	_, err = execRepoProtection(t, "add", testProtectionRepoULID, "HEAD")
 	require.NoError(t, err)
 	require.Len(t, fake.patches, 3)
-	assert.Equal(t, []string{"HEAD"}, fake.patches[2].RemoveRefs)
-	assert.Empty(t, fake.patches[2].AddRules)
+	assert.False(t, fake.patches[2].AddRules[0].ServerSideMergeOnly.IsSet())
+	assert.True(t, rulesView(fake.rules)[0].ServerSideMergeOnly, "HEAD stays merge-only")
+
+	out, err = execRepoProtection(t, "add", testProtectionRepoULID, "HEAD", "--server-side-merge-only=false")
+	require.NoError(t, err)
+	require.Len(t, fake.patches, 4)
+	assert.Equal(t, coreapi.NewOptBool(false), fake.patches[3].AddRules[0].ServerSideMergeOnly, "an explicit false is sent")
+	assert.False(t, rulesView(fake.rules)[0].ServerSideMergeOnly, "and lowers HEAD")
+	assert.NotContains(t, out, protectionLevelMergeOnly)
+
+	out, err = execRepoProtection(t, "remove", testProtectionRepoULID, "HEAD")
+	require.NoError(t, err)
+	require.Len(t, fake.patches, 5)
+	assert.Equal(t, []string{"HEAD"}, fake.patches[4].RemoveRefs)
+	assert.Empty(t, fake.patches[4].AddRules)
 	assert.NotContains(t, out, "HEAD")
 	assert.Contains(t, out, "refs/heads/release/*")
 

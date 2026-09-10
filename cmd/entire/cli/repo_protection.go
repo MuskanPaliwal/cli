@@ -38,7 +38,8 @@ const (
 		"a mirror's rules are its upstream's."
 	// headBranchPattern is the server's pattern for "whatever branch HEAD
 	// points at"; it follows a default-branch rename.
-	headBranchPattern = "HEAD"
+	headBranchPattern       = "HEAD"
+	serverSideMergeOnlyFlag = "server-side-merge-only"
 )
 
 func protectionRow(r branchRule) []string {
@@ -187,10 +188,11 @@ func newRepoProtectionAddCmd() *cobra.Command {
 		Short: "Protect a branch, or change the level of an existing rule",
 		Long: "Protect a branch, or change the level of an existing rule.\n\n" +
 			"<branch> is \"HEAD\", a branch name such as main, or a pattern such as release/*. " +
-			"Without --server-side-merge-only the branch is protected from force pushes and " +
-			"deletion. With it, every direct push is refused and the branch moves only through " +
-			"a merge Entire performs. Adding a branch that already has a rule replaces that " +
-			"rule's level. Prints the resulting rules. Requires manage permission on the repo.",
+			"A new rule protects the branch from force pushes and deletion. With " +
+			"--server-side-merge-only, every direct push is refused and the branch moves only " +
+			"through a merge Entire performs. Re-adding a branch without the flag keeps its " +
+			"current level; pass --server-side-merge-only=false to lower it. Prints the " +
+			"resulting rules. Requires manage permission on the repo.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := expandBranchRef(args[1])
@@ -207,9 +209,15 @@ func newRepoProtectionAddCmd() *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				body := &coreapi.UpdateBranchProtectionInputBody{
-					AddRules: []coreapi.BranchRule{{Ref: ref, ServerSideMergeOnly: coreapi.NewOptBool(mergeOnly)}},
+				// The level travels only when the flag was given. Absent, the
+				// server keeps an existing rule's level and protects a new
+				// branch, so an add that only names a branch can never lower
+				// it; --server-side-merge-only=false is the explicit way down.
+				rule := coreapi.BranchRule{Ref: ref}
+				if cmd.Flags().Changed(serverSideMergeOnlyFlag) {
+					rule.ServerSideMergeOnly = coreapi.NewOptBool(mergeOnly)
 				}
+				body := &coreapi.UpdateBranchProtectionInputBody{AddRules: []coreapi.BranchRule{rule}}
 				out, err := c.UpdateBranchProtection(ctx, body, coreapi.UpdateBranchProtectionParams{RepoId: repoID})
 				if err != nil {
 					return nil, err
@@ -219,7 +227,7 @@ func newRepoProtectionAddCmd() *cobra.Command {
 		},
 	}
 	bindRepoProjectFlag(cmd, &project)
-	cmd.Flags().BoolVar(&mergeOnly, "server-side-merge-only", false, "Refuse every direct push; the branch moves only through a merge Entire performs")
+	cmd.Flags().BoolVar(&mergeOnly, serverSideMergeOnlyFlag, false, "Refuse every direct push; the branch moves only through a merge Entire performs. Omit to keep an existing rule's level; =false lowers it")
 	addJSONFlag(cmd)
 	return cmd
 }
