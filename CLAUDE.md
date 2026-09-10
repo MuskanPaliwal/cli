@@ -80,8 +80,14 @@ the commands are always runnable in every build.
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
 - `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
-  `clone`, plus the `mirror` and `visibility` subtrees. Git content operations
-  (log, diff, …) are intentionally out of scope. The `mirror` subtree is
+  `clone`, plus the `mirror`, `visibility` and `protection` subtrees. Git
+  content operations (log, diff, …) are intentionally out of scope.
+  `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
+  native repo's branch-protection rules through core's
+  `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
+  PATCH each (`addRules` upserts by ref, so re-adding a branch changes its
+  level), never a read-modify-write of the list; a short branch name expands
+  to `refs/heads/`, `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
   exception: `mirror use` repoints the *current clone's* git remote at a mirror
   (local git config only — it creates nothing server-side). Interactively it
