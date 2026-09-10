@@ -53,7 +53,40 @@ func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name stri
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("install plugin: %w", err)
 	}
-	confirmed, err := runPluginConfirm(ctx, rootCmd.ErrOrStderr(), fmt.Sprintf("Install the entire-%s plugin?", name), true)
+
+	// Resolve the source before asking, for two reasons.
+	//
+	// The prompt is the only human checkpoint on this path — an index-listed
+	// install never prompts inside runRemoteInstall, because the catalog is
+	// the trust decision — so it has to say where the binary comes from.
+	// confirmInstallOrCancel names redactURL(repoURL) for an unlisted
+	// repository; a prompt that defaults to Yes and names nothing tells the
+	// user less about a download-and-exec than the one that defaults to No.
+	//
+	// And a name the index does not carry cannot be installed at all, so
+	// asking first and failing afterwards spends the user's Yes on a question
+	// that never had an answer — the same prompt-then-dead-end shape as the
+	// already-installed case above.
+	//
+	// This is not an extra round-trip: SyncPluginIndex touches a freshness
+	// marker, and runRemoteInstall's own call moments later reads the clone
+	// without fetching (pluginIndexTTL). Progress is reported and stopped
+	// before the prompt, per the rule that a spinner never overlaps a
+	// confirmation.
+	indexURL := resolvePluginIndexURL("")
+	stopIndex := startPluginStep(withPluginProgress(ctx, rootCmd.ErrOrStderr()), "Checking plugin index...")
+	idx, err := SyncPluginIndex(ctx, indexURL, false)
+	stopIndex()
+	if err != nil {
+		return "", fmt.Errorf("look up the entire-%s plugin in the plugin index %s: %w", name, redactURL(indexURL), err)
+	}
+	entry := idx.Find(name)
+	if entry == nil {
+		return "", fmt.Errorf("the entire-%s plugin is not listed in the plugin index %s, so it cannot be installed on demand; install it from its repository URL with 'entire plugin install <url>'", name, redactURL(indexURL))
+	}
+
+	confirmed, err := runPluginConfirm(ctx, rootCmd.ErrOrStderr(),
+		fmt.Sprintf("Install the entire-%s plugin from %s?", name, redactURL(entry.RepoURL)), true)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", err

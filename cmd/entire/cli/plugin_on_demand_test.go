@@ -57,11 +57,21 @@ func TestMaybeRunPlugin_InstallGraphAndRun(t *testing.T) { //nolint:paralleltest
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("PATH", dir)
+			// dir first so entire-graph is unresolvable, but git still
+			// reachable: the index clone shells out to it.
+			withIsolatedPath(t)
+			withPathDir(t, dir)
 			t.Setenv("ENTIRE_PLUGIN_DIR", filepath.Join(dir, "managed"))
 			t.Setenv("ENTIRE_TEST_TTY", "1")
 			t.Setenv("ACCESSIBLE", "1")
 			t.Setenv("ENTIRE_TELEMETRY_OPTOUT", "1")
+			// The prompt names the repository the binary comes from, so the
+			// entry has to resolve before it is shown. A local index keeps
+			// that off the network — without it these tests would consult the
+			// real published catalog.
+			withIndexCache(t)
+			indexURL, _ := newIndexRepo(t, `{"version":1,"plugins":[{"name":"graph","repo_url":"https://github.com/entireio/entire-graph"}]}`)
+			t.Setenv(pluginIndexEnvVar, indexURL)
 			interceptVersionCheck(t)
 			argFile := filepath.Join(dir, "args.txt")
 			sourceDir := t.TempDir()
@@ -105,8 +115,12 @@ func TestMaybeRunPlugin_InstallGraphAndRun(t *testing.T) { //nolint:paralleltest
 			if (installCalls == 1) != tc.wantInstall {
 				t.Errorf("install calls=%d, want install=%v", installCalls, tc.wantInstall)
 			}
-			if !strings.Contains(stderr.String(), "Install the entire-graph plugin?") || !strings.Contains(stderr.String(), "[Y/n]") {
-				t.Errorf("missing Yes-default prompt: %q", stderr.String())
+			// The prompt names its source: this is the only human checkpoint
+			// before a remote binary is downloaded and executed, and an
+			// index-listed install never prompts inside runRemoteInstall.
+			if !strings.Contains(stderr.String(), "Install the entire-graph plugin from https://github.com/entireio/entire-graph?") ||
+				!strings.Contains(stderr.String(), "[Y/n]") {
+				t.Errorf("prompt must name the repository and default to Yes: %q", stderr.String())
 			}
 			if data.Len() != len("plugin data\n") {
 				t.Error("confirmation consumed plugin stdin")
@@ -351,5 +365,34 @@ func TestCheckManagedPluginRunnable(t *testing.T) {
 				t.Errorf("reinstallFixes=%v, want %v", reinstallFixes, tc.wantReinstallFix)
 			}
 		})
+	}
+}
+
+// A name the index does not carry cannot be installed, so it must not be
+// offered. Asking first and failing afterwards spends the user's Yes on a
+// question that never had an answer.
+func TestMaybeRunPlugin_UnlistedNameIsNotOffered(t *testing.T) { //nolint:paralleltest // isolates PATH, index cache and terminal detection
+	withIsolatedPluginEnv(t)
+	withIndexCache(t)
+	indexURL, _ := newIndexRepo(t, `{"version":1,"plugins":[{"name":"other","repo_url":"https://example.invalid/entire-other"}]}`)
+	t.Setenv(pluginIndexEnvVar, indexURL)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	t.Setenv("ACCESSIBLE", "1")
+	originalTerminal := openPluginPromptTerminal
+	openPluginPromptTerminal = func() (pluginPromptTerminal, error) {
+		t.Error("an unlisted plugin must not be offered for installation")
+		return pluginPromptTerminal{in: io.NopCloser(strings.NewReader("y\n"))}, nil
+	}
+	t.Cleanup(func() { openPluginPromptTerminal = originalTerminal })
+
+	root := newTestRoot()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	handled, code, _ := MaybeRunPlugin(t.Context(), root, []string{"graph"})
+	if !handled || code != 1 {
+		t.Fatalf("handled=%v code=%d, want true, 1; stderr=%s", handled, code, &stderr)
+	}
+	if !strings.Contains(stderr.String(), "not listed in the plugin index") {
+		t.Errorf("missing diagnosis: %q", stderr.String())
 	}
 }
