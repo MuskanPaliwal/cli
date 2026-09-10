@@ -24,9 +24,13 @@ concurrency:
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
-    # Observed 6m30s-8m40s per leg. 60 leaves ~7x headroom while bounding how
-    # long a stuck nightly hides: the verdict only arrives at Summarize.
-    timeout-minutes: 60
+    # Above the sum of the agents' own retry ceilings (~85m: 9 + 18 + 13.5 +
+    # 13.5 + 18 + 13.5, see the step caps below) plus setup, so the per-step cap
+    # is always the one that binds — a step timeout leaves an attributable row
+    # in the table, a job timeout kills Summarize and the artifact upload with
+    # it. Legs measure 6m30s-8m40s; this only binds on a hang in one of the
+    # uncapped setup steps.
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
