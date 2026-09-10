@@ -45,7 +45,9 @@ func TestCodexSubagent_StoresDeclaredSubagentTranscript(t *testing.T) {
 	require.NoError(t, os.WriteFile(parentRollout, []byte(`{"type":"session_meta","payload":{"id":"`+sessionID+`","thread_source":"user"}}`+"\n"), 0o600))
 	subagentRollout := filepath.Join(rolloutDir, "rollout-"+agentID+".jsonl")
 	require.NoError(t, os.WriteFile(subagentRollout, []byte(
-		`{"type":"session_meta","payload":{"id":"`+agentID+`"}}`+"\n"+
+		`{"type":"session_meta","payload":{"id":"`+agentID+`","forked_from_id":"`+sessionID+`"}}`+"\n"+
+			`{"type":"event_msg","payload":{"type":"task_started","turn_id":"inherited-parent-turn"}}`+"\n"+
+			`{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Add File: parent-only.txt\n+x\n*** End Patch"}}`+"\n"+
 			`{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}`+"\n"+
 			`{"type":"response_item","payload":{"type":"custom_tool_call","status":"completed","name":"apply_patch","input":"*** Begin Patch\n*** Add File: `+editedFile+`\n+red\n*** End Patch"}}`+"\n"+
 			`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}`+"\n"+
@@ -77,7 +79,8 @@ func TestCodexSubagent_StoresDeclaredSubagentTranscript(t *testing.T) {
 	require.NotNil(t, rec, "expected a task record keyed by agent_id")
 	require.True(t, rec.CompletedAt.IsZero(), "provisional subagent-stop must not complete the record")
 
-	// Root Stop observes terminal evidence in the same verified child rollout.
+	// The fixture includes the real fork shape: inherited parent history with
+	// an open parent turn and no ordinal boundary. Root Stop observes terminal evidence in the same verified child rollout.
 	hook("stop", map[string]any{"hook_event_name": "Stop", "last_assistant_message": "done"})
 	state, err = env.GetSessionState(sessionID)
 	require.NoError(t, err)
@@ -87,7 +90,9 @@ func TestCodexSubagent_StoresDeclaredSubagentTranscript(t *testing.T) {
 	rec = state.FindTaskRecord(agentID)
 	require.NotNil(t, rec)
 	require.False(t, rec.CompletedAt.IsZero(), "terminal child rollout must reconcile the record")
-	require.True(t, containsFile(rec.Files, editedFile), "the record must carry the child edit, got %v", rec.Files)
+	require.Equal(t, []string{editedFile}, rec.Files, "only hook-observed child turns contribute files")
+	require.Nil(t, rec.TokenUsage, "unscoped fork counters are not exact child usage")
+	require.False(t, *state.TokenUsage.SubagentTokensComplete)
 
 	// Committing condenses the session, and the materializer must store the rollout
 	// itself — the storage guarantee this test is named for.

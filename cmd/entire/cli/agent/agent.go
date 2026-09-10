@@ -308,6 +308,8 @@ type TokenCalculator interface {
 // by the session ledger. Transcript paths are hints only: implementations must
 // verify that a path's native metadata identifies this exact AgentID.
 type SubagentReference struct {
+	// ObservedTurnIDs are child turn identities recorded by native hooks.
+	ObservedTurnIDs        []string
 	AgentID                string
 	DeclaredTranscriptPath string
 	ResolvedTranscriptPath string
@@ -327,9 +329,8 @@ type SubagentAnalysis struct {
 // authoritative child inventory. TokenUsage records parent usage and, when
 // complete, its exact cumulative child aggregate in SubagentTokens.
 type InventoryExtraction struct {
-	ModifiedFiles []string
-	TokenUsage    *TokenUsage
-	Children      []SubagentAnalysis
+	TokenUsage *TokenUsage
+	Children   []SubagentAnalysis
 }
 
 // InventoryAwareExtractor analyzes only an already-authoritative inventory of

@@ -213,7 +213,7 @@ func TestRefreshCodexInventory_MultiTurnChildRefreshesCompletedTaskRecord(t *tes
 	assert.Contains(t, state.FindSubagentInventory(agentID).FinalizedTurnIDs, "turn-2")
 }
 
-func TestFinalizeCodexObservedAtSessionEnd_MultiTurnChildClearsStaleEvidence(t *testing.T) {
+func TestFinalizeCodexObservedAtSessionEnd_MultiTurnChildPreservesCapturedEvidence(t *testing.T) {
 	// NOT parallel: setupStopTestRepo changes the process working directory.
 	setupStopTestRepo(t)
 	ctx := context.Background()
@@ -249,8 +249,8 @@ func TestFinalizeCodexObservedAtSessionEnd_MultiTurnChildClearsStaleEvidence(t *
 	record := state.FindTaskRecord(agentID)
 	require.NotNil(t, record)
 	assert.Equal(t, completedAt, record.CompletedAt, "force-closing a later turn must not complete the task twice")
-	assert.Empty(t, record.Files, "files from an earlier turn are not exact evidence for an unresolved later turn")
-	assert.Nil(t, record.TokenUsage, "tokens from an earlier turn are not exact evidence for an unresolved later turn")
+	assert.Equal(t, []string{"first.go"}, record.Files, "closing an unresolved turn must preserve previously captured files")
+	assert.Equal(t, &agent.TokenUsage{InputTokens: 10}, record.TokenUsage, "without a new snapshot, preserve captured tokens")
 	assert.Equal(t, "/tmp/verified-child-1.jsonl", record.DeclaredTranscriptPath,
 		"force-closing must retain the inventory's exact-ID-verified rollout path for condensation")
 	assert.Contains(t, state.FindSubagentInventory(agentID).FinalizedTurnIDs, "turn-2")
@@ -4100,4 +4100,51 @@ func TestAppendEventSkillEventsToState_ReturnsOnlyNewlyAppended(t *testing.T) {
 
 	// Full re-delivery is a no-op.
 	require.Nil(t, appendEventSkillEventsToState(&agent.Event{SkillEvents: []agent.SkillEvent{first, second}}, state))
+}
+
+func TestRefreshCodexInventory_RejectsStaleReturnedCoverage(t *testing.T) {
+	// NOT parallel: setupStopTestRepo changes CWD.
+	setupStopTestRepo(t)
+	ctx := t.Context()
+	const id = "stale-inventory-return"
+	complete := true
+	require.NoError(t, strategy.SaveSessionState(ctx, &strategy.SessionState{SessionID: id, StartedAt: time.Now(), SubagentInventoryComplete: &complete}))
+	ag := &mockInventoryAgent{mockLifecycleAgent: newMockAgent(), extraction: agent.InventoryExtraction{TokenUsage: &agent.TokenUsage{SubagentTokensComplete: &complete, SubagentTokens: &agent.TokenUsage{InputTokens: 99}}}, beforeReturn: func() {
+		require.NoError(t, strategy.MutateSessionState(ctx, id, func(s *strategy.SessionState) error { s.RegisterSubagent("new-child", "new-turn"); return nil }))
+	}}
+	usage, _ := refreshCodexInventory(ctx, ag, id, nil, 0)
+	require.NotNil(t, usage)
+	require.False(t, *usage.SubagentTokensComplete)
+	require.Nil(t, usage.SubagentTokens)
+}
+
+func TestCodexProvisionalStopBeforeStartRetainsObservation(t *testing.T) {
+	// NOT parallel: setupStopTestRepo changes CWD.
+	setupStopTestRepo(t)
+	ag := newMockAgent()
+	ag.agentType = agent.AgentTypeCodex
+	event := &agent.Event{SessionID: "stop-first", SubagentID: "child", TurnID: "turn", ProvisionalSubagentStop: true}
+	require.NoError(t, handleLifecycleSubagentEnd(t.Context(), ag, event))
+	state, err := strategy.LoadSessionState(t.Context(), event.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.NotNil(t, state.FindSubagentInventory("child"))
+	require.NotNil(t, state.FindTaskRecord("child"))
+}
+
+func TestCodexSessionEndPersistsEndedBeforeInventoryRead(t *testing.T) {
+	// NOT parallel: setupStopTestRepo changes CWD.
+	setupStopTestRepo(t)
+	ctx := t.Context()
+	const id = "end-before-child-read"
+	complete := true
+	require.NoError(t, strategy.SaveSessionState(ctx, &strategy.SessionState{SessionID: id, StartedAt: time.Now(), Phase: session.PhaseActive, SubagentInventoryComplete: &complete}))
+	ag := &mockInventoryAgent{mockLifecycleAgent: newMockAgent(), beforeReturn: func() {
+		state, err := strategy.LoadSessionState(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, state.EndedAt, "the host may kill the process during child reads")
+		require.Equal(t, session.PhaseEnded, state.Phase)
+	}}
+	ag.agentType = agent.AgentTypeCodex
+	require.NoError(t, handleLifecycleSessionEnd(ctx, ag, &agent.Event{SessionID: id}))
 }

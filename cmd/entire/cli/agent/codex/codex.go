@@ -2,6 +2,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -132,15 +133,8 @@ func (b *rolloutScanBudget) observeBytes(count int64) error {
 	return nil
 }
 
-func readRegularRolloutContext(ctx context.Context, path string, byteLimit int64, observe func(string, int)) (loadedRollout, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return loadedRollout{}, fmt.Errorf("lstat rollout: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return loadedRollout{}, errors.New("rollout is not a regular file")
-	}
-	file, opened, err := openRolloutFile(path, info)
+func readRegularRolloutContext(ctx context.Context, roots []string, path string, byteLimit int64, observe func(string, int)) (loadedRollout, error) {
+	file, opened, err := openScopedRollout(roots, path)
 	if err != nil {
 		return loadedRollout{}, err
 	}
@@ -158,17 +152,39 @@ func readRegularRolloutContext(ctx context.Context, path string, byteLimit int64
 	return loadedRollout{Path: path, Data: data}, nil
 }
 
-func openRolloutFile(path string, before fs.FileInfo) (*os.File, fs.FileInfo, error) {
-	file, err := os.Open(path) //nolint:gosec // Caller rejects special entries; descriptor Stat verifies the opened file.
+// openScopedRollout accepts files only inside configured rollout roots. Root
+// operations retain containment across directory/symlink replacement races.
+func openScopedRollout(roots []string, path string) (*os.File, fs.FileInfo, error) {
+	for _, base := range roots {
+		rel, err := filepath.Rel(base, path)
+		if err != nil || !filepath.IsLocal(rel) {
+			continue
+		}
+		root, err := os.OpenRoot(base)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open rollout root: %w", err)
+		}
+		file, info, err := openRolloutFile(root, rel)
+		_ = root.Close()
+		return file, info, err
+	}
+	return nil, nil, errors.New("rollout is outside configured roots")
+}
+
+func openRolloutFile(root *os.Root, name string) (*os.File, fs.FileInfo, error) {
+	before, err := root.Lstat(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lstat rollout: %w", err)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, nil, errors.New("rollout is not a regular file")
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY|rolloutNonblock, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open rollout: %w", err)
 	}
 	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, nil, fmt.Errorf("stat opened rollout: %w", err)
-	}
-	if !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
 		_ = file.Close()
 		return nil, nil, errors.New("rollout changed or is not a regular file")
 	}
@@ -219,7 +235,7 @@ func (c *CodexAgent) loadCandidateRollout(ctx context.Context, path string) (loa
 	if c.loadRollout != nil {
 		return c.loadRollout(path)
 	}
-	return readRegularRolloutContext(ctx, path, rolloutBodyByteLimit, c.observeRolloutRead)
+	return readRegularRolloutContext(ctx, c.rolloutRoots(), path, rolloutBodyByteLimit, c.observeRolloutRead)
 }
 
 func (c *CodexAgent) loadVerifiedRollout(ctx context.Context, path, agentID string) (loadedRollout, bool) {
@@ -292,21 +308,19 @@ func walkRolloutsIncremental(ctx context.Context, root string, budget *rolloutSc
 	if err := budget.check(); err != nil {
 		return err
 	}
-	rootInfo, err := os.Lstat(root)
+	scoped, err := os.OpenRoot(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("lstat rollout root: %w", err)
+		return fmt.Errorf("open rollout root: %w", err)
 	}
-	if !rootInfo.IsDir() {
-		return nil
-	}
-	return walkRolloutDirectory(ctx, root, budget, visit)
+	defer scoped.Close()
+	return walkRolloutDirectory(ctx, scoped, root, ".", budget, visit)
 }
 
-func walkRolloutDirectory(ctx context.Context, dirPath string, budget *rolloutScanBudget, visit func(string, fs.DirEntry) error) error {
-	dir, err := os.Open(dirPath) //nolint:gosec // rollout root is user configuration or Codex's own directory
+func walkRolloutDirectory(ctx context.Context, root *os.Root, base, dirPath string, budget *rolloutScanBudget, visit func(string, fs.DirEntry) error) error {
+	dir, err := root.Open(dirPath)
 	if err != nil {
 		return fmt.Errorf("open rollout directory: %w", err)
 	}
@@ -323,12 +337,12 @@ func walkRolloutDirectory(ctx context.Context, dirPath string, budget *rolloutSc
 			}
 			path := filepath.Join(dirPath, entry.Name())
 			if entry.IsDir() {
-				if err := walkRolloutDirectory(ctx, path, budget, visit); err != nil {
+				if err := walkRolloutDirectory(ctx, root, base, path, budget, visit); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := visit(path, entry); err != nil {
+			if err := visit(filepath.Join(base, path), entry); err != nil {
 				return err
 			}
 		}
@@ -349,14 +363,6 @@ func (c *CodexAgent) inspectFallbackCandidate(
 	agentIDs map[string]struct{},
 	budget *rolloutScanBudget,
 ) (string, loadedRollout, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", loadedRollout{}, fmt.Errorf("lstat rollout candidate: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", loadedRollout{}, nil
-	}
-
 	if c.loadRollout != nil {
 		loaded, loadErr := c.loadRollout(path)
 		if loadErr != nil {
@@ -384,7 +390,7 @@ func (c *CodexAgent) inspectFallbackCandidate(
 		return id, loaded, nil
 	}
 
-	file, opened, err := openRolloutFile(path, info)
+	file, opened, err := openScopedRollout(c.rolloutRoots(), path)
 	if err != nil {
 		return "", loadedRollout{}, err
 	}
@@ -444,7 +450,7 @@ func (c *CodexAgent) readFallbackMetadata(file *os.File, path string, budget *ro
 				c.observeRolloutRead(path, n)
 			}
 			chunk := buffer[:n]
-			if newline := indexByte(chunk, '\n'); newline >= 0 {
+			if newline := bytes.IndexByte(chunk, '\n'); newline >= 0 {
 				data = append(data, chunk[:newline+1]...)
 				if int64(len(data)) > budget.limits.metadataByteLimit {
 					return nil, fmt.Errorf("rollout metadata exceeds limit %d: %w", budget.limits.metadataByteLimit, errRolloutScanBudget)
@@ -466,15 +472,6 @@ func (c *CodexAgent) readFallbackMetadata(file *os.File, path string, budget *ro
 			return nil, fmt.Errorf("read rollout metadata: %w", err)
 		}
 	}
-}
-
-func indexByte(data []byte, target byte) int {
-	for index, value := range data {
-		if value == target {
-			return index
-		}
-	}
-	return -1
 }
 
 // scanFallbackRollouts scans every configured root once. Any traversal or

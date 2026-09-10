@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"regexp"
 	"sort"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // Compile-time interface assertions.
@@ -93,6 +96,7 @@ type rolloutClassificationResult struct {
 // sessionMetaPayload is the payload for type="session_meta" lines.
 type sessionMetaPayload struct {
 	ID                          string          `json:"id"`
+	ForkedFromID                string          `json:"forked_from_id,omitempty"`
 	Timestamp                   string          `json:"timestamp"`
 	ThreadSource                string          `json:"thread_source"`
 	Source                      json.RawMessage `json:"source"`
@@ -101,19 +105,19 @@ type sessionMetaPayload struct {
 
 // classifyRolloutDetailed reads only the rollout's session_meta record. Newer
 // Codex rollouts use thread_source; older rollouts use source.
-func classifyRolloutDetailed(path string) rolloutClassificationResult {
+func classifyRolloutDetailed(path string, roots []string) rolloutClassificationResult {
 	if path == "" {
 		return rolloutClassificationResult{Classification: rolloutUnknown, Issue: rolloutIssueNullPath}
 	}
 
-	file, err := os.Open(path) //nolint:gosec // Path comes from agent hook input
+	file, _, err := openScopedRollout(roots, path)
 	if err != nil {
 		return rolloutClassificationResult{Classification: rolloutUnknown, Issue: rolloutIssueUnreadable, Detail: "open"}
 	}
 	defer file.Close()
-
-	lineData, err := bufio.NewReader(file).ReadBytes('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	reader := &CodexAgent{}
+	lineData, err := reader.readFallbackMetadata(file, path, newRolloutScanBudget(context.Background(), defaultRolloutScanLimits))
+	if err != nil {
 		return rolloutClassificationResult{Classification: rolloutUnknown, Issue: rolloutIssueUnreadable, Detail: "read"}
 	}
 
@@ -484,7 +488,11 @@ type rolloutAnalysis struct {
 // Each evidence channel keeps its own validity: malformed task boundaries
 // invalidate terminal turns without discarding file paths already observed,
 // while a malformed final token snapshot makes exact usage unavailable.
-func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
+func analyzeRollout(data []byte) rolloutAnalysis {
+	return analyzeRolloutForTurns(context.Background(), data, nil)
+}
+
+func analyzeRolloutForTurns(ctx context.Context, data []byte, observedTurns []string) rolloutAnalysis {
 	var result rolloutAnalysis
 	terminalValid := true
 	scopeValid := true
@@ -495,17 +503,28 @@ func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
 	foundToken := false
 	lines := splitJSONL(data)
 	var localStartOrdinal *int
+	inherited := false
+	knownTurns := make(map[string]bool, len(observedTurns))
+	for _, turnID := range observedTurns {
+		knownTurns[turnID] = true
+	}
 	if len(lines) > 0 {
 		var first rolloutLine
 		if json.Unmarshal(lines[0], &first) == nil && first.Type == rolloutLineTypeSessionMeta {
 			var meta sessionMetaPayload
-			if json.Unmarshal(first.Payload, &meta) == nil && meta.SubagentHistoryStartOrdinal != nil && *meta.SubagentHistoryStartOrdinal >= 0 {
-				localStartOrdinal = meta.SubagentHistoryStartOrdinal
+			if json.Unmarshal(first.Payload, &meta) == nil {
+				inherited = meta.ForkedFromID != ""
+				if meta.SubagentHistoryStartOrdinal != nil && *meta.SubagentHistoryStartOrdinal >= 0 {
+					localStartOrdinal = meta.SubagentHistoryStartOrdinal
+				}
 			}
 		}
 	}
 
-	for index, lineData := range lines {
+	for _, lineData := range lines {
+		if ctx.Err() != nil {
+			return rolloutAnalysis{}
+		}
 		var line rolloutLine
 		if json.Unmarshal(lineData, &line) != nil {
 			terminalValid = false
@@ -523,7 +542,7 @@ func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
 				continue
 			}
 		}
-		if index+1 > fromOffset {
+		if !inherited || localStartOrdinal != nil || knownTurns[openTurn] {
 			for _, file := range extractFilesFromParsedLine(line) {
 				if _, seen := seenFiles[file]; !seen {
 					seenFiles[file] = struct{}{}
@@ -549,6 +568,9 @@ func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
 		if json.Unmarshal(line.Payload, &event) != nil {
 			if header.Type != eventMsgTypeTokenCount {
 				terminalValid = false
+			} else {
+				foundToken = true
+				lastTokenInfo = nil
 			}
 			continue
 		}
@@ -557,6 +579,11 @@ func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
 			foundToken = true
 			lastTokenInfo = event.Info
 		case "task_started":
+			// Forks copy an unfinished parent turn. A later explicit turn start
+			// replaces that orphan; only balanced pairs can yield terminal IDs.
+			if inherited && localStartOrdinal == nil && event.TurnID != nil && *event.TurnID != openTurn {
+				openTurn = ""
+			}
 			if openTurn != "" || event.TurnID == nil || *event.TurnID == "" {
 				terminalValid = false
 				continue
@@ -582,7 +609,7 @@ func analyzeRollout(data []byte, fromOffset int) rolloutAnalysis {
 	if !terminalValid || openTurn != "" {
 		result.TerminalTurnIDs = nil
 	}
-	if foundToken {
+	if foundToken && (!inherited || localStartOrdinal != nil) {
 		result.ExactTokenUsage = exactUsageFromInfo(lastTokenInfo)
 	}
 	return result
@@ -649,92 +676,59 @@ func exactUsageFromInfo(lastInfo json.RawMessage) *agent.TokenUsage {
 // caller's authoritative ledger. It never discovers children from transcript
 // text, filenames, timestamps, or token-count events.
 func (c *CodexAgent) ExtractWithSubagentInventory(ctx context.Context, parent []byte, fromOffset int, refs []agent.SubagentReference) (agent.InventoryExtraction, error) {
-	result := agent.InventoryExtraction{ModifiedFiles: analyzeRollout(parent, fromOffset).ModifiedFiles}
+	var result agent.InventoryExtraction
 	parentUsage, err := c.CalculateTokenUsage(parent, fromOffset)
 	if err != nil {
 		return result, err
 	}
 	complete := true
 	var childTotal *agent.TokenUsage
-	resolved := make([]loadedRollout, len(refs))
+	result.Children = make([]agent.SubagentAnalysis, len(refs))
 	unresolvedIDs := make(map[string]struct{})
 	for index, ref := range refs {
 		if loaded, ok := c.loadDirectRollout(ctx, ref); ok {
-			resolved[index] = loaded
-		} else if ref.AgentID != "" {
-			unresolvedIDs[ref.AgentID] = struct{}{}
+			// Analyze and release each direct body before reading the next child.
+			result.Children[index] = analyzeLoadedChild(ctx, ref, loaded)
+		} else {
+			result.Children[index].AgentID = ref.AgentID
+			if ref.AgentID != "" {
+				unresolvedIDs[ref.AgentID] = struct{}{}
+			}
 		}
 	}
 	fallback, fallbackErr := c.scanFallbackRollouts(ctx, unresolvedIDs)
 	if fallbackErr != nil {
 		fallback = nil
+		logging.Debug(ctx, "codex: fallback rollout scan incomplete", slog.String("error", fallbackErr.Error()))
 	}
 	for index, ref := range refs {
-		if resolved[index].Path == "" {
-			resolved[index] = fallback[ref.AgentID]
+		if result.Children[index].ResolvedPath == "" {
+			result.Children[index] = analyzeLoadedChild(ctx, ref, fallback[ref.AgentID])
 		}
-	}
-	for index, ref := range refs {
-		analysis := agent.SubagentAnalysis{AgentID: ref.AgentID}
-		loaded := resolved[index]
-		analysis.ResolvedPath = loaded.Path
-		if loaded.Path == "" {
-			complete = false
-			result.Children = append(result.Children, analysis)
-			continue
-		}
-		rollout := analyzeRollout(loaded.Data, 0)
-		analysis.ModifiedFiles = rollout.ModifiedFiles
-		analysis.TerminalTurnIDs = rollout.TerminalTurnIDs
-		analysis.TokenUsage = rollout.ExactTokenUsage
-		if analysis.TokenUsage == nil {
+		child := result.Children[index]
+		if child.TokenUsage == nil {
 			complete = false
 		} else {
-			childTotal = addExactUsage(childTotal, analysis.TokenUsage)
+			childTotal = types.AddTokenUsage(childTotal, child.TokenUsage)
 		}
-		result.ModifiedFiles = appendUniqueFiles(result.ModifiedFiles, analysis.ModifiedFiles)
-		result.Children = append(result.Children, analysis)
 	}
-	result.TokenUsage = withChildCoverage(parentUsage, complete)
+	result.TokenUsage = types.WithClearedSubagentTokens(parentUsage, complete)
 	if complete && len(refs) > 0 {
 		result.TokenUsage.SubagentTokens = childTotal
 	}
 	return result, nil
 }
 
-func withChildCoverage(usage *agent.TokenUsage, complete bool) *agent.TokenUsage {
-	if usage == nil {
-		return &agent.TokenUsage{SubagentTokensComplete: &complete}
+func analyzeLoadedChild(ctx context.Context, ref agent.SubagentReference, loaded loadedRollout) agent.SubagentAnalysis {
+	analysis := agent.SubagentAnalysis{AgentID: ref.AgentID, ResolvedPath: loaded.Path}
+	if loaded.Path == "" {
+		return analysis
 	}
-	result := *usage
-	result.SubagentTokens = nil
-	result.SubagentTokensComplete = &complete
-	return &result
-}
-
-func appendUniqueFiles(files, additions []string) []string {
-	seen := make(map[string]struct{}, len(files)+len(additions))
-	for _, file := range files {
-		seen[file] = struct{}{}
-	}
-	for _, file := range additions {
-		if _, exists := seen[file]; !exists {
-			seen[file] = struct{}{}
-			files = append(files, file)
-		}
-	}
-	return files
-}
-
-func addExactUsage(total, addition *agent.TokenUsage) *agent.TokenUsage {
-	if total == nil {
-		cloned := *addition
-		return &cloned
-	}
-	total.InputTokens += addition.InputTokens
-	total.CacheReadTokens += addition.CacheReadTokens
-	total.OutputTokens += addition.OutputTokens
-	return total
+	rollout := analyzeRolloutForTurns(ctx, loaded.Data, ref.ObservedTurnIDs)
+	analysis.ModifiedFiles = rollout.ModifiedFiles
+	analysis.TerminalTurnIDs = rollout.TerminalTurnIDs
+	analysis.TokenUsage = rollout.ExactTokenUsage
+	return analysis
 }
 
 // ExtractPrompts returns user prompts from the transcript starting at the given offset.

@@ -91,9 +91,9 @@ func TestTerminalTurnIDs_OnlyAcceptsUnambiguousBoundaries(t *testing.T) {
 		taskEvent("task_started", stringPointer("one")), taskEvent("task_complete", stringPointer("one")),
 		taskEvent("task_started", stringPointer("two")), taskEvent("task_complete", nil),
 	}
-	require.Equal(t, []string{"one", "two"}, analyzeRollout(rolloutData(t, "child", valid), 0).TerminalTurnIDs)
+	require.Equal(t, []string{"one", "two"}, analyzeRollout(rolloutData(t, "child", valid)).TerminalTurnIDs)
 	withUnknownEvent := append(append([]json.RawMessage(nil), valid...), json.RawMessage(`{"type":"event_msg","payload":{"type":"future_event","turn_id":7}}`))
-	require.Equal(t, []string{"one", "two"}, analyzeRollout(rolloutData(t, "child", withUnknownEvent), 0).TerminalTurnIDs)
+	require.Equal(t, []string{"one", "two"}, analyzeRollout(rolloutData(t, "child", withUnknownEvent)).TerminalTurnIDs)
 
 	tests := []struct {
 		name   string
@@ -112,7 +112,7 @@ func TestTerminalTurnIDs_OnlyAcceptsUnambiguousBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Empty(t, analyzeRollout(rolloutData(t, "child", tt.events), 0).TerminalTurnIDs)
+			require.Empty(t, analyzeRollout(rolloutData(t, "child", tt.events)).TerminalTurnIDs)
 		})
 	}
 }
@@ -145,9 +145,9 @@ func TestAnalyzeRollout_PaginatedSubagentIgnoresInheritedParentHistory(t *testin
 		encoded = append(encoded, data)
 	}
 
-	result := analyzeRollout(append([]byte(joinLines(encoded)), '\n'), 0)
-	require.Equal(t, []string{"/repo/child.txt"}, result.ModifiedFiles)
+	result := analyzeRollout(append([]byte(joinLines(encoded)), '\n'))
 	require.Equal(t, []string{"child-turn"}, result.TerminalTurnIDs)
+	require.Equal(t, []string{"/repo/child.txt"}, result.ModifiedFiles)
 	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 2, OutputTokens: 1}, result.ExactTokenUsage)
 }
 
@@ -158,18 +158,18 @@ func TestExactTokenUsage_UsesOnlyLastRecognizableSnapshot(t *testing.T) {
 		"input_tokens": 15, "cached_input_tokens": 12, "output_tokens": 3,
 		"reasoning_output_tokens": 2, "total_tokens": 18,
 	}})
-	usage := analyzeRollout(rolloutData(t, "child", []json.RawMessage{valid}), 0).ExactTokenUsage
+	usage := analyzeRollout(rolloutData(t, "child", []json.RawMessage{valid})).ExactTokenUsage
 	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 12, OutputTokens: 3}, usage)
 
 	malformedLast := tokenCountEvent(map[string]any{"total_token_usage": map[string]any{
 		"input_tokens": 10, "cached_input_tokens": 11, "output_tokens": 3,
 	}})
-	require.Nil(t, analyzeRollout(rolloutData(t, "child", []json.RawMessage{valid, malformedLast}), 0).ExactTokenUsage)
+	require.Nil(t, analyzeRollout(rolloutData(t, "child", []json.RawMessage{valid, malformedLast})).ExactTokenUsage)
 
 	missingRequired := tokenCountEvent(map[string]any{"total_token_usage": map[string]any{
 		"input_tokens": 10, "output_tokens": 3,
 	}})
-	require.Nil(t, analyzeRollout(rolloutData(t, "child", []json.RawMessage{missingRequired}), 0).ExactTokenUsage)
+	require.Nil(t, analyzeRollout(rolloutData(t, "child", []json.RawMessage{missingRequired})).ExactTokenUsage)
 }
 
 func TestExactTokenUsage_RejectsEveryUnavailableOrInconsistentSnapshot(t *testing.T) {
@@ -178,7 +178,7 @@ func TestExactTokenUsage_RejectsEveryUnavailableOrInconsistentSnapshot(t *testin
 	valid := func(values map[string]any) []byte {
 		return rolloutData(t, "child", []json.RawMessage{tokenCountEvent(map[string]any{"total_token_usage": values})})
 	}
-	require.Nil(t, analyzeRollout(rolloutData(t, "child", nil), 0).ExactTokenUsage)
+	require.Nil(t, analyzeRollout(rolloutData(t, "child", nil)).ExactTokenUsage)
 
 	for _, values := range []map[string]any{
 		{"cached_input_tokens": 0, "output_tokens": 1},
@@ -193,17 +193,17 @@ func TestExactTokenUsage_RejectsEveryUnavailableOrInconsistentSnapshot(t *testin
 		{"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": -1},
 		{"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1, "reasoning_output_tokens": 2},
 	} {
-		require.Nil(t, analyzeRollout(valid(values), 0).ExactTokenUsage)
+		require.Nil(t, analyzeRollout(valid(values)).ExactTokenUsage)
 	}
 
-	zeros := analyzeRollout(valid(map[string]any{"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}), 0).ExactTokenUsage
+	zeros := analyzeRollout(valid(map[string]any{"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0})).ExactTokenUsage
 	require.Equal(t, &agent.TokenUsage{}, zeros)
 
 	multiple := rolloutData(t, "child", []json.RawMessage{
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 9, "cached_input_tokens": 1, "output_tokens": 2}}),
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 4, "cached_input_tokens": 1, "output_tokens": 2}}),
 	})
-	usage := analyzeRollout(multiple, 0).ExactTokenUsage
+	usage := analyzeRollout(multiple).ExactTokenUsage
 	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 1, OutputTokens: 2}, usage)
 	require.Zero(t, usage.APICallCount, "snapshot record count is not an API-call count")
 
@@ -211,7 +211,7 @@ func TestExactTokenUsage_RejectsEveryUnavailableOrInconsistentSnapshot(t *testin
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 4, "cached_input_tokens": 1, "output_tokens": 2}}),
 		tokenCountEvent(map[string]any{"total_token_usage": "not-an-object"}),
 	})
-	require.Nil(t, analyzeRollout(malformedFinal, 0).ExactTokenUsage, "must not fall back to the earlier valid snapshot")
+	require.Nil(t, analyzeRollout(malformedFinal).ExactTokenUsage, "must not fall back to the earlier valid snapshot")
 }
 
 func TestSubagentInventory_CollectsExactEvidenceAndDoesNotPartialAggregate(t *testing.T) {
@@ -237,7 +237,6 @@ func TestSubagentInventory_CollectsExactEvidenceAndDoesNotPartialAggregate(t *te
 		{AgentID: "two", ResolvedTranscriptPath: childTwo},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"parent.txt", "child.txt", "two.txt"}, result.ModifiedFiles)
 	require.Len(t, result.Children, 2)
 	require.Equal(t, childOne, result.Children[0].ResolvedPath)
 	require.Equal(t, []string{"child.txt"}, result.Children[0].ModifiedFiles)
@@ -275,7 +274,6 @@ func TestSubagentInventory_AggregatesOnlyCompleteExactChildren(t *testing.T) {
 		{AgentID: "second", ResolvedTranscriptPath: second},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"first.txt", "second.txt"}, result.ModifiedFiles)
 	require.Len(t, result.Children, 2, "one analysis is retained for each supplied reference")
 	require.Equal(t, "first", result.Children[0].AgentID)
 	require.Equal(t, first, result.Children[0].ResolvedPath)
@@ -333,7 +331,6 @@ func TestSubagentInventory_UnresolvedChildPreventsPartialAggregate(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Children, 2)
-	require.Equal(t, []string{"available.txt"}, result.ModifiedFiles)
 	require.Equal(t, []string{"available-turn"}, result.Children[0].TerminalTurnIDs)
 	require.NotNil(t, result.Children[0].TokenUsage)
 	require.Empty(t, result.Children[1].ResolvedPath)
@@ -647,4 +644,32 @@ func joinLines(lines [][]byte) string {
 		result.Write(line)
 	}
 	return result.String()
+}
+
+func TestAnalyzeRollout_ForkWithoutOrdinalDoesNotAttributeParentUsage(t *testing.T) {
+	t.Parallel()
+	data := []byte(`{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"task_started","turn_id":"parent-turn"}}` + "\n" +
+		string(patchEvent("parent.txt")) + "\n" +
+		string(tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 1000, "cached_input_tokens": 900, "output_tokens": 50}})) + "\n" +
+		string(taskEvent("task_started", stringPointer("child-turn"))) + "\n" +
+		string(patchEvent("child.txt")) + "\n" +
+		string(taskEvent("task_complete", stringPointer("child-turn"))) + "\n")
+	result := analyzeRollout(data)
+	require.Nil(t, result.ExactTokenUsage, "inherited cumulative counters cannot prove child-only usage")
+	require.Empty(t, result.ModifiedFiles, "without a boundary or observed child turns, files are unscoped")
+	require.Contains(t, result.TerminalTurnIDs, "child-turn", "the inherited open parent turn must not invalidate a balanced child turn")
+	scoped := analyzeRolloutForTurns(t.Context(), data, []string{"child-turn"})
+	require.Equal(t, []string{"child.txt"}, scoped.ModifiedFiles)
+	require.Contains(t, scoped.TerminalTurnIDs, "child-turn")
+	require.Nil(t, scoped.ExactTokenUsage)
+}
+
+func TestExactTokenUsage_MalformedTokenEnvelopeClearsSnapshot(t *testing.T) {
+	t.Parallel()
+	data := rolloutData(t, "child", []json.RawMessage{
+		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 10, "cached_input_tokens": 2, "output_tokens": 3}}),
+		json.RawMessage(`{"type":"event_msg","payload":{"type":"token_count","turn_id":7}}`),
+	})
+	require.Nil(t, analyzeRollout(data).ExactTokenUsage)
 }

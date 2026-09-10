@@ -872,6 +872,10 @@ func (s *State) ClearCondensationAttempt() {
 // helper (resetCheckpointWindow) and cross-repo session adoption, which likewise
 // opens a fresh target-local window. Sharing this here keeps the two in step.
 func (s *State) RebaselineSubagentTokens() {
+	// Legacy agents without a snapshot retain their existing window baseline.
+	if s.TokenUsage == nil && s.AgentType != agent.AgentTypeCodex {
+		return
+	}
 	if s.TokenUsage == nil || (s.TokenUsage.SubagentTokensComplete != nil && !*s.TokenUsage.SubagentTokensComplete) {
 		incomplete := false
 		s.SubagentTokensBaseline = nil

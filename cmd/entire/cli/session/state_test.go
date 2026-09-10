@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/assert"
@@ -1210,4 +1211,17 @@ func TestState_RebaselineSubagentTokensPreservesTriState(t *testing.T) {
 	require.NotNil(t, unknown.SubagentTokensBaselineComplete)
 	assert.False(t, *unknown.SubagentTokensBaselineComplete)
 	assert.Nil(t, unknown.SubagentTokensBaseline)
+}
+
+func TestState_RebaselineSubagentTokensPreservesLegacyNilUsage(t *testing.T) {
+	t.Parallel()
+	for _, agentType := range []types.AgentType{agent.AgentTypeClaudeCode, agent.AgentTypeFactoryAIDroid} {
+		t.Run(string(agentType), func(t *testing.T) {
+			t.Parallel()
+			state := &State{AgentType: agentType, SubagentTokensBaseline: &agent.TokenUsage{InputTokens: 7}}
+			state.RebaselineSubagentTokens()
+			require.Equal(t, &agent.TokenUsage{InputTokens: 7}, state.SubagentTokensBaseline)
+			require.Nil(t, state.SubagentTokensBaselineComplete)
+		})
+	}
 }

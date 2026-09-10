@@ -86,7 +86,7 @@ func TestClassifyRollout(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "rollout.jsonl")
 			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o600))
-			got := classifyRolloutDetailed(path)
+			got := classifyRolloutDetailed(path, []string{filepath.Dir(path)})
 			require.Equal(t, tt.want, got.Classification)
 			require.Equal(t, tt.wantIssue, got.Issue)
 		})
@@ -94,7 +94,7 @@ func TestClassifyRollout(t *testing.T) {
 
 	t.Run("missing path", func(t *testing.T) {
 		t.Parallel()
-		got := classifyRolloutDetailed(filepath.Join(t.TempDir(), "missing.jsonl"))
+		got := classifyRolloutDetailed(filepath.Join(t.TempDir(), "missing.jsonl"), nil)
 		require.Equal(t, rolloutUnknown, got.Classification)
 		require.Equal(t, rolloutIssueUnreadable, got.Issue)
 	})

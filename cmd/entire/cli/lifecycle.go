@@ -1135,11 +1135,29 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	// sets no budget, and for agents that do, bounding the final captures
 	// against the same deadline is a known follow-up.
 	if ag.Type() == agent.AgentTypeCodex {
-		if transcript, readErr := ag.ReadTranscript(event.SessionRef); readErr == nil {
-			_, _ = refreshCodexInventory(ctx, ag, event.SessionID, transcript, 0)
+		// Persist the cheap end transition before any potentially large rollout
+		// reads. If the host kills this hook, the session must not remain ACTIVE.
+		ended, err := markSessionEnded(ctx, event, event.SessionID, nil, endedNow)
+		if err != nil {
+			return fmt.Errorf("mark codex session ended: %w", err)
 		}
+		if !ended {
+			return nil
+		}
+		deadline := sessionEndCondenseDeadline(ag)
+		if !deadline.IsZero() {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+		// Only child evidence is persisted here; rereading the parent is unused.
+		_, _ = refreshCodexInventory(ctx, ag, event.SessionID, nil, 0)
 		finalizeCodexObservedAtSessionEnd(ctx, event.SessionID)
+		completeLiveTaskRecords(ctx, ag, event.SessionID, event.SessionRef)
+		condenseEndedSession(ctx, event.SessionID, deadline)
+		return nil
 	}
+
 	completeLiveTaskRecords(ctx, ag, event.SessionID, event.SessionRef)
 
 	if _, err := endSessionNow(ctx, event, event.SessionID, nil, sessionEndCondenseDeadline(ag), endedNow); err != nil {
@@ -1176,8 +1194,7 @@ func finalizeCodexObservedAtSessionEnd(ctx context.Context, sessionID string) {
 					if entry.ResolvedTranscriptPath != "" {
 						record.DeclaredTranscriptPath = entry.ResolvedTranscriptPath
 					}
-					record.Files = nil
-					record.TokenUsage = nil
+					// No new snapshot exists here. Preserve evidence captured for earlier turns.
 					break
 				}
 			}
@@ -1199,7 +1216,7 @@ func refreshCodexInventory(ctx context.Context, ag agent.Agent, sessionID string
 	}
 	refs := make([]agent.SubagentReference, 0, len(state.SubagentInventory))
 	for _, entry := range state.SubagentInventory {
-		refs = append(refs, agent.SubagentReference{AgentID: entry.AgentID, DeclaredTranscriptPath: entry.DeclaredTranscriptPath, ResolvedTranscriptPath: entry.ResolvedTranscriptPath})
+		refs = append(refs, agent.SubagentReference{ObservedTurnIDs: entry.ObservedTurnIDs, AgentID: entry.AgentID, DeclaredTranscriptPath: entry.DeclaredTranscriptPath, ResolvedTranscriptPath: entry.ResolvedTranscriptPath})
 	}
 	version := state.SubagentLedgerVersion
 	extraction, ok := agent.ExtractWithSubagentInventory(ctx, ag, parent, fromOffset, refs)
@@ -1207,7 +1224,7 @@ func refreshCodexInventory(ctx context.Context, ag agent.Agent, sessionID string
 		return nil, &version
 	}
 
-	usage := extraction.TokenUsage
+	usage := types.WithClearedSubagentTokens(extraction.TokenUsage, false)
 	if err := strategy.MutateSessionState(ctx, sessionID, func(current *strategy.SessionState) error {
 		if current.SubagentLedgerVersion != version {
 			return strategy.ErrMutationSkip
@@ -1325,12 +1342,17 @@ func endSessionNow(ctx context.Context, event *agent.Event, sessionID string, gu
 	if err != nil || !ended {
 		return ended, err
 	}
+	condenseEndedSession(ctx, sessionID, condenseDeadline)
+	return true, nil
+}
+
+func condenseEndedSession(ctx context.Context, sessionID string, condenseDeadline time.Time) {
 	logCtx := logging.WithComponent(ctx, "lifecycle")
 	if !condenseDeadline.IsZero() {
 		if remaining := time.Until(condenseDeadline); remaining <= 0 {
 			logging.Info(logCtx, "skipping eager condense: session-end budget already spent",
 				slog.String("session_id", sessionID))
-			return true, nil
+			return
 		}
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, condenseDeadline)
@@ -1341,7 +1363,6 @@ func endSessionNow(ctx context.Context, event *agent.Event, sessionID string, gu
 			slog.String("session_id", sessionID),
 			slog.String("error", condErr.Error()))
 	}
-	return true, nil
 }
 
 // handleLifecycleSubagentStart handles subagent start: captures pre-task state.
@@ -1431,10 +1452,16 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 		if event.SubagentID == "" || event.TurnID == "" {
 			return errors.New("invalid codex provisional subagent stop: agent and turn IDs are required")
 		}
+		if err := GetStrategy(ctx).EnsureSessionExists(ctx, event.SessionID, ag.Type()); err != nil {
+			return fmt.Errorf("ensure codex subagent session: %w", err)
+		}
 		// Codex's stop hook is deliberately not completion: its rollout can
 		// still be changing. Record only the observation for later transcript
 		// reconciliation; do not capture the parent worktree or mark a task done.
 		err := strategy.MutateSessionState(logCtx, event.SessionID, func(state *strategy.SessionState) error {
+			if state.Phase == session.PhaseEnded || state.EndedAt != nil {
+				return strategy.ErrMutationSkip
+			}
 			state.RecordSubagentStop(event.SubagentID, event.TurnID)
 			state.UpdateSubagentTranscriptPaths(event.SubagentID, event.SubagentTranscriptPath, "")
 			return nil

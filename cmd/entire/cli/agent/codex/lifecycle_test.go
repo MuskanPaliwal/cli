@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,7 +187,7 @@ func TestParseHookEvent_TurnHooksIgnoreChildRollout(t *testing.T) {
 	input := `{"session_id":"root-session-1","turn_id":"turn-1","transcript_path":"` + path + `","model":"gpt-5","prompt":"do work","stop_hook_active":true}`
 
 	for _, hookName := range []string{HookNameUserPromptSubmit, HookNameStop} {
-		event, err := (&CodexAgent{}).ParseHookEvent(context.Background(), hookName, strings.NewReader(input))
+		event, err := (&CodexAgent{RolloutRoots: []string{filepath.Dir(path)}}).ParseHookEvent(context.Background(), hookName, strings.NewReader(input))
 		require.NoError(t, err)
 		require.Nil(t, event)
 	}
@@ -245,7 +246,7 @@ func TestParseHookEvent_UnknownTurnRolloutPreservesRootLifecycle(t *testing.T) {
 				pathJSON = `"` + rolloutPath + `"`
 			}
 			logDir := t.TempDir()
-			logger, err := logging.New(logging.Config{Dir: logDir})
+			logger, err := logging.New(logging.Config{Dir: logDir, Level: slog.LevelDebug})
 			require.NoError(t, err)
 			ctx := logging.WithLogger(context.Background(), logger)
 			input := `{"session_id":"root-session-1","turn_id":"turn-1","transcript_path":` + pathJSON + `,"model":"gpt-5","prompt":"do work"}`
@@ -257,7 +258,7 @@ func TestParseHookEvent_UnknownTurnRolloutPreservesRootLifecycle(t *testing.T) {
 				{HookNameUserPromptSubmit, agent.TurnStart},
 				{HookNameStop, agent.TurnEnd},
 			} {
-				event, err := (&CodexAgent{}).ParseHookEvent(ctx, hook.name, strings.NewReader(input))
+				event, err := (&CodexAgent{RolloutRoots: []string{filepath.Dir(rolloutPath)}}).ParseHookEvent(ctx, hook.name, strings.NewReader(input))
 				require.NoError(t, err)
 				require.NotNil(t, event)
 				require.Equal(t, hook.want, event.Type)

@@ -207,7 +207,7 @@ func (c *CodexAgent) parseTurnStart(ctx context.Context, stdin io.Reader) (*agen
 	if err != nil {
 		return nil, err
 	}
-	if !isRootTurnRollout(ctx, derefString(raw.TranscriptPath)) {
+	if !c.isRootTurnRollout(ctx, derefString(raw.TranscriptPath)) {
 		return nil, nil //nolint:nilnil // only confirmed child rollouts are skipped
 	}
 	return &agent.Event{
@@ -281,7 +281,7 @@ func (c *CodexAgent) parseTurnEnd(ctx context.Context, stdin io.Reader) (*agent.
 	if err != nil {
 		return nil, err
 	}
-	if !isRootTurnRollout(ctx, derefString(raw.TranscriptPath)) {
+	if !c.isRootTurnRollout(ctx, derefString(raw.TranscriptPath)) {
 		return nil, nil //nolint:nilnil // only confirmed child rollouts are skipped
 	}
 	return &agent.Event{
@@ -293,8 +293,8 @@ func (c *CodexAgent) parseTurnEnd(ctx context.Context, stdin io.Reader) (*agent.
 	}, nil
 }
 
-func isRootTurnRollout(ctx context.Context, path string) bool {
-	classification := classifyRolloutDetailed(path)
+func (c *CodexAgent) isRootTurnRollout(ctx context.Context, path string) bool {
+	classification := classifyRolloutDetailed(path, c.rolloutRoots())
 	switch classification.Classification {
 	case rolloutRoot:
 		return true
@@ -302,7 +302,7 @@ func isRootTurnRollout(ctx context.Context, path string) bool {
 		logging.Debug(ctx, "codex: skipped root lifecycle mutation for child rollout", slog.String("path", path))
 		return false
 	case rolloutUnknown:
-		logging.Warn(ctx, "codex: preserved root lifecycle event because rollout ownership is unverified",
+		logging.Debug(ctx, "codex: preserved root lifecycle event because rollout ownership is unverified",
 			slog.String("category", string(classification.Issue)),
 			slog.String("detail", classification.Detail),
 			slog.String("path", path))
