@@ -54,8 +54,8 @@ type remoteTopology struct {
 	// pushDisabled reports that push_sessions is off, which makes every claim
 	// below about where a push delivers checkpoints conditional: nothing is
 	// pushed at all. Read as a caveat on the note, not a reason to suppress
-	// it — the destination still decides where checkpoints are read from, and
-	// it is still what a user pins with checkpoint_remote.
+	// it — the ambiguity is still what re-enabling pushing would run into,
+	// and still what a user pins with checkpoint_remote.
 	pushDisabled bool
 }
 
@@ -156,12 +156,20 @@ func (t remoteTopology) describeCheckpointDestination(w io.Writer, header string
 	fmt.Fprintln(w, header)
 
 	// Said first, because it qualifies every "pushes to" below. The note is
-	// still worth printing: the destination decides where checkpoints are read
-	// from, and re-enabling pushing is one setting away.
+	// still worth printing: the ambiguity it describes is what re-enabling
+	// pushing would run into, and it is what checkpoint_remote pins.
+	//
+	// Deliberately silent about where checkpoints are READ from, even though
+	// that is the live question when nothing is pushed: what this note lists
+	// is PUSH URLs, and a fan-out remote's reads use its fetch URL instead
+	// (the git-branch branch below says as much — "only the fetch URL is ever
+	// reconciled"). `entire status` names the read source correctly, as an
+	// elected remote rather than a URL.
 	if t.pushDisabled {
 		fmt.Fprintln(w, "  Automatic checkpoint pushing is disabled (push_sessions=false), so no")
 		fmt.Fprintln(w, "  checkpoints are pushed anywhere right now. The destination below is where")
-		fmt.Fprintln(w, "  they would go, and where they are read from today.")
+		fmt.Fprintln(w, "  they would go if you re-enabled it; `entire status` reports where")
+		fmt.Fprintln(w, "  checkpoints are read from meanwhile.")
 	}
 
 	for _, d := range t.destinations {
