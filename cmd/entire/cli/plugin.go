@@ -87,12 +87,17 @@ func MaybeRunPlugin(ctx context.Context, rootCmd *cobra.Command, args []string) 
 			// The command was not executed because installation was declined.
 			return true, 1
 		}
-		// Name the command that is about to run: the install may have taken a
-		// while, and it is the reason the user is still waiting. The command
-		// itself is part of the line — printing only the arguments left a
-		// bare "Running plugin with command:" for `entire graph`.
-		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running %s\n",
-			strings.Join(append([]string{rootCmd.Name(), pluginName}, pluginArgs...), " "))
+		// Say what is happening now: the install may have taken a while, and
+		// it is the reason the user is still waiting.
+		//
+		// The binary's name, never the arguments. They are the user's own
+		// command line, already on their screen, so echoing them back adds
+		// nothing — and it would put whatever they contain into stderr and
+		// into anything capturing it: a token passed as a flag, a newline
+		// that forges a second line of output, a terminal escape that
+		// repositions the cursor or repaints what is above it. That last one
+		// is the same hazard hasTerminalControlChars exists for.
+		fmt.Fprintf(rootCmd.ErrOrStderr(), "Running %s%s\n", pluginBinaryPrefix, pluginName)
 	}
 	exitCode = runPlugin(ctx, pluginName, binPath, pluginArgs)
 	if exitCode == 0 {

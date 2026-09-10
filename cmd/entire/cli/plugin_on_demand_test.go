@@ -207,17 +207,22 @@ func TestMaybeRunPlugin_GraphInManagedDirIsRunNotReinstalled(t *testing.T) { //n
 	if err != nil || string(got) != "search\nhello\n" {
 		t.Fatalf("managed entry did not run with the forwarded args: %q %v", got, err)
 	}
-	// The announcement names the command, not just its arguments — a bare
-	// `entire graph` used to print "Running plugin with command:" and stop.
-	if !strings.Contains(stderr.String(), "Running entire graph search hello\n") {
-		t.Errorf("forwarded command was not announced: %q", stderr.String())
+	// The announcement names the binary and nothing else: the arguments are
+	// the user's own command line, and echoing them back would carry whatever
+	// they hold (a token, a newline, a terminal escape) into stderr.
+	if !strings.Contains(stderr.String(), "Running entire-graph\n") {
+		t.Errorf("plugin was not announced: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "hello") {
+		t.Errorf("arguments were echoed back: %q", stderr.String())
 	}
 }
 
-// A bare `entire graph` has no arguments to forward, which is the case the
-// announcement got wrong: joining only the arguments left a trailing colon
-// and nothing after it.
-func TestMaybeRunPlugin_BareGraphAnnouncesTheCommand(t *testing.T) { //nolint:paralleltest // isolates PATH and managed plugins
+// Arguments never reach stderr, whatever they contain. A terminal escape in
+// one could reposition the cursor or repaint the lines above it — the hazard
+// hasTerminalControlChars guards for index entries — and a flag value could be
+// a token that then lands in any log capturing stderr.
+func TestMaybeRunPlugin_AnnouncementNeverEchoesArguments(t *testing.T) { //nolint:paralleltest // isolates PATH and managed plugins
 	withIsolatedPluginEnv(t)
 	interceptVersionCheck(t)
 	binDir, err := EnsurePluginBinDir()
@@ -229,10 +234,122 @@ func TestMaybeRunPlugin_BareGraphAnnouncesTheCommand(t *testing.T) { //nolint:pa
 	root := newTestRoot()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	if handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph"}); !handled || code != 0 {
+	args := []string{"graph", "--token", "s3cr3t", "\x1b[1A\x1b[2Kforged", "line\nbreak"}
+	if handled, code := MaybeRunPlugin(t.Context(), root, args); !handled || code != 0 {
 		t.Fatalf("handled=%v code=%d; stderr=%s", handled, code, &stderr)
 	}
-	if !strings.Contains(stderr.String(), "Running entire graph\n") {
-		t.Errorf("bare command was not announced: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "Running entire-graph\n") {
+		t.Errorf("plugin was not announced: %q", stderr.String())
+	}
+	for _, leaked := range []string{"s3cr3t", "\x1b", "forged", "line\nbreak"} {
+		if strings.Contains(stderr.String(), leaked) {
+			t.Errorf("argument content %q reached stderr: %q", leaked, stderr.String())
+		}
+	}
+}
+
+// A managed entry Lstat reports but exec cannot use — the local-dev symlink
+// whose target moved — is neither run nor offered for installation: exec'ing
+// it fails with a fork/exec ENOENT naming a path the user never chose, and
+// prompting dead-ends on the already-installed guard. Both are replaced by a
+// message that says what is broken and how to repair it.
+func TestMaybeRunPlugin_BrokenManagedEntryReportsARemedy(t *testing.T) { //nolint:paralleltest // isolates PATH and managed plugins
+	withIsolatedPluginEnv(t)
+	interceptVersionCheck(t)
+	binDir, err := EnsurePluginBinDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(binDir, "entire-graph")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone", "entire-graph"), entry); err != nil {
+		t.Fatal(err)
+	}
+	if found, ferr := FindInstalledPlugin("graph"); ferr != nil || found == nil {
+		t.Fatalf("precondition: a dangling entry must still be listed: %v %v", found, ferr)
+	}
+
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	t.Setenv("ACCESSIBLE", "1")
+	originalTerminal := openPluginPromptTerminal
+	openPluginPromptTerminal = func() (pluginPromptTerminal, error) {
+		t.Error("a broken entry must not be answered with an install prompt")
+		return pluginPromptTerminal{in: io.NopCloser(strings.NewReader("n\n"))}, nil
+	}
+	t.Cleanup(func() { openPluginPromptTerminal = originalTerminal })
+	originalInstall := onDemandPluginInstall
+	onDemandPluginInstall = func(context.Context, *cobra.Command, installSource, remoteInstallFlags) error {
+		t.Error("a broken entry must not be silently reinstalled over")
+		return nil
+	}
+	t.Cleanup(func() { onDemandPluginInstall = originalInstall })
+
+	root := newTestRoot()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	handled, code := MaybeRunPlugin(t.Context(), root, []string{"graph", "search"})
+	if !handled || code != 1 {
+		t.Fatalf("handled=%v code=%d, want true, 1; stderr=%s", handled, code, &stderr)
+	}
+	for _, want := range []string{
+		entry,
+		"cannot be run",
+		"points at a file that no longer exists",
+		"entire plugin install graph --force",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("missing %q in the diagnosis: %q", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "use --force to replace") {
+		t.Errorf("fell through to the already-installed dead end: %q", stderr.String())
+	}
+}
+
+// The remedy is offered only for conditions a reinstall repairs, so it cannot
+// be hung off an error it would not resolve. Both identified conditions are
+// repairable; the unidentified branch (a stat failure that is not ENOENT) is
+// left to review, since staging one means breaking permissions on the managed
+// directory, which breaks its discovery first and exercises the wrong path.
+func TestCheckManagedPluginRunnable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runnable := filepath.Join(dir, "entire-ok")
+	if err := os.WriteFile(runnable, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(dir, "entire-dangling")
+	if err := os.Symlink(filepath.Join(dir, "gone"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	asDir := filepath.Join(dir, "entire-dir")
+	if err := os.Mkdir(asDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name             string
+		path             string
+		wantErr          string
+		wantReinstallFix bool
+	}{
+		{name: "regular file", path: runnable},
+		{name: "dangling symlink", path: dangling, wantErr: "points at a file that no longer exists", wantReinstallFix: true},
+		{name: "directory", path: asDir, wantErr: "it is a directory", wantReinstallFix: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reinstallFixes, err := checkManagedPluginRunnable(tc.path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err=%v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err=%v, want %q", err, tc.wantErr)
+			}
+			if reinstallFixes != tc.wantReinstallFix {
+				t.Errorf("reinstallFixes=%v, want %v", reinstallFixes, tc.wantReinstallFix)
+			}
+		})
 	}
 }
