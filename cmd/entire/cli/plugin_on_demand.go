@@ -106,7 +106,11 @@ func installMissingPlugin(ctx context.Context, rootCmd *cobra.Command, name stri
 	cmd := newPluginInstallCmd()
 	cmd.SetOut(rootCmd.ErrOrStderr())
 	cmd.SetErr(rootCmd.ErrOrStderr())
-	if err := onDemandPluginInstall(ctx, cmd, installSource{Kind: installFromIndex, Ref: name}, remoteInstallFlags{}); err != nil {
+	// Resolved carries the entry the prompt named, so the install cannot
+	// re-resolve into a different repository after the user has agreed to
+	// this one — see installSource.Resolved.
+	src := installSource{Kind: installFromIndex, Ref: name, Resolved: entry}
+	if err := onDemandPluginInstall(ctx, cmd, src, remoteInstallFlags{}); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {

@@ -88,3 +88,40 @@ func TestPluginUpgradeReportsStagesOnStderr(t *testing.T) { //nolint:paralleltes
 		t.Errorf("stdout should carry the upgrade result: %q", out.String())
 	}
 }
+
+// installSource.Resolved binds an install to the entry its caller already
+// showed the user. Without it runRemoteInstall reads the index a second time,
+// and the two reads can disagree — a failed refresh leaves the freshness
+// marker untouched so the next call retries and may succeed with different
+// content, and a concurrent forced update rewrites the clone either way —
+// letting the prompt name repository A while repository B is installed.
+//
+// The index here does not list "demo" at all, so a re-resolution cannot
+// silently substitute: it fails outright, which is what makes the assertion
+// unambiguous.
+func TestRunRemoteInstall_ResolvedEntryIsNotReResolved(t *testing.T) { //nolint:paralleltest // isolates managed plugins and index cache
+	withIsolatedPluginEnv(t)
+	withIndexCache(t)
+	repoURL, _ := newDemoPluginRepo(t, []string{remoteTestTagOld}, "0.1.0")
+	indexURL, _ := newIndexRepo(t, `{"version":1,"plugins":[{"name":"somethingelse","repo_url":"https://example.invalid/entire-somethingelse"}]}`)
+
+	cmd := newPluginInstallCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	src := installSource{
+		Kind:     installFromIndex,
+		Ref:      "demo",
+		Resolved: &PluginIndexEntry{Name: "demo", RepoURL: repoURL},
+	}
+	if err := runRemoteInstall(t.Context(), cmd, src, remoteInstallFlags{index: indexURL}); err != nil {
+		t.Fatalf("runRemoteInstall: %v", err)
+	}
+	if !strings.Contains(out.String(), `Installed plugin "demo" `+remoteTestTagOld+" from "+repoURL) {
+		t.Errorf("installed something other than the resolved repository: %q", out.String())
+	}
+	installed, err := FindInstalledPlugin("demo")
+	if err != nil || installed == nil {
+		t.Fatalf("FindInstalledPlugin: %v %v", installed, err)
+	}
+}

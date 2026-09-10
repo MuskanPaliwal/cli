@@ -74,6 +74,18 @@ type installSource struct {
 	// Ref is the repository URL, the filesystem path, or the catalog name,
 	// according to Kind.
 	Ref string
+	// Resolved is the catalog entry a caller already looked up for Ref.
+	//
+	// Set it whenever the caller has SHOWN the user which repository will be
+	// installed. runRemoteInstall reads the index for its own reasons, and
+	// that second read can disagree with the first: a refresh that failed
+	// leaves the freshness marker untouched, so the next call retries the
+	// fetch and may succeed with different content, and a concurrent
+	// `plugin index update --force` rewrites the clone under the lock either
+	// way. Re-resolving after a confirmation therefore lets the prompt name
+	// repository A while repository B is downloaded and executed — which
+	// makes naming the repository worse than useless.
+	Resolved *PluginIndexEntry
 }
 
 // parseInstallSource classifies an install argument and validates it in one
@@ -216,10 +228,18 @@ func runRemoteInstall(ctx context.Context, cmd *cobra.Command, src installSource
 	stopIndex()
 
 	if src.Kind == installFromIndex {
-		if idxErr != nil {
-			return fmt.Errorf("resolve %q via plugin index: %w", src.Ref, idxErr)
+		entry := src.Resolved
+		// Only consult the index when the caller did not already resolve the
+		// name. An idxErr is fatal only in that case: a caller that arrives
+		// with an entry has done the lookup, and the index is needed after
+		// this only for dependency planning, which already degrades to a
+		// warning when it is unavailable.
+		if entry == nil {
+			if idxErr != nil {
+				return fmt.Errorf("resolve %q via plugin index: %w", src.Ref, idxErr)
+			}
+			entry = idx.Find(src.Ref)
 		}
-		entry := idx.Find(src.Ref)
 		if entry == nil {
 			// Bare names never resolve to local files (see
 			// parseInstallSource), but a user who typed one expecting a

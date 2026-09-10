@@ -88,6 +88,12 @@ func TestMaybeRunPlugin_InstallGraphAndRun(t *testing.T) { //nolint:paralleltest
 				if src.Kind != installFromIndex || src.Ref != "graph" || flags != (remoteInstallFlags{}) {
 					t.Fatalf("unexpected install request: %+v %+v", src, flags)
 				}
+				// The entry the prompt named travels with the request, so the
+				// install cannot re-resolve into a different repository after
+				// the user agreed to this one.
+				if src.Resolved == nil || src.Resolved.RepoURL != "https://github.com/entireio/entire-graph" {
+					t.Fatalf("install was not bound to the repository shown: %+v", src.Resolved)
+				}
 				if tc.installErr != nil {
 					return tc.installErr
 				}

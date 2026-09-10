@@ -94,18 +94,23 @@ func main() {
 			// exits with a meaningful code (a TUI quitting on Ctrl-C exits 0)
 			// must keep that code instead of being reported as killed.
 			switch {
-			case killedBy != nil:
-				// The child's own signal, which is not necessarily one we
-				// received: `kill -TERM` aimed at the plugin must still exit
-				// 143, and a SIGPIPE from `entire graph | head -1` must still
-				// exit 141. Preferred over ours so the external command's
-				// outcome is what propagates.
-				dieFromSignal(killedBy)
 			case procsignal.Load() != nil:
-				// No child signal to name — the on-demand install was
-				// interrupted before any child existed — so die from what we
-				// were sent.
+				// A signal we received outranks the child's, because when we
+				// were signalled the child's signal is usually OUR signal
+				// laundered — and laundered lossily. Cancelling the context
+				// makes runPlugin's cmd.Cancel send the child SIGINT whatever
+				// we got, so a supervisor's SIGTERM comes back as a SIGINT
+				// child and would report 130 for a shutdown that must report
+				// 143. That is the exact confusion dieFromSignal exists to
+				// prevent.
 				dieFromSignal(terminatingSignal())
+			case killedBy != nil:
+				// We were not signalled, so the child's signal is genuinely
+				// its own: `kill -TERM` aimed at the plugin still exits 143,
+				// and a SIGPIPE from `entire graph | head -1` still exits
+				// 141. Nothing laundered it, so it is the outcome to
+				// propagate.
+				dieFromSignal(killedBy)
 			default:
 				// -1 with no signal on either side. Windows reports a killed
 				// child as an ordinary exit code, so it never lands here;
