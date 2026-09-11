@@ -157,10 +157,22 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		if _, refErr := repo.Reference(refName, true); refErr != nil {
 			absent, err := gitrepo.ReferenceIsAbsent(repo, refName)
 			if err != nil {
-				return nil, fmt.Errorf("verify shadow branch %s: %w", shadowBranch, err)
+				logging.Debug(logging.WithComponent(ctx, "session"),
+					"session discovery skipped state because shadow branch absence could not be verified",
+					slog.String("session_id", state.SessionID),
+					slog.String("branch", shadowBranch),
+					slog.String("error", err.Error()),
+				)
+				continue
 			}
 			if !absent {
-				return nil, fmt.Errorf("shadow branch %s is present but could not be read: %w", shadowBranch, refErr)
+				logging.Debug(logging.WithComponent(ctx, "session"),
+					"session discovery skipped state because its shadow branch could not be read",
+					slog.String("session_id", state.SessionID),
+					slog.String("branch", shadowBranch),
+					slog.String("error", refErr.Error()),
+				)
+				continue
 			}
 			if !state.Phase.IsActive() && state.LastCheckpointID.IsEmpty() && !state.HasTaskContent() {
 				//nolint:errcheck,gosec // G104: Cleanup is best-effort, shouldn't fail the list operation
