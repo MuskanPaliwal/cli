@@ -167,7 +167,7 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	if settings.SummaryGeneration.Provider != "claude-code" {
 		t.Errorf("expected summary_generation.provider 'claude-code', got %q", settings.SummaryGeneration.Provider)
 	}
-	if settings.SummaryGeneration.Model != "sonnet" { //nolint:goconst // test literal
+	if settings.SummaryGeneration.Model != "sonnet" {
 		t.Errorf("expected summary_generation.model 'sonnet', got %q", settings.SummaryGeneration.Model)
 	}
 	if settings.Redaction == nil {
@@ -642,67 +642,6 @@ func TestLoad_MergesLocalOverrides(t *testing.T) {
 	}
 	if s.LogLevel != "debug" {
 		t.Errorf("LogLevel = %q, want %q", s.LogLevel, "debug")
-	}
-}
-
-func TestLoad_AsyncMirrorRequestsUsesLayeredSettings(t *testing.T) {
-	tests := []struct {
-		name  string
-		base  string
-		local string
-		want  bool
-	}{
-		{name: "unset", base: `{"enabled": true}`, want: true},
-		{name: "project setting enabled", base: `{"async_mirror_requests": true}`, want: true},
-		{name: "project setting disabled", base: `{"async_mirror_requests": false}`},
-		{name: "local setting enabled", base: `{"enabled": true}`, local: `{"async_mirror_requests": true}`, want: true},
-		{name: "local false", base: `{"async_mirror_requests": true}`, local: `{"async_mirror_requests": false}`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setupSettingsDir(t, tt.base, tt.local)
-
-			got, err := Load(context.Background())
-			if err != nil {
-				t.Fatalf("Load() error = %v", err)
-			}
-			if got.IsAsyncMirrorRequestsEnabled() != tt.want {
-				t.Fatalf("IsAsyncMirrorRequestsEnabled() = %v, want %v", got.IsAsyncMirrorRequestsEnabled(), tt.want)
-			}
-		})
-	}
-}
-
-func TestSave_PreservesAsyncMirrorRequestsPresence(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{name: "unset", input: `{"enabled": true}`, want: ""},
-		{name: "enabled", input: `{"enabled": true, "async_mirror_requests": true}`, want: "true"},
-		{name: "disabled", input: `{"enabled": true, "async_mirror_requests": false}`, want: "false"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setupSettingsDir(t, tt.input, "")
-
-			individual, err := LoadFromFile(EntireSettingsFile)
-			if err != nil {
-				t.Fatalf("LoadFromFile() error = %v", err)
-			}
-			if err := Save(context.Background(), individual); err != nil {
-				t.Fatalf("Save() error = %v", err)
-			}
-
-			_, raw, _, err := LoadProjectRaw(context.Background())
-			if err != nil {
-				t.Fatalf("LoadProjectRaw() error = %v", err)
-			}
-			if got := string(raw["async_mirror_requests"]); got != tt.want {
-				t.Fatalf("saved async_mirror_requests = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

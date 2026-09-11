@@ -34,6 +34,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
+	"github.com/entireio/cli/cmd/entire/cli/tuiutil"
 	"github.com/entireio/cli/redact"
 
 	"charm.land/lipgloss/v2"
@@ -1036,7 +1037,7 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store che
 	if content.Metadata.Summary != nil && !force {
 		return renderExplainFailure(errW, "Summary already exists", []explainRow{
 			{Label: "id", Value: checkpointID.String()},
-			{Label: "try", Value: fmt.Sprintf("entire checkpoint explain --generate --force %s", checkpointID)},
+			{Label: explainLabelTry, Value: fmt.Sprintf("entire checkpoint explain --generate --force %s", checkpointID)},
 		}, fmt.Errorf("checkpoint %s already has a summary", checkpointID))
 	}
 
@@ -1256,28 +1257,28 @@ func formatCheckpointSummaryError(err error, attempt *summaryAttempt) (string, [
 		case claudecode.ClaudeErrorAuth:
 			label := "Claude authentication failed"
 			rows := []explainRow{
-				{Label: "try", Value: "run `claude login` and retry"},
+				{Label: explainLabelTry, Value: "run `claude login` and retry"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude authentication failed%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005: Claude is a proper noun
 		case claudecode.ClaudeErrorRateLimit:
 			label := "Claude rejected the summary request due to rate limits or quota"
 			rows := []explainRow{
-				{Label: "try", Value: "wait and retry"},
+				{Label: explainLabelTry, Value: "wait and retry"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude rejected the summary request due to rate limits or quota%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorConfig:
 			label := "Claude rejected the summary request"
 			rows := []explainRow{
-				{Label: "try", Value: "check your Claude CLI config and selected model"},
+				{Label: explainLabelTry, Value: "check your Claude CLI config and selected model"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude rejected the summary request%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorCLIMissing:
@@ -1355,33 +1356,33 @@ func timeoutDiagnostic(_ error, attempt *summaryAttempt) (string, []explainRow) 
 		case attempt.phasesReached[agent.PhaseDone]:
 			label = "model finished but the result was not delivered in time"
 			rows = []explainRow{
-				{Label: "cause", Value: "the deadline fired while the finished result was being read"},
-				{Label: "try", Value: "raise --summary-timeout-seconds and retry"},
+				{Label: explainLabelCause, Value: "the deadline fired while the finished result was being read"},
+				{Label: explainLabelTry, Value: "raise --summary-timeout-seconds and retry"},
 			}
 		case attempt.phasesReached[agent.PhaseGenerating], attempt.phasesReached[agent.PhaseFirstToken]:
 			label = "model responded but did not finish"
 			rows = []explainRow{
-				{Label: "cause", Value: "transcript may be too large for the chosen cap, or model is slow"},
-				{Label: "try", Value: "raise --summary-timeout-seconds or pick a faster model"},
+				{Label: explainLabelCause, Value: "transcript may be too large for the chosen cap, or model is slow"},
+				{Label: explainLabelTry, Value: "raise --summary-timeout-seconds or pick a faster model"},
 			}
 		case attempt.phasesReached[agent.PhaseConnecting]:
 			label = "provider sent request but received no response"
 			rows = []explainRow{
-				{Label: "cause", Value: "network/firewall, provider API degraded, or auth check stuck"},
-				{Label: "try", Value: "check connectivity to the provider, then retry"},
+				{Label: explainLabelCause, Value: "network/firewall, provider API degraded, or auth check stuck"},
+				{Label: explainLabelTry, Value: "check connectivity to the provider, then retry"},
 			}
 		default:
 			label = "provider never sent its request"
 			rows = []explainRow{
-				{Label: "cause", Value: "the provider CLI may be stalled before subprocess startup"},
-				{Label: "try", Value: tryRunCLI},
+				{Label: explainLabelCause, Value: "the provider CLI may be stalled before subprocess startup"},
+				{Label: explainLabelTry, Value: tryRunCLI},
 			}
 		}
 		// attempt.streaming is set eagerly when a streaming-capable provider
 		// is selected, so a provider that stalls before its first event lands
 		// here — surface the captured stderr rather than dropping it.
 		if stderr != "" {
-			rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+			rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 		}
 		return prefix + label, rows
 	}
@@ -1390,21 +1391,21 @@ func timeoutDiagnostic(_ error, attempt *summaryAttempt) (string, []explainRow) 
 
 	if stdoutBytes == 0 {
 		rows := []explainRow{
-			{Label: "cause", Value: "provider CLI produced no output (likely network/auth/CLI path issue)"},
-			{Label: "try", Value: tryRunCLI},
+			{Label: explainLabelCause, Value: "provider CLI produced no output (likely network/auth/CLI path issue)"},
+			{Label: explainLabelTry, Value: tryRunCLI},
 		}
 		if stderr != "" {
-			rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+			rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 		}
 		return prefix + "provider produced no output", rows
 	}
 
 	rows := []explainRow{
-		{Label: "cause", Value: "provider was generating output but did not finish before cap"},
-		{Label: "try", Value: "raise --summary-timeout-seconds"},
+		{Label: explainLabelCause, Value: "provider was generating output but did not finish before cap"},
+		{Label: explainLabelTry, Value: "raise --summary-timeout-seconds"},
 	}
 	if stderr != "" {
-		rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+		rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 	}
 	return prefix + "provider was generating output when killed", rows
 }
@@ -1727,7 +1728,7 @@ func explainTemporaryCheckpoint(ctx context.Context, w, errW io.Writer, repo *gi
 
 	label := fmt.Sprintf("Checkpoint %s [temporary]", shortID)
 	rows := []explainRow{
-		{Label: "session", Value: tc.SessionID},
+		{Label: explainLabelSession, Value: tc.SessionID},
 		{Label: "created", Value: tc.Timestamp.Format("2006-01-02 15:04:05")},
 	}
 	sb.WriteString(styles.renderIdentity(label, "", rows))
@@ -2040,9 +2041,17 @@ func buildAmbiguousCheckpointMatches(ids []id.CheckpointID, committed []checkpoi
 }
 
 // renderExplainBody routes a markdown body through the brand renderer when
-// the writer supports color, and returns the markdown source verbatim
-// otherwise. Single point of policy for every explain body section.
+// the writer supports color, and returns the markdown source otherwise.
+// Single point of policy for every explain body section.
+//
+// The body is built from stored checkpoint content (AI summaries, extracted
+// prompts, file lists), which is agent and user influenced, so it passes
+// through the shared terminal sanitizer here regardless of path: the
+// non-color return would otherwise hand raw escape sequences to the
+// terminal, and sanitizing before the markdown renderer means its output
+// cannot re-carry them either.
 func renderExplainBody(w io.Writer, md string) string {
+	md = tuiutil.SanitizeTerminalText(md)
 	if !shouldUseColor(w) {
 		return md
 	}
@@ -2086,17 +2095,10 @@ func formatCheckpointOutput(ctx context.Context, summary *checkpoint.CheckpointS
 		if verbose || full {
 			md += buildFilesMarkdown(meta.FilesTouched)
 		}
-		if shouldUseColor(w) {
-			rendered, err := defaultRenderTerminalMarkdown(w, md)
-			if err != nil {
-				logging.Debug(context.Background(), "explain markdown render failed", slog.String("error", err.Error()))
-				sb.WriteString(md)
-			} else {
-				sb.WriteString(rendered)
-			}
-		} else {
-			sb.WriteString(md)
-		}
+		// renderExplainBody rather than an inline color branch: it is the single
+		// point of policy for explain bodies, including the terminal sanitizer
+		// the stored (agent-authored) summary must pass through.
+		sb.WriteString(renderExplainBody(w, md))
 	} else {
 		intent := extractIntent(scopedPrompts, content.Prompts)
 
@@ -2164,7 +2166,7 @@ func appendTranscriptSection(sb *strings.Builder, verbose, full bool, fullTransc
 func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType types.AgentType) string {
 	if len(transcriptBytes) == 0 {
 		if fallback != "" {
-			return fallback + "\n"
+			return tuiutil.SanitizeTerminalText(fallback) + "\n"
 		}
 		return "  (none)\n"
 	}
@@ -2176,9 +2178,19 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 	}
 	if err != nil || len(condensed) == 0 {
 		if fallback != "" {
-			return fallback + "\n"
+			return tuiutil.SanitizeTerminalText(fallback) + "\n"
 		}
 		return "  (failed to parse transcript)\n"
+	}
+
+	// Transcript content is agent and user influenced, so it goes through the
+	// shared terminal sanitizer at this display boundary. The sanitization is
+	// deliberately not inside FormatCondensedTranscript, which also builds LLM
+	// prompt input where mutation is unwanted.
+	for i := range condensed {
+		condensed[i].Content = tuiutil.SanitizeTerminalText(condensed[i].Content)
+		condensed[i].ToolName = tuiutil.SanitizeTerminalText(condensed[i].ToolName)
+		condensed[i].ToolDetail = tuiutil.SanitizeTerminalText(condensed[i].ToolDetail)
 	}
 
 	input := summarize.Input{Transcript: condensed}
@@ -3071,7 +3083,7 @@ func outputWithPager(w io.Writer, content string) {
 	// Check if we're writing to stdout and it's a terminal
 	if f, ok := w.(*os.File); ok && f == os.Stdout && interactive.IsTerminalWriter(w) {
 		// Get terminal height
-		_, height, err := term.GetSize(int(f.Fd())) //nolint:gosec // G115: same as above
+		_, height, err := term.GetSize(int(f.Fd()))
 		if err != nil {
 			height = 24 // Default fallback
 		}
@@ -3141,9 +3153,9 @@ func formatBranchCheckpoints(w io.Writer, branchName string, points []strategy.P
 		{Label: "branch", Value: branchName},
 	}
 	if sessionFilter != "" {
-		branchRows = append(branchRows, explainRow{Label: "session", Value: sessionFilter})
+		branchRows = append(branchRows, explainRow{Label: explainLabelSession, Value: sessionFilter})
 	}
-	branchRows = append(branchRows, explainRow{Label: "checkpoints", Value: strconv.Itoa(len(groups))})
+	branchRows = append(branchRows, explainRow{Label: explainLabelCheckpoints, Value: strconv.Itoa(len(groups))})
 
 	sb.WriteString(styles.metadataRows(branchRows))
 	sb.WriteString("\n")

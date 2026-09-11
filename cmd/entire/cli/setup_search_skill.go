@@ -55,11 +55,11 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 		return managedScaffoldResult{}, fmt.Errorf("resolve worktree root: %w", err)
 	}
 
-	root, err := openScaffoldRoot(repoRoot)
+	target, err := openScaffoldTarget(repoRoot, relPath)
 	if err != nil {
 		return managedScaffoldResult{}, err
 	}
-	result, err := writeManagedScaffold(root, relPath, content, isManagedSearchSkill)
+	result, err := writeManagedScaffold(target, content, isManagedSearchSkill)
 	if err != nil {
 		return result, err
 	}
@@ -68,7 +68,7 @@ func scaffoldSearchSkill(ctx context.Context, ag agent.Agent) (managedScaffoldRe
 	// leaving that behind would have the agent offer both. It is best-effort:
 	// the skill is already installed at this point, so a failed deletion is a
 	// warning on the result, never a failure of the install.
-	removed, cleanupErr := removeLegacySearchSubagent(root, ag.Name())
+	removed, cleanupErr := removeLegacySearchSubagent(repoRoot, ag.Name())
 	if cleanupErr != nil {
 		result.LegacyCleanupWarning = fmt.Sprintf(
 			"failed to remove superseded search subagent %s (%v) — remove it manually",
@@ -113,12 +113,20 @@ func legacySearchSubagentPath(agentName types.AgentName) string {
 // symlink or directory at this path is not ours to delete. The marker check
 // decides which file is eligible. The confinement decides where the deletion
 // may happen at all.
-func removeLegacySearchSubagent(root *os.Root, agentName types.AgentName) (string, error) {
+func removeLegacySearchSubagent(repoRoot string, agentName types.AgentName) (string, error) {
 	relPath := legacySearchSubagentPath(agentName)
 	if relPath == "" {
 		return "", nil
 	}
-	name := filepath.ToSlash(relPath)
+	// The legacy subagent lives under the same agent directory as the skill that
+	// supersedes it (.claude/agents next to .claude/skills), so it has to be
+	// reached through the same anchor. Resolved separately rather than derived
+	// from the skill's target, because the two paths are independent inputs.
+	target, err := openScaffoldTarget(repoRoot, relPath)
+	if err != nil {
+		return "", err
+	}
+	root, name := target.root, target.name
 	info, err := osroot.LstatNoSymlinks(root, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil

@@ -137,6 +137,10 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 	ctx := cmd.Context()
 
+	// Ahead of checkGitHooks, which is the check a symlinked hooks directory
+	// makes fail: the cause should be on screen before the failure it explains.
+	checkGitHookSymlinks(cmd)
+
 	// The git hook surface. Checked before the agent hook checks because it is
 	// the more fundamental one: if git hooks are broken, commits are not captured
 	// at all and agent-config drift is noise by comparison.
@@ -797,7 +801,7 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		return
 	}
 
-	var links, unreadable, wrongType []string
+	var links, unreadable, wrongType, vouched []string
 	reported := make(map[string]struct{})
 	for _, candidate := range agentSymlinkCheckPaths() {
 		name, outcome := scanForSymlinkedComponent(root, candidate)
@@ -805,11 +809,41 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 			continue
 		}
 		// Several candidates share a prefix (.claude, .claude/settings.json), so
-		// a symlinked .claude would otherwise be named once per candidate.
-		if _, dup := reported[name]; dup {
-			continue
+		// a symlinked .claude would otherwise be named once per candidate. The
+		// vouched branch below does its own recording, because it has two names
+		// to track: the followed link and whatever it finds beneath it.
+		if outcome != componentScanLinked || !slices.Contains(agent.VouchedSymlinkedDirs(worktreeRoot), name) {
+			if _, dup := reported[name]; dup {
+				continue
+			}
+			reported[name] = struct{}{}
 		}
-		reported[name] = struct{}{}
+		// A link the user vouched for in settings.local.json is followed, not
+		// refused, so reporting it as a fault would be wrong twice: it names a
+		// problem that is not one, and it hides the fact that Entire is writing
+		// somewhere other than where the path appears to lead. Reported below in
+		// its own section instead.
+		//
+		// And then the scan CONTINUES beneath it. Stopping here reported the one
+		// link that is fine and stayed silent about the one that is not: with
+		// `.claude` vouched and `.claude/skills` a link inside the target,
+		// scaffold installation follows the first and refuses the second, so the
+		// user saw a failed install and a doctor that named only the allowed
+		// link.
+		if outcome == componentScanLinked && slices.Contains(agent.VouchedSymlinkedDirs(worktreeRoot), name) {
+			if _, dup := reported[name]; !dup {
+				reported[name] = struct{}{}
+				vouched = append(vouched, name)
+			}
+			name, outcome = scanBeneathVouchedDir(worktreeRoot, candidate)
+			if outcome == componentScanClean {
+				continue
+			}
+			if _, dup := reported[name]; dup {
+				continue
+			}
+			reported[name] = struct{}{}
+		}
 		switch outcome {
 		case componentScanUnreadable:
 			unreadable = append(unreadable, name)
@@ -820,6 +854,17 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		case componentScanClean:
 			// Filtered out above; listed so a new outcome fails the build here.
 		}
+	}
+
+	if len(vouched) > 0 {
+		fmt.Fprintln(w, "Agent config directories: FOLLOWING SYMLINKS")
+		printCappedList(w, vouched, func(name string) string {
+			return name + " -> " + readlinkOrUnknownIn(root, name)
+		})
+		fmt.Fprintf(w, "  Allowed by allow_symlinked_agent_dirs in %s. Entire installs hooks and\n",
+			settings.EntireSettingsLocalFile)
+		fmt.Fprintln(w, "  skills at the far end of these links rather than inside the repository.")
+		fmt.Fprintln(w, "  Remove the entry to go back to refusing them.")
 	}
 
 	if len(links) > 0 {
@@ -865,6 +910,92 @@ func checkAgentDirSymlinks(cmd *cobra.Command) {
 		fmt.Fprintln(w, "  cannot say whether hooks and skills can be installed under them.")
 		fmt.Fprintln(w, "  Fix: check the ownership and permissions of each path above.")
 	}
+}
+
+// checkGitHookSymlinks reports a symlink at the active git hooks directory, or
+// at one of the hooks Entire manages inside it.
+//
+// This needs its own function rather than an agentSymlinkCheckPaths entry, and
+// the reason is the path itself: that list is worktree-relative and scanned
+// through the worktree root, while core.hooksPath can name any directory at all
+// — a shared hooks directory in $HOME is a common setup — and a linked
+// worktree's hooks live in the common dir. Git resolves where the hooks are;
+// this only reports what is sitting there.
+//
+// The two findings differ in severity and so in remedy. A symlinked DIRECTORY
+// stops installation outright: Entire refuses to write hooks through a link, so
+// `entire status` reports them absent with nothing to say why — the same
+// invisible-after-the-fact condition checkAgentDirSymlinks exists for. A
+// symlinked HOOK FILE is not an error at all; it is simply not Entire's, so the
+// next install backs it up and chains to it, and the note is there so the user
+// is not surprised that the path they set up is no longer what git runs first.
+//
+// Read-only in both cases. Replacing a link means deciding what to do with its
+// target, which is not doctor's call.
+func checkGitHookSymlinks(cmd *cobra.Command) {
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
+
+	hooksDir, err := strategy.GetHooksDir(ctx)
+	if err != nil {
+		return // no repository: nothing to check
+	}
+	info, err := os.Lstat(hooksDir)
+	if err != nil {
+		return // absent or unreadable: checkGitHooks reports what that costs
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintln(w, "Git hooks directory: SYMLINK")
+		// The resolved target, not os.Readlink's raw contents: a relative link
+		// reads relative to the link's own parent, so pasting it into the
+		// command below sets a path git resolves from somewhere else. When it
+		// cannot be resolved, no command is printed at all -- a remedy the user
+		// pastes must not contain a placeholder.
+		target, resolved := strategy.HooksDirLinkTarget(hooksDir)
+		if resolved {
+			fmt.Fprintf(w, "  %s -> %s\n", hooksDir, target)
+		} else {
+			fmt.Fprintf(w, "  %s -> %s (unresolvable)\n", hooksDir, readlinkOrUnknown(hooksDir))
+		}
+		fmt.Fprintln(w, "  Entire will not install hooks through a link, so its git hooks are not")
+		fmt.Fprintln(w, "  installed. Uninstalling still works: `entire disable` follows the link.")
+		if resolved {
+			fmt.Fprintln(w, "  Fix: point git at the target directly, which says the same thing without")
+			fmt.Fprintln(w, "  the indirection:")
+			fmt.Fprintf(w, "    %s\n", strategy.HooksPathCommand(target))
+			fmt.Fprintln(w, "  or replace the link with a real directory.")
+		} else {
+			fmt.Fprintln(w, "  Fix: find where the path is set, then point git at a real directory:")
+			fmt.Fprintln(w, "    git config --show-origin --get-all core.hooksPath")
+		}
+		return
+	}
+	if !info.IsDir() {
+		return // InstallGitHook's own error covers core.hooksPath=/dev/null
+	}
+
+	var links []string
+	for _, name := range strategy.ManagedGitHookNames() {
+		hookInfo, lerr := os.Lstat(filepath.Join(hooksDir, name))
+		if lerr == nil && hookInfo.Mode()&os.ModeSymlink != 0 {
+			links = append(links, name)
+		}
+	}
+	if len(links) == 0 {
+		return
+	}
+
+	// No symlinkReportLimit here: the candidates are the five managed hook
+	// names, so the list cannot run away the way a walk of .entire can.
+	fmt.Fprintln(w, "Git hooks: SYMLINKS PRESENT")
+	for _, name := range links {
+		full := filepath.Join(hooksDir, name)
+		fmt.Fprintf(w, "  %s -> %s\n", full, readlinkOrUnknown(full))
+	}
+	fmt.Fprintf(w, "  Entire never installs a hook as a symlink, so these belong to you or to\n"+
+		"  another tool. It does not read or write through them: the next install\n"+
+		"  moves each one to <hook>%s and chains to it, so it still runs, but\n"+
+		"  after Entire's rather than instead of it.\n", strategy.GitHookBackupSuffix)
 }
 
 // componentScanOutcome is what scanForSymlinkedComponent found.
@@ -951,6 +1082,35 @@ func agentSymlinkCheckPaths() []string {
 
 	slices.Sort(out)
 	return out
+}
+
+// scanBeneathVouchedDir continues the component scan inside a vouched symlinked
+// agent directory, returning what it finds as a worktree-relative name.
+//
+// The outer scan stops at the first symlink, which is the right answer when that
+// link is a fault. When it is one the user vouched for, the components below it
+// are still Entire's to check and still refused by MkdirAllNoSymlink, so the
+// scan has to resume from the link's target. agent.OpenAnchoredRoot is the same
+// resolution the writers use, so doctor reports on exactly the tree they act on.
+//
+// A vouched link that will not resolve is reported unreadable rather than
+// silently dropped: every write through it fails, which is precisely the state
+// worth naming.
+func scanBeneathVouchedDir(worktreeRoot, candidate string) (string, componentScanOutcome) {
+	innerRoot, innerName, err := agent.OpenAnchoredRoot(worktreeRoot, candidate)
+	if err != nil {
+		return candidate, componentScanUnreadable
+	}
+	if innerName == candidate {
+		// Nothing was followed after all, so the outer scan already had it.
+		return "", componentScanClean
+	}
+	found, outcome := scanForSymlinkedComponent(innerRoot, innerName)
+	if outcome == componentScanClean {
+		return "", componentScanClean
+	}
+	prefix := strings.TrimSuffix(candidate, "/"+innerName)
+	return prefix + "/" + found, outcome
 }
 
 // scanForSymlinkedComponent walks name one component at a time and reports the
