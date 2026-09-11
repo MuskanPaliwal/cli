@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M27FNYWAG56R5H9CV0BCZSZK",
+  "strategy": "manual-commit",
+  "branch": "fix-session-cleanup-safety",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/doctor_cleanup_inventory_test.go",
+    "cmd/entire/cli/gitrepo/ref_absence.go",
+    "cmd/entire/cli/gitrepo/ref_absence_test.go",
+    "cmd/entire/cli/gitrepo/ref_cas.go",
+    "cmd/entire/cli/session/state.go",
+    "cmd/entire/cli/session/state_retention_test.go",
+    "cmd/entire/cli/strategy/cleanup.go",
+    "cmd/entire/cli/strategy/cleanup_inventory_test.go",
+    "cmd/entire/cli/strategy/manual_commit_reset.go",
+    "cmd/entire/cli/strategy/manual_commit_session.go",
+    "cmd/entire/cli/strategy/session_state.go",
+    "cmd/entire/cli/strategy/session_state_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 749904,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 18449024,
+    "output_tokens": 41822,
+    "api_call_count": 143
+  }
+}
