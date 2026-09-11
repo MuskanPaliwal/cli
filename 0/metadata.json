@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M28135FSP4SZ5JH97FDY692W",
+  "session_id": "01a08fdd-140f-7030-a79e-0c8ca75a4e67",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-11T10:44:29.24094Z",
+  "branch": "fix-checkpoint-push-remote-election-2360",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/integration_test/checkpoint_sync_remote_test.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_capture.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "854ec47e0013",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 324761,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13784448,
+    "output_tokens": 48132,
+    "api_call_count": 127
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-11T10:44:29.004983Z",
+    "agent_lines": 60,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 60,
+    "total_lines_changed": 65,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 60,
+      "agent_lines_removed": 5
+    }
+  ]
+}
