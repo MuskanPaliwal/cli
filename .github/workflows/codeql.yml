@@ -74,3 +74,12 @@ jobs:
         uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           category: /language:${{ matrix.language }}
+          # A fork PR gets a read-only GITHUB_TOKEN, so `security-events: write`
+          # is not granted and the upload fails the job. Analyze still runs and
+          # surfaces findings in the log. Note the condition tests the EVENT
+          # first: the predecessor workflow ran only on pull_request, so it could
+          # compare head.repo directly, but that expression is null on push and
+          # schedule — copied here verbatim it would resolve to 'never' and
+          # silently stop main from ever being uploaded, which is the one thing
+          # this workflow exists to do.
+          upload: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'always' || 'never' }}
