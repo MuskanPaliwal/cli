@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M28J6MX4M92Y88PWYE3WPRFK",
+  "strategy": "manual-commit",
+  "branch": "fix-session-token-total-2368",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/strategy/manual_commit_condensation_test.go",
+    "cmd/entire/cli/strategy/subagent_tokens_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 262455,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5119104,
+    "output_tokens": 26965,
+    "api_call_count": 56
+  }
+}
