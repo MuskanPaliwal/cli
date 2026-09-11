@@ -758,6 +758,17 @@ func TestCaptureCheckpointSyncRemote(t *testing.T) {
 		assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx))
 	})
 
+	t.Run("pushurl-only remote cannot capture", func(t *testing.T) {
+		dir := newCaptureTestRepo(t)
+		testutil.RunGit(t, dir, "config", "remote.pushonly.pushurl", "https://example.com/pushonly.git")
+		setGitConfig(t, dir, "remote.pushDefault", "pushonly")
+		t.Chdir(dir)
+
+		assert.False(t, pendingCaptureCheckpointSyncRemote(ctx, "pushonly"),
+			"capture must use the same fetch-URL eligibility rule as election")
+		assert.Empty(t, loadCapturedSyncRemotes(ctx))
+	})
+
 	t.Run("raw URL push never captures", func(t *testing.T) {
 		dir := newCaptureTestRepo(t)
 		setGitConfig(t, dir, "branch."+currentBranchName(t, dir)+".remote", "fork")
