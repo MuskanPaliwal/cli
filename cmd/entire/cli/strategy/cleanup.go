@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/gitdir"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -293,36 +293,56 @@ func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]pl
 	if len(branches) == 0 {
 		return []string{}, []string{}, nil
 	}
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		for branch := range branches {
+			failed = append(failed, branch)
+		}
+		return []string{}, failed, fmt.Errorf("resolve worktree root for shadow branch cleanup: %w", err)
+	}
 	var safetyErrors []error
 	for branch, expected := range branches {
 		if !isAutoDeletableShadowBranch(branch) || expected.IsZero() {
 			failed = append(failed, branch)
 			continue
 		}
-		protected, err := shadowBranchProtectedByCurrentState(ctx, branch)
-		if err != nil {
+
+		var protectionErr error
+		refName := plumbing.NewBranchReferenceName(branch)
+		runErr := gitrepo.CompareAndSwapRefGuarded(ctx, repoRoot, refName, plumbing.ZeroHash, expected, func() error {
+			protected, err := shadowBranchProtectedByCurrentState(ctx, branch)
+			if err != nil {
+				protectionErr = fmt.Errorf("recheck protection for shadow branch %s: %w", branch, err)
+				return protectionErr
+			}
+			if protected {
+				return errShadowBranchProtected
+			}
+			return nil
+		})
+		if protectionErr != nil {
 			logging.Debug(ctx, "shadow branch unchanged-delete skipped after protection recheck failed",
 				slog.String("branch", branch),
-				slog.String("error", err.Error()),
+				slog.String("error", runErr.Error()),
 			)
-			safetyErrors = append(safetyErrors, fmt.Errorf("recheck protection for shadow branch %s: %w", branch, err))
+			safetyErrors = append(safetyErrors, runErr)
 			failed = append(failed, branch)
 			continue
 		}
-		if protected {
+		if errors.Is(runErr, errShadowBranchProtected) {
 			logging.Debug(ctx, "shadow branch unchanged-delete skipped because current session state protects it",
 				slog.String("branch", branch),
 			)
+			if errors.Is(runErr, gitrepo.ErrRefCASAbort) {
+				safetyErrors = append(safetyErrors, fmt.Errorf("abort protected shadow branch deletion: %w", runErr))
+			}
 			failed = append(failed, branch)
 			continue
 		}
-		ref := "refs/heads/" + branch
-		cmd := exec.CommandContext(ctx, "git", "update-ref", "-d", ref, expected.String())
-		if output, runErr := cmd.CombinedOutput(); runErr != nil {
+		if runErr != nil {
 			logging.Debug(ctx, "shadow branch unchanged-delete skipped",
 				slog.String("branch", branch),
 				slog.String("expected", expected.String()),
-				slog.String("output", strings.TrimSpace(string(output))),
 				slog.String("error", runErr.Error()),
 			)
 			failed = append(failed, branch)
@@ -332,6 +352,8 @@ func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]pl
 	}
 	return deleted, failed, errors.Join(safetyErrors...)
 }
+
+var errShadowBranchProtected = errors.New("shadow branch is protected by current session state")
 
 func protectedShadowBranchForSession(s *SessionState) (string, bool) {
 	if s.Phase == session.PhaseEnded && s.FullyCondensed && len(s.TurnCheckpointIDs) == 0 {

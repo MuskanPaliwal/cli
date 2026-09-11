@@ -24,6 +24,8 @@ var (
 	ErrRefLocked = errors.New("git reference lock is unavailable")
 	// ErrRefSymbolic means the requested CAS target is a symbolic reference.
 	ErrRefSymbolic = errors.New("git reference is symbolic")
+	// ErrRefCASAbort means a prepared guarded update did not abort cleanly.
+	ErrRefCASAbort = errors.New("git reference transaction abort failed")
 )
 
 // CompareAndSwapRef atomically updates a direct ref through native Git and
@@ -34,6 +36,32 @@ func CompareAndSwapRef(
 	repoRoot string,
 	refName plumbing.ReferenceName,
 	newHash, expectedHash plumbing.Hash,
+) error {
+	return compareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash, nil)
+}
+
+// CompareAndSwapRefGuarded atomically updates a direct ref only when guard
+// succeeds. Git holds the prepared ref lock while guard runs, but the ref is
+// not changed until after guard returns nil.
+func CompareAndSwapRefGuarded(
+	ctx context.Context,
+	repoRoot string,
+	refName plumbing.ReferenceName,
+	newHash, expectedHash plumbing.Hash,
+	guard func() error,
+) error {
+	if guard == nil {
+		return errors.New("compare-and-swap ref guard is nil")
+	}
+	return compareAndSwapRef(ctx, repoRoot, refName, newHash, expectedHash, guard)
+}
+
+func compareAndSwapRef(
+	ctx context.Context,
+	repoRoot string,
+	refName plumbing.ReferenceName,
+	newHash, expectedHash plumbing.Hash,
+	guard func() error,
 ) error {
 	tx, err := prepareRefCAS(ctx, repoRoot, refName, newHash, expectedHash)
 	if err != nil {
@@ -49,6 +77,14 @@ func CompareAndSwapRef(
 			fmt.Errorf("ref %s points to %s: %w", refName, target, ErrRefSymbolic),
 			tx.abort(),
 		)
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			if abortErr := tx.abort(); abortErr != nil {
+				return errors.Join(err, fmt.Errorf("abort guarded ref update: %w", errors.Join(ErrRefCASAbort, abortErr)))
+			}
+			return err
+		}
 	}
 	return tx.commit()
 }
