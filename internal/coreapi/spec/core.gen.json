@@ -2387,8 +2387,7 @@
         },
         "required": [
           "repos",
-          "truncated",
-          "candidatesIncomplete"
+          "truncated"
         ],
         "type": "object"
       },

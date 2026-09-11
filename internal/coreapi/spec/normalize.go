@@ -256,10 +256,11 @@ var readModelEnumFields = map[string][]string{
 // message when the server omits it. A field must leave this list when the
 // CLI needs it to be *present* to be correct.
 var readModelOptionalFields = map[string][]string{
-	"Org":            {"capabilities"},
-	"Project":        {"capabilities"},
-	"Repo":           {"capabilities", "provider"},
-	"RepoIndexEntry": {"org", "provider"},
+	"ListReposOutputBody": {"candidatesIncomplete"},
+	"Org":                 {"capabilities"},
+	"Project":             {"capabilities"},
+	"Repo":                {"capabilities", "provider"},
+	"RepoIndexEntry":      {"org", "provider"},
 }
 
 // loosenReadModelRequired removes each field named in readModelOptionalFields

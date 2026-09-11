@@ -319,14 +319,15 @@ func TestListRepos_UnsentRequiredReadFieldsDecode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		// No "org", no "provider" — both required upstream, neither read here.
-		// "permission" carries a value the current spec's enum did NOT allow.
+		// No "org", no "provider", no "candidatesIncomplete" — all required
+		// upstream, none read here. "permission" carries a value the current
+		// spec's enum did NOT allow.
 		if _, err := w.Write([]byte(`{"repos":[{` +
 			`"id":"01H000000000000000000000R1","name":"web","full_name":"gh/acme/web",` +
 			`"jurisdiction":"us","cell":"aws-us-east-2","clusterSlug":"us","visibility":"private",` +
 			`"permission":"triage",` +
 			`"placements":[{"id":"01H000000000000000000000R1","jurisdiction":"us","cell":"aws-us-east-2","clusterSlug":"us","mirror":false,"status":"ready"}]` +
-			`}],"truncated":false,"candidatesIncomplete":false}`)); err != nil {
+			`}],"truncated":false}`)); err != nil {
 			t.Errorf("writing test response: %v", err)
 		}
 	}))

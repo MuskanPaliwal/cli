@@ -6716,8 +6716,8 @@ func (s *ListReposOrder) UnmarshalText(data []byte) error {
 // Ref: #/components/schemas/ListReposOutputBody
 type ListReposOutputBody struct {
 	// A URL to the JSON Schema for this object.
-	Schema               OptURI `json:"$schema"`
-	CandidatesIncomplete bool   `json:"candidatesIncomplete"`
+	Schema               OptURI  `json:"$schema"`
+	CandidatesIncomplete OptBool `json:"candidatesIncomplete"`
 	// Pass back to fetch the next page; empty when no more entries.
 	NextPageToken   OptString        `json:"nextPageToken"`
 	Repos           []RepoIndexEntry `json:"repos"`
@@ -6731,7 +6731,7 @@ func (s *ListReposOutputBody) GetSchema() OptURI {
 }
 
 // GetCandidatesIncomplete returns the value of CandidatesIncomplete.
-func (s *ListReposOutputBody) GetCandidatesIncomplete() bool {
+func (s *ListReposOutputBody) GetCandidatesIncomplete() OptBool {
 	return s.CandidatesIncomplete
 }
 
@@ -6761,7 +6761,7 @@ func (s *ListReposOutputBody) SetSchema(val OptURI) {
 }
 
 // SetCandidatesIncomplete sets the value of CandidatesIncomplete.
-func (s *ListReposOutputBody) SetCandidatesIncomplete(val bool) {
+func (s *ListReposOutputBody) SetCandidatesIncomplete(val OptBool) {
 	s.CandidatesIncomplete = val
 }
 

@@ -54,7 +54,8 @@ Retire the allowlist entries as upstream loosens the corresponding fields.
 ## 2b. New read-model fields ship as `required`
 
 **Symptom:** `capabilities` on `Org`, `Project` and `Repo`, `Repo.provider`,
-and `org`/`provider` on `RepoIndexEntry` were added as `required`. ogen's
+`org`/`provider` on `RepoIndexEntry`, and `ListReposOutputBody.candidatesIncomplete`
+were added as `required`. ogen's
 decoder then fails the whole response when a field is absent, so a core that
 predates the field, or a mixed-version roll, breaks every list, get and
 repo-routing call in a client that does not depend on any of them.

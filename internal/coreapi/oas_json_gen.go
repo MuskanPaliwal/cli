@@ -17719,8 +17719,10 @@ func (s *ListReposOutputBody) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
-		e.FieldStart("candidatesIncomplete")
-		e.Bool(s.CandidatesIncomplete)
+		if s.CandidatesIncomplete.Set {
+			e.FieldStart("candidatesIncomplete")
+			s.CandidatesIncomplete.Encode(e)
+		}
 	}
 	{
 		if s.NextPageToken.Set {
@@ -17778,11 +17780,9 @@ func (s *ListReposOutputBody) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"$schema\"")
 			}
 		case "candidatesIncomplete":
-			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
-				v, err := d.Bool()
-				s.CandidatesIncomplete = bool(v)
-				if err != nil {
+				s.CandidatesIncomplete.Reset()
+				if err := s.CandidatesIncomplete.Decode(d); err != nil {
 					return err
 				}
 				return nil
@@ -17850,7 +17850,7 @@ func (s *ListReposOutputBody) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00011010,
+		0b00011000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
