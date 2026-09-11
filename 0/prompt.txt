@@ -1,17 +1,1 @@
-did we fix the trail finding too?
-
----
-
-also resolve the findings there
-
----
-
-no it's trail 3
-
----
-
-ohh no it was trail 2. can you recreate it and run the runner again
-
----
-
-commit the changes
+push
