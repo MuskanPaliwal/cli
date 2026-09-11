@@ -1,0 +1,65 @@
+Teach me the architecture of this repository as if I am an engineer preparing to work on it full time.
+
+Start from a user running the Entire CLI and trace the system end-to-end.
+
+I want to understand:
+
+- CLI entry point and command structure
+- configuration
+- repositories/workspaces
+- agent session detection
+- checkpoints
+- how context/transcripts/tool activity are captured
+- how checkpoint data is represented
+- how it is associated with Git commits
+- what gets written into normal Git history versus hidden/special refs
+- storage layout
+- synchronization/push/pull behavior
+- remote/backend interactions, if any
+- how other parts such as search or graph consume this information
+
+Please trace real code paths, naming important packages, types, functions, files, and interfaces.
+
+Give me:
+1. a high-level architecture first,
+2. then a detailed execution trace,
+3. then the key invariants of the system,
+4. then the 10 concepts I absolutely need to understand to contribute effectively.
+
+Do not rely on README-level explanations where code can establish the actual behavior.
+
+---
+
+how is my work at moss and entire search collide?
+
+---
+
+you can find my work at moss in my obsidian archive folder
+
+---
+
+yeah so so i ahve been contributing to entire for more than a month. You have my prs history. and i have been reached out by their developer advocate to be on a coffee chat more like i assume they are noticing me and now wants to hire me. so i need to prepare myself about - what i have wokred on in entire till now, what does entire do, what all parts do they have like cli, search, graph, plugins, mirror refs etc. more like in depth as a programmer. then where all i have worked and on what things i have worked. and why am i excited about things at entire and how could it go from here? my experience at vibinex, how i use entire at the moment. all these we need to research from entire github, blogs, dispatches, my prs and my previous work you will find at my linkedin and obsidian vault. so let's start one things at a time?like what possible she could ask me? she has seen my work it could be mostly about everything in general right? I already have a obsidian doc for this. i want you to take over. start writing points there. mainly who am i, my previous work and then how entire collides wuth my previous work and my contributions to entire
+
+---
+
+do it quick
+
+---
+
+access my work info from linkedin etc
+
+---
+
+https://www.linkedin.com/in/muskanpaliwal/
+
+---
+
+yupp but put only points there in the obsidian md and also put what is my workflow and how does entire fit in
+
+---
+
+we have to put allthe info in one page but like prepare a final draft and put that at top in some points where i don't have to scroll
+
+---
+
+can you make it look like i am saying things?
