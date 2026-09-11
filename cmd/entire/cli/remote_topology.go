@@ -163,13 +163,17 @@ func (t remoteTopology) describeCheckpointDestination(w io.Writer, header string
 	// that is the live question when nothing is pushed: what this note lists
 	// is PUSH URLs, and a fan-out remote's reads use its fetch URL instead
 	// (the git-branch branch below says as much — "only the fetch URL is ever
-	// reconciled"). `entire status` names the read source correctly, as an
-	// elected remote rather than a URL.
+	// reconciled").
+	//
+	// It points at `entire status` for that rather than answering it, and
+	// without promising an answer: status names a read source where it can
+	// establish one, and says so when it cannot — a failed election with a
+	// configured checkpoint_remote resolves to neither.
 	if t.pushDisabled {
 		fmt.Fprintln(w, "  Automatic checkpoint pushing is disabled (push_sessions=false), so no")
 		fmt.Fprintln(w, "  checkpoints are pushed anywhere right now. The destination below is where")
-		fmt.Fprintln(w, "  they would go if you re-enabled it; `entire status` reports where")
-		fmt.Fprintln(w, "  checkpoints are read from meanwhile.")
+		fmt.Fprintln(w, "  they would go if you re-enabled it; for where they are read from today,")
+		fmt.Fprintln(w, "  see `entire status`.")
 	}
 
 	for _, d := range t.destinations {

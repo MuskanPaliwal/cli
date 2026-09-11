@@ -2290,6 +2290,11 @@ func TestRunStatus_PrintsBothReviewAndInvestigation(t *testing.T) {
 
 // --- Checkpoint sync visibility (single-remote gate observability) ---
 
+// originRemoteName is the primary remote these fixtures create. Named rather
+// than repeated: it is also the remote the checkpoint election defaults to and
+// the read chain's legacy tier, so the string carries meaning here.
+const originRemoteName = "origin"
+
 func TestRunStatus_CheckpointPushDisabled(t *testing.T) {
 	testCheckpointPushDisabledFork(t, false)
 }
@@ -2304,7 +2309,7 @@ func testCheckpointPushDisabledFork(t *testing.T, jsonOutput bool) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)
 	writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false,"checkpoint_push_remote":"fork"}}`)
-	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/org/repo.git")
 	testutil.AddRemote(t, ".", "fork", "https://github.com/user/repo.git")
 	head := checkpointSyncTestCommit(t, "a.txt", "one")
 	testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
@@ -2422,23 +2427,83 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 			// wantFallback is the remote reads fall OPEN to when the election
 			// failed closed, reported instead of (never alongside) wantRemote.
 			wantFallback string
+			// fork is the fetch URL of a second remote named "fork" ("" = none);
+			// forkPush overrides its push URL, so the two can have different
+			// owners and the push- and fetch-side ownership votes disagree.
+			fork     string
+			forkPush string
+			// originName renames the primary remote ("" = "origin"). A
+			// configured checkpoint_remote with no origin makes the read
+			// probe fail outright, which is not the same as it resolving
+			// elsewhere.
+			originName string
+			// wantReadUnknown pins that the probe failure is what suppressed
+			// the read source, rather than the row passing because nothing
+			// resolved for some other reason.
+			wantReadUnknown bool
 		}{
-			{"origin", "", "https://github.com/org/repo.git", "origin", "default", ""},
-			{"explicit_fork", `,"checkpoint_push_remote":"fork"`, "https://github.com/org/repo.git", "fork", "config", ""},
-			{"dedicated", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/org/repo.git", "org/checkpoints", checkpointSyncSourceDedicated, ""},
-			{"inherited_dedicated_rejected", `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`, "https://github.com/other/repo.git", "origin", "default", ""},
-			{"no_remotes", "", "", "", "", ""},
-			{"missing_configured_remote", `,"checkpoint_push_remote":"gone"`, "https://github.com/org/repo.git", "", "", "origin"},
+			{name: "origin", origin: "https://github.com/org/repo.git", wantRemote: "origin", wantSource: "default"},
+			{
+				name: "explicit_fork", options: `,"checkpoint_push_remote":"fork"`,
+				origin: "https://github.com/org/repo.git", fork: "https://github.com/user/repo.git",
+				wantRemote: "fork", wantSource: "config",
+			},
+			{
+				name: "dedicated", options: `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`,
+				origin:     "https://github.com/org/repo.git",
+				wantRemote: "org/checkpoints", wantSource: checkpointSyncSourceDedicated,
+			},
+			{
+				name: "inherited_dedicated_rejected", options: `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`,
+				origin:     "https://github.com/other/repo.git",
+				wantRemote: "origin", wantSource: "default",
+			},
+			{name: "no_remotes"},
+			{
+				name: "missing_configured_remote", options: `,"checkpoint_push_remote":"gone"`,
+				origin: "https://github.com/org/repo.git", wantFallback: "origin",
+			},
+			// Push- and fetch-side ownership disagree. Both require EVERY
+			// identity to be owned by the checkpoint repo's owner, but over
+			// different sets: origin plus fork's PUSH urls (all "org", so the
+			// push side certifies the dedicated store) versus origin plus
+			// fork's FETCH url ("other", so the fetch side rejects it). With
+			// pushing disabled the line names a read source, so the fetch
+			// side decides and the elected remote is reported; deciding it
+			// with PushURL named a store reads never use.
+			{
+				name:    "dedicated_rejected_by_fetch_owner",
+				options: `,"checkpoint_push_remote":"fork","checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`,
+				origin:  "https://github.com/org/repo.git",
+				fork:    "https://github.com/other/fork.git", forkPush: "https://github.com/org/fork.git",
+				wantRemote: "fork", wantSource: "config",
+			},
+			// The read probe cannot resolve any URL (a configured
+			// checkpoint_remote derives from origin, and there is none), so
+			// no read source is named rather than the sole remote being
+			// reported as one while reads fail.
+			{
+				name: "dedicated_without_origin", options: `,"checkpoint_remote":{"provider":"github","repo":"org/checkpoints"}`,
+				origin: "https://github.com/org/repo.git", originName: "upstream",
+				wantReadUnknown: true,
+			},
 		} {
 			t.Run(backend+"/"+tc.name, func(t *testing.T) {
 				testutil.IsolateGitConfigEnv(t)
 				setupTestRepo(t)
 				writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":false`+tc.options+`},"checkpoints":{"primary":{"type":"`+backend+`"}}}`)
 				if tc.origin != "" {
-					testutil.AddRemote(t, ".", "origin", tc.origin)
+					name := tc.originName
+					if name == "" {
+						name = originRemoteName
+					}
+					testutil.AddRemote(t, ".", name, tc.origin)
 				}
-				if tc.name == "explicit_fork" {
-					testutil.AddRemote(t, ".", "fork", "https://github.com/user/repo.git")
+				if tc.fork != "" {
+					testutil.AddRemote(t, ".", "fork", tc.fork)
+					if tc.forkPush != "" {
+						testutil.RunGit(t, ".", "remote", "set-url", "--push", "fork", tc.forkPush)
+					}
 				}
 				head := checkpointSyncTestCommit(t, "a.txt", "one")
 				testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
@@ -2463,7 +2528,17 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 					t.Fatal(err)
 				}
 				info := computeCheckpointSyncInfo(t.Context(), s)
-				if (info.Err != "") != (tc.name == "missing_configured_remote") || (info.IgnoredRemote != "") != (tc.name == "inherited_dedicated_rejected") {
+				// Both rejections report "not in use", by different routes:
+				// the origin-owner row through the push-side verdict, the
+				// fetch-rejected row through the read-side branch that exists
+				// because that verdict ACCEPTS it. Without the second, a
+				// configured store that serves no reads is reported by
+				// nothing. (Not the divergence documented as accepted on
+				// InheritedCheckpointRemote — that one is the opposite
+				// direction, a warning where a lead-less fetch still resolves
+				// the store.)
+				wantIgnored := tc.name == "inherited_dedicated_rejected" || tc.name == "dedicated_rejected_by_fetch_owner"
+				if (info.Err != "") != (tc.name == "missing_configured_remote") || (info.IgnoredRemote != "") != wantIgnored {
 					t.Errorf("unexpected remote diagnostics: %+v", info)
 				}
 				if !info.PushDisabled || info.Remote != tc.wantRemote || info.Source != tc.wantSource {
@@ -2474,6 +2549,9 @@ func TestRunStatus_CheckpointPushDisabledDestinations(t *testing.T) {
 				// means "elected" and has nothing to name here.
 				if info.ReadFallback != tc.wantFallback {
 					t.Errorf("read fallback = %q, want %q: %+v", info.ReadFallback, tc.wantFallback, info)
+				}
+				if info.ReadSourceUnknown != tc.wantReadUnknown {
+					t.Errorf("read source unknown = %v, want %v: %+v", info.ReadSourceUnknown, tc.wantReadUnknown, info)
 				}
 				// The counter is the only signal that checkpoint data is not
 				// reaching the destination, so it survives disabled pushing
@@ -2518,7 +2596,7 @@ func TestRunStatus_CheckpointDiagnosticsWithPushDisabled(t *testing.T) {
 				testutil.IsolateGitConfigEnv(t)
 				setupTestRepo(t)
 				writeSettings(t, `{"enabled":true,"strategy_options":{"push_sessions":`+pushSetting+`,`+tc.options+`}}`)
-				testutil.AddRemote(t, ".", "origin", "https://github.com/other/repo.git")
+				testutil.AddRemote(t, ".", originRemoteName, "https://github.com/other/repo.git")
 				for _, mode := range []struct {
 					name           string
 					detailed, json bool
@@ -2580,7 +2658,7 @@ func TestRunStatus_CheckpointPushDisabledSettingsPrecedence(t *testing.T) {
 			if tc.local != "" {
 				testutil.WriteFile(t, ".", ".entire/settings.local.json", tc.local)
 			}
-			testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+			testutil.AddRemote(t, ".", originRemoteName, "https://github.com/org/repo.git")
 			head := checkpointSyncTestCommit(t, "a.txt", "one")
 			testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, head)
 			for _, jsonOutput := range []bool{false, true} {
@@ -2827,7 +2905,7 @@ func TestRunStatus_CheckpointSyncDedicated_GitBranch_NoCounter(t *testing.T) {
 	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoint_remote": {"provider": "github", "repo": "org/checkpoints"}}}`)
 	// Same owner ("org") as checkpoint_remote and a parseable GitHub URL, so
 	// PushURL derivation succeeds locally and dedicated mode is verified.
-	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/org/repo.git")
 	head := checkpointSyncTestCommit(t, "a.txt", "one")
 	// A local v1 branch exists, but in dedicated URL mode on the git-branch
 	// backend the tracking-ref comparison would permanently read "all
@@ -2852,7 +2930,7 @@ func TestRunStatus_CheckpointSyncDedicated_GitRefs_QueueCounter(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)
 	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoint_remote": {"provider": "github", "repo": "org/checkpoints"}}, "checkpoints": {"primary": {"type": "git-refs"}}}`)
-	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/org/repo.git")
 	checkpointSyncTestCommit(t, "a.txt", "one")
 
 	cwd, err := os.Getwd()
@@ -2947,7 +3025,7 @@ func TestRunStatusJSON_CheckpointSync_Dedicated(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)
 	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoint_remote": {"provider": "github", "repo": "org/checkpoints"}}}`)
-	testutil.AddRemote(t, ".", "origin", "https://github.com/org/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/org/repo.git")
 
 	var stdout bytes.Buffer
 	if err := runStatus(context.Background(), &stdout, false, true); err != nil {
@@ -2979,7 +3057,7 @@ func TestRunStatus_CheckpointSyncDedicated_IneligibleFallsBackToElected(t *testi
 	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoint_remote": {"provider": "github", "repo": "org/checkpoints"}}}`)
 	// Remote owner "other" != checkpoint_remote owner "org": fork detection
 	// rejects the dedicated store at push time.
-	testutil.AddRemote(t, ".", "origin", "https://github.com/other/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/other/repo.git")
 	checkpointSyncTestCommit(t, "a.txt", "one")
 	second := checkpointSyncTestCommit(t, "b.txt", "two")
 	testutil.GitUpdateRef(t, ".", "refs/heads/"+paths.MetadataBranchName, second)
@@ -3007,7 +3085,7 @@ func TestRunStatusJSON_CheckpointSync_DedicatedIneligible(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	setupTestRepo(t)
 	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoint_remote": {"provider": "github", "repo": "org/checkpoints"}}}`)
-	testutil.AddRemote(t, ".", "origin", "https://github.com/other/repo.git")
+	testutil.AddRemote(t, ".", originRemoteName, "https://github.com/other/repo.git")
 
 	var stdout bytes.Buffer
 	if err := runStatus(context.Background(), &stdout, false, true); err != nil {

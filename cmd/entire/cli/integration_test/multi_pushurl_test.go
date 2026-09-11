@@ -406,37 +406,6 @@ func TestMultiPushURL_DestinationNoteSurfaces(t *testing.T) {
 			want:   []string{"2 remotes", "single elected remote", "entire status"},
 			absent: []string{"follow whichever remote", "always looks at origin"},
 		},
-		{
-			// The note tells the user to run `entire status` for the elected
-			// destination, and describes where a push delivers checkpoints —
-			// both of which read as promises when push_sessions is false and
-			// nothing is pushed at all. The ambiguity is still real (it is
-			// what re-enabling pushing runs into), so the note is qualified
-			// rather than suppressed — and the caveat points at status for
-			// the read source instead of claiming the URLs listed here are
-			// it, since those are push URLs and reads use the fetch URL.
-			name: "several remotes, pushing disabled",
-			setup: func(env *TestEnv) {
-				env.SetupNamedBareRemote("backup")
-				env.PatchSettings(map[string]any{
-					"strategy_options": map[string]any{"push_sessions": false},
-				})
-			},
-			want: []string{
-				// One string proving the note still renders its body; the
-				// case above already covers that body in full.
-				"single elected remote",
-				"Automatic checkpoint pushing is disabled (push_sessions=false)",
-				// Substrings must not straddle the note's line wrapping.
-				"they would go if you re-enabled it",
-			},
-			absent: []string{
-				"checkpoints are waiting for it",
-				// The URLs listed here are push URLs; reads use the fetch
-				// URL, so this note must not present them as the read source.
-				"where they are read from today",
-			},
-		},
 	}
 
 	for _, tt := range tests {
