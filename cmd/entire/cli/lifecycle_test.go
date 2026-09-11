@@ -213,47 +213,104 @@ func TestRefreshCodexInventory_MultiTurnChildRefreshesCompletedTaskRecord(t *tes
 	assert.Contains(t, state.FindSubagentInventory(agentID).FinalizedTurnIDs, "turn-2")
 }
 
-func TestFinalizeCodexObservedAtSessionEnd_MultiTurnChildPreservesCapturedEvidence(t *testing.T) {
-	// NOT parallel: setupStopTestRepo changes the process working directory.
-	setupStopTestRepo(t)
-	ctx := context.Background()
-	const (
-		sessionID = "codex-session-end-multi-turn-child"
-		agentID   = "child-1"
-	)
-	completedAt := time.Now().UTC().Truncate(time.Microsecond)
-	require.NoError(t, strategy.SaveSessionState(ctx, &strategy.SessionState{
-		SessionID: sessionID,
-		StartedAt: time.Now(),
-		Phase:     session.PhaseActive,
-		SubagentInventory: []session.SubagentInventoryEntry{{
-			AgentID:                agentID,
-			ResolvedTranscriptPath: "/tmp/verified-child-1.jsonl",
-			ObservedTurnIDs:        []string{"turn-1", "turn-2"},
-			FinalizedTurnIDs:       []string{"turn-1"},
-		}},
-		TaskRecords: []session.TaskRecord{{
-			ToolUseID:   agentID,
-			AgentID:     agentID,
-			StartedAt:   completedAt.Add(-time.Minute),
-			CompletedAt: completedAt,
-			Files:       []string{"first.go"},
-			TokenUsage:  &agent.TokenUsage{InputTokens: 10},
-		}},
-	}))
+func TestFinalizeCodexObservedAtSessionEnd(t *testing.T) {
+	// A turn is force-closed only when the inventory carries a rollout path
+	// refreshCodexInventory verified by matching session_meta.id to AgentID.
+	// Without one there is no evidence to close on, and closing anyway would
+	// complete the record — hiding it from the SessionEnd sweep that runs next
+	// and letting condensation drop it with neither files nor a transcript.
+	const agentID = "child-1"
+	tests := []struct {
+		name             string
+		resolvedPath     string
+		seedCompleted    bool
+		wantFinalized    bool
+		wantCompletion   string // "unchanged" | "set" | "live"
+		wantDeclaredPath string
+	}{
+		{
+			name:             "verified path closes a live turn and completes the record",
+			resolvedPath:     "/tmp/verified-child-1.jsonl",
+			wantFinalized:    true,
+			wantCompletion:   "set",
+			wantDeclaredPath: "/tmp/verified-child-1.jsonl",
+		},
+		{
+			name:             "verified path closes a later turn without completing twice",
+			resolvedPath:     "/tmp/verified-child-1.jsonl",
+			seedCompleted:    true,
+			wantFinalized:    true,
+			wantCompletion:   "unchanged",
+			wantDeclaredPath: "/tmp/verified-child-1.jsonl",
+		},
+		{
+			name:           "unresolved rollout leaves the turn pending and the record retryable",
+			wantFinalized:  false,
+			wantCompletion: "live",
+		},
+	}
 
-	finalizeCodexObservedAtSessionEnd(ctx, sessionID)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// NOT parallel: setupStopTestRepo changes the process working directory.
+			setupStopTestRepo(t)
+			ctx := context.Background()
+			sessionID := "codex-session-end-" + strings.ReplaceAll(tt.name, " ", "-")
+			seededAt := time.Now().UTC().Truncate(time.Microsecond)
+			record := session.TaskRecord{
+				ToolUseID:  agentID,
+				AgentID:    agentID,
+				StartedAt:  seededAt.Add(-time.Minute),
+				Files:      []string{"first.go"},
+				TokenUsage: &agent.TokenUsage{InputTokens: 10},
+			}
+			if tt.seedCompleted {
+				record.CompletedAt = seededAt
+			}
+			require.NoError(t, strategy.SaveSessionState(ctx, &strategy.SessionState{
+				SessionID: sessionID,
+				StartedAt: time.Now(),
+				Phase:     session.PhaseActive,
+				SubagentInventory: []session.SubagentInventoryEntry{{
+					AgentID:                agentID,
+					ResolvedTranscriptPath: tt.resolvedPath,
+					ObservedTurnIDs:        []string{"turn-1", "turn-2"},
+					FinalizedTurnIDs:       []string{"turn-1"},
+				}},
+				TaskRecords: []session.TaskRecord{record},
+			}))
 
-	state, err := strategy.LoadSessionState(ctx, sessionID)
-	require.NoError(t, err)
-	record := state.FindTaskRecord(agentID)
-	require.NotNil(t, record)
-	assert.Equal(t, completedAt, record.CompletedAt, "force-closing a later turn must not complete the task twice")
-	assert.Equal(t, []string{"first.go"}, record.Files, "closing an unresolved turn must preserve previously captured files")
-	assert.Equal(t, &agent.TokenUsage{InputTokens: 10}, record.TokenUsage, "without a new snapshot, preserve captured tokens")
-	assert.Equal(t, "/tmp/verified-child-1.jsonl", record.DeclaredTranscriptPath,
-		"force-closing must retain the inventory's exact-ID-verified rollout path for condensation")
-	assert.Contains(t, state.FindSubagentInventory(agentID).FinalizedTurnIDs, "turn-2")
+			finalizeCodexObservedAtSessionEnd(ctx, sessionID)
+
+			state, err := strategy.LoadSessionState(ctx, sessionID)
+			require.NoError(t, err)
+			got := state.FindTaskRecord(agentID)
+			require.NotNil(t, got)
+
+			entry := state.FindSubagentInventory(agentID)
+			require.NotNil(t, entry)
+			if tt.wantFinalized {
+				assert.Contains(t, entry.FinalizedTurnIDs, "turn-2")
+			} else {
+				assert.NotContains(t, entry.FinalizedTurnIDs, "turn-2",
+					"an unresolved rollout is not evidence the turn ended")
+			}
+
+			switch tt.wantCompletion {
+			case "unchanged":
+				assert.Equal(t, seededAt, got.CompletedAt, "force-closing a later turn must not complete the task twice")
+			case "set":
+				assert.False(t, got.CompletedAt.IsZero(), "a verified path closes the record")
+			case "live":
+				assert.True(t, got.CompletedAt.IsZero(),
+					"the record must stay live so the SessionEnd sweep can retry it and condensation retains it")
+			}
+
+			assert.Equal(t, tt.wantDeclaredPath, got.DeclaredTranscriptPath)
+			assert.Equal(t, []string{"first.go"}, got.Files, "closing a turn must preserve previously captured files")
+			assert.Equal(t, &agent.TokenUsage{InputTokens: 10}, got.TokenUsage, "without a new snapshot, preserve captured tokens")
+		})
+	}
 }
 
 func TestRefreshCodexInventory_UsesCurrentCompletenessWhenPersistingUsage(t *testing.T) {

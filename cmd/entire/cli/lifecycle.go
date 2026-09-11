@@ -1198,13 +1198,32 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	return nil
 }
 
-// finalizeCodexObservedAtSessionEnd closes every observed turn that did not
-// have a matching terminal record in the same verified rollout analysis. This
-// deliberately iterates the inventory rather than live task records: a
-// follow-up can be hidden behind a completed-but-unmaterialized record.
+// finalizeCodexObservedAtSessionEnd closes every observed turn of a VERIFIED
+// child that did not have a matching terminal record in the same rollout
+// analysis. This deliberately iterates the inventory rather than live task
+// records: a follow-up can be hidden behind a completed-but-unmaterialized
+// record.
+//
+// A child whose rollout this session never resolved is skipped, because
+// completing its record here is unrecoverable: it hides the record from the
+// completeLiveTaskRecords sweep that runs next — whose independent
+// ResolveAgentTranscriptPath attempt and analyzer pass are a genuinely
+// different resolution path — and condensation then writes a path-free
+// "unavailable" reason and drops the record (removeCompletedTaskRecords), with
+// no later hook to reconcile it. Left pending, the record stays live, so the
+// sweep retries it now and each later condensation re-materializes it.
 func finalizeCodexObservedAtSessionEnd(ctx context.Context, sessionID string) {
 	if err := strategy.MutateSessionState(ctx, sessionID, func(state *strategy.SessionState) error {
 		for _, entry := range state.SubagentInventory {
+			// refreshCodexInventory records this path only after loading the
+			// rollout and matching session_meta.id to AgentID, so it is the
+			// only evidence here that the child was ever read. Its absence
+			// covers every way resolution can fail — an unreadable or absent
+			// rollout, a fallback scan that timed out or breached its budget,
+			// an extraction that never ran at all.
+			if entry.ResolvedTranscriptPath == "" {
+				continue
+			}
 			for _, turnID := range entry.ObservedTurnIDs {
 				if !state.FinalizeSubagentTurn(entry.AgentID, turnID) {
 					continue
@@ -1217,13 +1236,11 @@ func finalizeCodexObservedAtSessionEnd(ctx context.Context, sessionID string) {
 					if record.CompletedAt.IsZero() {
 						record.CompletedAt = time.Now()
 					}
-					// refreshCodexInventory accepts this path only after loading the
-					// rollout and matching session_meta.id to AgentID. Carry that
-					// verified path into the durable task record even when this
-					// fallback has no exact terminal file/token snapshot.
-					if entry.ResolvedTranscriptPath != "" {
-						record.DeclaredTranscriptPath = entry.ResolvedTranscriptPath
-					}
+					// Carry the verified path into the durable task record so
+					// condensation can still materialize the transcript even
+					// though this fallback has no exact terminal file/token
+					// snapshot.
+					record.DeclaredTranscriptPath = entry.ResolvedTranscriptPath
 					// No new snapshot exists here. Preserve evidence captured for earlier turns.
 					break
 				}
