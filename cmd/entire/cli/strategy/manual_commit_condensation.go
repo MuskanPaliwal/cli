@@ -1190,10 +1190,6 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 		return checkpointUsage
 	}
 
-	if checkpointUsage != nil && checkpointUsage.InputTokens > 0 {
-		return checkpointUsage
-	}
-
 	return nil
 }
 

@@ -258,6 +258,83 @@ func TestCountTranscriptItems_CursorEmpty(t *testing.T) {
 	}
 }
 
+func TestNonCopilotCondensationPreservesSessionTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	sessionUsage := &agent.TokenUsage{
+		InputTokens:         10_000,
+		OutputTokens:        999,
+		CacheReadTokens:     2_000,
+		CacheCreationTokens: 500,
+		APICallCount:        42,
+	}
+	state := &SessionState{
+		SessionID:  "s1",
+		AgentType:  agent.AgentTypeClaudeCode,
+		TokenUsage: sessionUsage,
+	}
+	checkpointUsage := &agent.TokenUsage{
+		InputTokens:         100,
+		OutputTokens:        10,
+		CacheReadTokens:     20,
+		CacheCreationTokens: 5,
+		APICallCount:        1,
+	}
+
+	applyBackfilledSessionTokenUsage(t.Context(), nil, state, nil, checkpointUsage)
+
+	require.Equal(t, sessionUsage, state.TokenUsage)
+}
+
+func TestCondenseSessionByID_NonCopilotPreservesSessionTokenUsage(t *testing.T) { //nolint:paralleltest // uses t.Chdir
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "non-copilot-token-usage"
+	metadataDir := ".entire/metadata/" + sessionID
+	metadataDirAbs := filepath.Join(dir, metadataDir)
+	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
+
+	transcript := strings.Join([]string{
+		`{"type":"human","uuid":"u1","message":{"content":"hello"}}`,
+		`{"type":"assistant","uuid":"u2","message":{"id":"msg_001","usage":{"input_tokens":100,"output_tokens":10}}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript), 0o644,
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte("agent content"), 0o644))
+
+	sessionUsage := &agent.TokenUsage{
+		InputTokens:         10_000,
+		OutputTokens:        999,
+		CacheReadTokens:     2_000,
+		CacheCreationTokens: 500,
+		APICallCount:        42,
+	}
+	require.NoError(t, s.SaveStep(t.Context(), StepContext{
+		SessionID:     sessionID,
+		ModifiedFiles: []string{"test.txt"},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint 1",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
+		AgentType:     agent.AgentTypeClaudeCode,
+		TokenUsage:    sessionUsage,
+	}))
+
+	state, err := s.loadSessionState(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, sessionUsage, state.TokenUsage)
+
+	require.NoError(t, s.CondenseSessionByID(t.Context(), sessionID))
+
+	state, err = s.loadSessionState(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, sessionUsage, state.TokenUsage)
+	require.Nil(t, state.CheckpointTokenUsage)
+}
+
 func TestSessionStateBackfillTokenUsage_CopilotUsesZeroInputSessionAggregate(t *testing.T) {
 	t.Parallel()
 
@@ -282,6 +359,21 @@ func TestSessionStateBackfillTokenUsage_CopilotUsesZeroInputSessionAggregate(t *
 	require.Equal(t, 20, backfillUsage.CacheReadTokens)
 	require.Equal(t, 10, backfillUsage.CacheCreationTokens)
 	require.Equal(t, 3, backfillUsage.APICallCount)
+}
+
+func TestSessionStateBackfillTokenUsage_CopilotFallsBackToCheckpointUsage(t *testing.T) {
+	t.Parallel()
+
+	checkpointUsage := &agent.TokenUsage{
+		OutputTokens: 25,
+		APICallCount: 1,
+	}
+
+	backfillUsage := sessionStateBackfillTokenUsage(
+		t.Context(), nil, agent.AgentTypeCopilotCLI, nil, checkpointUsage,
+	)
+
+	require.Same(t, checkpointUsage, backfillUsage)
 }
 
 func TestSessionStateBackfillModel_PiReadsModelFromTranscript(t *testing.T) {
