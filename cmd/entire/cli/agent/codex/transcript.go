@@ -499,8 +499,14 @@ func analyzeRolloutForTurns(ctx context.Context, data []byte, observedTurns []st
 	openTurn := ""
 	seenTurns := make(map[string]struct{})
 	seenFiles := make(map[string]struct{})
-	var lastTokenInfo json.RawMessage
+	var lastTokenSnapshot *exactTokenUsageData
 	foundToken := false
+	// Every token_count event carrying a usage snapshot is one model turn —
+	// the same test CalculateTokenUsage applies when counting the parent's API
+	// calls. Counting them here keeps a child's APICallCount comparable with
+	// its parent's, and with the Claude Code and Droid subagent rollups, which
+	// both sum their children's counts.
+	tokenSnapshots := 0
 	lines := splitJSONL(data)
 	var localStartOrdinal *int
 	inherited := false
@@ -570,14 +576,17 @@ func analyzeRolloutForTurns(ctx context.Context, data []byte, observedTurns []st
 				terminalValid = false
 			} else {
 				foundToken = true
-				lastTokenInfo = nil
+				lastTokenSnapshot = nil
 			}
 			continue
 		}
 		switch header.Type {
 		case eventMsgTypeTokenCount:
 			foundToken = true
-			lastTokenInfo = event.Info
+			lastTokenSnapshot = decodeTotalTokenUsage(event.Info)
+			if lastTokenSnapshot != nil {
+				tokenSnapshots++
+			}
 		case "task_started":
 			// Forks copy an unfinished parent turn. A later explicit turn start
 			// replaces that orphan; only balanced pairs can yield terminal IDs.
@@ -610,7 +619,13 @@ func analyzeRolloutForTurns(ctx context.Context, data []byte, observedTurns []st
 		result.TerminalTurnIDs = nil
 	}
 	if foundToken && (!inherited || localStartOrdinal != nil) {
-		result.ExactTokenUsage = exactUsageFromInfo(lastTokenInfo)
+		result.ExactTokenUsage = exactUsageFromSnapshot(lastTokenSnapshot)
+		if result.ExactTokenUsage != nil {
+			// Reported only alongside exact usage: an unusable final snapshot
+			// makes the child's whole total unavailable, and a bare call count
+			// with no tokens would read as a child that burned nothing.
+			result.ExactTokenUsage.APICallCount = tokenSnapshots
+		}
 	}
 	return result
 }
@@ -645,17 +660,29 @@ func extractFilesFromParsedLine(line rolloutLine) []string {
 	}
 }
 
-func exactUsageFromInfo(lastInfo json.RawMessage) *agent.TokenUsage {
-	if len(lastInfo) == 0 {
+// decodeTotalTokenUsage pulls the cumulative usage snapshot out of a
+// token_count event's info payload, or nil when it is absent or malformed.
+// The API-call count and the exact-usage read share it so both agree on what
+// counts as a usage-bearing event.
+func decodeTotalTokenUsage(info json.RawMessage) *exactTokenUsageData {
+	if len(info) == 0 {
 		return nil
 	}
-	var info struct {
+	var payload struct {
 		TotalTokenUsage *exactTokenUsageData `json:"total_token_usage"`
 	}
-	if json.Unmarshal(lastInfo, &info) != nil || info.TotalTokenUsage == nil {
+	if json.Unmarshal(info, &payload) != nil {
 		return nil
 	}
-	usage := info.TotalTokenUsage
+	return payload.TotalTokenUsage
+}
+
+// exactUsageFromSnapshot converts a decoded snapshot into usage, rejecting any
+// snapshot whose fields are absent or mutually inconsistent.
+func exactUsageFromSnapshot(usage *exactTokenUsageData) *agent.TokenUsage {
+	if usage == nil {
+		return nil
+	}
 	if usage.InputTokens == nil || usage.CachedInputTokens == nil || usage.OutputTokens == nil {
 		return nil
 	}

@@ -148,7 +148,8 @@ func TestAnalyzeRollout_PaginatedSubagentIgnoresInheritedParentHistory(t *testin
 	result := analyzeRollout(append([]byte(joinLines(encoded)), '\n'))
 	require.Equal(t, []string{"child-turn"}, result.TerminalTurnIDs)
 	require.Equal(t, []string{"/repo/child.txt"}, result.ModifiedFiles)
-	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 2, OutputTokens: 1}, result.ExactTokenUsage)
+	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 2, OutputTokens: 1, APICallCount: 1},
+		result.ExactTokenUsage, "the inherited snapshot below the start ordinal is out of scope for the call count too")
 }
 
 func TestExactTokenUsage_UsesOnlyLastRecognizableSnapshot(t *testing.T) {
@@ -159,7 +160,7 @@ func TestExactTokenUsage_UsesOnlyLastRecognizableSnapshot(t *testing.T) {
 		"reasoning_output_tokens": 2, "total_tokens": 18,
 	}})
 	usage := analyzeRollout(rolloutData(t, "child", []json.RawMessage{valid})).ExactTokenUsage
-	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 12, OutputTokens: 3}, usage)
+	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 12, OutputTokens: 3, APICallCount: 1}, usage)
 
 	malformedLast := tokenCountEvent(map[string]any{"total_token_usage": map[string]any{
 		"input_tokens": 10, "cached_input_tokens": 11, "output_tokens": 3,
@@ -197,15 +198,22 @@ func TestExactTokenUsage_RejectsEveryUnavailableOrInconsistentSnapshot(t *testin
 	}
 
 	zeros := analyzeRollout(valid(map[string]any{"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0})).ExactTokenUsage
-	require.Equal(t, &agent.TokenUsage{}, zeros)
+	require.Equal(t, &agent.TokenUsage{APICallCount: 1}, zeros)
 
 	multiple := rolloutData(t, "child", []json.RawMessage{
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 9, "cached_input_tokens": 1, "output_tokens": 2}}),
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 4, "cached_input_tokens": 1, "output_tokens": 2}}),
 	})
 	usage := analyzeRollout(multiple).ExactTokenUsage
-	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 1, OutputTokens: 2}, usage)
-	require.Zero(t, usage.APICallCount, "snapshot record count is not an API-call count")
+	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 1, OutputTokens: 2, APICallCount: 2}, usage,
+		"each usage-bearing snapshot is one model turn, as it is for the parent")
+
+	withoutUsage := rolloutData(t, "child", []json.RawMessage{
+		tokenCountEvent(map[string]any{"rate_limits": map[string]any{"primary_used_percent": 12}}),
+		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 4, "cached_input_tokens": 1, "output_tokens": 2}}),
+	})
+	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 1, OutputTokens: 2, APICallCount: 1},
+		analyzeRollout(withoutUsage).ExactTokenUsage, "a token_count carrying no usage snapshot is not a model turn")
 
 	malformedFinal := rolloutData(t, "child", []json.RawMessage{
 		tokenCountEvent(map[string]any{"total_token_usage": map[string]any{"input_tokens": 4, "cached_input_tokens": 1, "output_tokens": 2}}),
@@ -279,16 +287,16 @@ func TestSubagentInventory_AggregatesOnlyCompleteExactChildren(t *testing.T) {
 	require.Equal(t, first, result.Children[0].ResolvedPath)
 	require.Equal(t, []string{"first.txt"}, result.Children[0].ModifiedFiles)
 	require.Equal(t, []string{"first-turn"}, result.Children[0].TerminalTurnIDs)
-	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 2, OutputTokens: 1}, result.Children[0].TokenUsage)
+	require.Equal(t, &agent.TokenUsage{InputTokens: 3, CacheReadTokens: 2, OutputTokens: 1, APICallCount: 1}, result.Children[0].TokenUsage)
 	require.Equal(t, "second", result.Children[1].AgentID)
 	require.Equal(t, second, result.Children[1].ResolvedPath)
 	require.Equal(t, []string{"second.txt"}, result.Children[1].ModifiedFiles)
 	require.Equal(t, []string{"second-turn"}, result.Children[1].TerminalTurnIDs)
-	require.Equal(t, &agent.TokenUsage{InputTokens: 7, CacheReadTokens: 3, OutputTokens: 5}, result.Children[1].TokenUsage)
+	require.Equal(t, &agent.TokenUsage{InputTokens: 7, CacheReadTokens: 3, OutputTokens: 5, APICallCount: 1}, result.Children[1].TokenUsage)
 	require.NotNil(t, result.TokenUsage)
 	require.NotNil(t, result.TokenUsage.SubagentTokensComplete)
 	require.True(t, *result.TokenUsage.SubagentTokensComplete)
-	require.Equal(t, &agent.TokenUsage{InputTokens: 10, CacheReadTokens: 5, OutputTokens: 6}, result.TokenUsage.SubagentTokens)
+	require.Equal(t, &agent.TokenUsage{InputTokens: 10, CacheReadTokens: 5, OutputTokens: 6, APICallCount: 2}, result.TokenUsage.SubagentTokens)
 }
 
 func TestSubagentInventory_EmptyInventoryIsExactWithoutChildTotal(t *testing.T) {
