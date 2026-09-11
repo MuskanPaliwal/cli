@@ -1,0 +1,46 @@
+I want to discuss and work on the follow-up to entireio/cli PR #2322: guard `entire session adopt` against adopting another caller’s session.
+
+Review and assess this independently before changing code. You own that review; the context below is a starting point, not a settled design. If the review supports the fix, proceed with implementation and verification.
+
+Context:
+- Repository: entireio/cli; local origin is MuskanPaliwal/cli and upstream is entireio/cli.
+- Trigger: https://github.com/entireio/cli/pull/2322#pullrequestreview-5154023419
+- The linked review is an approval with an empty body and no inline comments. The actual follow-up is explicitly stated in the PR description: `IsCaller()` distinguishes caller identification from a guess, but does not yet guard `session adopt`; preventing adoption of another caller’s session remains separate work.
+- PR #2322 addresses `session current` returning another worktree’s recently active session. Passing that ID to `session adopt` can move an unrelated live session and reset its checkpoint bookkeeping.
+- The PR describes caller resolution using agent-published session IDs and process ancestry, including nested agents, ambiguous matches, and recency fallbacks. Treat those details as PR claims to inspect, not implementation facts independently verified here.
+- A new branch and worktree already exist: `fix-session-adopt-caller-guard`, based on fetched upstream main at `628169784`. Reuse that worktree. No implementation, code exploration, or tests have been performed.
+- At handoff, PR #2322 was OPEN and unmerged; its branch was `soph/resolve-caller-session`. Re-check live state and determine how to handle this dependency before editing. The follow-up branch currently tracks upstream/main; do not accidentally push to that target.
+- The primary local main could not fast-forward because it contains the user’s edits to its Claude instructions. Those edits and unrelated untracked notes were preserved. The new worktree was created directly from upstream/main instead.
+- Entire hooks were configured for Claude Code, Codex, and OpenCode, and the Codex hooks were copied to the bare-clone root where Codex discovers them. The new worktree currently has setup-only modifications to Claude settings and Entire project settings. Inspect and preserve them; do not mistake them for implementation changes or include them in a code commit blindly.
+- This conversation started in the separate entire-graph repository. No session adoption or attachment was performed. Before committing, follow the receiving worktree’s Entire session-tracking instructions and verify the actual session identity; do not adopt a guessed or unrelated session.
+
+Before implementation:
+- Find the repository and existing branch worktree from your starting directory or usual workspace, and read local agent/repository instructions.
+- Perform an extensive independent review of relevant code, docs, tests, history, and live PR/CI state before making changes. Use installed Entire graph retrieval first for code location when required by local instructions, then inspect focused source.
+- Decide whether this follow-up is still real, already solved, stale, over-scoped, or better handled differently. Explain your recommendation and any hidden risks briefly, then proceed within the authorized scope if justified.
+- Assess the adoption ownership contract rather than assuming a particular placement of an `IsCaller()` check. Consider legitimate cross-worktree and cross-repository adoption, explicit session IDs, nested agents, ambiguous/untracked callers, human invocation, and existing force/override behavior if any.
+
+Task and boundaries:
+- Prevent accidental adoption of another caller’s session while preserving supported intentional adoption workflows.
+- Establish which evidence is sufficient to allow adoption and how unsupported or ambiguous identity should be reported. Inspect existing contracts before selecting behavior.
+- Rejected adoption must not move the session or reset its checkpoint bookkeeping. Determine whether both source and destination state need regression assertions.
+- Keep the fix complete and scoped to adoption safety and necessary tests/documentation. Do not broadly redesign caller resolution or session management without evidence that it is required.
+- Preserve others’ work and keep production comments focused on non-obvious contracts or safety invariants, without process metadata.
+
+Validation:
+- Reproduce the unsafe behavior and add meaningful regression coverage that exercises the real adoption contract.
+- Verify rejection leaves relevant state unchanged and legitimate supported adoption still works; cover ambiguous identity and nesting where the reviewed contract requires it.
+- Run focused tests and the repository’s required checks before declaring completion. Execute any graph-provided VERIFY command when applicable. Report exact commands and observed results, and disclose anything not run.
+
+Output:
+- Begin with independent review findings and your recommendation, then implement if warranted without asking again for routine authorized work.
+- Report the final behavior, scoped changes, validation evidence, and any remaining PR dependency or unresolved policy decision.
+- Do not push, merge, close issues or PRs, label, or post public comments unless explicitly instructed.
+
+---
+
+wait what did you cherry pick?
+
+---
+
+but why?

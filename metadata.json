@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M27GR68ZFD3QXFM4W60T9X4M",
+  "strategy": "manual-commit",
+  "branch": "fix-session-cleanup-safety",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CLAUDE.md",
+    "cmd/entire/cli/agent/caller_session.go",
+    "cmd/entire/cli/agent/caller_session_test.go",
+    "cmd/entire/cli/agent/claudecode/claude.go",
+    "cmd/entire/cli/agent/codex/codex.go",
+    "cmd/entire/cli/agent/copilotcli/copilotcli.go",
+    "cmd/entire/cli/agent/cursor/cursor.go",
+    "cmd/entire/cli/agent/pi/pi.go",
+    "cmd/entire/cli/hooks_git_cmd.go",
+    "cmd/entire/cli/hooks_git_cmd_test.go",
+    "cmd/entire/cli/integration_test/hook_bench_test.go",
+    "cmd/entire/cli/integration_test/setup_test.go",
+    "cmd/entire/cli/session_adopt_caller_test.go",
+    "cmd/entire/cli/session_current.go",
+    "cmd/entire/cli/session_current_test.go",
+    "cmd/entire/cli/session_tokens.go",
+    "cmd/entire/cli/session_tokens_resolution_test.go",
+    "cmd/entire/cli/sessions.go",
+    "cmd/entire/cli/sessions_test.go",
+    "cmd/entire/cli/strategy/caller_session.go",
+    "cmd/entire/cli/strategy/caller_session_test.go",
+    "cmd/entire/cli/strategy/session_identity.go",
+    "cmd/entire/cli/strategy/session_identity_test.go",
+    "cmd/entire/cli/strategy/session_state.go",
+    "cmd/entire/cli/strategy/session_state_test.go",
+    "e2e/tests/main_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 187863,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3003264,
+    "output_tokens": 7636,
+    "api_call_count": 41
+  }
+}
