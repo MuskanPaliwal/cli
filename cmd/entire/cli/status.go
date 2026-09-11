@@ -38,7 +38,7 @@ func newStatusCmd() *cobra.Command {
 	var jsonFlag bool
 
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   cmdStatus,
 		Short: "Show Entire status",
 		Long:  "Show whether Entire is currently enabled or disabled",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -467,10 +467,10 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 // mode has no git remote to name (and only reaches here on the git-refs
 // backend), so it drops the remote-name phrasing.
 func formatUnpushedCheckpointsLine(info checkpointSyncInfo) string {
-	noun := "checkpoints"
+	noun := nounCheckpoints
 	pronoun := "they sync"
 	if info.Unpushed == 1 {
-		noun = "checkpoint"
+		noun = nounCheckpoint
 		pronoun = "it syncs"
 	}
 	if info.Source == checkpointSyncSourceDedicated {

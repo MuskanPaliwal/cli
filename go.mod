@@ -1,6 +1,6 @@
 module github.com/entireio/cli
 
-go 1.26.6
+go 1.27.1
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -30,6 +30,7 @@ require (
 	github.com/go-git/x/plugin/objectsigner/program v0.0.0-20260624122410-382b2905c041
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
+	github.com/lastpersonlabs/goredact v0.1.0
 	github.com/mattn/go-isatty v0.0.24
 	github.com/mattn/go-runewidth v0.0.29
 	github.com/muesli/termenv v0.16.0
@@ -49,8 +50,6 @@ require (
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-require github.com/lastpersonlabs/goredact v0.1.0
 
 require (
 	dario.cat/mergo v1.0.2 // indirect

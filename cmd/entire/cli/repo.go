@@ -20,7 +20,7 @@ import (
 // content operations (log, diff, …) remain intentionally out of scope here.
 func newRepoCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "repo",
+		Use:   cmdRepo,
 		Short: "Manage Entire repositories",
 	}
 	addControlPlaneFlags(cmd)
@@ -37,7 +37,7 @@ func newRepoCmd() *cobra.Command {
 
 // repoColumns is the human table/field view of a repo, shared by list and
 // get. CLUSTER/STATE come from optional fields, shown as "-" when unset.
-var repoColumns = []string{"ID", "NAME", "PROJECT", "CLUSTER", "STATE"}
+var repoColumns = []string{"ID", colHeaderName, "PROJECT", colHeaderCluster, "STATE"}
 
 func repoRow(r coreapi.Repo) []string {
 	return []string{r.ID, r.Name, r.OwningProjectId, r.ClusterHost.Or("-"), r.State.Or("-")}
@@ -129,7 +129,7 @@ func newRepoCreateCmd() *cobra.Command {
 		objectFormat string
 	)
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   cmdCreateName,
 		Short: "Create a repository in a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
