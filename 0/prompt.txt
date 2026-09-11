@@ -1,0 +1,30 @@
+I have been contributing to the Entire CLI repository for a little over a month.
+
+Please inspect the git history, GitHub PR metadata if available, and the repository code to identify all commits/PRs authored by Muskan Paliwal / my GitHub account.
+
+For each meaningful contribution:
+
+1. Give me the PR/commit and title.
+2. Explain the original problem.
+3. Explain the relevant architecture before my change.
+4. Explain exactly what I changed at the code level.
+5. Identify the important files, packages, structs, interfaces, functions, commands, or abstractions involved.
+6. Explain any non-obvious design decisions or edge cases.
+7. Explain how the change fits into Entire's larger architecture.
+8. Tell me what technical concepts I should understand well enough to discuss this PR with an Entire engineer.
+9. Tell me what questions an Entire engineer might ask me about this contribution.
+10. Point out anything in the implementation that I may have forgotten but should know before discussing it.
+
+Do not just summarize PR descriptions. Trace the actual code and call paths.
+
+At the end, group my contributions by subsystem, for example:
+- git/ref machinery
+- checkpoints/session capture
+- agent integrations
+- CLI UX
+- search
+- storage/sync
+- GitHub/platform
+- other
+
+Also rank my 5 strongest contributions to discuss in a technical conversation and explain why.
