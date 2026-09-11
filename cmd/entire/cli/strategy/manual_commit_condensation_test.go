@@ -286,6 +286,24 @@ func TestNonCopilotCondensationPreservesSessionTokenUsage(t *testing.T) {
 	require.Equal(t, sessionUsage, state.TokenUsage)
 }
 
+func TestNonCopilotCondensationDoesNotPromoteCheckpointUsage(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		SessionID: "s1",
+		AgentType: agent.AgentTypeClaudeCode,
+	}
+	checkpointUsage := &agent.TokenUsage{
+		InputTokens:  100,
+		OutputTokens: 10,
+		APICallCount: 1,
+	}
+
+	applyBackfilledSessionTokenUsage(t.Context(), nil, state, nil, checkpointUsage)
+
+	require.Nil(t, state.TokenUsage)
+}
+
 func TestCondenseSessionByID_NonCopilotPreservesSessionTokenUsage(t *testing.T) { //nolint:paralleltest // uses t.Chdir
 	dir := setupGitRepo(t)
 	t.Chdir(dir)
@@ -374,6 +392,37 @@ func TestSessionStateBackfillTokenUsage_CopilotFallsBackToCheckpointUsage(t *tes
 	)
 
 	require.Same(t, checkpointUsage, backfillUsage)
+}
+
+func TestApplyBackfilledSessionTokenUsage_CopilotPreservesSubagentTotal(t *testing.T) {
+	t.Parallel()
+
+	checkpointUsage := &agent.TokenUsage{
+		OutputTokens: 25,
+		APICallCount: 1,
+	}
+	state := &SessionState{
+		AgentType: agent.AgentTypeCopilotCLI,
+		TokenUsage: &agent.TokenUsage{
+			InputTokens: 1_000,
+			SubagentTokens: &agent.TokenUsage{
+				InputTokens:  200,
+				OutputTokens: 50,
+				APICallCount: 2,
+			},
+		},
+	}
+
+	applyBackfilledSessionTokenUsage(t.Context(), nil, state, nil, checkpointUsage)
+
+	require.Equal(t, 25, state.TokenUsage.OutputTokens)
+	require.Equal(t, 1, state.TokenUsage.APICallCount)
+	require.Equal(t, &agent.TokenUsage{
+		InputTokens:  200,
+		OutputTokens: 50,
+		APICallCount: 2,
+	}, state.TokenUsage.SubagentTokens)
+	require.Nil(t, checkpointUsage.SubagentTokens)
 }
 
 func TestSessionStateBackfillModel_PiReadsModelFromTranscript(t *testing.T) {
