@@ -42,12 +42,12 @@ type CheckpointSyncRemote struct {
 
 // ResolveCheckpointSyncRemote elects the one configured git remote that
 // checkpoint data syncs to. Pure local lookup — no network. Precedence:
-// checkpoint_push_remote setting (fail-closed if the named remote does not
-// exist), then the captured election (evidence-elected by a past push that
-// agreed with the branch's declared push destination; fail-soft if that
-// remote is gone), then "origin", then the sole remote, then the first remote
-// in .git/config order. It knows nothing about the checkpoint_remote URL
-// feature; callers exempt that case themselves.
+// checkpoint_push_remote setting (fail-closed if the named remote has no
+// fetch URL), then the captured election (evidence-elected by a past push that
+// agreed with the branch's declared push destination; fail-soft if that remote
+// is no longer fetchable), then "origin", then the sole remote, then the first
+// remote in .git/config order. It knows nothing about the checkpoint_remote
+// URL feature; callers exempt that case themselves.
 //
 // Deliberately NOT keyed on the branch's tracking config alone
 // (branch.<name>.pushRemote / remote.pushDefault / branch.<name>.remote).
@@ -79,26 +79,28 @@ func ResolveCheckpointSyncRemote(ctx context.Context) (CheckpointSyncRemote, err
 	if err != nil {
 		return CheckpointSyncRemote{}, fmt.Errorf("cannot read settings to resolve the checkpoint sync remote: %w", err)
 	}
+	// Every tier elects from the same fetchable set. `git remote get-url`
+	// accepts a pushurl-only entry even though reads and reconciliation cannot.
+	remotes := configuredRemotesInConfigOrder(ctx)
 	if name := s.GetCheckpointPushRemote(); name != "" {
-		if !isConfiguredRemote(ctx, name) {
+		if !slices.Contains(remotes, name) {
 			return CheckpointSyncRemote{}, fmt.Errorf(
-				"checkpoint_push_remote %q is not a configured git remote; checkpoint sync disabled until fixed", name)
+				"checkpoint_push_remote %q has no configured fetch URL; checkpoint sync disabled until fixed", name)
 		}
 		return CheckpointSyncRemote{Name: name, Source: SyncRemoteSourceConfig}, nil
 	}
 
 	// Captured tier: fail-soft, unlike the explicit setting above — capture
-	// is automatic state, so a captured remote that was since renamed or
-	// removed falls through to the default tiers instead of disabling sync.
+	// is automatic state, so a captured remote that is no longer fetchable
+	// falls through to the default tiers instead of disabling sync.
 	for _, name := range loadCapturedSyncRemotes(ctx) {
-		if isConfiguredRemote(ctx, name) {
+		if slices.Contains(remotes, name) {
 			return CheckpointSyncRemote{Name: name, Source: SyncRemoteSourceObserved}, nil
 		}
-		logging.Debug(ctx, "captured checkpoint sync remote is not configured; falling through",
+		logging.Debug(ctx, "captured checkpoint sync remote has no configured fetch URL; falling through",
 			slog.String("remote", name))
 	}
 
-	remotes := configuredRemotesInConfigOrder(ctx)
 	switch {
 	case len(remotes) == 0:
 		return CheckpointSyncRemote{}, nil
