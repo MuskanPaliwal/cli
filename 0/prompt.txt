@@ -1,0 +1,37 @@
+let's create a trail for this issue: https://github.com/entireio/cli/issues/2360
+
+---
+
+no use my fork
+
+---
+
+for creating trail.
+
+---
+
+ohh we should pull from upstream main and push to the branch
+
+---
+
+why do i see 17k changes in entire io for this trail? we need to push to entire as well?
+
+---
+
+then sync my fork main too
+
+---
+
+and suppose i ask you to review a trail then what?
+
+---
+
+how do i do that?
+
+---
+
+re-open the trail and we should fix the issue there
+
+---
+
+let it be. let's create a new trail for the issue
