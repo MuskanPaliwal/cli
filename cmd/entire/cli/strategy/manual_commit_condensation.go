@@ -2005,8 +2005,7 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 
 // cleanupShadowBranchIfUnused deletes a shadow branch if no other active sessions reference it.
 func (s *ManualCommitStrategy) cleanupShadowBranchIfUnused(ctx context.Context, _ *git.Repository, shadowBranchName, excludeSessionID string) error {
-	// List all session states to check if any other session uses this shadow branch
-	allStates, err := s.listAllSessionStates(ctx)
+	allStates, err := ListSessionStatesStrict(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list session states: %w", err)
 	}

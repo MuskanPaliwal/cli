@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -206,9 +207,9 @@ func listShadowBranchHeads(ctx context.Context) (map[string]plumbing.Hash, error
 // so the caller knows any condensed checkpoint data already reached
 // the remote.
 //
-// Returns the count of branches deleted. Failures (e.g., one branch
-// fails to delete due to a stale lock) are logged but don't abort
-// the operation — remaining branches are still attempted.
+// Returns the count of branches deleted. Expected compare-and-swap or deletion
+// failures are logged without aborting the operation. Failures to establish
+// whether current session state protects a branch are returned to the caller.
 //
 // Safety properties:
 //   - Skips any shadow branch referenced by a session with EndedAt
@@ -264,12 +265,15 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	deleted, failed := DeleteShadowBranchesIfUnchanged(ctx, toDelete)
+	deleted, failed, safetyErr := DeleteShadowBranchesIfUnchanged(ctx, toDelete)
 	if len(failed) > 0 {
 		logging.Warn(ctx, "some shadow branches failed to delete during post-push cleanup",
 			slog.Int("failed_count", len(failed)),
 			slog.Int("deleted_count", len(deleted)),
 		)
+	}
+	if safetyErr != nil {
+		return len(deleted), safetyErr
 	}
 	return len(deleted), nil
 }
@@ -282,11 +286,14 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 // already have filtered to isAutoDeletableShadowBranch before calling this --
 // the same check is repeated here as a second, independent gate rather than
 // relying solely on the caller's filtering, since this function is the one
-// place that actually deletes a ref with no human confirmation.
-func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]plumbing.Hash) (deleted []string, failed []string) {
+// place that actually deletes a ref with no human confirmation. The returned
+// error is reserved for failures to establish that deletion is safe; expected
+// compare-and-swap and deletion failures are reported only in failed.
+func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]plumbing.Hash) (deleted []string, failed []string, safetyErr error) {
 	if len(branches) == 0 {
-		return []string{}, []string{}
+		return []string{}, []string{}, nil
 	}
+	var safetyErrors []error
 	for branch, expected := range branches {
 		if !isAutoDeletableShadowBranch(branch) || expected.IsZero() {
 			failed = append(failed, branch)
@@ -298,6 +305,7 @@ func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]pl
 				slog.String("branch", branch),
 				slog.String("error", err.Error()),
 			)
+			safetyErrors = append(safetyErrors, fmt.Errorf("recheck protection for shadow branch %s: %w", branch, err))
 			failed = append(failed, branch)
 			continue
 		}
@@ -322,7 +330,7 @@ func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]pl
 		}
 		deleted = append(deleted, branch)
 	}
-	return deleted, failed
+	return deleted, failed, errors.Join(safetyErrors...)
 }
 
 func protectedShadowBranchForSession(s *SessionState) (string, bool) {

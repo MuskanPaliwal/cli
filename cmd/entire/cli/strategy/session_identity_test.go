@@ -224,6 +224,22 @@ func TestFindSessionsForCommitLinking_IdentityAddsGuestSession(t *testing.T) {
 	assert.Contains(t, ids, "sess-agent-elsewhere")
 }
 
+// Not parallel: uses t.Chdir().
+func TestFindSessionsForCommitLinking_ToleratesMalformedUnrelatedState(t *testing.T) {
+	ctx := context.Background()
+	dir := identityTestRepo(t)
+	saveIdentitySession(t, "sess-here", func(st *SessionState) {
+		st.WorktreePath = dir
+	})
+	malformed := filepath.Join(dir, ".git", "entire-sessions", "malformed.json")
+	require.NoError(t, os.WriteFile(malformed, []byte(`{"session_id":`), 0o600))
+
+	got, err := NewManualCommitStrategy().findSessionsForCommitLinking(ctx, dir)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "sess-here", got[0].SessionID)
+}
+
 // addSiblingWorktree creates a real git worktree of dir so fallback matching
 // (which verifies a shared git common dir) can see sessions recorded there.
 func addSiblingWorktree(t *testing.T, dir, name string) string {

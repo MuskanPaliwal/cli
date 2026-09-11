@@ -112,7 +112,7 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		return nil, fmt.Errorf("failed to get state store: %w", err)
 	}
 
-	sessionStates, err := store.ListStrict(ctx)
+	sessionStates, err := store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list session states: %w", err)
 	}

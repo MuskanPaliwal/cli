@@ -90,16 +90,21 @@ func TestResetSession_PreservesCorruptSiblingShadow(t *testing.T) {
 				require.NoError(t, os.WriteFile(sibling, []byte(`{"session_id":`), 0600))
 			}
 			var output strings.Builder
-			resetErr := NewManualCommitStrategy().ResetSession(ctx, &output, io.Discard, "reset-me")
+			var warnings strings.Builder
+			resetErr := NewManualCommitStrategy().ResetSession(ctx, &output, &warnings, "reset-me")
 			if corrupt {
-				require.Error(t, resetErr)
+				require.NoError(t, resetErr)
+				require.Contains(t, warnings.String(), "Warning: failed to clean up shadow branch")
 			} else {
 				require.NoError(t, resetErr)
+				require.Empty(t, warnings.String())
 			}
+			_, err := os.Stat(filepath.Join(env.dir, ".git", "entire-sessions", "reset-me.json"))
+			require.ErrorIs(t, err, os.ErrNotExist)
 			require.True(t, env.branchExists(shadow))
-			_, err := os.Stat(sibling)
+			_, err = os.Stat(sibling)
 			require.NoError(t, err)
-			t.Logf("corrupt=%v shared_branch_exists=%v sibling_state_exists=true output=%q", corrupt, env.branchExists(shadow), output.String())
+			t.Logf("corrupt=%v shared_branch_exists=%v sibling_state_exists=true output=%q warnings=%q", corrupt, env.branchExists(shadow), output.String(), warnings.String())
 			requireShadowReachable(t, hash)
 			if corrupt {
 				require.NoError(t, SaveSessionState(ctx, &SessionState{SessionID: "keep-me", BaseCommit: env.baseHash.String(), StartedAt: time.Now(), Phase: session.PhaseActive, StepCount: 1}))
