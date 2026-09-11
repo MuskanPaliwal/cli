@@ -1473,7 +1473,7 @@ func writeCodexTrackedHooksRemedy(w io.Writer) {
 // canDeleteShadowBranch checks if a shadow branch can be safely deleted.
 // Returns true if no other sessions (besides excludeSessionID) need this branch.
 func canDeleteShadowBranch(ctx context.Context, shadowBranch, excludeSessionID string) (bool, error) {
-	states, err := strategy.ListSessionStates(ctx)
+	states, err := strategy.ListSessionStatesStrict(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to list session states: %w", err)
 	}

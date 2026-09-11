@@ -7,14 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	gitfilesystem "github.com/go-git/go-git/v6/storage/filesystem"
 )
 
 const refCASWaitDelay = 3 * time.Second
@@ -234,28 +232,7 @@ func refIsAbsent(repoRoot string, refName plumbing.ReferenceName) (bool, error) 
 		return false, fmt.Errorf("open repository to verify missing ref: %w", err)
 	}
 	defer repo.Close()
-	// go-git falls back to packed refs after any loose-ref read error, so its
-	// not-found result alone cannot distinguish a directory from absence.
-	if storage, ok := repo.Storer.(*gitfilesystem.Storage); ok {
-		info, statErr := storage.Filesystem().Lstat(refName.String())
-		if statErr == nil {
-			if info.IsDir() {
-				return false, fmt.Errorf("ref %s is a directory", refName)
-			}
-			return false, nil
-		}
-		if !errors.Is(statErr, os.ErrNotExist) {
-			return false, fmt.Errorf("inspect ref %s: %w", refName, statErr)
-		}
-	}
-	_, err = repo.Reference(refName, false)
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return true, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read ref %s: %w", refName, err)
-	}
-	return false, nil
+	return ReferenceIsAbsent(repo, refName)
 }
 
 func symbolicRefTarget(ctx context.Context, repoRoot string, refName plumbing.ReferenceName) (string, bool, error) {

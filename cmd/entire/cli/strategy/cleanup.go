@@ -230,7 +230,7 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	states, err := ListSessionStates(ctx)
+	states, err := ListSessionStatesStrict(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list session states: %w", err)
 	}
@@ -333,7 +333,7 @@ func protectedShadowBranchForSession(s *SessionState) (string, bool) {
 }
 
 func shadowBranchProtectedByCurrentState(ctx context.Context, branch string) (bool, error) {
-	states, err := ListSessionStates(ctx)
+	states, err := ListSessionStatesStrict(ctx)
 	if err != nil {
 		return false, err
 	}

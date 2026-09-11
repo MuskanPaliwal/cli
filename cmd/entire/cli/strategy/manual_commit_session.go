@@ -112,7 +112,7 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		return nil, fmt.Errorf("failed to get state store: %w", err)
 	}
 
-	sessionStates, err := store.List(ctx)
+	sessionStates, err := store.ListStrict(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list session states: %w", err)
 	}
@@ -154,7 +154,14 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		// Record-bearing sessions hold condensable content off the shadow branch — never orphaned.
 		shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		refName := plumbing.NewBranchReferenceName(shadowBranch)
-		if _, err := repo.Reference(refName, true); err != nil {
+		if _, refErr := repo.Reference(refName, true); refErr != nil {
+			absent, err := gitrepo.ReferenceIsAbsent(repo, refName)
+			if err != nil {
+				return nil, fmt.Errorf("verify shadow branch %s: %w", shadowBranch, err)
+			}
+			if !absent {
+				return nil, fmt.Errorf("shadow branch %s is present but could not be read: %w", shadowBranch, refErr)
+			}
 			if !state.Phase.IsActive() && state.LastCheckpointID.IsEmpty() && !state.HasTaskContent() {
 				//nolint:errcheck,gosec // G104: Cleanup is best-effort, shouldn't fail the list operation
 				store.Clear(ctx, state.SessionID)
