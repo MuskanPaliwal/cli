@@ -149,17 +149,17 @@ func checkpointSyncAllowedForRemote(ctx context.Context, pushRemote, pendingCapt
 // until the elected remote happens to be pushed.
 //
 // Stays quiet unless every condition holds: the push target is a configured
-// remote (checkpoint_push_remote takes a remote name, so a raw-URL push has
-// no actionable suggestion), the election succeeded AND was automatic (an
-// explicit checkpoint_push_remote is a decision already made, and the
-// fail-closed misconfigured case logs a warning through the gate itself), and
-// checkpoints are actually waiting. Fully local — no network.
+// remote with a fetch URL (checkpoint_push_remote must name one), the election
+// succeeded AND was automatic (an explicit checkpoint_push_remote is a
+// decision already made, and the fail-closed misconfigured case logs a warning
+// through the gate itself), and checkpoints are actually waiting. Fully local
+// — no network.
 //
 // The hint names .entire/settings.local.json: a remote name is a per-clone
 // fact, and committing it to the tracked settings.json would fail-close
 // checkpoint sync for every teammate whose clone lacks that remote name.
 func hintGatedCheckpointSync(ctx context.Context, pushRemote string) {
-	if !isConfiguredRemote(ctx, pushRemote) {
+	if !slices.Contains(configuredRemotesInConfigOrder(ctx), pushRemote) {
 		return
 	}
 	syncRemote, err := ResolveCheckpointSyncRemote(ctx)

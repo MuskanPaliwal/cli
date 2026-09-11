@@ -535,6 +535,18 @@ func TestHintGatedCheckpointSync(t *testing.T) {
 		assert.Empty(t, buf.String(), "checkpoint_push_remote takes a remote name; a URL push has no actionable hint")
 	})
 
+	t.Run("pushurl-only remote stays silent", func(t *testing.T) {
+		dir := initHintRepo(t, false)
+		testutil.RunGit(t, dir, "config", "remote.pushonly.pushurl", "https://example.com/pushonly.git")
+		setGitConfig(t, dir, "remote.pushDefault", "pushonly")
+		t.Chdir(dir)
+		buf := captureStderrWriter(t)
+
+		hintGatedCheckpointSync(ctx, "pushonly")
+
+		assert.Empty(t, buf.String(), "the hint must not recommend a remote that checkpoint sync cannot read from")
+	})
+
 	t.Run("failed election stays silent", func(t *testing.T) {
 		dir := initHintRepo(t, true)
 		testutil.WriteCheckpointPushRemoteSetting(t, dir, "gone")
