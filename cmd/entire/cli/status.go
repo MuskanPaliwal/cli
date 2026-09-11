@@ -352,8 +352,11 @@ type checkpointSyncInfo struct {
 	// set.
 	PushDisabled bool
 	// Remote is the elected git remote name, or the org/repo slug in
-	// dedicated checkpoint_remote mode. Empty when nothing resolved (no
-	// remotes configured, or the fail-closed case).
+	// dedicated checkpoint_remote mode. Empty when nothing resolved: no
+	// remotes configured, or the fail-closed case — except that with pushing
+	// disabled a failed election can still leave the dedicated slug here,
+	// since reads fail open and the store may serve them with nothing
+	// elected.
 	Remote string
 	// Source is config|observed|default|sole|first (resolver values) or
 	// "dedicated".
@@ -373,10 +376,11 @@ type checkpointSyncInfo struct {
 	// TWO preconditions, and its absence means whichever did not hold.
 	// Pushing must be disabled — with pushing enabled the headline is the
 	// broken setting and the user's next move is to fix it, so that output is
-	// left as it was. And no checkpoint_remote may be configured, because
-	// reads would then resolve to the dedicated store rather than to any read
-	// candidate, and this field names a git remote. So empty does NOT mean
-	// "reads fall open to nothing".
+	// left as it was. And the dedicated store must not be what serves reads:
+	// a configured checkpoint_remote the fetch side confirms is reported
+	// through Remote/Source instead (this field names a git remote), and a
+	// failed probe through ReadSourceUnknown. So empty does NOT mean "reads
+	// fall open to nothing".
 	ReadFallback string
 	// Unpushed approximates checkpoints not yet on the sync destination; 0
 	// when none, when counting failed, or when the count would be a lie
@@ -388,6 +392,46 @@ type checkpointSyncInfo struct {
 	// where a user finds out why — the hooks only log the rejection.
 	IgnoredRemote string
 	IgnoredReason string
+}
+
+// resolveDedicatedReadSource records where checkpoint READS land when the
+// configured checkpoint_remote is what serves them. Used by both paths that
+// name a read source, so the two cannot answer the question differently — the
+// asymmetry between them is what this function exists to remove.
+//
+// lead is the read candidate whose FETCH url joins origin in the ownership
+// vote: the elected remote, or "" when the election failed and reads fall
+// open to origin alone.
+//
+// Reports whether it settled the answer — the dedicated store serves reads
+// (Remote/Source), or the probe failed so nothing is known
+// (ReadSourceUnknown). False means reads resolve to the caller's own
+// candidate, which the caller names.
+func resolveDedicatedReadSource(ctx context.Context, s *EntireSettings, lead string, info *checkpointSyncInfo) bool {
+	cr := s.GetCheckpointRemote()
+	if cr == nil {
+		return false
+	}
+	authoritative, err := checkpointremote.ReadsDedicatedStore(ctx, lead)
+	switch {
+	case err != nil:
+		// Not the same as false. False means reads resolve somewhere else,
+		// so the caller's candidate is the answer; an error means no read URL
+		// resolves at all — reachable with a configured checkpoint_remote and
+		// no remote named origin, since the dedicated derivation is from
+		// origin. Naming a candidate there would report a working read source
+		// for a repo whose checkpoint reads fail.
+		logging.Debug(ctx, "checkpoint read source probe failed; status omits the read source",
+			slog.String("error", err.Error()))
+		info.ReadSourceUnknown = true
+		return true
+	case authoritative:
+		info.Remote = cr.Repo
+		info.Source = checkpointSyncSourceDedicated
+		return true
+	default:
+		return false
+	}
 }
 
 func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpointSyncInfo {
@@ -404,14 +448,13 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 		// elected remote left to probe PushURL against here.
 		info.Err = err.Error()
 		// Reads fail OPEN where the election failed closed (see
-		// strategy.CheckpointReadRemotes), so something may still be serving
-		// them. Asked of the resolver rather than reproducing its fallback
-		// rule here; it re-runs the election, which is why this is on the
-		// error path only, and it stays local-only like the rest of status.
-		// Skipped when a checkpoint_remote is configured: reads may resolve
-		// to the dedicated store instead of to any read candidate, and this
-		// field names a git remote, so it has nothing true to say there.
-		if info.PushDisabled && s.GetCheckpointRemote() == nil {
+		// strategy.CheckpointReadRemotes), so something is probably still
+		// serving them: the dedicated store when one is configured and the
+		// fetch side owns it, otherwise the fail-open candidate. Each is
+		// asked of its own resolver rather than reproduced here. Both re-run
+		// the election, which is why this is on the error path only, and both
+		// stay local-only like the rest of status.
+		if info.PushDisabled && !resolveDedicatedReadSource(ctx, s, "", &info) {
 			info.ReadFallback = strategy.LeadCheckpointReadRemote(ctx)
 		}
 		return info
@@ -440,23 +483,17 @@ func computeCheckpointSyncInfo(ctx context.Context, s *EntireSettings) checkpoin
 	if cr := s.GetCheckpointRemote(); cr != nil {
 		dedicated := false
 		if info.PushDisabled {
-			authoritative, fetchErr := checkpointremote.ReadsDedicatedStore(ctx, elected.Name)
-			if fetchErr != nil {
-				// Not the same as false. False means reads resolve somewhere
-				// else (so the elected remote is the answer); an error means
-				// no read URL resolves at all — reachable with a configured
-				// checkpoint_remote and no remote named origin. Falling soft
-				// to the elected remote there would report a working read
-				// source for a repo whose checkpoint reads fail. The push
-				// branch below may fall soft because resolvePushSettings
-				// degrades the same way it does; this one may not.
-				logging.Debug(ctx, "checkpoint read source probe failed; status omits the read source",
-					slog.String("error", fetchErr.Error()))
-				info.ReadSourceUnknown = true
-				return info
+			if resolveDedicatedReadSource(ctx, s, elected.Name, &info) {
+				if info.ReadSourceUnknown {
+					return info
+				}
+				dedicated = true
 			}
-			dedicated = authoritative
 		} else if _, enabled, purlErr := checkpointremote.PushURL(ctx, elected.Name); purlErr == nil {
+			// The push side may fall soft to the elected remote because
+			// resolvePushSettings degrades the same way; the read side may
+			// not, which is why the helper above distinguishes error from
+			// false and this branch does not need to.
 			dedicated = enabled
 		}
 		if dedicated {
@@ -542,34 +579,28 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 		// not claim exclusivity — "read from", never "only".
 		destination = "\n  Checkpoints read from: "
 	}
-	switch {
-	case info.Err != "":
+	// The misconfiguration warning is emitted independently of the read
+	// source below, not as one arm of the same switch: with pushing disabled
+	// a failed election does not stop reads, so the two can both have
+	// something to say and one must not shadow the other.
+	if info.Err != "" {
 		b.WriteString("\n")
 		// A fail-closed election is not a push failure when nothing is being
 		// pushed: name the misconfiguration without claiming a lost sync.
 		if info.PushDisabled {
 			b.WriteString(sty.render(sty.yellow, "  ! Checkpoint remote configuration: "+info.Err))
-			// Same label as the resolved case — to the reader it is one
-			// question, "where do checkpoints come from" — with the suffix
-			// saying this one was not chosen, it was fallen back to.
-			if info.ReadFallback != "" {
-				b.WriteString(destination)
-				b.WriteString(sty.render(sty.cyan, info.ReadFallback))
-				b.WriteString(sty.render(sty.dim, " (fallback; nothing was elected)"))
-			}
 		} else {
 			b.WriteString(sty.render(sty.yellow, "  ! Checkpoints NOT syncing: "+info.Err))
 		}
+	}
+	switch {
 	case info.ReadSourceUnknown:
 		b.WriteString("\n")
 		b.WriteString(sty.render(sty.yellow, "  ! Could not determine where checkpoints are read from"))
-	case info.Remote == "":
-		// No remotes configured: nothing resolved, and the diagnostics and
-		// counter below are empty by construction on this path.
 	case info.Source == checkpointSyncSourceDedicated:
 		b.WriteString(destination)
 		b.WriteString(sty.render(sty.cyan, "dedicated checkpoint remote ("+info.Remote+")"))
-	default:
+	case info.Remote != "":
 		b.WriteString(destination)
 		b.WriteString(sty.render(sty.cyan, info.Remote))
 		// Both suffixes describe how the remote was ELECTED, which is what
@@ -580,6 +611,13 @@ func writeCheckpointSyncLines(ctx context.Context, b *strings.Builder, s *Entire
 		case string(strategy.SyncRemoteSourceObserved):
 			b.WriteString(sty.render(sty.dim, " (follows your branch's push destination)"))
 		}
+	case info.ReadFallback != "":
+		// Same label as a resolved read source — to the reader it is one
+		// question, "where do checkpoints come from" — with the suffix
+		// saying this one was not chosen, it was fallen back to.
+		b.WriteString(destination)
+		b.WriteString(sty.render(sty.cyan, info.ReadFallback))
+		b.WriteString(sty.render(sty.dim, " (fallback; nothing was elected)"))
 	}
 	if info.IgnoredRemote != "" {
 		b.WriteString("\n")
@@ -1022,12 +1060,12 @@ type statusJSON struct {
 	// rather than guessed at.
 	CheckpointReadSourceUnknown bool `json:"checkpoint_read_source_unknown,omitempty"`
 	// CheckpointReadFallback is the remote reads fall open to when the
-	// election failed (checkpoint_sync_error is then set and
-	// checkpoint_sync_remote is absent, because nothing was elected). Emitted
-	// only alongside checkpoint_push_disabled AND only when no
-	// checkpoint_remote is configured — with one configured, reads may
-	// resolve to the dedicated store instead, so absence here does not mean
-	// reads fall open to nothing.
+	// election failed, so checkpoint_sync_error is set. Emitted only
+	// alongside checkpoint_push_disabled, and only when the dedicated store
+	// is not what serves reads — if it is, checkpoint_sync_remote carries it
+	// (with source "dedicated") even though nothing was elected, and a failed
+	// probe sets checkpoint_read_source_unknown instead. Absence here does
+	// not mean reads fall open to nothing.
 	CheckpointReadFallback string `json:"checkpoint_read_fallback,omitempty"`
 	UnpushedCheckpoints    int    `json:"unpushed_checkpoints,omitempty"`
 	// CheckpointRemoteIgnored/-Reason report a configured checkpoint_remote the
