@@ -1,0 +1,53 @@
+create a draft issue
+
+---
+
+you should also figure out the trail for the issue
+
+---
+
+do not create issue without my approval
+
+---
+
+no remove the codex agent and terminal and additional context should have trail?
+
+---
+
+remove the agent field itself and fix another finding
+
+---
+
+nice. for the draft issue use unslop
+
+---
+
+nice, create the issue
+
+---
+
+yupp
+
+---
+
+what? where is the markdown?
+
+---
+
+why are you using browser to create issues?
+
+---
+
+yupp
+
+---
+
+now, you are not supposed to bypass anything at all.
+
+---
+
+now think again and maybe we can describe the bugs in issue in more descriptive manner
+
+---
+
+update the issue
