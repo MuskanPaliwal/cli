@@ -310,18 +310,14 @@ func TestCondenseSessionByID_NonCopilotPreservesSessionTokenUsage(t *testing.T) 
 
 	s := &ManualCommitStrategy{}
 	sessionID := "non-copilot-token-usage"
-	metadataDir := ".entire/metadata/" + sessionID
-	metadataDirAbs := filepath.Join(dir, metadataDir)
-	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
+	metadataDir := paths.SessionMetadataDirFromSessionID(sessionID)
 
 	transcript := strings.Join([]string{
 		`{"type":"human","uuid":"u1","message":{"content":"hello"}}`,
 		`{"type":"assistant","uuid":"u2","message":{"id":"msg_001","usage":{"input_tokens":100,"output_tokens":10}}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(
-		filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript), 0o644,
-	))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte("agent content"), 0o644))
+	testutil.WriteFile(t, dir, filepath.Join(metadataDir, paths.TranscriptFileName), transcript)
+	testutil.WriteFile(t, dir, "test.txt", "agent content")
 
 	sessionUsage := &agent.TokenUsage{
 		InputTokens:         10_000,
