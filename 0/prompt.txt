@@ -1,0 +1,9 @@
+$simplify
+
+---
+
+what do you mean by review scope? i am asking you to apply simplify skill on the branch diff
+
+---
+
+continue

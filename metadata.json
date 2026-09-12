@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M2AW38T6Y7300KGQ45Z0VPHS",
+  "strategy": "manual-commit",
+  "branch": "fix-session-cleanup-safety",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/doctor_cleanup_inventory_test.go",
+    "cmd/entire/cli/strategy/cleanup.go",
+    "cmd/entire/cli/strategy/cleanup_inventory_test.go",
+    "cmd/entire/cli/strategy/manual_commit_condensation.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 292127,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5843072,
+    "output_tokens": 23274,
+    "api_call_count": 79
+  }
+}
