@@ -22,11 +22,11 @@ func TestCanDeleteShadowBranch_RejectsIncompleteInventory(t *testing.T) {
 	name := checkpoint.ShadowBranchNameForCommit(state.BaseCommit, "")
 	file := filepath.Join(dir, ".git", session.SessionStateDirName, "protected.json")
 	require.NoError(t, os.WriteFile(file, []byte(`{"session_id":`), 0o600))
-	allowed, err := canDeleteShadowBranch(t.Context(), name, "other")
+	allowed, err := strategy.CanDeleteShadowBranch(t.Context(), name, "other")
 	require.Error(t, err)
 	require.False(t, allowed)
 	require.NoError(t, strategy.SaveSessionState(t.Context(), state))
-	allowed, err = canDeleteShadowBranch(t.Context(), name, "other")
+	allowed, err = strategy.CanDeleteShadowBranch(t.Context(), name, "other")
 	require.NoError(t, err)
 	require.False(t, allowed)
 }

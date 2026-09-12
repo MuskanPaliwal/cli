@@ -3,7 +3,6 @@ package strategy
 import (
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,22 +16,17 @@ import (
 
 func newShadowOnlyCommit(t *testing.T, env *shadowCleanupEnv, shadow string) plumbing.Hash {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", "mktree")
-	output, treeErr := cmd.CombinedOutput()
-	require.NoError(t, treeErr, string(output))
-	hash, err := checkpoint.CreateCommit(t.Context(), env.repo, plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904"), env.baseHash, "shadow-only history", "test", "test@test.com")
+	hash, err := checkpoint.CreateCommit(t.Context(), env.repo, emptyTreeHash(t, env.repo), env.baseHash, "shadow-only history", "test", "test@test.com")
 	require.NoError(t, err)
 	require.NoError(t, env.repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(shadow), hash)))
 	return hash
 }
 
-func requireShadowReachable(t *testing.T, hash plumbing.Hash) {
+func requireShadowBranchAt(t *testing.T, env *shadowCleanupEnv, shadow string, hash plumbing.Hash) {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "git", "fsck", "--unreachable", "--no-reflogs")
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
-	require.NotContains(t, string(output), "unreachable commit "+hash.String())
-	t.Log("shadow commit remains reachable:", hash.String())
+	ref, err := env.repo.Reference(plumbing.NewBranchReferenceName(shadow), false)
+	require.NoError(t, err)
+	require.Equal(t, hash, ref.Hash())
 }
 
 func TestCleanupPushedShadowBranches_PreservesExpiredUncondensed(t *testing.T) {
@@ -66,7 +60,7 @@ func TestCleanupPushedShadowBranches_PreservesExpiredUncondensed(t *testing.T) {
 			_, err = os.Stat(filepath.Join(env.dir, ".git", "entire-sessions", state.SessionID+".json"))
 			require.NoError(t, err)
 			t.Logf("phase=%s control_deleted=0 aged_deleted=%d state_preserved=true", phase, deleted)
-			requireShadowReachable(t, hash)
+			requireShadowBranchAt(t, env, shadow, hash)
 		})
 	}
 }
@@ -105,7 +99,7 @@ func TestResetSession_PreservesCorruptSiblingShadow(t *testing.T) {
 			_, err = os.Stat(sibling)
 			require.NoError(t, err)
 			t.Logf("corrupt=%v shared_branch_exists=%v sibling_state_exists=true output=%q warnings=%q", corrupt, env.branchExists(shadow), output.String(), warnings.String())
-			requireShadowReachable(t, hash)
+			requireShadowBranchAt(t, env, shadow, hash)
 			if corrupt {
 				require.NoError(t, SaveSessionState(ctx, &SessionState{SessionID: "keep-me", BaseCommit: env.baseHash.String(), StartedAt: time.Now(), Phase: session.PhaseActive, StepCount: 1}))
 				require.NoError(t, NewManualCommitStrategy().ResetSession(ctx, &output, io.Discard, "keep-me"))
@@ -146,7 +140,7 @@ func TestListAllSessionStates_PreservesUnreadableShadow(t *testing.T) {
 	deleted, err := CleanupPushedShadowBranches(ctx)
 	require.NoError(t, err)
 	require.Zero(t, deleted)
-	requireShadowReachable(t, hash)
+	requireShadowBranchAt(t, env, shadow, hash)
 }
 
 func TestCleanupPushedShadowBranches_PreservesCorruptState(t *testing.T) {
@@ -161,7 +155,7 @@ func TestCleanupPushedShadowBranches_PreservesCorruptState(t *testing.T) {
 	require.Error(t, err)
 	require.Zero(t, deleted)
 	require.True(t, env.branchExists(shadow))
-	requireShadowReachable(t, hash)
+	requireShadowBranchAt(t, env, shadow, hash)
 	env.addSessionState("pending", env.baseHash.String(), "", nil, nil, false)
 	deleted, err = CleanupPushedShadowBranches(ctx)
 	require.NoError(t, err)

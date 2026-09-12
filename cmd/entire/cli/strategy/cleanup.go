@@ -362,6 +362,26 @@ func protectedShadowBranchForSession(s *SessionState) (string, bool) {
 	return getShadowBranchNameForCommit(s.BaseCommit, s.WorktreeID), true
 }
 
+// CanDeleteShadowBranch reports whether any other session still pins the branch.
+func CanDeleteShadowBranch(ctx context.Context, shadowBranch, excludeSessionID string) (bool, error) {
+	states, err := ListSessionStatesStrict(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to list session states: %w", err)
+	}
+	for _, state := range states {
+		if state.SessionID == excludeSessionID {
+			continue
+		}
+		// Task records never live on the shadow branch, so only SaveStep
+		// checkpoints pin it alive.
+		otherShadow := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
+		if otherShadow == shadowBranch && state.StepCount > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func shadowBranchProtectedByCurrentState(ctx context.Context, branch string) (bool, error) {
 	states, err := ListSessionStatesStrict(ctx)
 	if err != nil {
