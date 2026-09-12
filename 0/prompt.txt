@@ -1,5 +1,1 @@
-$simplify
-
----
-
-you should use branch diff for this
+commit the changes and push
