@@ -51,47 +51,38 @@ func TestResolveCheckpointSyncRemote_ConfigSetting(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir()
-func TestResolveCheckpointSyncRemote_ConfigSettingMissingRemote_FailsClosed(t *testing.T) {
+func TestResolveCheckpointSyncRemote_ConfigSettingInvalidRemote_FailsClosed(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	ctx := context.Background()
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	testutil.WriteFile(t, tmpDir, "f.txt", "init")
-	testutil.GitAdd(t, tmpDir, "f.txt")
-	testutil.GitCommit(t, tmpDir, "init")
 
-	testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
-	testutil.WriteCheckpointPushRemoteSetting(t, tmpDir, "gone")
+	for _, tt := range []struct {
+		name    string
+		remote  string
+		pushURL string
+	}{
+		{name: "missing remote", remote: "gone"},
+		{name: "pushurl-only remote", remote: "pushonly", pushURL: "https://example.com/pushonly.git"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testutil.InitRepo(t, tmpDir)
+			testutil.WriteFile(t, tmpDir, "f.txt", "init")
+			testutil.GitAdd(t, tmpDir, "f.txt")
+			testutil.GitCommit(t, tmpDir, "init")
+			testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
+			if tt.pushURL != "" {
+				testutil.RunGit(t, tmpDir, "config", "remote."+tt.remote+".pushurl", tt.pushURL)
+			}
+			testutil.WriteCheckpointPushRemoteSetting(t, tmpDir, tt.remote)
+			t.Chdir(tmpDir)
 
-	t.Chdir(tmpDir)
-
-	got, err := ResolveCheckpointSyncRemote(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "gone")
-	assert.Empty(t, got.Name)
-}
-
-// Not parallel: uses t.Chdir()
-func TestResolveCheckpointSyncRemote_ConfigSettingPushurlOnlyRemote_FailsClosed(t *testing.T) {
-	testutil.IsolateGitConfigEnv(t)
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	testutil.WriteFile(t, tmpDir, "f.txt", "init")
-	testutil.GitAdd(t, tmpDir, "f.txt")
-	testutil.GitCommit(t, tmpDir, "init")
-
-	testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
-	testutil.RunGit(t, tmpDir, "config", "remote.pushonly.pushurl", "https://example.com/pushonly.git")
-	testutil.WriteCheckpointPushRemoteSetting(t, tmpDir, "pushonly")
-
-	t.Chdir(tmpDir)
-
-	got, err := ResolveCheckpointSyncRemote(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pushonly")
-	assert.Contains(t, err.Error(), "fetch URL")
-	assert.Empty(t, got.Name)
+			got, err := ResolveCheckpointSyncRemote(ctx)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.remote)
+			assert.Contains(t, err.Error(), "fetch URL")
+			assert.Empty(t, got.Name)
+		})
+	}
 }
 
 // Not parallel: uses t.Chdir()

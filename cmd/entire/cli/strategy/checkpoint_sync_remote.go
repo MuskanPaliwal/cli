@@ -81,9 +81,9 @@ func ResolveCheckpointSyncRemote(ctx context.Context) (CheckpointSyncRemote, err
 	}
 	// Every tier elects from the same fetchable set. `git remote get-url`
 	// accepts a pushurl-only entry even though reads and reconciliation cannot.
-	remotes := configuredRemotesInConfigOrder(ctx)
+	fetchRemotes := configuredRemotesInConfigOrder(ctx)
 	if name := s.GetCheckpointPushRemote(); name != "" {
-		if !hasConfiguredFetchURL(remotes, name) {
+		if !slices.Contains(fetchRemotes, name) {
 			return CheckpointSyncRemote{}, fmt.Errorf(
 				"checkpoint_push_remote %q has no configured fetch URL; checkpoint sync disabled until fixed", name)
 		}
@@ -94,7 +94,7 @@ func ResolveCheckpointSyncRemote(ctx context.Context) (CheckpointSyncRemote, err
 	// is automatic state, so a captured remote that is no longer fetchable
 	// falls through to the default tiers instead of disabling sync.
 	for _, name := range loadCapturedSyncRemotes(ctx) {
-		if hasConfiguredFetchURL(remotes, name) {
+		if slices.Contains(fetchRemotes, name) {
 			return CheckpointSyncRemote{Name: name, Source: SyncRemoteSourceObserved}, nil
 		}
 		logging.Debug(ctx, "captured checkpoint sync remote has no configured fetch URL; falling through",
@@ -102,14 +102,14 @@ func ResolveCheckpointSyncRemote(ctx context.Context) (CheckpointSyncRemote, err
 	}
 
 	switch {
-	case len(remotes) == 0:
+	case len(fetchRemotes) == 0:
 		return CheckpointSyncRemote{}, nil
-	case hasConfiguredFetchURL(remotes, "origin"):
+	case slices.Contains(fetchRemotes, "origin"):
 		return CheckpointSyncRemote{Name: "origin", Source: SyncRemoteSourceDefault}, nil
-	case len(remotes) == 1:
-		return CheckpointSyncRemote{Name: remotes[0], Source: SyncRemoteSourceSole}, nil
+	case len(fetchRemotes) == 1:
+		return CheckpointSyncRemote{Name: fetchRemotes[0], Source: SyncRemoteSourceSole}, nil
 	default:
-		return CheckpointSyncRemote{Name: remotes[0], Source: SyncRemoteSourceFirst}, nil
+		return CheckpointSyncRemote{Name: fetchRemotes[0], Source: SyncRemoteSourceFirst}, nil
 	}
 }
 
@@ -159,7 +159,7 @@ func checkpointSyncAllowedForRemote(ctx context.Context, pushRemote, pendingCapt
 // fact, and committing it to the tracked settings.json would fail-close
 // checkpoint sync for every teammate whose clone lacks that remote name.
 func hintGatedCheckpointSync(ctx context.Context, pushRemote string) {
-	if !hasConfiguredFetchURL(configuredRemotesInConfigOrder(ctx), pushRemote) {
+	if !slices.Contains(configuredRemotesInConfigOrder(ctx), pushRemote) {
 		return
 	}
 	syncRemote, err := ResolveCheckpointSyncRemote(ctx)
@@ -211,10 +211,6 @@ func hintGatedCheckpointSync(ctx context.Context, pushRemote string) {
 		slog.Int("unpushed_checkpoints", count),
 		slog.String("checkpoint_sync_remote", syncRemote.Name),
 		slog.String("push_remote", pushRemote))
-}
-
-func hasConfiguredFetchURL(remotes []string, name string) bool {
-	return slices.Contains(remotes, name)
 }
 
 // configuredRemotesInConfigOrder lists remote names in .git/config section
