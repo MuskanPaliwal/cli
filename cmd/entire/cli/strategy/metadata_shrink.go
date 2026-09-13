@@ -136,16 +136,16 @@ func ScanOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository, 
 	if err != nil {
 		return nil, fmt.Errorf("scan local %s: %w", v1.Short(), err)
 	}
-	if remoteName == "" {
-		return scan, nil
-	}
-
-	trackingRef := plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
 	// The tracking ref as last fetched. An unreadable one (dangling, partial
 	// clone) is reported, not fatal: doctor's other checks must still run, and
 	// with a clean local branch there is nothing this check would do anyway.
-	readErr := scan.readRemoteSide(ctx, repo, trackingRef)
-	if len(scan.Local) == 0 && (readErr != nil || len(scan.Remote) == 0) {
+	var trackingRef plumbing.ReferenceName
+	var readErr error
+	if remoteName != "" {
+		trackingRef = plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
+		readErr = scan.readRemoteSide(ctx, repo, trackingRef)
+	}
+	if len(scan.Local) == 0 && (remoteName == "" || readErr != nil || len(scan.Remote) == 0) {
 		scan.RemoteErr = readErr
 		return scan, nil //nolint:nilerr // fail-soft: the unreadable tracking ref is reported on scan.RemoteErr, not fatal to doctor
 	}
@@ -154,10 +154,15 @@ func ScanOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository, 
 	// dedicated checkpoint_remote URL has no remote-tracking ref to lease
 	// against, and pre-push replays local commits onto whatever that URL
 	// holds, so a local-only rewrite there would be undone by the next push.
-	// Report it and stop rather than repair half of it. The settings are read
-	// directly rather than through resolvePushSettings, which may fetch and
-	// create the local branch as a side effect; this scan must stay read-only.
-	if s, loadErr := settings.Load(ctx); loadErr == nil {
+	// Report it and stop rather than repair half of it — and decide that
+	// BEFORE the no-remote early return below, so a repository whose only
+	// checkpoint destination is the dedicated URL is refused the same way.
+	// The settings are read directly rather than through resolvePushSettings,
+	// which may fetch and create the local branch as a side effect; this scan
+	// must stay read-only. They are read for THIS repository's worktree, not
+	// the process working directory: the scan is handed a repo and must not
+	// answer for whichever checkout the caller happens to be standing in.
+	if s, loadErr := loadSettingsForRepo(ctx, repo); loadErr == nil {
 		scan.PushDisabled = s.IsPushSessionsDisabled()
 		if s.GetCheckpointRemote() != nil {
 			scan.DedicatedCheckpointRemote = true
@@ -167,6 +172,9 @@ func ScanOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository, 
 	} else {
 		// Unknown push policy: do not push. The local rewrite is still useful.
 		scan.PushDisabled = true
+	}
+	if remoteName == "" {
+		return scan, nil
 	}
 	// Refresh from the remote so the fix works from its current tip.
 	if fetchErr := refreshCheckpointTrackingRef(ctx, remoteName, v1, trackingRef); fetchErr != nil {
@@ -183,6 +191,15 @@ func ScanOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository, 
 // checkpoint branch to a dedicated checkpoint_remote URL, which the automatic
 // repair does not handle (see ScanOversizedCheckpointMetadata).
 var ErrDedicatedCheckpointRemote = errors.New("checkpoint branch is pushed to a dedicated checkpoint remote; automatic repair is not available there")
+
+// loadSettingsForRepo reads Entire settings for the worktree repo was opened on.
+func loadSettingsForRepo(ctx context.Context, repo *git.Repository) (*settings.EntireSettings, error) {
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, fmt.Errorf("resolve worktree: %w", err)
+	}
+	return settings.LoadForWorktreeRoot(ctx, wt.Filesystem().Root()) //nolint:wrapcheck // settings errors carry their own context
+}
 
 // clearRemote leaves the scan with no knowledge of the remote side.
 func (s *MetadataSizeScan) clearRemote() {

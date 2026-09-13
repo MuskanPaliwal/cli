@@ -56,6 +56,12 @@ func checkOversizedCheckpointMetadata(cmd *cobra.Command) error {
 		return err
 	}
 	if scan.Empty() {
+		if scan.RemoteErr != nil {
+			// The local branch is clean but the remote side is unknown, which
+			// is not the same as clean: say so instead of a bare OK.
+			fmt.Fprintf(w, "○ Checkpoint metadata size: local %s OK; %s could not be read, so its history was not checked\n", paths.MetadataBranchName, remoteName)
+			return nil
+		}
 		fmt.Fprintln(w, "✓ Checkpoint metadata size: OK")
 		return nil
 	}
@@ -173,11 +179,27 @@ func scanCheckpointMetadataSize(cmd *cobra.Command, repo *git.Repository) (strin
 	return remoteName, scan, nil
 }
 
+// gitHubBlobHardLimit is the blob size GitHub refuses outright; the scan's
+// threshold (50 MiB) is GitHub's warning line, well short of it.
+const gitHubBlobHardLimit int64 = 100 << 20
+
 func reportOversizedCheckpointMetadata(w io.Writer, scan *strategy.MetadataSizeScan, remoteName string) {
 	fmt.Fprintln(w, "Checkpoint metadata size: OVERSIZED")
 	all := scan.All()
-	fmt.Fprintf(w, "  %d file(s) on %s exceed %s. GitHub refuses blobs over 100 MiB, so the branch\n", len(all), paths.MetadataBranchName, humanBytes(scan.Threshold))
-	fmt.Fprintln(w, "  cannot be pushed or mirrored there while any of them is in its history.")
+	overLimit := 0
+	for _, b := range all {
+		if b.Size > gitHubBlobHardLimit {
+			overLimit++
+		}
+	}
+	fmt.Fprintf(w, "  %d file(s) on %s exceed %s, the size GitHub warns about.\n", len(all), paths.MetadataBranchName, humanBytes(scan.Threshold))
+	if overLimit > 0 {
+		fmt.Fprintf(w, "  %d of them exceed GitHub's %s hard limit: the branch cannot be pushed or mirrored\n", overLimit, humanBytes(gitHubBlobHardLimit))
+		fmt.Fprintln(w, "  there while any of those is in its history.")
+	} else {
+		fmt.Fprintf(w, "  None exceeds GitHub's %s hard limit yet, so the branch still pushes; the field that\n", humanBytes(gitHubBlobHardLimit))
+		fmt.Fprintln(w, "  made them this large is diagnostic only and can be dropped.")
+	}
 	writeOversizedList(w, scan)
 	fmt.Fprintln(w, "  Cause: CLI versions before v0.10.1 recorded every file of nested git checkouts")
 	fmt.Fprintln(w, "  (agent worktrees) in the prompt_attributions diagnostic field on every prompt.")

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -84,7 +85,7 @@ func TestCheckOversizedCheckpointMetadata_NonInteractive_ReportsAndNamesSubcomma
 	withTinyOversizeThreshold(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
 	tip := writeBloatedCheckpointBranch(t, repo)
 	cmd, stdout := newDoctorTestCmd()
@@ -106,7 +107,7 @@ func TestRunSessionsFix_Force_DoesNotRewriteCheckpointBranch(t *testing.T) {
 	withTinyOversizeThreshold(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
 	tip := writeBloatedCheckpointBranch(t, repo)
 	cmd, stdout := newDoctorTestCmd()
@@ -125,7 +126,7 @@ func TestDoctorShrinkCheckpointMetadata_Yes_RewritesBranch(t *testing.T) {
 	withTinyOversizeThreshold(t)
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
-	repo, err := git.PlainOpen(dir)
+	repo, err := gitrepo.OpenPath(dir)
 	require.NoError(t, err)
 	tip := writeBloatedCheckpointBranch(t, repo)
 
