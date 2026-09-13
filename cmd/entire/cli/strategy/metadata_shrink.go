@@ -211,14 +211,14 @@ func (s *MetadataSizeScan) readRemoteSide(ctx context.Context, repo *git.Reposit
 		return nil
 	case s.LocalTip.IsZero():
 		s.RemoteAhead = true
-	case remoteTip != s.LocalTip:
+	case !remoteTip.Equal(s.LocalTip):
 		base, mbErr := computeMergeBase(repo, s.LocalTip, remoteTip)
 		if mbErr != nil {
 			return fmt.Errorf("compare local and %s: %w", trackingRef.Short(), mbErr)
 		}
-		s.RemoteAhead = base != remoteTip
+		s.RemoteAhead = !base.Equal(remoteTip)
 	}
-	if remoteTip == s.LocalTip {
+	if remoteTip.Equal(s.LocalTip) {
 		return nil
 	}
 	remoteBlobs, err := findOversizedMetadataBlobs(ctx, repo, remoteTip, s.Threshold)
@@ -381,7 +381,7 @@ func contentReachable(repo *git.Repository, tip, target plumbing.Hash) (bool, er
 	defer iter.Close()
 	found := false
 	walkErr := iter.ForEach(func(c *object.Commit) error {
-		if c.TreeHash == tc.TreeHash {
+		if c.TreeHash.Equal(tc.TreeHash) {
 			found = true
 			return errStop
 		}
@@ -444,7 +444,7 @@ func ShrinkOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository
 		return res, fmt.Errorf("rewrite %s: %w", v1.Short(), err)
 	}
 	res.CommitsRewritten = rw.commitsRewritten
-	if newTip != scan.LocalTip {
+	if !newTip.Equal(scan.LocalTip) {
 		if err := atomicSetV1Ref(ctx, repo, scan.LocalTip, newTip); err != nil {
 			return res, err
 		}
@@ -480,7 +480,7 @@ func ShrinkOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository
 		res.PushSkippedReason = fmt.Sprintf("the state of %s could not be determined (%v); re-run entire doctor once it is reachable", scan.RemoteName, scan.RemoteErr)
 	case scan.RemoteTip.IsZero():
 		res.PushSkippedReason = fmt.Sprintf("%s has no %s branch yet; the next git push creates it", scan.RemoteName, v1.Short())
-	case scan.RemoteTip == newTip:
+	case scan.RemoteTip.Equal(newTip):
 		res.PushSkippedReason = scan.RemoteName + " already has this history"
 	case scan.PushDisabled:
 		res.PushSkippedReason = "checkpoint pushing is disabled in settings; push the branch yourself with --force-with-lease"
@@ -506,7 +506,7 @@ func ShrinkOversizedCheckpointMetadata(ctx context.Context, repo *git.Repository
 //   - genuine divergence: replay the local-only commits onto the remote via
 //     SafelyAdvanceLocalRef, the same reconciliation pre-push uses.
 func reconcileRewrittenTips(ctx context.Context, repo *git.Repository, w io.Writer, remoteName string, v1 plumbing.ReferenceName, local, fixedRemote plumbing.Hash) (plumbing.Hash, error) {
-	if fixedRemote == local {
+	if fixedRemote.Equal(local) {
 		return local, nil
 	}
 	if local.IsZero() {
@@ -640,13 +640,13 @@ func (r *metadataRewriter) rewriteCommit(c *object.Commit) (plumbing.Hash, error
 		return plumbing.ZeroHash, err
 	}
 	parents := make([]plumbing.Hash, 0, len(c.ParentHashes))
-	changed := newTree != c.TreeHash
+	changed := !newTree.Equal(c.TreeHash)
 	for _, p := range c.ParentHashes {
 		np, ok := r.commits[p]
 		if !ok {
 			return plumbing.ZeroHash, fmt.Errorf("parent %s of %s was not rewritten first", p, c.Hash)
 		}
-		if np != p {
+		if !np.Equal(p) {
 			changed = true
 		}
 		parents = append(parents, np)
@@ -714,7 +714,7 @@ func (r *metadataRewriter) rewriteTree(hash plumbing.Hash, prefix string) (plumb
 		case filemode.Empty, filemode.Symlink, filemode.Submodule:
 			// kept verbatim
 		}
-		if newEntry.Hash != e.Hash {
+		if !newEntry.Hash.Equal(e.Hash) {
 			changed = true
 		}
 		entries = append(entries, newEntry)
