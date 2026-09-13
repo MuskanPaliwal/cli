@@ -734,7 +734,7 @@ func (s *treeWriter) writeSessionToSubdirectory(ctx context.Context, opts WriteO
 		SkillEvents:                 opts.SkillEvents,
 		SessionMetrics:              opts.SessionMetrics,
 		Attribution:                 opts.Attribution,
-		PromptAttributions:          opts.PromptAttributionsJSON,
+		PromptAttributions:          CapPromptAttributions(ctx, opts.PromptAttributionsJSON, opts.SessionID),
 		Summary:                     RedactSummary(opts.Summary),
 		CLIVersion:                  versioninfo.Version,
 		Kind:                        opts.Kind,
