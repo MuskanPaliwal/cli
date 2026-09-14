@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.10.5-nightly.202609030626.408372c97",
+  "checkpoint_id": "01M2FNRCE1AMZZVN8C15DVKP6S",
+  "session_id": "01a09e7b-aa72-7dc1-9deb-a4ea754b4584",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-14T10:00:22.799672Z",
+  "branch": "fix-checkpoint-metadata-followups",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/agent/claudecode/hooks.go",
+    "cmd/entire/cli/agent/claudecode/hooks_test.go",
+    "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/hooks_git_cmd.go",
+    "cmd/entire/cli/settings/settings.go",
+    "cmd/entire/cli/settings/settings_test.go",
+    "cmd/entire/cli/status.go",
+    "cmd/entire/cli/status_test.go",
+    "cmd/entire/cli/strategy/checkpoint_remote.go",
+    "cmd/entire/cli/strategy/checkpoint_remote_test.go",
+    "cmd/entire/cli/strategy/common.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_rewrite_test.go",
+    "cmd/entire/cli/strategy/manual_commit_push.go",
+    "cmd/entire/cli/strategy/metadata_push_reconcile.go",
+    "cmd/entire/cli/strategy/metadata_push_reconcile_test.go",
+    "cmd/entire/cli/strategy/metadata_reconcile.go",
+    "cmd/entire/cli/strategy/metadata_shrink.go",
+    "cmd/entire/cli/strategy/push_common.go",
+    "cmd/entire/cli/strategy/push_common_test.go",
+    "cmd/entire/cli/worktree_setup_diagnostic.go",
+    "cmd/entire/cli/worktree_setup_diagnostic_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "1100c925e758",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 655568,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 49969280,
+    "output_tokens": 104808,
+    "api_call_count": 386
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-14T10:00:22.406519Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 768,
+    "human_modified": 122,
+    "human_removed": 0,
+    "total_committed": 823,
+    "total_lines_changed": 890,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1422,
+      "user_lines_removed": 15,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/agent/claudecode/hooks.go": 23,
+        "cmd/entire/cli/agent/claudecode/hooks_test.go": 23,
+        "cmd/entire/cli/doctor.go": 19,
+        "cmd/entire/cli/settings/settings.go": 44,
+        "cmd/entire/cli/settings/settings_test.go": 34,
+        "cmd/entire/cli/status.go": 31,
+        "cmd/entire/cli/status_test.go": 1,
+        "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go": 14,
+        "cmd/entire/cli/strategy/manual_commit_push.go": 7,
+        "cmd/entire/cli/strategy/metadata_push_reconcile.go": 310,
+        "cmd/entire/cli/strategy/metadata_push_reconcile_test.go": 467,
+        "cmd/entire/cli/strategy/metadata_reconcile.go": 3,
+        "cmd/entire/cli/strategy/push_common.go": 29,
+        "cmd/entire/cli/worktree_setup_diagnostic.go": 141,
+        "cmd/entire/cli/worktree_setup_diagnostic_test.go": 276
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/doctor.go": 7,
+        "cmd/entire/cli/settings/settings.go": 2,
+        "cmd/entire/cli/status.go": 3,
+        "cmd/entire/cli/status_test.go": 1,
+        "cmd/entire/cli/strategy/push_common.go": 2
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1422,
+      "agent_lines_removed": 15
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 890,
+      "user_lines_removed": 107,
+      "agent_lines_added": 1584,
+      "agent_lines_removed": 76,
+      "user_added_per_file": {
+        "cmd/entire/cli/strategy/metadata_push_reconcile.go": 281,
+        "cmd/entire/cli/strategy/metadata_push_reconcile_test.go": 475,
+        "cmd/entire/cli/worktree_setup_diagnostic.go": 23,
+        "cmd/entire/cli/worktree_setup_diagnostic_test.go": 111
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/strategy/metadata_push_reconcile.go": 69,
+        "cmd/entire/cli/strategy/metadata_push_reconcile_test.go": 5,
+        "cmd/entire/cli/worktree_setup_diagnostic.go": 14,
+        "cmd/entire/cli/worktree_setup_diagnostic_test.go": 19
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2367,
+      "agent_lines_removed": 76
+    }
+  ]
+}

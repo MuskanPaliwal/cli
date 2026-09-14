@@ -3,21 +3,28 @@
   "checkpoint_id": "01M2FNRCE1AMZZVN8C15DVKP6S",
   "strategy": "manual-commit",
   "branch": "fix-checkpoint-metadata-followups",
-  "checkpoints_count": 4,
+  "checkpoints_count": 7,
   "files_touched": [
     "cmd/entire/cli/agent/claudecode/hooks.go",
     "cmd/entire/cli/agent/claudecode/hooks_test.go",
     "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/hooks_git_cmd.go",
     "cmd/entire/cli/settings/settings.go",
     "cmd/entire/cli/settings/settings_test.go",
     "cmd/entire/cli/status.go",
     "cmd/entire/cli/status_test.go",
+    "cmd/entire/cli/strategy/checkpoint_remote.go",
+    "cmd/entire/cli/strategy/checkpoint_remote_test.go",
+    "cmd/entire/cli/strategy/common.go",
     "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_rewrite_test.go",
     "cmd/entire/cli/strategy/manual_commit_push.go",
     "cmd/entire/cli/strategy/metadata_push_reconcile.go",
     "cmd/entire/cli/strategy/metadata_push_reconcile_test.go",
     "cmd/entire/cli/strategy/metadata_reconcile.go",
+    "cmd/entire/cli/strategy/metadata_shrink.go",
     "cmd/entire/cli/strategy/push_common.go",
+    "cmd/entire/cli/strategy/push_common_test.go",
     "cmd/entire/cli/worktree_setup_diagnostic.go",
     "cmd/entire/cli/worktree_setup_diagnostic_test.go"
   ],
@@ -35,13 +42,20 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 809491,
+    "input_tokens": 1465059,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 16188544,
-    "output_tokens": 67021,
-    "api_call_count": 165
+    "cache_read_tokens": 66157824,
+    "output_tokens": 171829,
+    "api_call_count": 551
   }
 }
