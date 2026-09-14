@@ -3,7 +3,7 @@
   "checkpoint_id": "01M2FNRCE1AMZZVN8C15DVKP6S",
   "strategy": "manual-commit",
   "branch": "fix-checkpoint-metadata-followups",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "cmd/entire/cli/agent/claudecode/hooks.go",
     "cmd/entire/cli/agent/claudecode/hooks_test.go",
@@ -28,13 +28,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 694235,
+    "input_tokens": 809491,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 13946240,
-    "output_tokens": 55832,
-    "api_call_count": 136
+    "cache_read_tokens": 16188544,
+    "output_tokens": 67021,
+    "api_call_count": 165
   }
 }
