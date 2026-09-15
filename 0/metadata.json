@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.10.7-nightly.202609130627.8a43e78f1",
+  "checkpoint_id": "01M2HSBDH056RREM3PZXYJ2RZS",
+  "session_id": "01a09ba8-5ff5-7200-908c-4be42eb5730e",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-15T05:41:34.547021Z",
+  "branch": "fix-trail-context-overwrite",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/api/trail_types.go",
+    "cmd/entire/cli/trail_cmd.go",
+    "cmd/entire/cli/trail_cmd_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "771355574560",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 272352,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 17345280,
+    "output_tokens": 44191,
+    "api_call_count": 115,
+    "subagent_tokens_complete": false
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-15T05:41:34.464186Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 94,
+    "human_removed": 107,
+    "total_committed": 4,
+    "total_lines_changed": 201,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 118,
+      "user_lines_removed": 84,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 5,
+        "cmd/entire/cli/api/trail_types.go": 2,
+        "cmd/entire/cli/trail_cmd.go": 25,
+        "cmd/entire/cli/trail_cmd_test.go": 86
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/api/trail_types.go": 1,
+        "cmd/entire/cli/trail_cmd.go": 32,
+        "cmd/entire/cli/trail_cmd_test.go": 51
+      }
+    }
+  ]
+}

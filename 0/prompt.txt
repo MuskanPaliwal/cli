@@ -1,0 +1,55 @@
+I want to discuss and possibly work on: make Trail Context updates fail closed when concurrency verification fails
+
+Context:
+- Repository/product: entireio/cli, specifically `entire trail update --body`, the Trail body API, and optimistic-concurrency handling.
+- This is infrastructure for an Entire-centered developer workflow. We need safe automated Trail Context updates before the Hub workflow can rely on them, and we want to preserve a clear problem/solution/evidence story for a later blog.
+- Canonical `upstream/main` was refreshed and verified at commit `8a43e78f1e7f8567e2bd77b058c5155893e58cb0`. The behavior below is still present there.
+- A local isolated branch and worktree named `fix-trail-context-overwrite` already exists from that canonical commit and tracks `upstream/main`. Find and reuse it; do not create a duplicate branch or worktree.
+- Entire agent setup was run in that worktree for Claude Code, Codex, and OpenCode. It left two unrelated tracked configuration diffs: a Claude metadata-read deny rule and a formatting-only rewrite of Entire settings. Inspect them carefully and keep them out of the bug fix unless independently justified.
+- The worktree's checked-in mise configuration has already been trusted.
+- The current Codex session that found the bug was launched in the Hub repository, not the CLI bug worktree. Do not claim that its checkpoints or session belong to the CLI branch. Begin the fresh implementation session inside the existing bug worktree.
+- Separate Hub work remains uncommitted on `feat/skill-workflow-hardening`, including a draft `update-trail-context` skill and eval artifacts. Do not modify, stage, revert, or bundle any of that work.
+
+Verified bug evidence:
+- In `runTrailUpdateWithClientAtPath`, a non-interactive body update tries to fetch the current body/ETag. If that GET fails, the command only warns and continues with an empty ETag.
+- In `sendTrailBody`, an empty ETag is treated the same as explicit overwrite authority: the request is sent with `overwrite: true` and no `If-Match` header.
+- The interactive path can reach the same failure direction after a body seed read fails.
+- The current test `TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite` simulates a 500 detail response, then asserts command success, `overwrite: true`, an empty `If-Match`, and a warning. On canonical main, the focused test passes, proving the unsafe behavior is deterministic and intentionally codified.
+- Git history shows this compatibility policy was deliberate: `d3f920f01270` added `If-Match` while preserving missing-ETag overwrite fallback; `0dc4af34ddb` added the warning while keeping that fallback. Checkpoint transcripts for those commits were not available locally, so call this commit-backed intent, not transcript-backed intent.
+- The behavior originated in merged entireio/cli PR #2079 (`https://github.com/entireio/cli/pull/2079`). No later commit in the refreshed refs removes it. Indexed public searches found no separate issue or fix, but the negative search was not exhaustive because live GitHub API search was network-blocked and Entire semantic search required login.
+- The safety invariant is: inability to establish the current body version is not authority to replace it. Default updates should fail closed. Only an explicit `--overwrite` should authorize an unconditional replacement.
+
+Before doing any implementation:
+- Find the existing `fix-trail-context-overwrite` worktree from the current directory, a parent directory, or the usual workspace and enter it.
+- Read all local agent/repository instructions and Entire Graph guidance. Use `entire graph search` as the first code-location move, then verify the focused source and tests directly.
+- Re-check canonical upstream, the branch/worktree identity, local diffs, and current GitHub issue/PR state. Determine whether someone has already reported or fixed this exact behavior before publishing duplicate work.
+- Inspect the relevant code, focused tests, recent commits, and the compatibility rationale around missing body documents or older servers.
+- Independently decide whether fail-closed default behavior is the smallest correct fix, whether absent body documents need a separate safe case, and whether the interactive path needs the same guard.
+- Call out stale assumptions, hidden compatibility risks, and anything that should stop the work.
+
+Task:
+- Follow the bug-fix playbook from its reproduction/regression-test stage onward.
+- First rerun the existing focused test unchanged and capture its exact output as the reproduction.
+- Write a focused failing regression test proving that an ETag/detail read failure causes an error and no body PUT when `--overwrite` was not explicitly supplied.
+- Implement the smallest fix that makes default body replacement fail closed while preserving explicit `--overwrite` behavior.
+- Cover both non-interactive and interactive call paths if they share the unsafe fallback.
+- Keep the change narrowly scoped. Exact Trail-number/ID targeting, `--body-file`, post-write readback verification, the Hub `update-trail-context` skill, session-handoff changes, and broader workflow integration are follow-up slices unless the bug cannot be fixed safely without one of them.
+- Do not authenticate Entire, change remotes or settings, or require a live Trail for this unit-level fix.
+
+Validation:
+- Show the original passing reproduction that proves the old behavior, then the new failing regression test before production code changes, then the same regression passing after the fix.
+- Run the narrow CLI package tests for Trail update behavior, then the repository-required pre-commit/pre-PR checks from CONTRIBUTING and local instructions.
+- Perform correctness review, blast-radius review, and final code review. Pay special attention to old-server/no-body-document compatibility, explicit overwrite semantics, partial metadata/body updates, and whether any request can still mutate after a verification read fails.
+- Preserve exact command output and reviewer-facing evidence for the eventual PR and later workflow/blog notes.
+- Do not run paid real E2E tests unless repository instructions explicitly require them.
+
+Output:
+- Start with independent review findings and a recommendation.
+- Then report the reproduction and the proposed minimal patch before broadening scope.
+- If you edit code, keep changes scoped and report exact failing-then-passing proof.
+- Continue through local commit and preflight only when their skill boundaries permit. Draft the PR body for review before any public mutation.
+- Do not push, create or update a PR or Trail, merge, close issues, label, or post public comments unless explicitly authorized.
+
+---
+
+create handoff session
