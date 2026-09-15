@@ -1,0 +1,174 @@
+let's dig into trails and if in order to use runners do i need to have open ai api key? and how are runners related to github ci/cd? do i need to have ci in github first in order to for runners to run on entire?
+
+---
+
+Hi Entire team! I've been busy with a provider migration that had to be hands-on (no AI implementation, unfortunately). I've now finally started working with Trails, I'm excited to adopt them! Two points of feedback right off the bat:
+I really like that the runner setup sources its customization from the repo state and past work. It makes migrating my current in-session review-merge workflow a lot easier.
+I'm hoping you will add a multi-line capable format - ideally just making your parser compatible with JSON5, the extension that is specifically meant for using JSON for config files rather than data files. The IDE can soft-wrap long lines like the prompt templates, but soft wrap is still a bit annoying to work with when editing large text. Same goes for the main settings.json file.
+
+I also do have a few questions I may need you to clear up:
+In my current in-session reviews, I have multiple separate agents dedicated to correctness, performance, simplification, etc. Can I create multiple runners similar to the default review runner, that all have "trails_review" enabled and "result_type": "code_review_comments", so that all runners attach their findings to the trail as they come in? Or can there only be one review runner?
+The monitor and review runners on my first trail finished successfully and there are no findings. But the trail is showing "Ready to merge" even though there are no approvals yet, and in the Gates I have set "Minimum approvals" to 1. Is this because I have no minimum approvals set in GitHub?
+When are trails supposed to move from "Building" to "Reviewing"? Who is supposed to move them, the agent after pushing, or the reviewer after checking the runner results? I can't even find a way to move a trail to the "Reviewing" section in the console UI. What is it actually meant for? Is it just a "meta" section to signal to the rest of the team that the trail is being manually reviewed, or does it serve a specific purpose (for the agent)? here for more context
+
+---
+
+so then why the hub repo has runners etc on but i see no output from runners?
+
+---
+
+ohh then i would want to have the runners on my all repos
+
+---
+
+no no only the repos that i have locally in my machine
+
+---
+
+yupp
+
+---
+
+use subagents for this so not to burn more tokens
+
+---
+
+also our repository-something skill can find the issue right? and it has this runner setup in it?
+
+---
+
+yeah so we need to update the skill in order to make sure if a repo doesn't have runners, it create runners for the repo and asl for user's approval before creating it and also suggests what all runners we should really have for this repo etc. do this task in a subagent use sol xhigh
+
+---
+
+let me know when hub has runners setup?
+
+---
+
+## JSON5 feedback
+
+  The concern is valid. The current CLI parses runner files with Go’s strict encoding/json: cmd/entire/cli/runner_prompt.go:88.
+
+  I would separate the request into two product needs:
+
+  - JSON5 helps configuration ergonomics: comments, trailing commas, unquoted keys.
+  - JSON5 does not provide particularly good preserved multiline prompt literals. A referenced .md prompt file, TOML multiline string, or YAML block scalar would solve that more cleanly.
+
+  For example, an especially maintainable design would be:
+
+  {
+    "id": "trail-correctness",
+    "prompt": {
+      "file": "prompts/trail-correctness.md"
+    }
+  }
+
+  That keeps machine configuration structured while making long prompts pleasant to review and diff. what does this feedback was about?
+
+---
+
+but why that should be globally ignored? .entire? it should not right? can you check entire/cli repo?
+
+---
+
+then do the changes in all my repos. .entire should not be globally ignored
+
+---
+
+but why the .codex, .claude or .opencode etc be in globally ignored files/
+
+---
+
+.entire do have a .gitignore in it
+
+---
+
+yeah then do the needful
+
+---
+
+we also need to make sure that these files don't get pushed to any of upstream repos.
+
+---
+
+also we can push these .codex etc changes to our repos?
+
+---
+
+yupp how do we do that/
+
+---
+
+give me an overview of what we have done/
+
+---
+
+yeah but the fork that i have also need to have runners
+
+---
+
+i want the verifcation 5 in my create draft pr skill, like the changes in these files can be pushed to my repos but not in prs right? those should not even be committed then maybe those should not even be in the branch i am working on?
+
+---
+
+umm, i think we don't need this sin ce in many of my prs i have updated these files and they were part of a change. so maybe we should keep it optional
+
+---
+
+yeah but i should be asked if they are the part of the change before pushing
+
+---
+
+commit and push
+
+---
+
+yupp
+
+---
+
+you are cmmitting in hub?
+
+---
+
+push the changes
+
+---
+
+so now i should see runners working for hub/
+
+---
+
+no push the runners too
+
+---
+
+yupp
+
+---
+
+do the same for all other repos
+
+---
+
+push directly to main of those repos
+
+---
+
+you can have subagents do these things in parallel so we burn less tokens
+
+---
+
+yupp
+
+---
+
+push all the changes
+
+---
+
+yupp except build artifacts and any code changes
+
+---
+
+yupp
