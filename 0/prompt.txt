@@ -1,0 +1,132 @@
+I want to discuss and possibly work on: finish, independently review, and safely hand off the uncommitted fix that makes Trail Context body updates fail closed when optimistic-concurrency verification fails.
+
+Repository and working state
+
+- Repository: entireio/cli.
+- Reuse the existing branch and worktree named `fix-trail-context-overwrite`; do not create another branch or worktree.
+- The branch was created from and tracks canonical `upstream/main`. At the start of the prior session, HEAD, `upstream/main`, and their merge base were all `8a43e78f1e7f8567e2bd77b058c5155893e58cb0`. Recheck this rather than assuming it is still current.
+- Start the continuation session inside that CLI worktree. Do not associate the earlier Hub-repository session or its checkpoints with this CLI branch.
+- Entire agent setup left two unrelated tracked diffs: a Claude metadata-read deny rule and a formatting-only rewrite of Entire settings. Inspect them carefully, but do not modify, stage, revert, or include them in the bug fix unless independently justified.
+- Separate uncommitted Hub work exists on `feat/skill-workflow-hardening`, including an `update-trail-context` skill draft and eval artifacts. Do not touch it.
+- The intended Trail fix is currently uncommitted. It changes the Trail API types, Trail update command logic, and focused Trail command tests. Use `git status` and `git diff` to identify the exact current state.
+
+Begin with independent review
+
+Before changing anything further, perform an extensive independent review and lead with findings plus a recommendation. Re-read all local repository/agent instructions and Entire Graph guidance. Use `entire graph search` as the first code-location move, then verify the relevant symbols and tests directly. Recheck canonical upstream, branch/worktree identity, local diffs, recent commits, and current GitHub issue/PR state. Decide independently whether the patch is correct, stale, already solved elsewhere, or broader than needed.
+
+The safety invariant is: inability to establish the current Trail body version is not authority to replace it. A default body update must fail closed. Only an explicit `--overwrite` authorizes an unconditional replacement.
+
+Relevant symbols are `resolveTrailUpdateBodyAtPath`, `runTrailUpdateWithClientAtPath`, and `sendTrailBody`. Review the Trail body request types and the focused Trail command tests around these symbols.
+
+Historical and public context
+
+- The unsafe behavior originated in merged PR #2079: https://github.com/entireio/cli/pull/2079
+- Commit `d3f920f01270dfd9d7de3a0cdbcc08f4d4fcc320` introduced ETag/`If-Match` handling while preserving missing-ETag overwrite fallback.
+- Commit `0dc4af34ddb446a855ba8a719867ad8960be5dd1` added a warning for a failed refetch while retaining the fallback.
+- Checkpoint transcripts for those commits could not be retrieved locally. Describe the rationale as commit- and PR-backed intent, not transcript-backed intent.
+- Live read-only searches in the prior session found no separate issue or newer exact fix. Recheck because that result can go stale. An older draft PR #1493, https://github.com/entireio/cli/pull/1493, covers a much broader update-by-number/ID/body-file design and contains an earlier interactive-read failure idea, but it was not a current canonical fix.
+- No approved public issue for this exact bug was found. CONTRIBUTING requires an approved issue before a PR, so treat that as a blocker to public PR creation, not to local review or a local commit.
+
+Reproduction and regression evidence already captured
+
+The original unsafe test passed unchanged on canonical main with:
+
+`GOCACHE=/private/tmp/entire-go-cache go test ./cmd/entire/cli -run '^TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite$' -count=1 -v`
+
+Exact output:
+
+```
+=== RUN   TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite
+=== PAUSE TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite
+=== CONT  TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite
+--- PASS: TestRunTrailUpdateWithClient_EtagFetchFailureWarnsAndFallsBackToOverwrite (0.00s)
+PASS
+ok  github.com/entireio/cli/cmd/entire/cli  0.689s
+```
+
+That test proved a detail GET returning 500 still led to command success, `overwrite: true`, an empty `If-Match`, and a warning.
+
+The test was then replaced with the focused regression `TestRunTrailUpdateWithClient_EtagFetchFailureSendsNoBodyWrite`. Before production changes it failed because the request counters observed one body PUT; the key failure was `Should be zero, but was 1`, followed by `FAIL` for that test and package. The test combines a metadata title update and a body update so it also proves a failed verification read causes neither a body PUT nor a preceding metadata PATCH. It expects an error containing `could not verify trail body is unchanged`.
+
+An interactive regression, `TestRunTrailUpdateWithClient_InteractiveBodyReadFailureSendsNoWrite`, also failed before production changes: the command proceeded toward the form after a detail 500 and returned nil instead of an error. It is intentionally not parallel because it controls process-wide stdin/environment.
+
+Current proposed minimal patch
+
+- In the interactive path, a detail/body seed read failure returns `could not load current trail body: %w` before opening the form or writing anything.
+- In the non-interactive path, when a body update is requested without explicit overwrite, the detail/ETag verification happens before any metadata PATCH. A read failure returns `could not verify trail body is unchanged: %w`; it no longer warns and falls back to overwrite.
+- `sendTrailBody` now sends `overwrite: true` only for explicit overwrite. With a nonempty ETag it sends `If-Match`. With no ETag and no explicit overwrite it sends neither, relying on the server's guarded semantics: an absent/empty body document can be created or cleared, while an existing nonempty body should conflict rather than be overwritten.
+- The internal helper's now-unused error-writer parameter was removed and its test call sites updated.
+- Tests were updated so missing ETag without explicit overwrite expects a guarded body request, explicit overwrite remains the negative control that skips the verification GET and sends overwrite authority, and the 409 conflict mapping remains covered.
+
+Do not accept this design merely because it is already implemented. Independently verify the old-server/no-body-document contract. In particular, determine whether a successful detail response without an ETag is a legitimate absent-body case, whether sending neither `If-Match` nor overwrite is supported by old and current servers, and whether any server version interprets that request unsafely. If that assumption is not supported, stop and report the compatibility risk rather than widening the patch speculatively.
+
+Also review:
+
+- explicit `--overwrite` semantics and its guarantee that no verification GET is required;
+- both non-interactive and interactive paths;
+- partial metadata/body updates and the ordering that prevents metadata mutation before a failed body verification read;
+- clearing an absent body document;
+- 409 conflict behavior;
+- whether any request can still mutate after a verification or seed read fails;
+- whether the error messages follow repository conventions;
+- whether removal of the internal error-writer parameter has unintended callers.
+
+Passing evidence after the patch
+
+The two regressions passed together:
+
+```
+=== RUN   TestRunTrailUpdateWithClient_EtagFetchFailureSendsNoBodyWrite
+=== PAUSE TestRunTrailUpdateWithClient_EtagFetchFailureSendsNoBodyWrite
+=== RUN   TestRunTrailUpdateWithClient_InteractiveBodyReadFailureSendsNoWrite
+--- PASS: TestRunTrailUpdateWithClient_InteractiveBodyReadFailureSendsNoWrite (0.00s)
+=== CONT  TestRunTrailUpdateWithClient_EtagFetchFailureSendsNoBodyWrite
+--- PASS: TestRunTrailUpdateWithClient_EtagFetchFailureSendsNoBodyWrite (0.00s)
+PASS
+ok  github.com/entireio/cli/cmd/entire/cli  0.840s
+```
+
+The final focused non-interactive run also passed in 0.900s. The narrow Trail update suite passed with:
+
+`GOCACHE=/private/tmp/entire-go-cache go test ./cmd/entire/cli -run '^(TestResolveTrailUpdateBody_|TestRunTrailUpdate|TestSendTrailBody_)' -count=1`
+
+The full CLI package passed with:
+
+`GOCACHE=/private/tmp/entire-go-cache go test ./cmd/entire/cli -count=1`
+
+`mise run fmt` followed by `mise run lint` passed; lint reported `0 issues`. `mise run dup` exited successfully but reported many pre-existing advisory 50-token duplicates, including existing Trail-test duplication, with no identified new blocker.
+
+Preflight complication to resolve carefully
+
+The repository-required `mise run check` was attempted in the real worktree. Its format/lint phase initially found one new `indent-error-flow` issue, which was fixed; the subsequent Trail tests passed. The full check then failed only because the unrelated Claude metadata-read deny diff makes `TestCommittedDogfoodSettingsIsCurrent` compare the locally changed checked-in configuration with installer output. Do not change that unrelated diff just to make the check green.
+
+A disposable clean clone was used to apply only the Trail patch. Its format/lint phases passed, but full `test:ci` failed in two unrelated tests because the disposable clone's origin URL was a local bare-clone path rather than a GitHub remote. The failures were `TestSearchCmd_CodeFlagRequiresQuery` and `TestRunTrailListAll_PrintsLoginHintWhenNotLoggedIn`; both rejected or failed to parse that local origin. All Trail tests passed. The disposable clone and its temporary mise trust were cleaned up. The user prohibited changing remotes or settings, so do not normalize a remote to force a green check. Find a safe validation approach within those constraints, or report the environmental blocker precisely.
+
+Work requested from the continuation
+
+1. Report independent correctness findings and a recommendation before editing further.
+2. If the current patch is sound, complete focused verification and repository-required checks as far as the unchanged unrelated diffs and remote constraints allow.
+3. Run a correctness review, blast-radius review, and final code review. Verify that the tests observe the real write contract, not merely mocked return values.
+4. Keep the patch narrow. Exact Trail-number/ID targeting, `--body-file`, post-write readback verification, the Hub `update-trail-context` skill, session-handoff changes, and broader workflow integration are follow-up slices unless this bug cannot be fixed safely without one.
+5. Preserve the exact reproduction, red, green, and preflight evidence for a future reviewer-facing PR description and later workflow/blog notes.
+6. Draft the PR body for review before any public mutation. Include the problem/causal story, compatibility tradeoff, safety invariant, exact validation, scoped non-goals, and the approved-issue prerequisite.
+7. Follow the repository commit skill boundary: propose the scoped conventional commit and obtain any required confirmation before staging or committing. Stage only the intended Trail changes.
+
+Constraints
+
+- Do not authenticate Entire.
+- Do not change remotes or settings.
+- Do not require a live Trail for this unit-level fix.
+- Do not run paid real-agent E2E tests. The Vogon canary is allowed only when repository checks require it.
+- Do not modify, stage, revert, or bundle either unrelated configuration diff or any Hub work.
+- Do not push, create or update a PR or Trail, create an issue, merge, close issues, label, or post public comments without explicit authorization.
+- Call out stale assumptions, hidden compatibility risks, or evidence that should stop the work rather than papering over them.
+
+Output order
+
+- Independent review findings and recommendation.
+- Reproduction and assessment of the minimal patch.
+- Exact failing-then-passing regression evidence and broader validation.
+- Correctness, blast-radius, and final review results.
+- Remaining blockers, proposed commit, and a draft PR body, with no public mutation.
+ use subagents to burn less tokens
