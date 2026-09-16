@@ -54,6 +54,11 @@ type grantTarget[Row any] struct {
 	// "everyone already has access" happened. nil where no pool is enumerable
 	// (org), which is what leaves `org grant add` exactly as it was.
 	candidates func(ctx context.Context, c *coreapi.Client, id string) (offer []grantCandidate, orgSize int, err error)
+	// holders lists the grants on this target that revoking would actually
+	// remove, for the remove picker. Set on all three targets: the members to
+	// remove from an org ARE an enumerable list, which is what the add side
+	// lacks.
+	holders func(ctx context.Context, c *coreapi.Client, id string) ([]grantCandidate, error)
 	// ownerNotOrg phrases an ownerNotOrgError for this target, given the name of
 	// the account-owned project. The repo wording has to name the project
 	// standing between the repo and the missing org, so one shared sentence
@@ -256,33 +261,101 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		grantee += " or an account ULID"
 	}
 	return &cobra.Command{
-		Use:     fmt.Sprintf("remove <%s> <grantee>", t.noun),
-		Short:   fmt.Sprintf("Revoke a user's %s access", t.noun),
-		Long:    fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is %s.", t.noun, t.noun, t.refUsage, grantee),
+		Use:   fmt.Sprintf("remove <%s> [grantee]", t.noun),
+		Short: fmt.Sprintf("Revoke a user's %s access", t.noun),
+		Long: fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is %s. "+
+			"Omit the grantee on a terminal to choose from who holds %s access now.", t.noun, t.noun, t.refUsage, grantee, t.noun),
 		Example: fmt.Sprintf("  entire %s grant remove %s github:alice", t.noun, t.exampleRef),
-		Args:    cobra.ExactArgs(2),
+		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles}
+			// Decided before any request, like the add side: without a prompt
+			// the list of who holds the target has no use here.
+			if len(args) == 1 && !interactive.CanPromptInteractively() {
+				return granteeRequiredErr(pt, grantee)
+			}
 			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				id, err := t.resolve(ctx, c, args[0])
 				if err != nil {
 					return err
 				}
-				target := t.noun + " " + args[0]
-				if t.revokeByID != nil && looksLikeULID(args[1]) {
-					return revokeGrant(cmd, "account "+args[1]+" from "+target, func() error {
-						return t.revokeByID(ctx, c, id, args[1])
-					})
-				}
-				provider, providerUserID, err := resolveGranteeProvider(ctx, c, args[1])
-				if err != nil {
+				// A typed grantee is its own label, so the confirmation names
+				// exactly what the user wrote; a picked one is reported by the
+				// name the picker showed rather than the id it acts on.
+				picked := []grantCandidate{}
+				if len(args) == 2 {
+					picked = append(picked, handleCandidate(args[1]))
+				} else if picked, err = pickGrantsToRevoke(ctx, cmd, c, t, pt, id); err != nil {
 					return err
 				}
-				return revokeGrant(cmd, args[1]+" from "+target, func() error {
-					return t.revokeByProvider(ctx, c, id, provider, providerUserID)
-				})
+				for _, p := range picked {
+					if err := revokeOne(ctx, cmd, c, t, pt, id, p); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 		},
 	}
+}
+
+// pickGrantsToRevoke offers who holds the target now. An empty pool is an
+// error rather than a silent success: the user asked to revoke something and
+// nothing was revoked.
+func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string) ([]grantCandidate, error) {
+	holders, err := t.holders(ctx, c, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(holders) == 0 {
+		return nil, fmt.Errorf("%s has no grants that can be revoked here", pt.describe())
+	}
+	refs, err := removePicker(cmd, pt, holders)
+	if err != nil {
+		return nil, err
+	}
+	// Back to whole rows, so the confirmation can name what was shown rather
+	// than the id it acts on. The picker already refused a ref it did not offer.
+	byRef := make(map[string]grantCandidate, len(holders))
+	for _, h := range holders {
+		byRef[h.ref] = h
+	}
+	picked := make([]grantCandidate, 0, len(refs))
+	for _, ref := range refs {
+		picked = append(picked, byRef[ref])
+	}
+	return picked, nil
+}
+
+// revokeOne revokes a single grantee, routing on the form of the ref exactly as
+// a typed argument does — so a picked row and a typed one take the same path.
+func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, g grantCandidate) error {
+	if t.revokeByID != nil && looksLikeULID(g.ref) {
+		subject := g.label
+		if subject == g.ref {
+			// A ULID the user typed: keep the "account <id>" wording it has
+			// always had, rather than printing a bare id.
+			subject = "account " + g.ref
+		}
+		return revokeGrant(cmd, subject+" from "+pt.describe(), func() error {
+			return t.revokeByID(ctx, c, id, g.ref)
+		})
+	}
+	provider, providerUserID, err := resolveGranteeProvider(ctx, c, g.ref)
+	if err != nil {
+		return err
+	}
+	return revokeGrant(cmd, g.label+" from "+pt.describe(), func() error {
+		return t.revokeByProvider(ctx, c, id, provider, providerUserID)
+	})
+}
+
+// granteeRequiredErr is the remove side of pickerUnavailable: no terminal to
+// choose on, so the grantee has to be named. It spells out the forms this
+// target accepts, which differ — only project and repo take an account ULID.
+func granteeRequiredErr(pt grantPickerTarget, grantee string) error {
+	return fmt.Errorf("no grantee given; pass one as %s, e.g. entire %s grant remove %s github:alice", grantee, pt.noun, pt.ref)
 }
 
 // validateRole rejects a --role outside the target's set at the CLI boundary
@@ -388,6 +461,7 @@ var orgGrantTarget = grantTarget[coreapi.Membership]{
 	revokeByProvider: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error {
 		return c.RemoveOrgMember(ctx, coreapi.RemoveOrgMemberParams{OrgId: id, Provider: provider, ProviderUserId: providerUserID})
 	},
+	holders: orgMemberHolders,
 }
 
 // projectGrantTarget is project access: roles reader/writer/admin, required,
@@ -403,6 +477,7 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 		return resolveProjectRef(ctx, c, ref)
 	},
 	candidates: projectGrantCandidates,
+	holders:    projectGrantHolders,
 	ownerNotOrg: func(pt grantPickerTarget, _ string) string {
 		// The project the user named IS the account-owned one, so its name is
 		// already in pt.ref and the error's copy would just repeat it.
@@ -447,6 +522,7 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 		return resolveRepoPath(ctx, c, ref)
 	},
 	candidates: repoGrantCandidates,
+	holders:    repoGrantHolders,
 	ownerNotOrg: func(pt grantPickerTarget, project string) string {
 		// A repo's pool comes from its project's org, so the refusal names the
 		// project in between rather than leaving the user to find it.

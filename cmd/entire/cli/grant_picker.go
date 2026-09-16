@@ -33,10 +33,25 @@ import (
 // takes. So a selection is a handle string and rejoins the typed path every
 // other grantee takes.
 
-// grantCandidate is one offerable grantee: the provider-qualified handle, which
-// is both what the picker shows and what resolveGranteeProvider consumes.
+// grantCandidate is one row a picker offers. ref is how the command addresses
+// that grantee — the same spelling a user could have typed — so a selection
+// rejoins the typed path instead of needing one of its own. label is what the
+// picker shows.
+//
+// The two differ only when removing: a project or repo grant is revoked by
+// account ULID through a typed route, which needs no handle lookup and cannot
+// be defeated by a handle that has since been renamed, while the row still
+// shows the friendly name the server resolved. When adding, and for org
+// membership either way, ref is the provider-qualified handle and the two are
+// the same string.
 type grantCandidate struct {
-	handle string
+	ref   string
+	label string
+}
+
+// handleCandidate is a candidate addressed and shown by its handle.
+func handleCandidate(handle string) grantCandidate {
+	return grantCandidate{ref: handle, label: handle}
 }
 
 // grantSelection pairs a chosen grantee with the role to grant them. Roles are
@@ -115,7 +130,7 @@ func orgMembersWithout(ctx context.Context, c *coreapi.Client, orgID string, hel
 		if held[m.AccountId] {
 			continue
 		}
-		candidates = append(candidates, grantCandidate{handle: handle})
+		candidates = append(candidates, handleCandidate(handle))
 	}
 	return candidates, len(members), nil
 }
@@ -192,7 +207,7 @@ func runGrantPicker(cmd *cobra.Command, t grantPickerTarget, candidates []grantC
 	handles := known
 	if len(handles) == 0 {
 		var err error
-		if handles, err = pickGrantees(cmd, t, candidates); err != nil {
+		if handles, err = pickGrantees(cmd, "Select grantees for "+t.describe(), candidates); err != nil {
 			return nil, err
 		}
 	}
@@ -219,19 +234,20 @@ func promptForm(cmd *cobra.Command, groups ...*huh.Group) *huh.Form {
 	return NewAccessibleForm(groups...).WithOutput(cmd.ErrOrStderr())
 }
 
-// pickGrantees runs the multi-select over the offered candidates.
-func pickGrantees(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]string, error) {
+// pickGrantees runs the multi-select over the offered candidates, returning the
+// refs of the chosen rows.
+func pickGrantees(cmd *cobra.Command, title string, candidates []grantCandidate) ([]string, error) {
 	offered := make(map[string]bool, len(candidates))
 	options := make([]huh.Option[string], len(candidates))
 	for i, c := range candidates {
-		offered[c.handle] = true
-		options[i] = huh.NewOption(c.handle, c.handle)
+		offered[c.ref] = true
+		options[i] = huh.NewOption(c.label, c.ref)
 	}
 	var selected []string
 	form := promptForm(cmd,
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
-				Title("Select grantees for "+t.describe()).
+				Title(title).
 				Options(options...).
 				Height(uiform.SingleLineMultiSelectHeight(len(options))).
 				Value(&selected),
@@ -325,4 +341,112 @@ func cancelledPicker(cmd *cobra.Command, err error) error {
 func pickerUnavailable(t grantPickerTarget, reason string) error {
 	example := fmt.Sprintf("entire %s grant add %s github:alice --role %s", t.noun, t.ref, t.roles[0])
 	return fmt.Errorf("%s; pass a grantee as provider:handle, e.g. %s", reason, example)
+}
+
+// The remove half. Its pool is the inverse of add's — who holds the target
+// now — and unlike add it exists for all three targets: org membership cannot
+// be offered for adding, because everyone eligible is by definition absent from
+// the only list there is, but the members to REMOVE are exactly that list.
+//
+// A row is offered only when revoking it would actually do something. Two
+// filters, each for a condition observed on a real listing:
+//
+//   - granteeType must be an account. The `owner` row is the owning org itself
+//     and holds the target through the authz schema's owner relation rather
+//     than a grant, so there is nothing to revoke; the typed revoke route sends
+//     granteeType=account and could not address it anyway.
+//   - source must be direct. A repo listing also carries the project's grants
+//     as `project:<name>` rows, and those are held through the project, not the
+//     repo: revoking one at the repo level answers "no such grant; nothing to
+//     revoke", so offering it would be offering a no-op. Removing that access
+//     means removing the project grant, which `project grant remove` does.
+
+// grantHolders lists the account grants that can be revoked on a project or
+// repo, addressed by ULID so no handle has to resolve, labelled by the friendly
+// name the server resolved.
+func grantHolders[Row any](rows []Row, granteeID, granteeType, source, name func(Row) string) []grantCandidate {
+	holders := make([]grantCandidate, 0, len(rows))
+	for _, r := range rows {
+		if granteeType(r) != granteeTypeAccount || source(r) != grantSourceDirect {
+			continue
+		}
+		id := granteeID(r)
+		if id == "" {
+			continue
+		}
+		holders = append(holders, grantCandidate{ref: id, label: granteeName(coreapi.NewOptString(name(r)), id)})
+	}
+	return holders
+}
+
+// grantSourceDirect is the source of a grant written on the resource itself,
+// as opposed to one inherited from its project or implied by its owner.
+const grantSourceDirect = "direct"
+
+func projectGrantHolders(ctx context.Context, c *coreapi.Client, projectID string) ([]grantCandidate, error) {
+	rows, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.ProjectGrant, coreapi.OptString, error) {
+		out, err := c.ListProjectMembers(ctx, coreapi.ListProjectMembersParams{ProjectId: projectID, PageToken: pageToken})
+		if err != nil {
+			return nil, coreapi.OptString{}, err
+		}
+		return out.Members, out.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return grantHolders(rows,
+		func(g coreapi.ProjectGrant) string { return g.GranteeId },
+		func(g coreapi.ProjectGrant) string { return g.GranteeType },
+		func(g coreapi.ProjectGrant) string { return g.Source },
+		func(g coreapi.ProjectGrant) string { return g.GranteeName.Or("") },
+	), nil
+}
+
+func repoGrantHolders(ctx context.Context, c *coreapi.Client, repoID string) ([]grantCandidate, error) {
+	rows, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.RepoGrant, coreapi.OptString, error) {
+		out, err := c.ListRepoGrants(ctx, coreapi.ListRepoGrantsParams{RepoId: repoID, PageToken: pageToken})
+		if err != nil {
+			return nil, coreapi.OptString{}, err
+		}
+		return out.Grants, out.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return grantHolders(rows,
+		func(g coreapi.RepoGrant) string { return g.GranteeId },
+		func(g coreapi.RepoGrant) string { return g.GranteeType },
+		func(g coreapi.RepoGrant) string { return g.Source },
+		func(g coreapi.RepoGrant) string { return g.GranteeName.Or("") },
+	), nil
+}
+
+// orgMemberHolders lists the org's members for removal. They are addressed by
+// handle, not ULID: org membership has no typed-id revoke route, so a member
+// whose handle the server did not resolve cannot be removed by this command at
+// all and is left out rather than offered and then refused.
+func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]grantCandidate, error) {
+	members, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.Membership, coreapi.OptString, error) {
+		out, err := c.ListOrgMembers(ctx, coreapi.ListOrgMembersParams{OrgId: orgID, PageToken: pageToken})
+		if err != nil {
+			return nil, coreapi.OptString{}, err
+		}
+		return out.Members, out.NextPageToken, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	holders := make([]grantCandidate, 0, len(members))
+	for _, m := range members {
+		if handle := strings.TrimSpace(m.Handle.Or("")); handle != "" {
+			holders = append(holders, handleCandidate(handle))
+		}
+	}
+	return holders, nil
+}
+
+// removePicker is the seam the remove flow's form sits behind, matching
+// grantPicker's role for add.
+var removePicker = func(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]string, error) {
+	return pickGrantees(cmd, "Select grants to revoke on "+t.describe(), candidates)
 }

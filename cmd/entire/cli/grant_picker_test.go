@@ -24,15 +24,32 @@ const (
 	pickerRepoULID = "01HZX7QABCDEFGHJKMNPQRSTW2"
 )
 
+// Grantee ids are ULID-shaped because the real ones are, and the remove flow
+// routes a ULID ref to the typed-id revoke route. A placeholder like "acct-a"
+// would quietly take the by-handle path instead and test the wrong thing.
+var (
+	acctAlice = holder{"01HZX7QABCDEFGHJKMNPQRSTA1", "github:alice"}
+	acctBob   = holder{"01HZX7QABCDEFGHJKMNPQRSTB2", "github:bob"}
+)
+
+// holder is one account that already holds a target, in the fixture.
+type holder struct {
+	id     string
+	handle string
+}
+
 // pickerFixture is one control plane's answers: the org behind the target, its
 // members, and who already holds the target.
 type pickerFixture struct {
 	ownerType coreapi.ProjectOwnerType
 	members   []coreapi.Membership
-	held      []string // grantee ULIDs holding the target directly
+	held      []holder // accounts holding the target directly
 	// viaProject holds the grantees a repo carries through its project. Listing
 	// returns them alongside the direct rows, and the pool must subtract both.
-	viaProject []string
+	viaProject []holder
+	// withOwnerRow adds the synthetic row for the owning org, which every real
+	// listing carries and neither picker may offer.
+	withOwnerRow bool
 }
 
 func member(handle, accountID string) coreapi.Membership {
@@ -47,19 +64,25 @@ func member(handle, accountID string) coreapi.Membership {
 
 func (f pickerFixture) projectGrants() []coreapi.ProjectGrant {
 	rows := make([]coreapi.ProjectGrant, 0, len(f.held))
-	for _, id := range f.held {
-		rows = append(rows, coreapi.ProjectGrant{GranteeId: id, GranteeType: granteeTypeAccount, Role: "writer", Source: "direct"})
+	for _, h := range f.held {
+		rows = append(rows, coreapi.ProjectGrant{GranteeId: h.id, GranteeType: granteeTypeAccount, GranteeName: coreapi.NewOptString(h.handle), Role: "writer", Source: "direct"})
+	}
+	if f.withOwnerRow {
+		rows = append(rows, coreapi.ProjectGrant{GranteeId: pickerOrgULID, GranteeType: "org", GranteeName: coreapi.NewOptString("acme"), Role: "owner", Source: "owner"})
 	}
 	return rows
 }
 
 func (f pickerFixture) repoGrants() []coreapi.RepoGrant {
 	rows := make([]coreapi.RepoGrant, 0, len(f.held)+len(f.viaProject))
-	for _, id := range f.held {
-		rows = append(rows, coreapi.RepoGrant{GranteeId: id, GranteeType: granteeTypeAccount, Role: "writer", Source: "direct"})
+	for _, h := range f.held {
+		rows = append(rows, coreapi.RepoGrant{GranteeId: h.id, GranteeType: granteeTypeAccount, GranteeName: coreapi.NewOptString(h.handle), Role: "writer", Source: "direct"})
 	}
-	for _, id := range f.viaProject {
-		rows = append(rows, coreapi.RepoGrant{GranteeId: id, GranteeType: granteeTypeAccount, Role: "writer", Source: "project:widgets"})
+	for _, h := range f.viaProject {
+		rows = append(rows, coreapi.RepoGrant{GranteeId: h.id, GranteeType: granteeTypeAccount, GranteeName: coreapi.NewOptString(h.handle), Role: "writer", Source: "project:widgets"})
+	}
+	if f.withOwnerRow {
+		rows = append(rows, coreapi.RepoGrant{GranteeId: pickerOrgULID, GranteeType: "org", GranteeName: coreapi.NewOptString("acme"), Role: "owner", Source: "owner"})
 	}
 	return rows
 }
@@ -104,6 +127,11 @@ func pickerServer(t *testing.T, f pickerFixture, grants *[]string, grantStatus f
 				}
 			}
 			write(w, http.StatusCreated, map[string]string{"status": "ok"})
+			return
+		}
+		if r.Method == http.MethodDelete {
+			*grants = append(*grants, "DELETE "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		path := r.URL.Path
@@ -164,7 +192,7 @@ func capturePicker(t *testing.T, answer func(offered []grantCandidate, known []s
 func handles(cs []grantCandidate) []string {
 	out := make([]string, len(cs))
 	for i, c := range cs {
-		out[i] = c.handle
+		out[i] = c.ref
 	}
 	return out
 }
@@ -190,17 +218,17 @@ func TestGrantPicker_PoolSubtractsExistingAccess(t *testing.T) {
 	}{
 		"project/direct holder excluded": {
 			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{members: members, held: []string{"acct-b"}},
+			pickerFixture{members: members, held: []holder{{"acct-b", ""}}},
 			[]string{"github:alice", "github:carol"},
 		},
 		"repo/direct holder excluded": {
 			newRepoGrantCmd, wiringRepoPath,
-			pickerFixture{members: members, held: []string{"acct-a"}},
+			pickerFixture{members: members, held: []holder{{"acct-a", ""}}},
 			[]string{"github:bob", "github:carol"},
 		},
 		"repo/project-inherited holder excluded": {
 			newRepoGrantCmd, wiringRepoPath,
-			pickerFixture{members: members, viaProject: []string{"acct-c"}},
+			pickerFixture{members: members, viaProject: []holder{{"acct-c", ""}}},
 			[]string{"github:alice", "github:bob"},
 		},
 	} {
@@ -209,7 +237,7 @@ func TestGrantPicker_PoolSubtractsExistingAccess(t *testing.T) {
 			srv := pickerServer(t, tc.fixture, &grants, nil)
 			t.Cleanup(srv.Close)
 			offered := capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
-				return []grantSelection{{handle: cs[0].handle, role: "reader"}}, nil
+				return []grantSelection{{handle: cs[0].ref, role: "reader"}}, nil
 			})
 
 			_, _, err := runPickerCmd(t, tc.newCmd, srv.URL, tc.ref)
@@ -237,7 +265,7 @@ func TestGrantPicker_UngrantableMembersAreDropped(t *testing.T) {
 	}}, &grants, nil)
 	t.Cleanup(srv.Close)
 	offered := capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
-		return []grantSelection{{handle: cs[0].handle, role: "reader"}}, nil
+		return []grantSelection{{handle: cs[0].ref, role: "reader"}}, nil
 	})
 
 	_, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID)
@@ -288,7 +316,7 @@ func TestGrantPicker_FixedRoleIsNotPrompted(t *testing.T) {
 		gotFixed = fixedRole
 		out := make([]grantSelection, len(cs))
 		for i, c := range cs {
-			out[i] = grantSelection{handle: c.handle, role: fixedRole}
+			out[i] = grantSelection{handle: c.ref, role: fixedRole}
 		}
 		return out, nil
 	})
@@ -321,7 +349,7 @@ func TestGrantPicker_PartialFailureStopsAndReports(t *testing.T) {
 	capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
 		out := make([]grantSelection, len(cs))
 		for i, c := range cs {
-			out[i] = grantSelection{handle: c.handle, role: "reader"}
+			out[i] = grantSelection{handle: c.ref, role: "reader"}
 		}
 		return out, nil
 	})
@@ -353,7 +381,7 @@ func TestGrantPicker_PartialFailureIsReportedInJSONToo(t *testing.T) {
 	capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
 		out := make([]grantSelection, len(cs))
 		for i, c := range cs {
-			out[i] = grantSelection{handle: c.handle, role: "reader"}
+			out[i] = grantSelection{handle: c.ref, role: "reader"}
 		}
 		return out, nil
 	})
@@ -385,7 +413,7 @@ func TestGrantPicker_NoCandidatesCases(t *testing.T) {
 		},
 		"every member already has access": {
 			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{members: []coreapi.Membership{member("github:alice", "acct-a")}, held: []string{"acct-a"}},
+			pickerFixture{members: []coreapi.Membership{member("github:alice", "acct-a")}, held: []holder{{"acct-a", ""}}},
 			"every member of the org owning project " + pickerProjULID + " already has access to it",
 		},
 		"project owned by an account": {
@@ -481,7 +509,7 @@ func TestGrantPicker_SoleCandidateIsStillOffered(t *testing.T) {
 	capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
 		opened = true
 		require.Len(t, cs, 1)
-		return []grantSelection{{handle: cs[0].handle, role: "reader"}}, nil
+		return []grantSelection{{handle: cs[0].ref, role: "reader"}}, nil
 	})
 
 	_, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID)
@@ -517,7 +545,7 @@ func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
 		capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
 			out := make([]grantSelection, len(cs))
 			for i, c := range cs {
-				out[i] = grantSelection{handle: c.handle, role: "reader"}
+				out[i] = grantSelection{handle: c.ref, role: "reader"}
 			}
 			return out, nil
 		})
@@ -530,4 +558,153 @@ func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
 		// The confirmation lines are the human rendering; --json replaces them.
 		require.NotContains(t, out, "✓")
 	})
+}
+
+// captureRemovePicker swaps the remove form seam, recording what was offered
+// and answering with the refs of the rows to revoke.
+func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []string) *[]grantCandidate {
+	t.Helper()
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	var offered []grantCandidate
+	prev := removePicker
+	removePicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate) ([]string, error) {
+		offered = candidates
+		return answer(candidates), nil
+	}
+	t.Cleanup(func() { removePicker = prev })
+	return &offered
+}
+
+func labels(cs []grantCandidate) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.label
+	}
+	return out
+}
+
+// TestRemovePicker_OffersOnlyWhatRevokingWouldRemove is the remove pool's whole
+// job. A listing carries rows that revoking cannot touch, and offering one
+// produces a no-op the user reads as a bug: the owning org holds the target
+// through the authz schema rather than a grant, and a repo's `project:<name>`
+// rows are held through the project — revoking one at the repo level really
+// does answer "no such grant; nothing to revoke".
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_OffersOnlyWhatRevokingWouldRemove(t *testing.T) {
+	for name, tc := range map[string]struct {
+		newCmd  func() *cobra.Command
+		ref     string
+		fixture pickerFixture
+		want    []string
+	}{
+		"project/owner row is not offered": {
+			newProjectGrantCmd, pickerProjULID,
+			pickerFixture{held: []holder{acctAlice}, withOwnerRow: true},
+			[]string{"github:alice"},
+		},
+		"repo/inherited and owner rows are not offered": {
+			newRepoGrantCmd, wiringRepoPath,
+			pickerFixture{held: []holder{acctAlice}, viaProject: []holder{acctBob}, withOwnerRow: true},
+			[]string{"github:alice"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var grants []string
+			srv := pickerServer(t, tc.fixture, &grants, nil)
+			t.Cleanup(srv.Close)
+			offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+
+			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "remove", tc.ref)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, labels(*offered))
+		})
+	}
+}
+
+// TestRemovePicker_OrgHasAPoolToo: the add side cannot offer anything for an
+// org, because everyone eligible is absent from the only list there is. Remove
+// is the opposite — the members to remove ARE that list — so org gets a picker
+// where add does not.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_OrgHasAPoolToo(t *testing.T) {
+	require.NotNil(t, orgGrantTarget.holders, "remove has a pool where add has none")
+
+	var grants []string
+	srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
+		member("github:alice", "acct-a"), member("github:bob", "acct-b"),
+	}}, &grants, nil)
+	t.Cleanup(srv.Close)
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[1].ref} })
+
+	out, _, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"github:alice", "github:bob"}, labels(*offered))
+	// Org members are addressed by handle: there is no typed-id revoke route.
+	require.Equal(t, "github:bob", (*offered)[1].ref)
+	require.Contains(t, out, "✓ Revoked github:bob from org "+pickerOrgULID)
+}
+
+// TestRemovePicker_ReportsTheNameItShowed: a project or repo row is revoked by
+// account ULID, which needs no handle lookup and survives a rename, but the
+// user chose a name off a list and the confirmation has to say that name back.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_ReportsTheNameItShowed(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice}}, &grants, nil)
+	t.Cleanup(srv.Close)
+	captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+
+	out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
+	require.NoError(t, err)
+	require.Contains(t, out, "✓ Revoked github:alice from project "+pickerProjULID)
+	require.NotContains(t, out, "acct-a", "the id it acted on is not what the user picked")
+}
+
+// TestRemovePicker_EmptyPoolIsAnError: the user asked to revoke something and
+// nothing was revoked, so this is not a quiet success.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_EmptyPoolIsAnError(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{withOwnerRow: true}, &grants, nil)
+	t.Cleanup(srv.Close)
+	captureRemovePicker(t, func([]grantCandidate) []string {
+		t.Error("the picker must not open with nothing to offer")
+		return nil
+	})
+
+	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
+	require.ErrorContains(t, err, "project "+pickerProjULID+" has no grants that can be revoked here")
+}
+
+// TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest: without a terminal the
+// list of holders has no use, so the refusal costs no lookup. The accepted
+// forms differ by target — only project and repo take an account ULID — and the
+// message says which.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	for name, tc := range map[string]struct {
+		newCmd func() *cobra.Command
+		ref    string
+		want   string
+	}{
+		"org takes a handle only":   {newOrgGrantCmd, wiringOrgULID, "pass one as a provider-qualified handle (e.g. github:alice), e.g."},
+		"project also takes a ULID": {newProjectGrantCmd, wiringProjULID, "or an account ULID, e.g."},
+		"repo also takes a ULID":    {newRepoGrantCmd, wiringRepoPath, "or an account ULID, e.g."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "remove", tc.ref)
+			require.ErrorContains(t, err, "no grantee given; ")
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
