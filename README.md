@@ -45,7 +45,7 @@ With Entire, you can:
 - Git
 - macOS, Linux or Windows
 - [Supported agent](#agent-hook-configuration) installed and authenticated
-- Go 1.26+ only if you install with `go install` (the packaged installs bundle their own runtime)
+- Go 1.27.1+ only if you install with `go install` (the packaged installs bundle their own runtime)
 
 ## Quick Start
 
@@ -54,11 +54,11 @@ With Entire, you can:
 Install with Homebrew:
 
 ```bash
-brew tap entireio/tap
-brew trust entireio/tap
-brew install --cask entire            # stable
-# brew install --cask entire@nightly  # or nightly
+brew install --cask entireio/tap/entire            # stable
+# brew install --cask entireio/tap/entire@nightly  # or nightly
 ```
+
+Use the fully-qualified cask name (`entireio/tap/entire`, not `entire`). Homebrew 6 requires third-party taps to be trusted before it will evaluate them, and a fully-qualified name taps and trusts just that one cask, so no separate `brew tap` / `brew trust` step is needed. Requires Homebrew 6.0.10 or newer.
 
 Or with the install script:
 
@@ -69,7 +69,21 @@ curl -fsSL https://entire.io/install.sh | bash                          # stable
 
 ### Windows
 
-Install with Scoop:
+Install with Windows PowerShell 5.1 or later:
+
+```powershell
+irm https://entire.io/install.ps1 | iex  # stable
+# or nightly:
+# iex "& {$(irm https://entire.io/install.ps1)} -Channel nightly"
+```
+
+For stable releases, the PowerShell installer uses Scoop when it is available,
+adding the Entire bucket if needed. Without Scoop — and for nightly releases —
+it verifies the release checksum and installs both `entire.exe` and
+`git-remote-entire.exe` to `%USERPROFILE%\.local\bin`, adding that directory to
+your user `PATH` if needed.
+
+Or install the stable release with Scoop:
 
 ```powershell
 scoop bucket add entire https://github.com/entireio/scoop-bucket.git
@@ -123,11 +137,12 @@ Entire currently ships two release channels:
 
 How to use each channel:
 
-- Homebrew (one-time setup): `brew tap entireio/tap && brew trust entireio/tap`
-- Homebrew stable: `brew install --cask entire`
-- Homebrew nightly: `brew install --cask entire@nightly`
+- Homebrew stable: `brew install --cask entireio/tap/entire`
+- Homebrew nightly: `brew install --cask entireio/tap/entire@nightly`
 - `install.sh` stable: `curl -fsSL https://entire.io/install.sh | bash`
 - `install.sh` nightly: `curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly`
+- `install.ps1` stable (uses Scoop when available): `irm https://entire.io/install.ps1 | iex`
+- `install.ps1` nightly: `iex "& {$(irm https://entire.io/install.ps1)} -Channel nightly"`
 - Scoop: currently supports `stable` only via `scoop install entire/entire`
 
 ## Typical Workflow
@@ -329,6 +344,7 @@ Descriptions below are the commands' own summaries. `entire help` always reflect
 
 | Command          | Description                                                                       |
 | ---------------- | --------------------------------------------------------------------------------- |
+| `entire cluster` | Show the Entire clusters you can place projects and repos on (`list`)              |
 | `entire org`     | Manage Entire organizations (`create`, `list`, `get`, `delete`)                    |
 | `entire project` | Manage Entire projects (`create`, `list`, `get`, `delete`)                         |
 | `entire repo`    | Manage Entire repositories (`create`, `list`, `get`, `delete`, `clone`, `mirror`, `visibility`) |
@@ -368,6 +384,7 @@ These are visible in developer and nightly builds and hidden in stable releases,
 | `--yes`, `-y`                               | Accept all defaults without prompting                                                                             |
 | `--force`, `-f`                             | Force reinstall hooks (removes existing Entire hooks first)                                                       |
 | `--checkpoint-remote <provider:owner/repo>` | Push checkpoint data to a separate repo (e.g., `github:org/checkpoints-repo`)                                     |
+| `--checkpoint-push-remote <name>`           | Select an existing Git remote for checkpoints; always saves to this clone's `.entire/settings.local.json`, even with `--project` |
 | `--skip-push-sessions`                      | Disable automatic pushing of checkpoint data on git push                                                           |
 | `--local`                                   | Write settings to `.entire/settings.local.json` instead of `.entire/settings.json`                                |
 | `--project`                                 | Write settings to `.entire/settings.json` even if it already exists                                               |
@@ -377,7 +394,7 @@ These are visible in developer and nightly builds and hidden in stable releases,
 | `--agent-help-skill`                        | Install the Entire agent-help skill (points agents at `entire agent-help`) for the selected agent(s)              |
 | `--telemetry=false`                         | Disable anonymous usage analytics                                                                                 |
 
-Run in a directory that is not a git repository, `entire enable` offers to initialize one and (optionally) create a matching GitHub repo via the `gh` CLI. That path is driven by `--init-repo` / `--no-init-repo`, `--no-github`, `--repo-name`, `--repo-owner`, `--repo-visibility`, `--push`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
+Run in a directory that is not a git repository, `entire enable` offers to initialize one and make an initial commit. It is local-only — no remote is created or pushed to, so publish the repository yourself when you are ready (`gh repo create`, `entire repo create`, or your forge's web UI). That path is driven by `--init-repo` / `--no-init-repo`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
 
 **Examples:**
 
@@ -535,6 +552,16 @@ By default, checkpoint data rides along with your own pushes — but only to **o
 
 A push to any *other* remote carries no checkpoint data. `entire status` shows the current destination, where it came from, and how many checkpoints are unpushed. This matters if you push code to several remotes: checkpoints go to exactly one of them.
 
+When a repository has several remotes that could receive checkpoints, interactive first-time `entire enable` asks which one to use, after agent selection and before any hooks or settings are written. Re-running `entire enable` in an enabled repository does not ask again. Choosing a remote saves `strategy_options.checkpoint_push_remote` in `.entire/settings.local.json`, so teammates do not inherit a remote name specific to your clone; keeping the current destination writes nothing.
+
+To select a remote without the picker:
+
+```bash
+entire enable --yes --checkpoint-push-remote fork
+```
+
+The remote must already exist, and this is also how to change the destination later or repair a saved selection that names a missing remote. An explicit flag pins the named remote, even if it is currently selected automatically. `--yes` alone does not change the checkpoint destination. The command confirms the destination when you chose one or when the saved one is unusable; otherwise it ends at `Ready.` Selecting a destination does not re-enable disabled checkpoint pushing, upload existing checkpoints immediately, or move or delete checkpoint history from other remotes.
+
 If instead you want checkpoint data in a separate repo (e.g., a private repo for a public project), configure `checkpoint_remote` with a structured provider and repo. A dedicated `checkpoint_remote` is addressed directly and is exempt from the single-remote election above:
 
 ```json
@@ -593,13 +620,13 @@ When enabled, Entire automatically generates AI summaries for checkpoints at com
 
 Summaries are also generated on demand, with or without this setting, by `entire checkpoint explain --generate`.
 
-**Which agent writes them.** By default Claude Code (`claude` on your `PATH`, model `sonnet`). Set a different one with `summary_generation.provider` — `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini`, or `pi`, plus an optional `summary_generation.model` hint:
+**Which agent writes them.** By default Claude Code (`claude` on your `PATH`, model `sonnet`). Set a different one with `summary_generation.provider` — `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini`, `opencode`, or `pi`, plus an optional `summary_generation.model` hint:
 
 ```bash
 entire configure --summarize-provider codex
 ```
 
-`opencode` and `factoryai-droid` cannot generate summaries. Whichever provider you pick must be installed and authenticated.
+`factoryai-droid` cannot generate summaries. Whichever provider you pick must be installed and authenticated.
 
 **Requirements:**
 
