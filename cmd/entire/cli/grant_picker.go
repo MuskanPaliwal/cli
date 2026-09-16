@@ -209,6 +209,16 @@ type grantPickerTarget struct {
 
 func (t grantPickerTarget) describe() string { return t.noun + " " + t.ref }
 
+// promptForm is NewAccessibleForm with the form's own output pinned to stderr.
+// huh writes to STDERR in its TUI mode but to STDOUT in accessible mode, and
+// these commands can be asked for --json, so under ACCESSIBLE the prompts would
+// land in the middle of the JSON a caller is parsing. Stderr is where a prompt
+// belongs whenever stdout is carrying data; for the TUI mode this restates the
+// default rather than changing it.
+func promptForm(cmd *cobra.Command, groups ...*huh.Group) *huh.Form {
+	return NewAccessibleForm(groups...).WithOutput(cmd.ErrOrStderr())
+}
+
 // pickGrantees runs the multi-select over the offered candidates.
 func pickGrantees(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]string, error) {
 	offered := make(map[string]bool, len(candidates))
@@ -218,10 +228,10 @@ func pickGrantees(cmd *cobra.Command, t grantPickerTarget, candidates []grantCan
 		options[i] = huh.NewOption(c.handle, c.handle)
 	}
 	var selected []string
-	form := NewAccessibleForm(
+	form := promptForm(cmd,
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
-				Title("Select grantees for " + t.describe()).
+				Title("Select grantees for "+t.describe()).
 				Options(options...).
 				Height(uiform.SingleLineMultiSelectHeight(len(options))).
 				Value(&selected),
@@ -253,7 +263,7 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedR
 		for _, h := range handles {
 			fmt.Fprintf(&b, "%s%s  %s\n", uiform.SelectOptionIndent, h, fixedRole)
 		}
-		form := NewAccessibleForm(
+		form := promptForm(cmd,
 			huh.NewGroup(
 				huh.NewNote().
 					Title(fmt.Sprintf("Role for each grantee (set by --role %s)", fixedRole)).
@@ -285,7 +295,7 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedR
 			Inline(true).
 			Value(&roles[i])
 	}
-	form := NewAccessibleForm(huh.NewGroup(fields...).Title("Role for each grantee"))
+	form := promptForm(cmd, huh.NewGroup(fields...).Title("Role for each grantee"))
 	if err := form.RunWithContext(cmd.Context()); err != nil {
 		return nil, cancelledPicker(cmd, err)
 	}

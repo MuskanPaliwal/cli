@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"testing"
@@ -24,45 +25,31 @@ import (
 // working around.
 
 // runAccessibleForm runs fn with ACCESSIBLE set and the process's stdin fed
-// from input, returning what the form printed.
+// from input, returning what the form printed to the command's stderr.
+//
+// Only stdin is a process-global swap; the prompts are captured from the cobra
+// command, because the picker pins its forms' output to cmd.ErrOrStderr().
 func runAccessibleForm(t *testing.T, input string, fn func(cmd *cobra.Command)) string {
 	t.Helper()
 	t.Setenv("ACCESSIBLE", "1")
 
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-
-	oldIn, oldOut := os.Stdin, os.Stdout
-	os.Stdin, os.Stdout = inR, outW
-	t.Cleanup(func() { os.Stdin, os.Stdout = oldIn, oldOut })
+	oldIn := os.Stdin
+	os.Stdin = inR
+	t.Cleanup(func() { os.Stdin = oldIn })
 
 	// The answers are buffered ahead of the run so the form never blocks.
 	_, err = inW.WriteString(input)
 	require.NoError(t, err)
 	require.NoError(t, inW.Close())
 
-	// Drained concurrently: the prompts can outgrow the pipe buffer.
-	printed := make(chan string, 1)
-	go func() {
-		// The write end is closed by this function before the channel is read,
-		// so ReadAll ends at EOF; any other error leaves the prompts unchecked
-		// rather than failing from a non-test goroutine.
-		b, err := io.ReadAll(outR)
-		if err != nil {
-			b = nil
-		}
-		printed <- string(b)
-	}()
-
 	cmd := &cobra.Command{}
 	cmd.SetContext(t.Context())
+	var prompts bytes.Buffer
+	cmd.SetErr(&prompts)
 	fn(cmd)
-
-	require.NoError(t, outW.Close())
-	os.Stdout = oldOut
-	return <-printed
+	return prompts.String()
 }
 
 // TestPickRoles_EachRowKeepsItsOwnRole is the wiring this feature turns on: one
@@ -119,4 +106,46 @@ func TestPickRoles_FixedRoleIsShownAndNotAsked(t *testing.T) {
 	require.Contains(t, out, "writer")
 	// The roles were stated, not offered.
 	require.NotContains(t, out, "Enter a number")
+}
+
+// TestPickRoles_PromptsStayOffStdout: these commands can be asked for --json,
+// and huh writes to stdout in accessible mode, so prompts would land inside the
+// JSON a caller is parsing. The picker pins form output to stderr for exactly
+// that reason; this fails if a form is ever built without it.
+//
+// Not parallel: swaps the process's stdin.
+func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
+	t.Setenv("ACCESSIBLE", "1")
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	oldIn := os.Stdin
+	os.Stdin = inR
+	t.Cleanup(func() { os.Stdin = oldIn })
+	require.NoError(t, inW.Close())
+
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	oldOut := os.Stdout
+	os.Stdout = outW
+	t.Cleanup(func() { os.Stdout = oldOut })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	var prompts, stdout bytes.Buffer
+	cmd.SetErr(&prompts)
+	cmd.SetOut(&stdout)
+
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+	_, err = pickRoles(cmd, pt, []string{"github:alice"}, "writer")
+	require.NoError(t, err)
+
+	require.NoError(t, outW.Close())
+	os.Stdout = oldOut
+	leaked, err := io.ReadAll(outR)
+	require.NoError(t, err)
+
+	require.Contains(t, prompts.String(), "github:alice", "the prompt goes to stderr")
+	require.Empty(t, string(leaked), "nothing may reach the process's stdout")
+	require.Empty(t, stdout.String(), "nor the command's stdout, which carries --json")
 }
