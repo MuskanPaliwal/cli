@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/internal/coreapi"
 )
 
@@ -40,12 +42,23 @@ type grantTarget[Row any] struct {
 	// grant gives the provider account the role on the resolved target and
 	// returns the effective role: the server's, when role was left to default.
 	grant            func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (granted string, wire any, err error)
-	list             func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]Row, string, error)
+	list             func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]Row, coreapi.OptString, error)
 	revokeByProvider func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error
 	// revokeByID is the typed-id route for an account ULID grantee. nil when
 	// the target has none (org), so a ULID grantee falls through to
 	// resolveGranteeProvider and is refused with the handle form named.
 	revokeByID func(ctx context.Context, c *coreapi.Client, id, granteeID string) error
+	// candidates lists who could be granted this target for the interactive
+	// picker: members of the owning org who hold no grant on it yet, plus the
+	// org's total membership so an empty pool can say which of "no members" and
+	// "everyone already has access" happened. nil where no pool is enumerable
+	// (org), which is what leaves `org grant add` exactly as it was.
+	candidates func(ctx context.Context, c *coreapi.Client, id string) (offer []grantCandidate, orgSize int, err error)
+	// ownerNotOrg phrases an ownerNotOrgError for this target, given the name of
+	// the account-owned project. The repo wording has to name the project
+	// standing between the repo and the missing org, so one shared sentence
+	// cannot serve both.
+	ownerNotOrg func(pt grantPickerTarget, project string) string
 }
 
 func newOrgGrantCmd() *cobra.Command     { return newGrantSubtreeCmd(orgGrantTarget) }
@@ -68,51 +81,152 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 	roleHelp := "Role: one of " + strings.Join(t.roles, ", ")
 	if required {
 		example += " --role " + t.roles[0]
-		roleHelp += " (required)"
+		roleHelp += " (required; asked for if omitted on a terminal)"
 	} else {
 		roleHelp += " (default " + t.defaultRole + ")"
 	}
+	// A target with no candidate pool (org) keeps the two-argument shape, so
+	// cobra reports a missing grantee exactly as it always has.
+	use := fmt.Sprintf("add <%s> <grantee>", t.noun)
+	long := fmt.Sprintf("Grant a user (addressed as provider:handle, e.g. github:alice) %s access. The %s is addressed by %s.", t.noun, t.noun, t.refUsage)
+	args := cobra.ExactArgs(2)
+	if t.candidates != nil {
+		use = fmt.Sprintf("add <%s> [grantee]", t.noun)
+		long += fmt.Sprintf(" Omit the grantee on a terminal to choose from the members of the owning org who do not have %s access yet, and set a role for each.", t.noun)
+		args = cobra.RangeArgs(1, 2)
+	}
 	cmd := &cobra.Command{
-		Use:     fmt.Sprintf("add <%s> <grantee>", t.noun),
+		Use:     use,
 		Short:   fmt.Sprintf("Grant a user %s access", t.noun),
-		Long:    fmt.Sprintf("Grant a user (addressed as provider:handle, e.g. github:alice) %s access. The %s is addressed by %s.", t.noun, t.noun, t.refUsage),
+		Long:    long,
 		Example: example,
-		Args:    cobra.ExactArgs(2),
+		Args:    args,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			// A role the user typed is always checked, an explicit `--role=`
-			// included: markRequired asks only whether the flag was given, and
-			// on org an empty value is not the same as leaving the flag out.
-			// Only an omitted --role means the server default, which exists
-			// only where required is false.
+			// included: an empty value is not the same as leaving the flag out.
+			// An omitted --role means the server default where the target has
+			// one, and otherwise is resolved per grantee below.
 			if cmd.Flags().Changed("role") {
 				if err := validateRole(role, t.roles); err != nil {
-					cmd.SilenceUsage = true
 					return err
 				}
 			}
-			return runCoreMutation(cmd, func(ctx context.Context, c *coreapi.Client) (string, any, error) {
+			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles}
+			grantee := ""
+			if len(args) == 2 {
+				grantee = args[1]
+			}
+			// Both refusals a non-interactive run can hit are decided from the
+			// command line alone, so they are settled before any request: an
+			// unanswerable prompt must not cost a lookup, and an omitted --role
+			// must not reach the API — the property cobra's required-flag check
+			// used to provide.
+			if !interactive.CanPromptInteractively() {
+				if grantee == "" {
+					return pickerUnavailable(pt, "no grantee given")
+				}
+				if role == "" && required {
+					return missingRoleErr(t.roles)
+				}
+			}
+			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				id, err := t.resolve(ctx, c, args[0])
 				if err != nil {
-					return "", nil, err
+					return err
 				}
-				provider, providerUserID, err := resolveGranteeProvider(ctx, c, args[1])
+				picked, err := resolveGrantSelections(ctx, cmd, c, t, pt, grantee, id, role, required)
 				if err != nil {
-					return "", nil, err
+					return err
 				}
-				granted, wire, err := t.grant(ctx, c, id, provider, providerUserID, role)
-				if err != nil {
-					return "", nil, err
-				}
-				return fmt.Sprintf("✓ Granted %s %s access to %s %s", args[1], granted, t.noun, args[0]), wire, nil
+				return grantEach(ctx, cmd, c, t, pt, id, picked)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&role, "role", "", roleHelp)
-	if required {
-		markRequired(cmd, "role")
-	}
 	addJSONFlag(cmd)
 	return cmd
+}
+
+// resolveGrantSelections turns the command line into the grantee/role pairs to
+// grant. A grantee argument is one pair, taking --role or the prompt; an omitted
+// grantee opens the picker.
+//
+// --role is deliberately NOT cobra-required, even where the target has no server
+// default: cobra enforces required flags before RunE, which would make a role
+// impossible to prompt for. The property that used to guarantee — an omitted
+// role never reaching validation, a lookup, or the API — is kept here instead,
+// by resolving one before anything is granted.
+func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, grantee, id, role string, roleRequired bool) ([]grantSelection, error) {
+	if grantee != "" {
+		// A grantee with no --role where the target has no server default still
+		// needs one; prompting for it is the one-row version of the picker's
+		// second screen. The non-interactive case was refused before any request.
+		if role == "" && roleRequired {
+			return grantPicker(cmd, pt, nil, []string{grantee}, "")
+		}
+		return []grantSelection{{handle: grantee, role: role}}, nil
+	}
+	offer, orgSize, err := t.candidates(ctx, c, id)
+	if err != nil {
+		var notOrg *ownerNotOrgError
+		if errors.As(err, &notOrg) {
+			return nil, pickerUnavailable(pt, t.ownerNotOrg(pt, notOrg.project))
+		}
+		return nil, err
+	}
+	if len(offer) == 0 {
+		// Two conditions, not one: "every member already has access" is a claim
+		// about members that must not be printed when there are none.
+		if orgSize == 0 {
+			return nil, pickerUnavailable(pt, pt.describe()+" has no org members to choose from")
+		}
+		return nil, pickerUnavailable(pt, fmt.Sprintf("every member of the org owning %s already has access to it", pt.describe()))
+	}
+	return grantPicker(cmd, pt, offer, nil, role)
+}
+
+// grantEach grants every pair in turn. On a failure it stops and returns,
+// having reported the grants that already landed: those are real, and the CLI
+// cannot undo them, so the user needs to know which ones to skip on a retry.
+func grantEach[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, picked []grantSelection) error {
+	wires := make([]any, 0, len(picked))
+	for _, p := range picked {
+		provider, providerUserID, err := resolveGranteeProvider(ctx, c, p.handle)
+		if err != nil {
+			return errors.Join(err, emitGrantJSON(cmd, wires, len(picked)))
+		}
+		granted, wire, err := t.grant(ctx, c, id, provider, providerUserID, p.role)
+		if err != nil {
+			return errors.Join(err, emitGrantJSON(cmd, wires, len(picked)))
+		}
+		wires = append(wires, wire)
+		if !jsonRequested(cmd) {
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ Granted %s %s access to %s\n", p.handle, granted, pt.describe())
+		}
+	}
+	return emitGrantJSON(cmd, wires, len(picked))
+}
+
+// emitGrantJSON writes the wire objects for --json; text mode has already
+// printed a line per grant as it went. The SHAPE follows how many grants were
+// asked for and the CONTENT follows how many landed, so one grantee named on
+// the command line stays the single object callers already parse, and a picked
+// set stays an array even when a failure cut it short.
+func emitGrantJSON(cmd *cobra.Command, wires []any, requested int) error {
+	if !jsonRequested(cmd) || len(wires) == 0 {
+		return nil
+	}
+	if requested == 1 {
+		return printJSON(cmd.OutOrStdout(), wires[0])
+	}
+	return printJSON(cmd.OutOrStdout(), wires)
+}
+
+// missingRoleErr replaces cobra's required-flag message for --role, which no
+// longer marks it required (see resolveGrantSelections).
+func missingRoleErr(roles []string) error {
+	return fmt.Errorf("--role is required: one of %s", strings.Join(roles, ", "))
 }
 
 func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
@@ -126,11 +240,7 @@ func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				return fetchAllPages(ctx, func(ctx context.Context, cursor string) ([]Row, string, error) {
-					var pageToken coreapi.OptString
-					if cursor != "" {
-						pageToken = coreapi.NewOptString(cursor)
-					}
+				return pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]Row, coreapi.OptString, error) {
 					return t.list(ctx, c, id, pageToken)
 				})
 			})
@@ -268,12 +378,12 @@ var orgGrantTarget = grantTarget[coreapi.Membership]{
 		}
 		return m.Role, m, nil
 	},
-	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.Membership, string, error) {
+	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.Membership, coreapi.OptString, error) {
 		out, err := c.ListOrgMembers(ctx, coreapi.ListOrgMembersParams{OrgId: id, PageToken: pageToken})
 		if err != nil {
-			return nil, "", err
+			return nil, coreapi.OptString{}, err
 		}
-		return out.Members, out.NextPageToken.Or(""), nil
+		return out.Members, out.NextPageToken, nil
 	},
 	revokeByProvider: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error {
 		return c.RemoveOrgMember(ctx, coreapi.RemoveOrgMemberParams{OrgId: id, Provider: provider, ProviderUserId: providerUserID})
@@ -292,6 +402,12 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
 		return resolveProjectRef(ctx, c, ref)
 	},
+	candidates: projectGrantCandidates,
+	ownerNotOrg: func(pt grantPickerTarget, _ string) string {
+		// The project the user named IS the account-owned one, so its name is
+		// already in pt.ref and the error's copy would just repeat it.
+		return pt.describe() + " is owned by an account, so it has no member list to choose from"
+	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {
 		out, err := c.GrantProjectAccess(ctx, &coreapi.GrantProjectAccessInputBody{
 			Provider:       provider,
@@ -303,12 +419,12 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 		}
 		return role, out, nil
 	},
-	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.ProjectGrant, string, error) {
+	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.ProjectGrant, coreapi.OptString, error) {
 		out, err := c.ListProjectMembers(ctx, coreapi.ListProjectMembersParams{ProjectId: id, PageToken: pageToken})
 		if err != nil {
-			return nil, "", err
+			return nil, coreapi.OptString{}, err
 		}
-		return out.Members, out.NextPageToken.Or(""), nil
+		return out.Members, out.NextPageToken, nil
 	},
 	revokeByProvider: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error {
 		return c.RevokeProjectAccessByProvider(ctx, coreapi.RevokeProjectAccessByProviderParams{ProjectId: id, Provider: provider, ProviderUserId: providerUserID})
@@ -330,6 +446,12 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
 		return resolveRepoPath(ctx, c, ref)
 	},
+	candidates: repoGrantCandidates,
+	ownerNotOrg: func(pt grantPickerTarget, project string) string {
+		// A repo's pool comes from its project's org, so the refusal names the
+		// project in between rather than leaving the user to find it.
+		return fmt.Sprintf("%s is in project %s, which is owned by an account, so it has no member list to choose from", pt.describe(), project)
+	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {
 		out, err := c.GrantRepoAccess(ctx, &coreapi.GrantRepoAccessInputBody{
 			Provider:       provider,
@@ -341,12 +463,12 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 		}
 		return role, out, nil
 	},
-	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.RepoGrant, string, error) {
+	list: func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]coreapi.RepoGrant, coreapi.OptString, error) {
 		out, err := c.ListRepoGrants(ctx, coreapi.ListRepoGrantsParams{RepoId: id, PageToken: pageToken})
 		if err != nil {
-			return nil, "", err
+			return nil, coreapi.OptString{}, err
 		}
-		return out.Grants, out.NextPageToken.Or(""), nil
+		return out.Grants, out.NextPageToken, nil
 	},
 	revokeByProvider: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error {
 		return c.RevokeRepoAccessByProvider(ctx, coreapi.RevokeRepoAccessByProviderParams{RepoId: id, Provider: provider, ProviderUserId: providerUserID})

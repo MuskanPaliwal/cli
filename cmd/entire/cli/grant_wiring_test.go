@@ -223,10 +223,14 @@ func TestGrantAdd_EmptyRoleIsRefusedLocally(t *testing.T) {
 }
 
 // TestGrantAdd_OmittedRequiredRoleIsRefusedLocally pins the other half of the
-// role contract: where --role is required (project and repo), leaving it out
-// fails cobra's required-flag check before RunE runs, so the empty role never
-// reaches validation, a lookup, or the API. That check is what lets the RunE
-// validate only a role the user typed.
+// role contract: where --role has no server default (project and repo), leaving
+// it out without a terminal to prompt on is refused locally, so the empty role
+// never reaches validation, a lookup, or the API.
+//
+// --role is no longer a cobra-required flag, because cobra enforces those
+// before RunE and a role that cannot reach RunE cannot be prompted for. The
+// guarantee moved into the RunE, ahead of every request, which is what this
+// test states; `go test` is non-interactive, so this is the refusing path.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestGrantAdd_OmittedRequiredRoleIsRefusedLocally(t *testing.T) {
@@ -244,7 +248,7 @@ func TestGrantAdd_OmittedRequiredRoleIsRefusedLocally(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "add", tc.target, "github:alice")
-			require.ErrorContains(t, err, `required flag(s) "role" not set`)
+			require.ErrorContains(t, err, "--role is required: one of reader, writer, admin")
 		})
 	}
 }
