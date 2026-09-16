@@ -35,11 +35,11 @@ type column struct {
 // so a --sort value needs no quoting; headers stay upper-case display text.
 var (
 	colName       = column{key: "name", header: "NAME (owner/repo)"}
-	colCloneURL   = column{key: "clone-url", header: "CLONE URL"}
+	colCloneURL   = column{key: "clone-url", header: colHeaderCloneURL}
 	colClusters   = column{key: "clusters", header: "CLUSTERS"}
 	colVisibility = column{key: "visibility", header: "VISIBILITY"}
 	colAccess     = column{key: "access", header: "ACCESS"}
-	colStatus     = column{key: "status", header: "STATUS"}
+	colStatus     = column{key: "status", header: colHeaderStatus}
 )
 
 // columnHeaders is the display-header view of a column set, for the table/field
@@ -482,6 +482,13 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 			"  entire repo mirror create github.com/octocat/hello-world\n" +
 			"  entire repo mirror create github.com/octocat/hello-world aws-us-east-2.entire.io",
 		Args: cobra.RangeArgs(0, 2),
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			// Preserve zero as an unbounded wait for existing callers.
+			if waitTimeout < 0 {
+				return errors.New("--wait-timeout must be zero or positive")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := mirrorCreateOptions{noWait: noWait, timeout: waitTimeout}
 			if len(args) == 0 {
@@ -527,7 +534,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the placement is registered, without waiting for the initial clone")
-	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 30*time.Minute, "How long to wait for mirror request submission, placement, and clone readiness (0 waits indefinitely)")
 	return cmd
 }
 
@@ -568,6 +575,7 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 	}
 
 	waitCtx := ctx
+	// Zero preserves the caller context without adding a timeout.
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(ctx, opts.timeout)
@@ -923,7 +931,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	var pageToken string
 	var noPager, all bool
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   cmdList,
 		Short: "List repos you can see: existing mirrors and GitHub repos you could onboard",
 		Long: "List repos visible from your login in one table: existing mirrors " +
 			"(one row per repo, with the clusters it is mirrored on and the clone " +
@@ -1140,7 +1148,7 @@ func renderRepoDetail(w io.Writer, row repoDirRow) {
 		return
 	}
 
-	headers := styledHeaders(st, []string{"CLUSTER", "CLONE URL", "STATUS"})
+	headers := styledHeaders(st, []string{colHeaderCluster, colHeaderCloneURL, colHeaderStatus})
 	rows := make([][]string, len(row.Placements))
 	for i, p := range row.Placements {
 		cluster, status := p.Cluster, p.Status
