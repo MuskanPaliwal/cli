@@ -128,7 +128,11 @@ func (g *gitHookContext) skipUnreadableCheckpointPolicy(err error) bool {
 // enabled Entire. The check is not repeated here: it costs an uncached
 // settings.Load, and this runs on the per-commit and per-turn paths.
 func withHookSession(ctx context.Context) context.Context {
-	ctx = logging.WithSessionID(ctx, strategy.FindMostRecentSession(ctx))
+	// Resolve the caller rather than the most recent session: a git hook an
+	// agent triggered inherits that agent's session ID in its environment, so
+	// log lines get attributed to the session that actually ran the commit
+	// instead of whichever session in the shared store moved last.
+	ctx = logging.WithSessionID(ctx, strategy.ResolveCallerSession(ctx).SessionID)
 
 	// Hooks are the checkpoint-writing path, so this cannot be left to the root
 	// pre-run: without it only always-on secret scanning would run.
