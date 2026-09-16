@@ -164,6 +164,7 @@ var agentHelpClassification = map[string]agentHelpFacts{
 	"agent":       {agentHelpAudienceUserOwned, false},
 	"auth":        {agentHelpAudienceUserOwned, false},
 	"clean":       {agentHelpAudienceUserOwned, false},
+	"cluster":     {agentHelpAudienceUserOwned, false},
 	"configure":   {agentHelpAudienceUserOwned, false},
 	"disable":     {agentHelpAudienceUserOwned, false},
 	"enable":      {agentHelpAudienceUserOwned, false},
@@ -692,9 +693,9 @@ func renderAgentHelpTop(rootCmd *cobra.Command, repoLine string, trailsEnabled b
 	}
 	// Use an example command that is actually advertised here (trail is gated on
 	// trails being enabled), so we never point at a command the agent can't use.
-	example := "checkpoint"
+	example := cmdCheckpoint
 	if trailsEnabled {
-		example = "trail"
+		example = cmdTrail
 	}
 	fmt.Fprintf(&b, "\nDrill in for exact, currently-installed flags:  entire agent-help <command>  (e.g. entire agent-help %s)\n", example)
 	b.WriteString("Add --json for structured output.\n")
