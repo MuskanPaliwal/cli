@@ -14,11 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/auth-go/sts"
+
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
-	"github.com/entireio/cli/internal/entireclient/httputil"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
@@ -185,7 +186,7 @@ func JurisdictionToken(ctx context.Context, insecureHTTP bool, jurisdiction stri
 	}
 
 	audience := jurisdictionAudience(j, subject.dataOrigin, subject.discoveredCore)
-	token, err := exchangeJurisdictionToken(ctx, coreURL, subject.loginJWT, audience, subject.httpClient)
+	token, err := exchangeJurisdictionToken(ctx, coreURL, subject.loginJWT, audience, subject.httpClient.Transport)
 	if err != nil {
 		return "", fmt.Errorf("exchange jurisdictional identity token: %w", err)
 	}
@@ -213,8 +214,8 @@ type cellSubject struct {
 // `--jurisdiction` mints a token for the caller's SELECTED environment, so with
 // (say) a partial.to context active it must mint a partial.to token even though
 // the data host defaults to entire.io. Discovery keys off api.BaseURL(), so it
-// would fail outright — clusterdiscovery.requireActiveContext validates the
-// active context against *that* host's trusted issuers and errors when they
+// would fail outright — clusterdiscovery.selectLoginContext validates the
+// selected context against *that* host's trusted issuers and errors when they
 // don't match, which for this command is the wrong question to ask: the target
 // jurisdiction comes from the flag, not from the default data host.
 // NewEntireAPICellClient is a different case — it dials the data plane — so it
@@ -676,18 +677,47 @@ func resolveCellAPIBaseURL(ctx context.Context, coreURL, loginJWT, jurisdiction 
 	return strings.TrimRight(chosen.APIURL, "/"), nil
 }
 
-func exchangeJurisdictionToken(ctx context.Context, coreURL, loginJWT, audience string, httpClient *http.Client) (string, error) {
+// exchangeJurisdictionToken mints the jurisdictional identity token for a
+// cell, trading the login JWT for one pinned to audience.
+//
+// Through auth-go's sts client rather than a hand-rolled POST, so the CLI has
+// one RFC 8693 implementation: the duplicate this replaced had drifted, losing
+// auth-go's terminal-escape sanitisation of server error text and keeping its
+// own redirect guard in the CLI rather than the library.
+//
+// Takes the transport, not the caller's *http.Client: only the transport (and
+// so the connection pool) carries over. The Timeout deliberately does not —
+// sts applies the same budget via context.WithTimeout, which unlike
+// Client.Timeout does not cancel the post-response body read. Note sts also
+// narrows plain HTTP to loopback on top of AllowInsecureHTTP, so that is the
+// effective policy here regardless of --insecure-http-auth.
+//
+// subject_token_type stays access_token, not JWT — what the replaced form sent
+// and what entire-core matches on.
+func exchangeJurisdictionToken(ctx context.Context, coreURL, loginJWT, audience string, transport http.RoundTripper) (string, error) {
 	if coreURL == "" {
 		return "", errors.New("no entire-core URL configured for jurisdiction token exchange")
 	}
-	form := httputil.TokenExchangeForm(loginJWT, audience, JurisdictionIdentityScope)
-
-	token, _, err := httputil.PostOAuthToken(ctx, httpClient, coreURL, form)
+	client := &sts.Client{
+		Transport:         transport,
+		BaseURL:           coreURL,
+		Path:              oauthTokenPath,
+		AllowInsecureHTTP: shouldUsePlainHTTPDiscovery(coreURL),
+		RequestTimeout:    cellDataAPITimeout,
+	}
+	ts, err := client.Exchange(ctx, sts.ExchangeRequest{
+		SubjectToken:       loginJWT,
+		SubjectTokenType:   sts.SubjectTokenTypeAccessToken,
+		RequestedTokenType: sts.SubjectTokenTypeAccessToken,
+		Audience:           audience,
+		Scope:              JurisdictionIdentityScope,
+		ClientID:           oauthClientID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("post token exchange: %w", err)
 	}
-	if strings.TrimSpace(token) == "" {
+	if strings.TrimSpace(ts.AccessToken) == "" {
 		return "", errors.New("token exchange returned an empty access token")
 	}
-	return token, nil
+	return ts.AccessToken, nil
 }
