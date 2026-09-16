@@ -451,6 +451,33 @@ For the fork setup where `origin` is an unpushable base repo, capture elects
 the fork automatically on the first tracked push; `checkpoint_push_remote`
 remains the explicit override.
 
+`entire enable` offers a named-remote picker during interactive **first-time**
+setup when multiple remotes need resolution. It uses the existing election and
+destination checks; it does not introduce another election tier. Keeping the
+current selection writes no override — which is why a bare re-enable in a
+configured repo never prompts: the conditions would be unchanged on the next
+run, and there would be no way to say "stop asking" short of pinning a remote.
+Selecting a different remote, or supplying `--checkpoint-push-remote <name>`
+(the path for changing the destination later, and for repairing a saved remote
+that no longer exists), persists an explicit override in the clone-local
+settings file. The write preserves unrelated settings and is verified through
+the effective settings loader before reporting success. On fresh enable, agent
+selection precedes remote selection; both happen before hook/settings setup
+side effects. Persistence happens after setup's settings saves but before
+destination-dependent checkpoint initialization.
+
+The picker is skipped for valid explicit or elected dedicated destinations,
+disabled checkpoint pushing, a rejected local settings layer (the choice could
+not be saved), and non-interactive invocations; `esc` at the picker means the
+same as keeping the current destination. An explicit remote flag is still
+honored without prompting and does not enable disabled pushing. Destination
+selection does not migrate, publish, or delete existing remote checkpoint data.
+Alternatives that still resolve to dedicated storage are not offered as
+ordinary named destinations. The closing destination report is printed only
+when the destination was touched (explicit flag, picker shown, or
+`--checkpoint-remote`) or is unusable; a healthy destination nobody asked about
+ends at `Ready.`, and the multi-remote ambiguity note covers the rest.
+
 The pre-push hook carries checkpoint data only when the push targets the
 elected remote; pushes to any other remote or to a raw URL sync nothing, on
 both the git-branch and git-refs backends (git-refs leaves its push queue
@@ -832,14 +859,28 @@ Strategies determine checkpoint timing and type:
 | On Task Complete | Task record on session state → materialized at condensation |
 | On User Commit | Condense → Committed |
 
-## Rewind
+## Pending Checkpoints
 
-Each `RewindPoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
+Each `PendingCheckpoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
 
-A rewind point is something you can list and resume from, not something the CLI
-restores working files to: the file-restoring path (`Rewind`, `PreviewRewind`,
-`CanRewind`) was removed along with the `rewind` commands. `RestoreLogsOnly`
-still writes a checkpoint's session logs into the agent's session directory for
+`checkpoint list --pending` is the resume view of the current branch, and a
+`PendingCheckpoint` row is one of two things:
+
+- a **live checkpoint** on the session's shadow branch, not yet condensed onto
+  `entire/checkpoints/v1`; or
+- a **logs-only resume point** — a commit on the current branch whose
+  `Entire-Checkpoint` trailer resolves to a checkpoint that *is* already
+  condensed onto `entire/checkpoints/v1`, listed so its session transcript can
+  be restored from there (file state would need a git checkout).
+
+So "pending" describes the listing, not a guarantee that the work behind every
+row is un-condensed: `ListLogsOnlyPendingCheckpoints` builds the second kind by
+scanning branch history against committed checkpoint storage.
+
+Either shape can be listed and resumed from, but the CLI cannot restore working
+files to it: the file-restoring path (`Rewind`, `PreviewRewind`, `CanRewind`) was
+removed along with the `rewind` commands. `RestoreLogsOnly` still writes a
+checkpoint's session logs into the agent's session directory for
 `entire resume`, and leaves the worktree alone.
 
 ## Concurrent Sessions

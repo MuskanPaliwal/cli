@@ -147,8 +147,8 @@ verify-metadata-branch)
   fi
   ;;
 
-list-rewind-points)
-  echo "==> Listing rewind points..."
+list-pending-checkpoints)
+  echo "==> Listing pending checkpoints..."
   cd "$REPO_DIR"
 
   "$BIN_PATH" checkpoint list --pending --json
@@ -184,20 +184,20 @@ info)
   echo "Unknown step: $step"
   echo ""
   echo "Available steps:"
-  echo "  setup-repo             - Create test repository"
-  echo "  configure-strategy     - Configure Entire with strategy"
-  echo "  start-session          - Start Claude session"
-  echo "  create-files           - Create test files"
-  echo "  create-transcript      - Create session transcript"
-  echo "  stop-session           - Stop session (create checkpoint)"
-  echo "  verify-commit          - Verify active branch commit"
-  echo "  verify-session-state   - Verify session state files"
-  echo "  verify-shadow-branch   - Verify shadow branch exists"
-  echo "  verify-metadata-branch - Verify metadata branch exists"
-  echo "  list-rewind-points     - List available rewind points"
-  echo "  create-changes         - Create changes on top of the checkpoint"
-  echo "  cleanup                - Clean up test environment"
-  echo "  info                   - Show environment info"
+  echo "  setup-repo               - Create test repository"
+  echo "  configure-strategy       - Configure Entire with strategy"
+  echo "  start-session            - Start Claude session"
+  echo "  create-files             - Create test files"
+  echo "  create-transcript        - Create session transcript"
+  echo "  stop-session             - Stop session (create checkpoint)"
+  echo "  verify-commit            - Verify active branch commit"
+  echo "  verify-session-state     - Verify session state files"
+  echo "  verify-shadow-branch     - Verify shadow branch exists"
+  echo "  verify-metadata-branch   - Verify metadata branch exists"
+  echo "  list-pending-checkpoints - List pending (not yet condensed) checkpoints"
+  echo "  create-changes           - Create changes on top of the checkpoint"
+  echo "  cleanup                  - Clean up test environment"
+  echo "  info                     - Show environment info"
   echo ""
   echo "Prerequisites:"
   echo "  Build the CLI first: go build -o /tmp/entire-bin ./cmd/entire"
