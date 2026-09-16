@@ -96,13 +96,13 @@ func loginURLKeysAvailable() bool {
 		return false
 	}
 
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	tty, err := interactive.OpenPromptTTY()
 	if err != nil {
 		return false
 	}
 	defer tty.Close()
 
-	return interactive.IsTerminalReader(tty)
+	return interactive.IsTerminalReader(tty.Input())
 }
 
 // copyLoginURL bounds a clipboard write. clipboardWriteFunc takes no context —
@@ -171,27 +171,7 @@ func newLoginCmd() *cobra.Command {
 		Use:   "login",
 		Short: "Log in to Entire",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			loginServer, err := parseLoginServer(server)
-			if err != nil {
-				return fmt.Errorf("invalid --server: %w", err)
-			}
-			if err := requireSecureLoginServer(loginServer, insecureHTTPAuth); err != nil {
-				return err
-			}
-			client := auth.NewClient(loginServer, nil, insecureHTTPAuth)
-			// Closure adapts the concrete *auth.BrowserAuthFlow result to the
-			// browserAuthFlow interface (func types are invariant, so the
-			// method value alone won't do). On error the flow is a typed nil,
-			// which is fine — runLoginAuto checks err before touching it.
-			startBrowser := func(ctx context.Context) (browserAuthFlow, error) {
-				return client.StartBrowserAuth(ctx)
-			}
-			return runLoginAuto(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
-				client, startBrowser, defaultLoginURLInteractor(cmd.ErrOrStderr()), loginFlowFacts{
-					useDevice:  useDevice,
-					canPrompt:  interactive.CanPromptInteractively(),
-					sshSession: isSSHSession(),
-				})
+			return runLoginCommand(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), server, insecureHTTPAuth, useDevice)
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", api.DefaultAuthBaseURL,
@@ -199,6 +179,28 @@ func newLoginCmd() *cobra.Command {
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
 	cmd.Flags().BoolVar(&useDevice, "device", false, "Use the device-code flow (enter a code in your browser) instead of the default browser redirect")
 	return cmd
+}
+
+func runLoginCommand(ctx context.Context, outW, errW io.Writer, server string, insecureHTTPAuth, useDevice bool) error {
+	loginServer, err := parseLoginServer(server)
+	if err != nil {
+		return fmt.Errorf("invalid --server: %w", err)
+	}
+	if err := requireSecureLoginServer(loginServer, insecureHTTPAuth); err != nil {
+		return err
+	}
+	client := auth.NewClient(loginServer, nil, insecureHTTPAuth)
+	// Closure adapts the concrete *auth.BrowserAuthFlow result to the
+	// browserAuthFlow interface (func types are invariant, so the method value
+	// alone won't do).
+	startBrowser := func(ctx context.Context) (browserAuthFlow, error) {
+		return client.StartBrowserAuth(ctx)
+	}
+	return runLoginAuto(ctx, outW, errW, client, startBrowser, defaultLoginURLInteractor(errW), loginFlowFacts{
+		useDevice:  useDevice,
+		canPrompt:  interactive.CanPromptInteractively(),
+		sshSession: isSSHSession(),
+	})
 }
 
 // parseLoginServer validates and canonicalises the --server value: an
@@ -869,26 +871,35 @@ func readLoginURLAction(ctx context.Context, errW io.Writer) (loginURLAction, er
 		return loginURLNone, nil
 	}
 
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	tty, err := interactive.OpenPromptTTY()
 	if err != nil {
 		return loginURLNone, nil //nolint:nilerr // no controlling TTY; continue without key actions
 	}
 
-	return readLoginURLActionFromTTY(ctx, errW, tty)
+	return readLoginURLActionFromTerminal(ctx, errW, tty.Input(), tty.Close)
 }
 
 // readLoginURLActionFromTTY takes ownership of tty. Bubble Tea handles raw mode,
 // escape-sequence decoding, and terminal restoration. If the terminal cannot
 // provide single-key input, disable key actions.
 func readLoginURLActionFromTTY(ctx context.Context, errW io.Writer, tty *os.File) (loginURLAction, error) {
+	return readLoginURLActionFromTerminal(ctx, errW, tty, tty.Close)
+}
+
+func readLoginURLActionFromTerminal(
+	ctx context.Context,
+	errW io.Writer,
+	input *os.File,
+	closeTerminal func() error,
+) (loginURLAction, error) {
 	closeTTY := true
 	defer func() {
 		if closeTTY {
-			_ = tty.Close()
+			_ = closeTerminal() //nolint:errcheck // best-effort cleanup after terminal interaction
 		}
 	}()
 
-	if !interactive.IsTerminalReader(tty) {
+	if !interactive.IsTerminalReader(input) {
 		return loginURLNone, nil
 	}
 
@@ -899,7 +910,7 @@ func readLoginURLActionFromTTY(ctx context.Context, errW io.Writer, tty *os.File
 
 	program := tea.NewProgram(
 		loginURLActionModel{},
-		tea.WithInput(tty),
+		tea.WithInput(input),
 		tea.WithOutput(io.Discard),
 		tea.WithoutSignalHandler(),
 	)
@@ -916,7 +927,8 @@ func readLoginURLActionFromTTY(ctx context.Context, errW io.Writer, tty *os.File
 	if errors.Is(err, tea.ErrProgramKilled) {
 		// Bubble Tea reports any event-loop error this way, input-stream failures
 		// included, and a killed Run skipped waitForReadLoop — so the reader may
-		// still hold tty. Let process exit reclaim the fd rather than race for it.
+		// still hold the input handle. Let process exit reclaim the terminal
+		// handles rather than race for them.
 		closeTTY = false
 	}
 	if ctx.Err() != nil {

@@ -22,10 +22,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
+	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitops"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/proclive"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -50,7 +53,8 @@ const (
 	ttyResultLinkAlways                  // Link and remember: add trailer + save "always" preference
 )
 
-// askConfirmTTY prompts the user via /dev/tty whether to link a commit to session context.
+// askConfirmTTY prompts via the controlling terminal whether to link a commit
+// to session context.
 // This requires a controlling terminal — callers must check
 // interactive.CanPromptInteractively() first and handle the no-TTY case
 // (agent subprocesses, CI) themselves.
@@ -68,10 +72,10 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 		return defaultResult
 	}
 
-	// Open /dev/tty for both reading and writing.
-	// This is the controlling terminal, which works even when stdin/stderr are redirected
-	// (e.g., human runs git commit -m where stdin is not a pipe).
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	// Open the controlling terminal for both reading and writing. This works even
+	// when stdin/stderr are redirected (e.g., human runs git commit -m where
+	// stdin is not a pipe).
+	tty, err := interactive.OpenPromptTTY()
 	if err != nil {
 		return defaultResult
 	}
@@ -117,40 +121,18 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 // fields. This avoids writing unintended defaults (e.g., enabled: true) when the
 // local settings file doesn't exist yet.
 func saveCommitLinkingAlways(ctx context.Context) error {
-	localPath, err := paths.AbsPath(ctx, settings.EntireSettingsLocalFile)
+	// Read-modify-write through the settings package: it owns the confined read
+	// and the atomic write, and the raw map preserves every field this hook has
+	// no opinion about.
+	localPath, raw, _, err := settings.LoadLocalRaw(ctx)
 	if err != nil {
-		return fmt.Errorf("resolving local settings path: %w", err)
-	}
-
-	// Read existing file as raw JSON map to preserve all existing fields.
-	// If the file doesn't exist, start with an empty map so we only write commit_linking.
-	var raw map[string]json.RawMessage
-	data, readErr := os.ReadFile(localPath) //nolint:gosec // path is from AbsPath
-	if readErr == nil {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing local settings: %w", err)
-		}
-	} else if !os.IsNotExist(readErr) {
-		return fmt.Errorf("reading local settings: %w", readErr)
-	}
-	if raw == nil {
-		raw = make(map[string]json.RawMessage)
+		return err //nolint:wrapcheck // LoadLocalRaw already names the file and the failure
 	}
 
 	raw["commit_linking"] = json.RawMessage(`"` + settings.CommitLinkingAlways + `"`)
 
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling local settings: %w", err)
-	}
-	out = append(out, '\n')
-
-	if err := os.MkdirAll(filepath.Dir(localPath), 0o750); err != nil {
-		return fmt.Errorf("creating settings directory: %w", err)
-	}
-	//nolint:gosec // G306: settings file is config, not secrets; 0o644 is appropriate
-	if err := os.WriteFile(localPath, out, 0o644); err != nil {
-		return fmt.Errorf("writing local settings: %w", err)
+	if err := settings.SaveLocalRaw(localPath, raw); err != nil {
+		return err //nolint:wrapcheck // SaveLocalRaw already names the file and the failure
 	}
 	return nil
 }
@@ -322,20 +304,18 @@ func isGitSequenceOperation(ctx context.Context) bool {
 		return false // Can't determine, assume not in sequence operation
 	}
 
-	// Check for rebase state directories
-	if _, err := os.Lstat(filepath.Join(gitDir, "rebase-merge")); err == nil {
-		return true
-	}
-	if _, err := os.Lstat(filepath.Join(gitDir, "rebase-apply")); err == nil {
-		return true
+	// These markers live in the PER-WORKTREE git dir, not the common dir, which
+	// is why this opens gitDir rather than using gitdir.Open.
+	root, err := gitdir.OpenAt(gitDir)
+	if err != nil {
+		return false // Can't determine, assume not in sequence operation
 	}
 
-	// Check for cherry-pick and revert state files
-	if _, err := os.Lstat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
-		return true
-	}
-	if _, err := os.Lstat(filepath.Join(gitDir, "REVERT_HEAD")); err == nil {
-		return true
+	// Check for rebase state directories, then cherry-pick and revert state files.
+	for _, marker := range []string{"rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
+		if _, err := root.Lstat(marker); err == nil {
+			return true
+		}
 	}
 
 	return false
@@ -848,21 +828,20 @@ func warnStaleEndedSessions(ctx context.Context, count int) {
 }
 
 func warnStaleEndedSessionsTo(ctx context.Context, count int, w io.Writer) {
-	commonDir, err := GetGitCommonDir(ctx)
+	root, err := gitdir.Open(ctx)
 	if err != nil {
 		return // fail-open
 	}
-	warnDir := filepath.Join(commonDir, session.SessionStateDirName)
-	warnFile := filepath.Join(warnDir, staleEndedSessionWarnFile)
-	if info, statErr := os.Lstat(warnFile); statErr == nil {
+	warnFile := session.SessionStateDirName + "/" + staleEndedSessionWarnFile
+	if info, statErr := root.Lstat(warnFile); statErr == nil {
 		if time.Since(info.ModTime()) < staleEndedSessionWarnInterval {
 			return // rate-limited
 		}
 	}
-	//nolint:errcheck,gosec // G104: Best-effort warning — fail-open if file ops fail
-	os.MkdirAll(warnDir, 0o750)
-	//nolint:errcheck,gosec // G104: Best-effort sentinel file write
-	os.WriteFile(warnFile, []byte{}, 0o644)
+	//nolint:errcheck // Best-effort warning — fail-open if file ops fail
+	_ = osroot.MkdirAllNoSymlink(root, session.SessionStateDirName, 0o750)
+	//nolint:errcheck // Best-effort sentinel file write
+	_ = jsonutil.WriteFileAtomicIn(root, warnFile, []byte{}, 0o644)
 	fmt.Fprintf(w,
 		"\nentire: %d ended session(s) are accumulating and slowing down commits.\n"+
 			"Run 'entire doctor' to condense them and restore commit performance.\n\n",
@@ -1498,11 +1477,11 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 			s.carryForwardToNewShadowBranch(ctx, repo, state, remainingFiles)
 		}
 
-		// Clear filesystem prompt.txt only when ALL files are committed.
-		// If carry-forward files remain, the prompt must persist so the next
-		// condensation (triggered by the next commit) can read it.
+		// Release the staged prompt.txt and full.jsonl only when ALL files are
+		// committed. If carry-forward files remain they must persist, so the
+		// next condensation (triggered by the next commit) can still read them.
 		if len(state.FilesTouched) == 0 {
-			clearFilesystemPrompt(ctx, state.SessionID)
+			clearFilesystemStagedFiles(ctx, state.SessionID)
 		}
 	}
 	carryForwardSpan.End()
@@ -2206,7 +2185,7 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 	// AND subagent transcripts in a single pass, avoiding redundant parsing.
 	if state.AgentType == agent.AgentTypeClaudeCode {
 		subagentsDir := paths.SubagentsDir(filepath.Dir(state.TranscriptPath), state.SessionID)
-		transcriptData, readErr := os.ReadFile(state.TranscriptPath)
+		transcriptData, readErr := agent.ReadTranscriptFile(state.TranscriptPath)
 		if readErr != nil {
 			logging.Debug(logCtx, "extractModifiedFilesFromLiveTranscript: failed to read transcript",
 				slog.String("session_id", state.SessionID),
@@ -2550,6 +2529,52 @@ func correctSessionAgentType(ctx context.Context, currentType types.AgentType, t
 	return owner.Type(), true
 }
 
+// transitionSessionToCodex initializes Codex child-accounting state when a
+// transcript path proves that an existing session is Codex-owned. The
+// transition deliberately happens in the same session-state mutation as the
+// AgentType correction so readers can never observe a Codex session with
+// legacy, ambiguous child-coverage markers.
+func transitionSessionToCodex(state *SessionState) {
+	dirty := hasPriorSubagentEvidence(state)
+	complete := !dirty
+
+	// Task records predate the durable Codex inventory. Preserve their child
+	// identities without calling RegisterSubagent: this is a migration of known
+	// evidence, not a new observation, so it must not advance the ledger again.
+	for _, record := range state.TaskRecords {
+		if record.AgentID == "" || state.FindSubagentInventory(record.AgentID) != nil {
+			continue
+		}
+		state.SubagentInventory = append(state.SubagentInventory, session.SubagentInventoryEntry{
+			AgentID:                record.AgentID,
+			DeclaredTranscriptPath: record.DeclaredTranscriptPath,
+		})
+	}
+
+	state.TokenUsage = types.WithClearedSubagentTokens(state.TokenUsage, complete)
+	state.CheckpointTokenUsage = types.WithClearedSubagentTokens(state.CheckpointTokenUsage, complete)
+	state.SubagentTokensBaseline = nil
+	state.SubagentInventoryComplete = &complete
+	state.SubagentTokensBaselineComplete = &complete
+}
+
+func hasPriorSubagentEvidence(state *SessionState) bool {
+	if len(state.SubagentInventory) > 0 || len(state.TaskRecords) > 0 || state.SubagentLedgerVersion != 0 || state.SubagentTokensBaseline != nil {
+		return true
+	}
+	if state.TokenUsage != nil && (state.TokenUsage.SubagentTokens != nil || explicitlyIncomplete(state.TokenUsage.SubagentTokensComplete)) {
+		return true
+	}
+	if state.CheckpointTokenUsage != nil && (state.CheckpointTokenUsage.SubagentTokens != nil || explicitlyIncomplete(state.CheckpointTokenUsage.SubagentTokensComplete)) {
+		return true
+	}
+	return explicitlyIncomplete(state.SubagentInventoryComplete) || explicitlyIncomplete(state.SubagentTokensBaselineComplete)
+}
+
+func explicitlyIncomplete(complete *bool) bool {
+	return complete != nil && !*complete
+}
+
 // InitializeSession creates session state for a new session or updates an existing one.
 // This implements the optional SessionInitializer interface.
 // Called during UserPromptSubmit to allow git hooks to detect active sessions.
@@ -2607,17 +2632,22 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 		}
 		state.TurnID = turnID.String()
 
-		// Update AgentType when it isn't set yet, or when the transcript path
-		// proves we're a different agent than the one stored.
-		if state.AgentType == "" && resolvedAgentType != "" {
-			state.AgentType = resolvedAgentType
-		} else if corrected, changed := correctSessionAgentType(ctx, state.AgentType, transcriptPath); changed {
+		// A transcript path is stronger evidence than both a stored owner and
+		// the current hook. Apply transcript-proven corrections first, including
+		// the empty-owner case, so a Codex correction can initialize all of its
+		// child-accounting markers atomically.
+		if corrected, changed := correctSessionAgentType(ctx, state.AgentType, transcriptPath); changed {
 			logging.Info(logging.WithComponent(ctx, "hooks"), "corrected session agent type from transcript path",
 				slog.String("session_id", sessionID),
 				slog.String("from", string(state.AgentType)),
 				slog.String("to", string(corrected)),
 				slog.String("transcript_path", transcriptPath))
+			if corrected == agent.AgentTypeCodex && state.AgentType != agent.AgentTypeCodex {
+				transitionSessionToCodex(state)
+			}
 			state.AgentType = corrected
+		} else if state.AgentType == "" && resolvedAgentType != "" {
+			state.AgentType = resolvedAgentType
 		}
 		if model != "" {
 			state.ModelName = model
@@ -2821,10 +2851,13 @@ func (s *ManualCommitStrategy) calculatePromptAttributionAtStart(
 			continue
 		}
 
-		// Always read from worktree to match checkpoint behavior
-		fullPath := filepath.Join(worktreeRoot, filePath)
+		// Always read from worktree to match checkpoint behavior, and through the
+		// worktree's shared root: filePath comes straight out of git status, so
+		// it is already the coordinate the root reads in. Joining it onto
+		// worktreeRoot and reading the result is what put a name Entire did not
+		// choose in front of an unconfined open, on the hook path.
 		var content string
-		if data, err := os.ReadFile(fullPath); err == nil { //nolint:gosec // filePath is from git worktree status
+		if data, err := readWorktreeFile(worktreeRoot, filePath); err == nil {
 			// Use git's binary detection algorithm (matches getFileContent behavior).
 			// Binary files are excluded from line-based attribution calculations.
 			isBinary, binErr := binary.IsBinary(bytes.NewReader(data))
@@ -3137,7 +3170,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		return 1 // Count as error - all checkpoints will be skipped
 	}
 
-	fullTranscript, err := os.ReadFile(transcriptPath) //nolint:gosec // path validated by resolveTranscriptPath
+	fullTranscript, err := agent.ReadTranscriptFile(transcriptPath)
 	if err != nil || len(fullTranscript) == 0 {
 		msg := "finalize: empty transcript, skipping"
 		if err != nil {
@@ -3387,7 +3420,6 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 		WorktreeID:        state.WorktreeID,
 		ModifiedFiles:     remainingFiles,
 		MetadataDir:       "",
-		MetadataDirAbs:    "",
 		CommitMessage:     "carry forward: uncommitted session files",
 		IsFirstCheckpoint: false,
 	})

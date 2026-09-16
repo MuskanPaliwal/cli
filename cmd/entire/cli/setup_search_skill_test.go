@@ -19,8 +19,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/pi"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
@@ -41,7 +41,7 @@ func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := setupTestDir(t)
+			tmpDir := setupTestRepo(t)
 
 			result, err := scaffoldSearchSkill(context.Background(), tc.agent)
 			if err != nil {
@@ -71,7 +71,7 @@ func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_IdempotentManagedFile(t *testing.T) {
-	setupTestDir(t)
+	setupTestRepo(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
 	if _, err := scaffoldSearchSkill(context.Background(), ag); err != nil {
@@ -88,7 +88,7 @@ func TestScaffoldSearchSkill_IdempotentManagedFile(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_UpdatesManagedFile(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
 	relPath, _, ok := searchSkillTemplate(ag.Name())
@@ -124,7 +124,7 @@ func TestScaffoldSearchSkill_UpdatesManagedFile(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_PreservesUserOwnedFile(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
 	relPath, _, ok := searchSkillTemplate(ag.Name())
@@ -171,7 +171,7 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagent(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := setupTestDir(t)
+			tmpDir := setupTestRepo(t)
 
 			legacyPath := filepath.Join(tmpDir, tc.legacyRelPath)
 			if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
@@ -200,7 +200,7 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagent(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_RemovesManagedLegacySubagentOnSkillConflict(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
 	relPath, _, ok := searchSkillTemplate(ag.Name())
@@ -249,7 +249,7 @@ func TestScaffoldSearchSkill_RemovesManagedLegacySubagentOnSkillConflict(t *test
 }
 
 func TestScaffoldSearchSkill_SkipsNonRegularLegacyPath(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	// A directory at the legacy path is not the regular file Entire ever
 	// scaffolded, so cleanup skips it silently and the install succeeds.
@@ -298,7 +298,7 @@ func TestReportSearchSkillScaffold_SurfacesLegacyCleanupWarning(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_LegacyCleanupNeverEscapesRepoViaSymlinkedParent(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	outsideDir := t.TempDir()
 	outsideFile := filepath.Join(outsideDir, "entire-search.md")
@@ -332,7 +332,7 @@ func TestScaffoldSearchSkill_LegacyCleanupNeverEscapesRepoViaSymlinkedParent(t *
 }
 
 func TestScaffoldSearchSkill_SkipsSymlinkedLegacyFile(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	agentsDir := filepath.Join(tmpDir, ".claude", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
@@ -364,7 +364,7 @@ func TestScaffoldSearchSkill_SkipsSymlinkedLegacyFile(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_RefusesSymlinkedSkillTargetEscapingRepo(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -385,7 +385,7 @@ func TestScaffoldSearchSkill_RefusesSymlinkedSkillTargetEscapingRepo(t *testing.
 }
 
 func TestScaffoldSearchSkill_PlantedTmpSymlinkCannotRedirectTheWrite(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	victimRelPath := "victim.md"
 	victimPath := filepath.Join(tmpDir, victimRelPath)
@@ -431,7 +431,7 @@ func TestScaffoldSearchSkill_PlantedTmpSymlinkCannotRedirectTheWrite(t *testing.
 }
 
 func TestScaffoldSearchSkill_StaleTmpFileDoesNotBlockInstall(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -455,34 +455,33 @@ func TestScaffoldSearchSkill_StaleTmpFileDoesNotBlockInstall(t *testing.T) {
 	}
 }
 
-func TestScaffoldSearchSkill_ReplacesInRepoDanglingSymlinkTarget(t *testing.T) {
-	tmpDir := setupTestDir(t)
+func TestScaffoldSearchSkill_RefusesInRepoDanglingSymlinkTarget(t *testing.T) {
+	tmpDir := setupTestRepo(t)
 
 	skillDir := filepath.Join(tmpDir, ".claude", "skills", "entire-search")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("failed to create skill dir: %v", err)
 	}
-	// Relative dangling link inside the repo: reads as absent, and the write
-	// must replace the link itself, never create its target.
-	if err := os.Symlink("missing-target.md", filepath.Join(skillDir, "SKILL.md")); err != nil {
+	// A relative dangling link inside the repo. Confinement is not the question
+	// here: the link cannot leave the repository, and the write is a rename, so
+	// following it would silently replace whatever the user pointed at. Both the
+	// read and the write refuse instead, and the link is left exactly as found.
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.Symlink("missing-target.md", skillPath); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
 
-	result, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
-	if err != nil {
-		t.Fatalf("scaffoldSearchSkill() error = %v", err)
-	}
-	if result.Status != managedScaffoldCreated {
-		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, managedScaffoldCreated)
+	_, err := scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
+	if !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Fatalf("scaffoldSearchSkill() error = %v, want %v", err, osroot.ErrSymlinkedPath)
 	}
 
-	skillPath := filepath.Join(skillDir, "SKILL.md")
 	info, err := os.Lstat(skillPath)
 	if err != nil {
-		t.Fatalf("failed to lstat scaffolded skill: %v", err)
+		t.Fatalf("failed to lstat the planted link: %v", err)
 	}
-	if !info.Mode().IsRegular() {
-		t.Fatalf("scaffold must replace the symlink with a regular file, got mode %v", info.Mode())
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link itself must be left alone, got mode %v", info.Mode())
 	}
 	if _, err := os.Lstat(filepath.Join(skillDir, "missing-target.md")); !os.IsNotExist(err) {
 		t.Fatalf("the dangling link's target must not be created, lstat err = %v", err)
@@ -490,7 +489,7 @@ func TestScaffoldSearchSkill_ReplacesInRepoDanglingSymlinkTarget(t *testing.T) {
 }
 
 func TestScaffoldSearchSkill_PreservesUserOwnedLegacySubagent(t *testing.T) {
-	tmpDir := setupTestDir(t)
+	tmpDir := setupTestRepo(t)
 
 	legacyRelPath := filepath.Join(".claude", "agents", "entire-search.md")
 	legacyPath := filepath.Join(tmpDir, legacyRelPath)
@@ -523,8 +522,7 @@ func TestScaffoldSearchSkill_PreservesUserOwnedLegacySubagent(t *testing.T) {
 }
 
 func TestSetupAgentHooksNonInteractive_SearchSkillOptInOnly(t *testing.T) {
-	tmpDir := setupTestDir(t)
-	testutil.InitRepo(t, tmpDir)
+	tmpDir := setupTestRepo(t)
 	ag := claudecode.NewClaudeCodeAgent()
 
 	var out bytes.Buffer

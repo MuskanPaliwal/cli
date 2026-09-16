@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // managedScaffoldStatus is the outcome of writing an Entire-managed scaffold file
@@ -50,8 +53,19 @@ type managedScaffoldResult struct {
 // settings.readConfined exists for) is replaced rather than written through.
 // The relative path is fixed, but its resolution is not; that is why the
 // root, not the caller-joined absolute path, is the API.
-func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManaged func([]byte) bool) (managedScaffoldResult, error) {
-	existingData, err := root.ReadFile(relPath)
+//
+// Confinement alone is not the whole property. relPath names a file under an
+// agent's own directory (.claude/skills/, .claude/agents/, .codex/agents/,
+// .gemini/agents/), and those arrive with a checkout, so a repository can ship
+// a symlink at `.claude`. An os.Root refuses a component that escapes it but
+// silently follows one pointing elsewhere inside it. That is why
+// ReadFileNoFollow and MkdirAllNoSymlink reject every symlink component, while
+// the atomic writer pins the real parent for the whole replacement. An
+// unmanaged file at the far end of a link therefore cannot be mistaken for one
+// of ours and rewritten.
+func writeManagedScaffold(t scaffoldTarget, content []byte, isManaged func([]byte) bool) (managedScaffoldResult, error) {
+	root, name, relPath := t.root, t.name, t.relPath
+	existingData, err := osroot.ReadFileNoFollow(root, name)
 	if err == nil {
 		if !isManaged(existingData) {
 			return managedScaffoldResult{Status: managedScaffoldSkippedConflict, RelPath: relPath}, nil
@@ -59,7 +73,7 @@ func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManag
 		if bytes.Equal(existingData, content) {
 			return managedScaffoldResult{Status: managedScaffoldUnchanged, RelPath: relPath}, nil
 		}
-		if err := writeScaffoldViaRename(root, relPath, content); err != nil {
+		if err := jsonutil.WriteFileAtomicIn(root, name, content, 0o644); err != nil {
 			return managedScaffoldResult{}, fmt.Errorf("update managed scaffold: %w", err)
 		}
 		return managedScaffoldResult{Status: managedScaffoldUpdated, RelPath: relPath}, nil
@@ -70,58 +84,50 @@ func writeManagedScaffold(root *os.Root, relPath string, content []byte, isManag
 
 	// Scaffolds are ordinary project files meant to be committed, so they get
 	// standard shareable permissions, not config-file 0o600/0o750.
-	if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
-		return managedScaffoldResult{}, fmt.Errorf("create managed scaffold directory: %w", err)
+	if dir := path.Dir(name); dir != "." {
+		if err := osroot.MkdirAllNoSymlink(root, dir, 0o755); err != nil {
+			return managedScaffoldResult{}, fmt.Errorf("create managed scaffold directory: %w", err)
+		}
 	}
-	if err := writeScaffoldViaRename(root, relPath, content); err != nil {
+	if err := jsonutil.WriteFileAtomicIn(root, name, content, 0o644); err != nil {
 		return managedScaffoldResult{}, fmt.Errorf("write managed scaffold: %w", err)
 	}
 	return managedScaffoldResult{Status: managedScaffoldCreated, RelPath: relPath}, nil
 }
 
-// writeScaffoldViaRename writes to a sibling temp file and renames it over
-// relPath. Rename replaces a symlink at the target instead of writing through
-// it (jsonutil.WriteFileAtomic's property); a root-relative Root.WriteFile
-// alone would follow the link.
+// scaffoldTarget is where one managed scaffold is written: the root to write
+// inside, the name inside that root, and the worktree-relative path to report.
 //
-// The temp path is predictable, so a checkout can plant a symlink there
-// pointing at another in-repo file — Root confinement would not stop a write
-// through it. Two guards close that: any pre-existing entry at the temp path
-// is removed first (Remove unlinks a planted link itself, and clears a stale
-// temp a crashed run left behind), and the create is O_EXCL, so whatever
-// still exists at the path fails the write instead of receiving it.
-func writeScaffoldViaRename(root *os.Root, relPath string, content []byte) error {
-	tmpPath := relPath + ".tmp"
-	if err := root.Remove(tmpPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("clear scaffold temp path: %w", err)
-	}
-	tmp, err := root.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("create scaffold temp file: %w", err)
-	}
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed write
-		return fmt.Errorf("write scaffold temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed close
-		return fmt.Errorf("close scaffold temp file: %w", err)
-	}
-	if err := root.Rename(tmpPath, relPath); err != nil {
-		_ = root.Remove(tmpPath) //nolint:errcheck // best-effort temp cleanup after a failed rename
-		return fmt.Errorf("rename scaffold into place: %w", err)
-	}
-	return nil
+// name and relPath differ only when the scaffold sits under a symlinked agent
+// directory the user vouched for, in which case the root is anchored at the
+// link's target and name has lost the components consumed getting there.
+// Messages keep naming relPath, which is the path the user recognises.
+type scaffoldTarget struct {
+	root    *os.Root
+	name    string
+	relPath string
 }
 
-// openScaffoldRoot opens the repository root for confined scaffold IO.
-func openScaffoldRoot(repoRoot string) (*os.Root, error) {
-	root, err := os.OpenRoot(repoRoot)
+// openScaffoldTarget resolves where a scaffold at relPath should be written.
+//
+// It goes through worktreedir rather than opening its own root because the
+// worktree already has exactly one anchor and repoRoot is what a resolver
+// answered. The returned root is owned by the registry and shared with every
+// other reader and writer of this tree, so callers must not close it.
+//
+// The vouched-directory step is not optional here even though scaffolds are not
+// hook configs: they are written under the SAME agent directories
+// (.claude/skills, .claude/agents, .codex/agents, .gemini/agents), by the same
+// `entire enable`. A vouched `.claude` that hook installation follows and
+// scaffolding refuses would leave enable half-applied, with the hook config at
+// the link's target and the skill nowhere, reporting success for both.
+func openScaffoldTarget(repoRoot, relPath string) (scaffoldTarget, error) {
+	name := filepath.ToSlash(relPath)
+	root, inner, err := agent.OpenAnchoredRoot(repoRoot, name)
 	if err != nil {
-		return nil, fmt.Errorf("open repository root for scaffolding: %w", err)
+		return scaffoldTarget{}, fmt.Errorf("open repository root for scaffolding: %w", err)
 	}
-	return root, nil
+	return scaffoldTarget{root: root, name: inner, relPath: name}, nil
 }
 
 // setupOptionalSkillForNames installs an optional skill (search, agent-help, ...)

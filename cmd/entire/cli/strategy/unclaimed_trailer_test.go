@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/entiredir"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -155,14 +156,18 @@ func TestPostCommit_UnclaimedCheckpointTrailer(t *testing.T) {
 func captureStrategyLogs(t *testing.T, fn func(ctx context.Context)) string {
 	t.Helper()
 
-	logDir := t.TempDir()
-	logger, err := logging.New(logging.Config{Dir: logDir, Level: slog.LevelDebug})
+	worktree := t.TempDir()
+	logger, err := logging.New(logging.Config{
+		Root:  entiredir.OpenerAt(worktree),
+		Dir:   logging.LogsName,
+		Level: slog.LevelDebug,
+	})
 	require.NoError(t, err)
 
 	fn(logging.WithLogger(context.Background(), logger))
 	require.NoError(t, logger.Close())
 
-	content, err := os.ReadFile(filepath.Join(logDir, "entire.log"))
+	content, err := os.ReadFile(filepath.Join(worktree, logging.LogsDir, logging.LogFileName))
 	if errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
@@ -201,13 +206,12 @@ func TestPostCommit_PartialCommit_TrailerIsClaimed(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o600))
 	}
 	require.NoError(t, s.SaveStep(context.Background(), StepContext{
-		SessionID:      sessionID,
-		NewFiles:       []string{"A.txt", "B.txt", "C.txt"},
-		MetadataDir:    metadataDir,
-		MetadataDirAbs: metadataDirAbs,
-		CommitMessage:  "Checkpoint: files A, B, C",
-		AuthorName:     "Test",
-		AuthorEmail:    "test@test.com",
+		SessionID:     sessionID,
+		NewFiles:      []string{"A.txt", "B.txt", "C.txt"},
+		MetadataDir:   metadataDir,
+		CommitMessage: "Checkpoint: files A, B, C",
+		AuthorName:    "Test",
+		AuthorEmail:   "test@test.com",
 	}))
 
 	state, err := s.loadSessionState(context.Background(), sessionID)

@@ -59,6 +59,18 @@ func TestRepoRemoteURL(t *testing.T) {
 			},
 			want: "",
 		},
+		{
+			// The URL is pasted into `git clone`, which would read the real
+			// cluster as userinfo and send the repo token to evil.com; no URL
+			// is safer than a spoofable one, and `repo clone` refuses the same
+			// host at its end.
+			name: "a host that is not a bare host yields no URL",
+			repo: coreapi.Repo{
+				ClusterHost: coreapi.NewOptString("aws-us-east-2.entire.io@evil.com"),
+				Path:        coreapi.NewOptString("acme/web"),
+			},
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,27 +292,40 @@ func TestParseObjectFormat(t *testing.T) {
 // channel. Points the active-context client seam at the server.
 func serveRepoCreate(t *testing.T) <-chan []byte {
 	t.Helper()
+	return serveRepoCreateWith(t, &coreapi.Repo{
+		ID:              "01KS6KFJR2XS6PZ188MVYE07AN",
+		Name:            "web",
+		OwningProjectId: testProjectULID,
+	})
+}
+
+// serveRepoCreateWith is serveRepoCreate answering with the given created repo.
+func serveRepoCreateWith(t *testing.T, created *coreapi.Repo) <-chan []byte {
+	t.Helper()
 	bodyCh := make(chan []byte, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/repos" {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos":
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read create body: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			bodyCh <- raw
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/"+created.ID && r.URL.Query().Get("authoritative") == "true":
+			w.Header().Set("Content-Type", "application/json")
+		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read create body: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		bodyCh <- raw
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		if err := printJSON(w, &coreapi.Repo{
-			ID:              "01KS6KFJR2XS6PZ188MVYE07AN",
-			Name:            "web",
-			OwningProjectId: testProjectULID,
-		}); err != nil {
+		response := *created
+		// The authoritative GET confirms the creation fixture is active.
+		response.State = coreapi.NewOptString("active")
+		if err := printJSON(w, &response); err != nil {
 			t.Errorf("encode create response: %v", err)
 		}
 	}))
@@ -318,14 +343,113 @@ func serveRepoCreate(t *testing.T) <-chan []byte {
 // carrying the control-plane persistent flags, mirroring execRepoList.
 func execRepoCreate(t *testing.T, args ...string) error {
 	t.Helper()
+	return execRepoCreateNamed(t, "web", args...)
+}
+
+// execRepoCreateNamed is execRepoCreate with the repo name itself under test.
+func execRepoCreateNamed(t *testing.T, name string, args ...string) error {
+	t.Helper()
+	_, _, err := runRepoCreateNamed(t, name, args...)
+	return err
+}
+
+// runRepoCreateNamed is execRepoCreateNamed returning what the command wrote
+// to stdout and stderr as well.
+func runRepoCreateNamed(t *testing.T, name string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	parent := &cobra.Command{Use: "repo"}
 	addControlPlaneFlags(parent)
 	parent.AddCommand(newRepoCreateCmd())
 	var out, errOut bytes.Buffer
 	parent.SetOut(&out)
 	parent.SetErr(&errOut)
-	parent.SetArgs(append([]string{"create", "web", "--project", testProjectULID}, args...))
-	return parent.ExecuteContext(t.Context())
+	parent.SetArgs(append([]string{"create", name, "--project", testProjectULID}, args...))
+	err = parent.ExecuteContext(t.Context())
+	return out.String(), errOut.String(), err
+}
+
+// TestRepoCreate_WarnsOnInvalidServerHost pins that a created repo whose
+// clusterHost fails validation is reported, not just quietly stripped of its
+// remote: repoRemoteURL answers "" for both that and a still-provisioning
+// repo, and only the warning tells the two apart.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestRepoCreate_WarnsOnInvalidServerHost(t *testing.T) {
+	serveRepoCreateWith(t, &coreapi.Repo{
+		ID:              "01KS6KFJR2XS6PZ188MVYE07AN",
+		Name:            "web",
+		OwningProjectId: testProjectULID,
+		ClusterHost:     coreapi.NewOptString("aws-us-east-2.entire.io@evil.com"),
+		Path:            coreapi.NewOptString("/acme/web"),
+	})
+	stdout, stderr, err := runRepoCreateNamed(t, "web")
+	require.NoError(t, err)
+	require.NotContains(t, stdout, "Remote:")
+	require.NotContains(t, stdout, "evil.com")
+	require.Contains(t, stderr, "invalid cluster host")
+	require.Contains(t, stderr, "evil.com")
+}
+
+// TestRepoCreate_RejectsGitSuffix pins that the CLI refuses a name it would not
+// be able to address afterwards. The server accepts "web.git" — an interior dot
+// is legal — but every ref parser drops the suffix (see gitDirSuffix), so such
+// a repo would be reachable only by ULID. The check must fire before the
+// request, since the server would happily create it.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestRepoCreate_RejectsGitSuffix(t *testing.T) {
+	for _, name := range []string{"web.git", "trails.el.git"} {
+		t.Run(name, func(t *testing.T) {
+			bodyCh := serveRepoCreate(t)
+			err := execRepoCreateNamed(t, name)
+			require.ErrorContains(t, err, gitDirSuffix)
+			require.ErrorContains(t, err, strings.TrimSuffix(name, gitDirSuffix))
+			select {
+			case raw := <-bodyCh:
+				t.Fatalf("no create request expected, got body %s", raw)
+			default:
+			}
+		})
+	}
+
+	t.Run("a dotted name that does not end in the suffix is accepted", func(t *testing.T) {
+		bodyCh := serveRepoCreate(t)
+		require.NoError(t, execRepoCreateNamed(t, "trails.el"))
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(<-bodyCh, &body))
+		require.Equal(t, "trails.el", body["name"])
+	})
+}
+
+// TestRepoCreate_RejectsUnsafeClusterHost pins that --cluster-host gets the
+// same bare-host check every other host-taking flag applies before the value
+// is sent: the server pins the repo to it and echoes it back as clusterHost,
+// which then becomes a clone URL, so a spoofable value must fail here rather
+// than be created and refused at every later use.
+//
+// Not parallel: swaps the package-level activeCoreClient seam.
+func TestRepoCreate_RejectsUnsafeClusterHost(t *testing.T) {
+	for _, host := range []string{"aws-us-east-2.entire.io@evil.com", "https://aws-us-east-2.entire.io", "aws-us-east-2.entire.io/path"} {
+		t.Run(host, func(t *testing.T) {
+			bodyCh := serveRepoCreate(t)
+			err := execRepoCreate(t, "--cluster-host", host)
+			require.ErrorContains(t, err, "--cluster-host")
+			require.ErrorContains(t, err, host)
+			select {
+			case raw := <-bodyCh:
+				t.Fatalf("no create request expected, got body %s", raw)
+			default:
+			}
+		})
+	}
+
+	t.Run("a bare host reaches the wire body", func(t *testing.T) {
+		bodyCh := serveRepoCreate(t)
+		require.NoError(t, execRepoCreate(t, "--cluster-host", "aws-us-east-2.entire.io"))
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(<-bodyCh, &body))
+		require.Equal(t, "aws-us-east-2.entire.io", body["clusterHost"])
+	})
 }
 
 // TestRepoCreate_ObjectFormat pins the --object-format wiring: a set flag
@@ -570,4 +694,71 @@ func TestRepoList_GroupedFlagHelp(t *testing.T) {
 		"Formatting Flags:", "--json", "--no-pager",
 	)
 	require.NotContains(t, stdout, "Filtering & Sorting Flags:")
+}
+
+// TestRepoProjectFlagRedundancyWarning covers the one spelling where --project
+// used to be swallowed in silence. A ULID identifies the repo globally, so the
+// flag cannot change what is resolved — resolveRepoRef returns before it is
+// ever read — and a user who supplied a project the repo is not in got a clean
+// success confirming a wrong belief.
+//
+// It is a warning, not a refusal: the combination has been accepted since the
+// flag shipped and may be scripted, and the command still does exactly what it
+// did. What changes is that it says so.
+//
+// Not parallel: swaps the package-level activeCoreClient seam via runCoreCmd.
+func TestRepoProjectFlagRedundancyWarning(t *testing.T) {
+	const repoULID = "0123456789ABCDEFGHJKMNPQR5"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := printJSON(w, &coreapi.Repo{ID: repoULID, Name: "web", OwningProjectId: ulidProjectWidgets}); err != nil {
+			t.Errorf("encode repo: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Run("a ULID ref warns that --project is ignored", func(t *testing.T) {
+		stdout, stderr, err := runCoreCmd(t, newRepoGetCmd, srv.URL, repoULID, "--project", "not-this-project")
+		require.NoError(t, err, "the command must still succeed")
+		require.Contains(t, stdout, repoULID, "the repo must still be shown")
+		require.Contains(t, stderr, "--project")
+		require.Contains(t, stderr, "ignored")
+	})
+
+	t.Run("an explicit empty --project still warns", func(t *testing.T) {
+		// Changed(), not a non-empty value: --project "" is still the user
+		// saying something about this repo's project, and it is still ignored.
+		_, stderr, err := runCoreCmd(t, newRepoGetCmd, srv.URL, repoULID, "--project", "")
+		require.NoError(t, err)
+		require.Contains(t, stderr, "ignored")
+	})
+
+	t.Run("a ULID ref without the flag says nothing", func(t *testing.T) {
+		_, stderr, err := runCoreCmd(t, newRepoGetCmd, srv.URL, repoULID)
+		require.NoError(t, err)
+		require.NotContains(t, stderr, "ignored")
+	})
+
+	t.Run("the warning is wired on every command binding the flag", func(t *testing.T) {
+		// The flag is bound in three files across four command families; the
+		// warning rides on bindRepoProjectFlag so it cannot be wired for some
+		// and missed for others. Asserting the PreRunE exists is what pins
+		// that, without standing up a server per command.
+		for name, newCmd := range map[string]func() *cobra.Command{
+			"repo get":               newRepoGetCmd,
+			"repo delete":            newRepoDeleteCmd,
+			"repo visibility get":    newRepoVisibilityGetCmd,
+			"repo visibility set":    newRepoVisibilitySetCmd,
+			"repo protection list":   newRepoProtectionListCmd,
+			"repo protection add":    newRepoProtectionAddCmd,
+			"repo protection remove": newRepoProtectionRemoveCmd,
+			"grant repo add":         newGrantRepoAddCmd,
+			"grant repo list":        newGrantRepoListCmd,
+			"grant repo remove":      newGrantRepoRemoveCmd,
+		} {
+			cmd := newCmd()
+			require.NotNilf(t, cmd.Flags().Lookup("project"), "%s must bind --project", name)
+			require.NotNilf(t, cmd.PreRunE, "%s must carry the redundancy check", name)
+		}
+	})
 }
