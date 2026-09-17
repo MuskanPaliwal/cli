@@ -47,6 +47,13 @@ import (
 type grantCandidate struct {
 	ref   string
 	label string
+	// byID routes the revoke through the typed-id route rather than resolving
+	// the ref as a handle. Set only by the remove pools, which read the grantee
+	// ULID off a listing row; it is never shown and never typed. Sniffing the
+	// ref's shape instead would both mistake a non-ULID grantee id for a handle
+	// and let a user reach the typed-id route by pasting one, which the CLI no
+	// longer accepts — a grantee is a provider-qualified handle and nothing else.
+	byID bool
 }
 
 // handleCandidate is a candidate addressed and shown by its handle.
@@ -257,6 +264,14 @@ func runGrantPicker(cmd *cobra.Command, t grantPickerTarget, candidates []grantC
 		for _, ref := range refs {
 			chosen = append(chosen, byRef[ref])
 		}
+		// Nobody chosen is a decision not to grant anything, so stop here.
+		// Falling through asked for a role per grantee over an empty list,
+		// which with --role is a note about nothing and without it hands huh a
+		// group with no fields — and huh indexes its first field unguarded, so
+		// that panics rather than merely looking odd.
+		if len(chosen) == 0 {
+			return nil, nil
+		}
 	}
 	return pickRoles(cmd, t, chosen, fixedRole)
 }
@@ -424,7 +439,7 @@ func grantHolders[Row any](rows []Row, granteeID, granteeType, source, name func
 		if id == "" {
 			continue
 		}
-		holders = append(holders, grantCandidate{ref: id, label: granteeName(coreapi.NewOptString(name(r)), id)})
+		holders = append(holders, grantCandidate{ref: id, label: granteeName(coreapi.NewOptString(name(r)), id), byID: true})
 	}
 	return holders
 }

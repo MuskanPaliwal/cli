@@ -148,8 +148,8 @@ func resolveGranteeProvider(ctx context.Context, c *coreapi.Client, ref string) 
 	// ID), but the by-provider routes can't be addressed by ULID. Reject it with
 	// a message that points at the form this command actually wants, rather than
 	// letting parseQualifiedHandle dangle a "(or a ULID)" hint that doesn't apply.
-	if looksLikeULID(ref) {
-		return "", "", fmt.Errorf("grantee %q is an account ULID; this command needs a provider-qualified handle like \"github:alice\"", ref)
+	if err := ensureGranteeIsHandle(ref); err != nil {
+		return "", "", err
 	}
 	p, handle, err := parseQualifiedHandle(ref)
 	if err != nil {
@@ -171,6 +171,19 @@ func resolveGranteeProvider(ctx context.Context, c *coreapi.Client, ref string) 
 		p = id.Provider
 	}
 	return p, id.ProviderUserId, nil
+}
+
+// ensureGranteeIsHandle rejects an account ULID as a grantee. A grantee is a
+// provider-qualified handle and nothing else: the by-provider routes cannot be
+// addressed by ULID, there is no reverse account→provider-id lookup, and a
+// listing's grantee id is an internal identifier the interface does not ask
+// anyone to copy. Commands call it before resolving their target, so a grantee
+// that cannot work costs no lookup.
+func ensureGranteeIsHandle(ref string) error {
+	if looksLikeULID(ref) {
+		return fmt.Errorf("grantee %q is an account ULID; this command needs a provider-qualified handle like \"github:alice\"", ref)
+	}
+	return nil
 }
 
 // parseQualifiedHandle splits a provider-qualified handle like "github:alice"

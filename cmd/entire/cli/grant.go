@@ -121,6 +121,9 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 			grantee := ""
 			if len(args) == 2 {
 				grantee = args[1]
+				if err := ensureGranteeIsHandle(grantee); err != nil {
+					return err
+				}
 			}
 			// Both refusals a non-interactive run can hit are decided from the
 			// command line alone, so they are settled before any request: an
@@ -222,44 +225,34 @@ func reportNothingToAdd(cmd *cobra.Command, reason string) {
 // having reported the grants that already landed: those are real, and the CLI
 // cannot undo them, so the user needs to know which ones to skip on a retry.
 func grantEach[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, picked []grantSelection) error {
-	// Nothing chosen: an empty pool already said why, or the user selected
-	// nobody. Either way no grant was asked for, so --json still owes a caller
-	// the empty array rather than empty output it cannot parse.
-	if len(picked) == 0 {
-		if jsonRequested(cmd) {
-			return printJSON(cmd.OutOrStdout(), []any{})
-		}
-		return nil
-	}
 	wires := make([]any, 0, len(picked))
 	for _, p := range picked {
 		provider, providerUserID, err := resolveGranteeProvider(ctx, c, p.handle)
 		if err != nil {
-			return errors.Join(err, emitGrantJSON(cmd, wires, len(picked)))
+			return errors.Join(err, emitGrantJSON(cmd, wires))
 		}
 		granted, wire, err := t.grant(ctx, c, id, provider, providerUserID, p.role)
 		if err != nil {
-			return errors.Join(err, emitGrantJSON(cmd, wires, len(picked)))
+			return errors.Join(err, emitGrantJSON(cmd, wires))
 		}
 		wires = append(wires, wire)
 		if !jsonRequested(cmd) {
 			fmt.Fprintf(cmd.OutOrStdout(), "✓ Granted %s %s access to %s\n", p.handle, granted, pt.describe())
 		}
 	}
-	return emitGrantJSON(cmd, wires, len(picked))
+	return emitGrantJSON(cmd, wires)
 }
 
 // emitGrantJSON writes the wire objects for --json; text mode has already
-// printed a line per grant as it went. The SHAPE follows how many grants were
-// asked for and the CONTENT follows how many landed, so one grantee named on
-// the command line stays the single object callers already parse, and a picked
-// set stays an array even when a failure cut it short.
-func emitGrantJSON(cmd *cobra.Command, wires []any, requested int) error {
-	if !jsonRequested(cmd) || len(wires) == 0 {
+// printed a line per grant as it went.
+//
+// Always an array, one entry per grant that landed — including none. `add`
+// grants a set, and a caller should not have to look at what it got back to
+// learn which shape this run chose; an empty run still owes them something
+// parseable rather than empty output.
+func emitGrantJSON(cmd *cobra.Command, wires []any) error {
+	if !jsonRequested(cmd) {
 		return nil
-	}
-	if requested == 1 {
-		return printJSON(cmd.OutOrStdout(), wires[0])
 	}
 	return printJSON(cmd.OutOrStdout(), wires)
 }
@@ -292,24 +285,26 @@ func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
 }
 
 func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
-	grantee := "a provider-qualified handle (e.g. github:alice)"
-	if t.revokeByID != nil {
-		grantee += " or an account ULID"
-	}
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("remove <%s> [grantee]", t.noun),
 		Short: fmt.Sprintf("Revoke a user's %s access", t.noun),
-		Long: fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is %s. "+
-			"Omit the grantee on a terminal to choose from who holds %s access now.", t.noun, t.noun, t.refUsage, grantee, t.noun),
+		Long: fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is a "+
+			"provider-qualified handle (e.g. github:alice). Omit the grantee on a terminal to choose "+
+			"from who holds %s access now.", t.noun, t.noun, t.refUsage, t.noun),
 		Example: fmt.Sprintf("  entire %s grant remove %s github:alice", t.noun, t.exampleRef),
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles}
+			if len(args) == 2 {
+				if err := ensureGranteeIsHandle(args[1]); err != nil {
+					return err
+				}
+			}
 			// Decided before any request, like the add side: without a prompt
 			// the list of who holds the target has no use here.
 			if len(args) == 1 && !interactive.CanPromptInteractively() {
-				return granteeRequiredErr(pt, grantee)
+				return granteeRequiredErr(pt)
 			}
 			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				id, err := t.resolve(ctx, c, args[0])
@@ -336,6 +331,11 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				// The prompt is there for the hand on the keyboard — above all
 				// for a set just picked off a list — and that hand is by
 				// definition at a terminal.
+				// Nobody chosen: nothing to confirm and nothing to revoke.
+				// Confirming anyway asked "Revoke 0 grants on …?".
+				if len(picked) == 0 {
+					return nil
+				}
 				if interactive.CanPromptInteractively() {
 					proceed, err := revokeConfirmed(ctx, cmd, pt, picked)
 					if err != nil || !proceed {
@@ -407,14 +407,8 @@ func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *cor
 // revokeOne revokes a single grantee, routing on the form of the ref exactly as
 // a typed argument does — so a picked row and a typed one take the same path.
 func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, g grantCandidate) error {
-	if t.revokeByID != nil && looksLikeULID(g.ref) {
-		subject := g.label
-		if subject == g.ref {
-			// A ULID the user typed: keep the "account <id>" wording it has
-			// always had, rather than printing a bare id.
-			subject = "account " + g.ref
-		}
-		return revokeGrant(cmd, subject+" from "+pt.describe(), func() error {
+	if g.byID {
+		return revokeGrant(cmd, g.label+" from "+pt.describe(), func() error {
 			return t.revokeByID(ctx, c, id, g.ref)
 		})
 	}
@@ -430,8 +424,8 @@ func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Clie
 // granteeRequiredErr is the remove side of pickerUnavailable: no terminal to
 // choose on, so the grantee has to be named. It spells out the forms this
 // target accepts, which differ — only project and repo take an account ULID.
-func granteeRequiredErr(pt grantPickerTarget, grantee string) error {
-	return fmt.Errorf("no grantee given; pass one as %s, e.g. entire %s grant remove %s github:alice", grantee, pt.noun, pt.ref)
+func granteeRequiredErr(pt grantPickerTarget) error {
+	return fmt.Errorf("no grantee given; pass one as provider:handle, e.g. entire %s grant remove %s github:alice", pt.noun, pt.ref)
 }
 
 // validateRole rejects a --role outside the target's set at the CLI boundary

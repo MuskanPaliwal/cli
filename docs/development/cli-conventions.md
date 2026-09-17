@@ -90,9 +90,8 @@ the commands are always runnable in every build.
   grantee, roles owner/admin/member (default member)
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`,
   plus `grant` (`add`/`list`/`remove`): project access for a `provider:handle`
-  grantee, roles reader/writer/admin; `remove` also takes an account ULID, and
-  both `add` and `remove` take the grantee optionally (see the grant-subtree
-  notes below)
+  grantee, roles reader/writer/admin; both `add` and `remove` take the grantee
+  optionally (see the grant-subtree notes below)
 - `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
   `clone`, plus the `mirror`, `visibility`, `protection` and `grant` subtrees
   (`repo grant` mirrors `project grant`, addressing the repo by its
@@ -213,7 +212,13 @@ the commands are always runnable in every build.
   provider identity, with no reverse lookup, while a `Membership` carries the
   `provider:handle` that `resolveGranteeProvider` already takes. `remove` uses
   the ULID where a typed-id route exists, since it needs no lookup and survives
-  a rename, so a candidate carries a `ref` to act on and a `label` to show.
+  a rename, so a candidate carries a `ref` to act on and a `label` to show, plus
+  `byID` saying which route it takes. **A grantee is a provider-qualified handle
+  and nothing else** (`ensureGranteeIsHandle`, checked before the target is
+  resolved so a grantee that cannot work costs no lookup): a ULID is an internal
+  id the interface does not ask anyone to copy, and routing on `byID` rather
+  than on the ref's shape is what keeps the typed-id route reachable only by the
+  picker, which reads the id off a listing.
 
   **`--role` is not a cobra-required flag**, because cobra enforces those before
   `RunE` and a role that cannot reach `RunE` cannot be prompted for. The

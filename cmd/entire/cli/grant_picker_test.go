@@ -198,6 +198,38 @@ func capturePicker(t *testing.T, answer func(offered []grantCandidate, known []s
 	return &offered
 }
 
+// captureRemovePicker puts the command on the interactive path and swaps the
+// remove form seam, recording what was offered and answering with the refs of
+// the rows to revoke.
+//
+// ENTIRE_TEST_TTY=1 puts the confirmation in play as well, so it stubs that too
+// and answers yes; a test that cares about declining says so itself.
+func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []string) *[]grantCandidate {
+	t.Helper()
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	var offered []grantCandidate
+	prev := removePicker
+	removePicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate) ([]string, error) {
+		offered = candidates
+		return answer(candidates), nil
+	}
+	prevConfirm := revokeConfirmed
+	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+		return true, nil
+	}
+	t.Cleanup(func() { removePicker, revokeConfirmed = prev, prevConfirm })
+	return &offered
+}
+
+// labels is what the picker shows, as opposed to what it acts on.
+func labels(cs []grantCandidate) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.label
+	}
+	return out
+}
+
 func handles(cs []grantCandidate) []string {
 	out := make([]string, len(cs))
 	for i, c := range cs {
@@ -627,13 +659,14 @@ func TestGrantPicker_SoleCandidateIsStillOffered(t *testing.T) {
 	require.True(t, opened, "the lone candidate must be chosen, not assumed")
 }
 
-// TestGrantAdd_JSONShapeFollowsTheRequest: one grantee named on the command
-// line stays the single object callers already parse; a picked set is an array,
-// one entry per grant. The shape tracks how many grants were asked for.
+// TestGrantAdd_JSONIsAlwaysAnArray: `add` grants a set, so --json is one shape
+// whatever happened. A caller should not have to inspect what came back to
+// learn which shape this run picked, and an empty run still owes them something
+// parseable rather than empty output.
 //
 // Not parallel: swaps the activeCoreClient and grantPicker seams.
-func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
-	t.Run("argument form is an object", func(t *testing.T) {
+func TestGrantAdd_JSONIsAlwaysAnArray(t *testing.T) {
+	t.Run("one grantee named on the command line", func(t *testing.T) {
 		var grants []string
 		srv := pickerServer(t, pickerFixture{}, &grants, nil)
 		t.Cleanup(srv.Close)
@@ -641,12 +674,13 @@ func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
 		out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL,
 			"add", pickerProjULID, "github:alice", "--role", "reader", "--json")
 		require.NoError(t, err)
-		var obj map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &obj))
+		var arr []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &arr))
+		require.Len(t, arr, 1)
 		require.NotEmpty(t, grants)
 	})
 
-	t.Run("picked set is an array", func(t *testing.T) {
+	t.Run("a picked set", func(t *testing.T) {
 		var grants []string
 		srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
 			member("github:alice", "acct-a"), member("github:bob", "acct-b"),
@@ -665,39 +699,8 @@ func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
 		var arr []map[string]any
 		require.NoError(t, json.Unmarshal([]byte(out), &arr))
 		require.Len(t, arr, 2)
-		// The confirmation lines are the human rendering; --json replaces them.
-		require.NotContains(t, out, "✓")
+		require.NotContains(t, out, "✓", "--json replaces the confirmation lines")
 	})
-}
-
-// captureRemovePicker swaps the remove form seam, recording what was offered
-// and answering with the refs of the rows to revoke.
-//
-// ENTIRE_TEST_TTY=1 puts the confirmation in play as well, so it stubs that too
-// and answers yes; a test that cares about declining says so itself.
-func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []string) *[]grantCandidate {
-	t.Helper()
-	t.Setenv("ENTIRE_TEST_TTY", "1")
-	var offered []grantCandidate
-	prev := removePicker
-	removePicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate) ([]string, error) {
-		offered = candidates
-		return answer(candidates), nil
-	}
-	prevConfirm := revokeConfirmed
-	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
-		return true, nil
-	}
-	t.Cleanup(func() { removePicker, revokeConfirmed = prev, prevConfirm })
-	return &offered
-}
-
-func labels(cs []grantCandidate) []string {
-	out := make([]string, len(cs))
-	for i, c := range cs {
-		out[i] = c.label
-	}
-	return out
 }
 
 // TestRemovePicker_OffersOnlyWhatRevokingWouldRemove is the remove pool's whole
@@ -798,9 +801,8 @@ func TestRemovePicker_EmptyPoolIsAnError(t *testing.T) {
 }
 
 // TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest: without a terminal the
-// list of holders has no use, so the refusal costs no lookup. The accepted
-// forms differ by target — only project and repo take an account ULID — and the
-// message says which.
+// list of holders has no use, so the refusal costs no lookup and names the one
+// form a grantee takes.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest(t *testing.T) {
@@ -814,9 +816,9 @@ func TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest(t *testing.T) {
 		ref    string
 		want   string
 	}{
-		"org takes a handle only":   {newOrgGrantCmd, wiringOrgULID, "pass one as a provider-qualified handle (e.g. github:alice), e.g."},
-		"project also takes a ULID": {newProjectGrantCmd, wiringProjULID, "or an account ULID, e.g."},
-		"repo also takes a ULID":    {newRepoGrantCmd, wiringRepoPath, "or an account ULID, e.g."},
+		"org":     {newOrgGrantCmd, wiringOrgULID, "entire org grant remove " + wiringOrgULID + " github:alice"},
+		"project": {newProjectGrantCmd, wiringProjULID, "entire project grant remove " + wiringProjULID + " github:alice"},
+		"repo":    {newRepoGrantCmd, wiringRepoPath, "entire repo grant remove " + wiringRepoPath + " github:alice"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "remove", tc.ref)
