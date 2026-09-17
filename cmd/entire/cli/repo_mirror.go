@@ -391,9 +391,9 @@ func filterByName[T any](items []T, nameOf func(T) string, substr string) []T {
 }
 
 // defaultClusterHost is the cluster a mirror command targets when --cluster is
-// omitted: `mirror remove` and `access list` default the flag to it outright,
-// and `mirror add` falls back to it when there is no terminal to offer a
-// picker on. The no-arg add wizard and the interactive one-shot `add <repo>`
+// omitted: `mirror remove` defaults the flag to it outright, `mirror add` falls
+// back to it when there is no terminal to offer a picker on, and
+// mirrorReadCluster prefers it among a repo's placements. The no-arg add wizard and the interactive one-shot `add <repo>`
 // instead enumerate real clusters from the catalog (GET /api/v1/clusters, see
 // availableRegions and resolveOneShotClusterHost in
 // repo_mirror_add_wizard.go); this stays as the fixed fallback for
