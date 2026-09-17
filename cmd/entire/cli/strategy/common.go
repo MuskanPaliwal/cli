@@ -1383,15 +1383,7 @@ func openGitCommonRoot(ctx context.Context) (*os.Root, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("resolve git common dir: %w", err)
 	}
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("resolve worktree root: %w", err)
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve git common dir: %w", err)
-	}
-	root, err := gitdir.OpenAt(metadata.CommonDir)
+	root, err := gitdir.OpenForCurrentWorktree(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open git common dir: %w", err)
 	}

@@ -24,6 +24,21 @@ const gitDir = ".git"
 // every open re-read pack data from scratch.
 var sharedObjectCache = cache.NewObjectLRUDefault()
 
+// ResolveCurrentWorktreeMetadata discovers the current worktree and resolves
+// its filesystem metadata. Callers with an explicit root should use
+// ResolveWorktreeMetadata instead.
+func ResolveCurrentWorktreeMetadata(ctx context.Context) (WorktreeMetadata, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return WorktreeMetadata{}, fmt.Errorf("resolve worktree root: %w", err)
+	}
+	metadata, err := ResolveWorktreeMetadata(repoRoot)
+	if err != nil {
+		return WorktreeMetadata{}, fmt.Errorf("resolve worktree metadata: %w", err)
+	}
+	return metadata, nil
+}
+
 // OpenCurrent opens the current git worktree with object alternates enabled.
 // The caller owns the returned repository and must close it.
 //

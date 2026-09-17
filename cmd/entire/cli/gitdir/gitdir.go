@@ -16,11 +16,7 @@ import (
 // OpenForCurrentWorktree discovers the current worktree and opens its common
 // directory. The returned root belongs to the shared registry; do not close it.
 func OpenForCurrentWorktree(ctx context.Context) (*os.Root, error) {
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("resolve worktree root: %w", err)
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	metadata, err := gitrepo.ResolveCurrentWorktreeMetadata(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve git metadata: %w", err)
 	}

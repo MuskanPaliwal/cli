@@ -167,11 +167,7 @@ func trailEnablementScopeHintPath(ctx context.Context, sessionID string) (string
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return "", fmt.Errorf("invalid session ID: %w", err)
 	}
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return "", fmt.Errorf("resolve worktree root: %w", err)
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
+	metadata, err := gitrepo.ResolveCurrentWorktreeMetadata(ctx)
 	if err != nil {
 		return "", fmt.Errorf("resolve git common dir: %w", err)
 	}

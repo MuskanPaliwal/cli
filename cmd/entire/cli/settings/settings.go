@@ -834,11 +834,11 @@ func saveRaw(filePath, label string, raw map[string]json.RawMessage) error {
 
 // ClonePreferencesPath returns the clone-local preferences path in the git common dir.
 func ClonePreferencesPath(ctx context.Context) (string, error) {
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	metadata, err := gitrepo.ResolveCurrentWorktreeMetadata(ctx)
 	if err != nil {
 		return "", fmt.Errorf("resolve git common dir: %w", err)
 	}
-	return clonePreferencesPathForWorktreeRoot(worktreeRoot)
+	return filepath.Join(metadata.CommonDir, ClonePreferencesFile), nil
 }
 
 // LoadClonePreferences loads clone-local preferences from the git common dir.

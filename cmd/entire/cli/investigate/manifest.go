@@ -12,10 +12,8 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/gitdir"
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 const manifestsSubdirName = "manifests"
@@ -100,17 +98,13 @@ type LocalManifestStore struct {
 // NewLocalManifestStore creates a LocalManifestStore rooted at
 // <git-common-dir>/entire-investigations/manifests in the current repository.
 func NewLocalManifestStore(ctx context.Context) (*LocalManifestStore, error) {
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	commonDir, err := currentCommonDir(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("resolve worktree root: %w", err)
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
-	if err != nil {
-		return nil, fmt.Errorf("get git common dir: %w", err)
+		return nil, err
 	}
 	return &LocalManifestStore{
-		dir:     filepath.Join(metadata.CommonDir, InvestigationsDirName, manifestsSubdirName),
-		parent:  metadata.CommonDir,
+		dir:     filepath.Join(commonDir, InvestigationsDirName, manifestsSubdirName),
+		parent:  commonDir,
 		dirName: InvestigationsDirName + "/" + manifestsSubdirName,
 	}, nil
 }

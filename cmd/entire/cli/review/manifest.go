@@ -15,7 +15,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/gitdir"
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
@@ -763,15 +762,7 @@ const localReviewManifestName = "entire-review/manifests"
 // localReviewManifestStore returns the shared *os.Root over the git common dir
 // and the manifest directory's name inside it.
 func localReviewManifestStore(ctx context.Context) (*os.Root, string, error) {
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolve worktree root: %w", err)
-	}
-	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolve git common dir: %w", err)
-	}
-	root, err := gitdir.OpenAt(metadata.CommonDir)
+	root, err := gitdir.OpenForCurrentWorktree(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("open git common dir: %w", err)
 	}
