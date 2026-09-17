@@ -103,15 +103,39 @@ func owningOrgOf(ctx context.Context, c *coreapi.Client, projectID string) (stri
 	return p.OwnerId, nil
 }
 
-// orgMembersWithout lists the org's members, dropping anyone whose account ULID
-// is in held. It reports the total fetched alongside the survivors so the caller
-// can tell "this org has no members" from "they all already have access" —
-// distinct conditions that must not share a message.
+// memberPool is the add picker's candidate set plus the counts needed to say
+// why it is empty: an org with no members, one whose members cannot be
+// addressed, and one where everyone already holds a grant are three different
+// answers to "who can I add?".
+type memberPool struct {
+	candidates  []grantCandidate
+	total       int // members the org has
+	addressable int // of those, the ones that can be granted at all
+}
+
+// orgMemberCandidates lists the owning org's members who can be granted the
+// target.
 //
-// Members that are not active, or that carry no handle, are dropped: neither can
-// be resolved to the (provider, providerUserId) pair the grant routes need, so
-// offering one would produce a selection that fails at the grant.
-func orgMembersWithout(ctx context.Context, c *coreapi.Client, orgID string, held map[string]bool) (candidates []grantCandidate, total int, err error) {
+// **A member with a DIRECT grant on the target is left out; one who only holds
+// it through the project is offered.** Those are different situations, and
+// conflating them is what made two earlier versions of this pool wrong in
+// opposite directions. Someone with a direct grant has nothing to add here —
+// `grant add <target> <handle> --role` changes their role, which is the typed
+// form's job. Someone whose access comes from the project has no grant on THIS
+// target, so granting one is a real action: it pins the role on this repo
+// rather than following the project's. Subtracting them too emptied the pool on
+// any repo whose project already covered the org.
+//
+// Every candidate is shown as its plain handle. An earlier version annotated
+// the inherited ones with the role and project they came from, which is true
+// but is detail about a grant the user is not editing, in a list whose question
+// is only "who". `grant list` is where the current state is read.
+//
+// Members that are not active, or that carry no handle, are dropped whatever
+// they hold: neither can be resolved to the (provider, providerUserId) pair the
+// grant routes need, so offering one would produce a selection that fails at
+// the grant.
+func orgMemberCandidates(ctx context.Context, c *coreapi.Client, orgID string, directHolders map[string]bool) (memberPool, error) {
 	members, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.Membership, coreapi.OptString, error) {
 		out, err := c.ListOrgMembers(ctx, coreapi.ListOrgMembersParams{OrgId: orgID, PageToken: pageToken})
 		if err != nil {
@@ -120,31 +144,31 @@ func orgMembersWithout(ctx context.Context, c *coreapi.Client, orgID string, hel
 		return out.Members, out.NextPageToken, nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
+	pool := memberPool{total: len(members)}
 	for _, m := range members {
 		handle := strings.TrimSpace(m.Handle.Or(""))
 		if handle == "" || m.Status != orgMembershipActive {
 			continue
 		}
-		if held[m.AccountId] {
+		pool.addressable++
+		if directHolders[m.AccountId] {
 			continue
 		}
-		candidates = append(candidates, handleCandidate(handle))
+		pool.candidates = append(pool.candidates, handleCandidate(handle))
 	}
-	return candidates, len(members), nil
+	return pool, nil
 }
 
 // orgMembershipActive is the Membership.Status of a member who has joined. Any
 // other status (invited, pending) may have no resolvable provider identity yet.
 const orgMembershipActive = "active"
 
-// projectGrantCandidates offers the owning org's members who hold no grant on
-// the project.
-func projectGrantCandidates(ctx context.Context, c *coreapi.Client, projectID string) ([]grantCandidate, int, error) {
+func projectGrantCandidates(ctx context.Context, c *coreapi.Client, projectID string) (memberPool, error) {
 	orgID, err := owningOrgOf(ctx, c, projectID)
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
 	grants, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.ProjectGrant, coreapi.OptString, error) {
 		out, err := c.ListProjectMembers(ctx, coreapi.ListProjectMembersParams{ProjectId: projectID, PageToken: pageToken})
@@ -154,26 +178,38 @@ func projectGrantCandidates(ctx context.Context, c *coreapi.Client, projectID st
 		return out.Members, out.NextPageToken, nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
-	held := make(map[string]bool, len(grants))
-	for _, g := range grants {
-		held[g.GranteeId] = true
+	return orgMemberCandidates(ctx, c, orgID, directHolders(grants, func(g coreapi.ProjectGrant) (string, string) {
+		return g.GranteeId, g.Source
+	}))
+}
+
+// directHolders is the set of accounts holding a grant written on the resource
+// itself. A row inherited from the project is deliberately not in it: that is
+// access to the project, not a grant on this target, so it neither blocks a
+// grant here nor could be revoked here.
+func directHolders[Row any](rows []Row, key func(Row) (granteeID, source string)) map[string]bool {
+	held := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if id, source := key(r); source == grantSourceDirect {
+			held[id] = true
+		}
 	}
-	return orgMembersWithout(ctx, c, orgID, held)
+	return held
 }
 
 // repoGrantCandidates offers the members of the org owning the repo's project
 // who hold no grant on the repo — neither a direct one nor one inherited from
 // the project, both of which ListRepoGrants returns.
-func repoGrantCandidates(ctx context.Context, c *coreapi.Client, repoID string) ([]grantCandidate, int, error) {
+func repoGrantCandidates(ctx context.Context, c *coreapi.Client, repoID string) (memberPool, error) {
 	repo, err := c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: repoID})
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
 	orgID, err := owningOrgOf(ctx, c, repo.OwningProjectId)
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
 	grants, err := pagedList(ctx, func(ctx context.Context, pageToken coreapi.OptString) ([]coreapi.RepoGrant, coreapi.OptString, error) {
 		out, err := c.ListRepoGrants(ctx, coreapi.ListRepoGrantsParams{RepoId: repoID, PageToken: pageToken})
@@ -183,13 +219,12 @@ func repoGrantCandidates(ctx context.Context, c *coreapi.Client, repoID string) 
 		return out.Grants, out.NextPageToken, nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return memberPool{}, err
 	}
-	held := make(map[string]bool, len(grants))
-	for _, g := range grants {
-		held[g.GranteeId] = true
-	}
-	return orgMembersWithout(ctx, c, orgID, held)
+	// A repo lists its own grants and its project's; only the former counts.
+	return orgMemberCandidates(ctx, c, orgID, directHolders(grants, func(g coreapi.RepoGrant) (string, string) {
+		return g.GranteeId, g.Source
+	}))
 }
 
 // grantPicker is the single seam the picker's forms sit behind. Production
@@ -204,14 +239,26 @@ var grantPicker = runGrantPicker
 // was given: the role rows are then displayed rather than offered, so the user
 // still sees what each grantee will receive but cannot change it.
 func runGrantPicker(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate, known []string, fixedRole string) ([]grantSelection, error) {
-	handles := known
-	if len(handles) == 0 {
-		var err error
-		if handles, err = pickGrantees(cmd, "Select grantees for "+t.describe(), candidates); err != nil {
+	chosen := make([]grantCandidate, 0, len(known))
+	for _, h := range known {
+		chosen = append(chosen, handleCandidate(h))
+	}
+	if len(chosen) == 0 {
+		refs, err := pickGrantees(cmd, "Select grantees for "+t.describe(), candidates)
+		if err != nil {
 			return nil, err
 		}
+		// Back to whole rows, so the role screen can show what each grantee
+		// already holds and default their row to it.
+		byRef := make(map[string]grantCandidate, len(candidates))
+		for _, c := range candidates {
+			byRef[c.ref] = c
+		}
+		for _, ref := range refs {
+			chosen = append(chosen, byRef[ref])
+		}
 	}
-	return pickRoles(cmd, t, handles, fixedRole)
+	return pickRoles(cmd, t, chosen, fixedRole)
 }
 
 // grantPickerTarget is what the picker needs to know about the target it is
@@ -256,8 +303,11 @@ func pickGrantees(cmd *cobra.Command, title string, candidates []grantCandidate)
 	if err := form.RunWithContext(cmd.Context()); err != nil {
 		return nil, cancelledPicker(cmd, err)
 	}
+	// Confirming an empty selection is a decision not to grant anything, not a
+	// failure — and it exited 1 with no message at all, which is the worst of
+	// both. Nothing chosen, nothing done, exit 0.
 	if len(selected) == 0 {
-		return nil, NewSilentError(errors.New("no grantee selected"))
+		return nil, nil
 	}
 	for _, h := range selected {
 		// The form returned a value that was not on offer. Nothing has been
@@ -273,11 +323,11 @@ func pickGrantees(cmd *cobra.Command, title string, candidates []grantCandidate)
 // pickRoles collects a role per grantee. With fixedRole set the rows are a note
 // instead of selects: huh notes are non-focusable, so the roles are shown as
 // already decided and cannot be edited.
-func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedRole string) ([]grantSelection, error) {
+func pickRoles(cmd *cobra.Command, t grantPickerTarget, chosen []grantCandidate, fixedRole string) ([]grantSelection, error) {
 	if fixedRole != "" {
 		var b strings.Builder
-		for _, h := range handles {
-			fmt.Fprintf(&b, "%s%s  %s\n", uiform.SelectOptionIndent, h, fixedRole)
+		for _, g := range chosen {
+			fmt.Fprintf(&b, "%s%s  %s\n", uiform.SelectOptionIndent, g.label, fixedRole)
 		}
 		form := promptForm(cmd,
 			huh.NewGroup(
@@ -289,9 +339,9 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedR
 		if err := form.RunWithContext(cmd.Context()); err != nil {
 			return nil, cancelledPicker(cmd, err)
 		}
-		out := make([]grantSelection, len(handles))
-		for i, h := range handles {
-			out[i] = grantSelection{handle: h, role: fixedRole}
+		out := make([]grantSelection, len(chosen))
+		for i, g := range chosen {
+			out[i] = grantSelection{handle: g.ref, role: fixedRole}
 		}
 		return out, nil
 	}
@@ -301,12 +351,12 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedR
 		options[i] = huh.NewOption(r, r)
 	}
 	// Each row binds its own element, so the selections stay independent.
-	roles := make([]string, len(handles))
-	fields := make([]huh.Field, len(handles))
-	for i, h := range handles {
+	roles := make([]string, len(chosen))
+	fields := make([]huh.Field, len(chosen))
+	for i, g := range chosen {
 		roles[i] = t.roles[0] // least-privileged default, per the target's help order
 		fields[i] = huh.NewSelect[string]().
-			Title(h).
+			Title(g.label).
 			Options(options...).
 			Inline(true).
 			Value(&roles[i])
@@ -315,12 +365,12 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, handles []string, fixedR
 	if err := form.RunWithContext(cmd.Context()); err != nil {
 		return nil, cancelledPicker(cmd, err)
 	}
-	out := make([]grantSelection, len(handles))
-	for i, h := range handles {
+	out := make([]grantSelection, len(chosen))
+	for i, g := range chosen {
 		if err := validateRole(roles[i], t.roles); err != nil {
 			return nil, err
 		}
-		out[i] = grantSelection{handle: h, role: roles[i]}
+		out[i] = grantSelection{handle: g.ref, role: roles[i]}
 	}
 	return out, nil
 }

@@ -50,11 +50,10 @@ type grantTarget[Row any] struct {
 	// resolveGranteeProvider and is refused with the handle form named.
 	revokeByID func(ctx context.Context, c *coreapi.Client, id, granteeID string) error
 	// candidates lists who could be granted this target for the interactive
-	// picker: members of the owning org who hold no grant on it yet, plus the
-	// org's total membership so an empty pool can say which of "no members" and
-	// "everyone already has access" happened. nil where no pool is enumerable
+	// picker: members of the owning org with no direct grant on it, plus the
+	// counts an empty pool needs to say why. nil where no pool is enumerable
 	// (org), which is what leaves `org grant add` exactly as it was.
-	candidates func(ctx context.Context, c *coreapi.Client, id string) (offer []grantCandidate, orgSize int, err error)
+	candidates func(ctx context.Context, c *coreapi.Client, id string) (memberPool, error)
 	// holders lists the grants on this target that revoking would actually
 	// remove, for the remove picker. Set on all three targets: the members to
 	// remove from an org ARE an enumerable list, which is what the add side
@@ -173,7 +172,7 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		}
 		return []grantSelection{{handle: grantee, role: role}}, nil
 	}
-	offer, orgSize, err := t.candidates(ctx, c, id)
+	pool, err := t.candidates(ctx, c, id)
 	if err != nil {
 		var notOrg *ownerNotOrgError
 		if errors.As(err, &notOrg) {
@@ -181,21 +180,57 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		}
 		return nil, err
 	}
-	if len(offer) == 0 {
-		// Two conditions, not one: "every member already has access" is a claim
-		// about members that must not be printed when there are none.
-		if orgSize == 0 {
-			return nil, pickerUnavailable(pt, pt.describe()+" has no org members to choose from")
+	if len(pool.candidates) == 0 {
+		// An empty pool is not a failure. Nothing went wrong, nothing is left
+		// for the user to fix, and in the common case the state they wanted
+		// already holds — the same reasoning that makes revoking an
+		// already-revoked grant a success rather than a 404. So this reports
+		// and stops, and the command exits 0.
+		//
+		// Three different answers to "who can I add?", so three messages. The
+		// last is not "already has access": a member holding the target only
+		// through its project is still offered, so reaching it means every one
+		// of them holds a grant on this target itself.
+		var reason string
+		switch {
+		case pool.total == 0:
+			reason = pt.describe() + " has no org members to choose from"
+		case pool.addressable == 0:
+			reason = fmt.Sprintf("no member of the org owning %s can be granted access here", pt.describe())
+		default:
+			reason = fmt.Sprintf("every member of the org owning %s already has a grant on it", pt.describe())
 		}
-		return nil, pickerUnavailable(pt, fmt.Sprintf("every member of the org owning %s already has access to it", pt.describe()))
+		reportNothingToAdd(cmd, reason)
+		return nil, nil
 	}
-	return grantPicker(cmd, pt, offer, nil, role)
+	return grantPicker(cmd, pt, pool.candidates, nil, role)
+}
+
+// reportNothingToAdd says why a pool came back empty. The reason is the human
+// output; with --json the stdout shape has to stay parseable, so it moves to
+// stderr and grantEach puts the empty array that "no grants were made" means
+// on stdout instead.
+func reportNothingToAdd(cmd *cobra.Command, reason string) {
+	w := cmd.OutOrStdout()
+	if jsonRequested(cmd) {
+		w = cmd.ErrOrStderr()
+	}
+	fmt.Fprintln(w, reason)
 }
 
 // grantEach grants every pair in turn. On a failure it stops and returns,
 // having reported the grants that already landed: those are real, and the CLI
 // cannot undo them, so the user needs to know which ones to skip on a retry.
 func grantEach[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, picked []grantSelection) error {
+	// Nothing chosen: an empty pool already said why, or the user selected
+	// nobody. Either way no grant was asked for, so --json still owes a caller
+	// the empty array rather than empty output it cannot parse.
+	if len(picked) == 0 {
+		if jsonRequested(cmd) {
+			return printJSON(cmd.OutOrStdout(), []any{})
+		}
+		return nil
+	}
 	wires := make([]any, 0, len(picked))
 	for _, p := range picked {
 		provider, providerUserID, err := resolveGranteeProvider(ctx, c, p.handle)

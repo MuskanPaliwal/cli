@@ -68,7 +68,7 @@ func TestPickRoles_EachRowKeepsItsOwnRole(t *testing.T) {
 	var got []grantSelection
 	out := runAccessibleForm(t, "3\n", func(cmd *cobra.Command) {
 		var err error
-		got, err = pickRoles(cmd, pt, []string{"github:alice", "github:bob"}, "")
+		got, err = pickRoles(cmd, pt, []grantCandidate{handleCandidate("github:alice"), handleCandidate("github:bob")}, "")
 		require.NoError(t, err)
 	})
 
@@ -93,7 +93,7 @@ func TestPickRoles_FixedRoleIsShownAndNotAsked(t *testing.T) {
 	// No answers at all: a form that asked anything would block or fail here.
 	out := runAccessibleForm(t, "", func(cmd *cobra.Command) {
 		var err error
-		got, err = pickRoles(cmd, pt, []string{"github:alice", "github:bob"}, "writer")
+		got, err = pickRoles(cmd, pt, []grantCandidate{handleCandidate("github:alice"), handleCandidate("github:bob")}, "writer")
 		require.NoError(t, err)
 	})
 
@@ -137,7 +137,7 @@ func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
 	cmd.SetOut(&stdout)
 
 	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
-	_, err = pickRoles(cmd, pt, []string{"github:alice"}, "writer")
+	_, err = pickRoles(cmd, pt, []grantCandidate{handleCandidate("github:alice")}, "writer")
 	require.NoError(t, err)
 
 	require.NoError(t, outW.Close())

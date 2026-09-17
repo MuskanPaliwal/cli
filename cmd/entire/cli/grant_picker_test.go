@@ -53,6 +53,14 @@ type pickerFixture struct {
 	withOwnerRow bool
 }
 
+// inactive is a member who has not joined, so no provider identity resolves for
+// them and they cannot be granted anything.
+func inactive(handle, accountID string) coreapi.Membership {
+	m := member(handle, accountID)
+	m.Status = "invited"
+	return m
+}
+
 func member(handle, accountID string) coreapi.Membership {
 	return coreapi.Membership{
 		AccountId: accountID,
@@ -198,14 +206,18 @@ func handles(cs []grantCandidate) []string {
 	return out
 }
 
-// TestGrantPicker_PoolSubtractsExistingAccess is the core of the picker: the
-// offered set is the owning org's members minus whoever already holds the
-// target. For a repo that subtraction must also remove the holders who arrived
-// through the project, since project access reaches the project's repos and
-// offering it again would grant a no-op.
+// TestGrantPicker_ExcludesDirectHoldersButOffersInheritedOnes is the pool's
+// rule, and the two halves were each wrong on their own in an earlier version.
+//
+// A member with a DIRECT grant on the target has nothing to add here, so they
+// are left out; changing their role is the typed form's job. A member who holds
+// the target only through its PROJECT has no grant on this target at all, so
+// granting one is a real action — it pins the role on this repo instead of
+// following the project's — and leaving them out emptied the pool on every repo
+// whose project already covered the org.
 //
 // Not parallel: swaps the activeCoreClient and grantPicker seams.
-func TestGrantPicker_PoolSubtractsExistingAccess(t *testing.T) {
+func TestGrantPicker_ExcludesDirectHoldersButOffersInheritedOnes(t *testing.T) {
 	members := []coreapi.Membership{
 		member("github:alice", "acct-a"),
 		member("github:bob", "acct-b"),
@@ -217,20 +229,29 @@ func TestGrantPicker_PoolSubtractsExistingAccess(t *testing.T) {
 		fixture pickerFixture
 		want    []string
 	}{
-		"project/direct holder excluded": {
+		"project/a direct holder is left out": {
 			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{members: members, held: []holder{{"acct-b", ""}}},
+			pickerFixture{members: members, held: []holder{{"acct-b", "github:bob"}}},
 			[]string{"github:alice", "github:carol"},
 		},
-		"repo/direct holder excluded": {
+		"repo/a direct holder is left out": {
 			newRepoGrantCmd, wiringRepoPath,
-			pickerFixture{members: members, held: []holder{{"acct-a", ""}}},
+			pickerFixture{members: members, held: []holder{{"acct-a", "github:alice"}}},
 			[]string{"github:bob", "github:carol"},
 		},
-		"repo/project-inherited holder excluded": {
+		"repo/an inherited holder is offered": {
 			newRepoGrantCmd, wiringRepoPath,
-			pickerFixture{members: members, viaProject: []holder{{"acct-c", ""}}},
-			[]string{"github:alice", "github:bob"},
+			pickerFixture{members: members, viaProject: []holder{{"acct-c", "github:carol"}}},
+			[]string{"github:alice", "github:bob", "github:carol"},
+		},
+		"repo/a direct grant wins over the inherited row for the same account": {
+			newRepoGrantCmd, wiringRepoPath,
+			pickerFixture{
+				members:    members,
+				held:       []holder{{"acct-a", "github:alice"}},
+				viaProject: []holder{{"acct-a", "github:alice"}},
+			},
+			[]string{"github:bob", "github:carol"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -243,9 +264,106 @@ func TestGrantPicker_PoolSubtractsExistingAccess(t *testing.T) {
 
 			_, _, err := runPickerCmd(t, tc.newCmd, srv.URL, tc.ref)
 			require.NoError(t, err)
-			require.Equal(t, tc.want, handles(*offered))
+			// Members holding nothing come first: adding is the common case.
+			require.Equal(t, tc.want, labels(*offered))
 		})
 	}
+}
+
+// TestGrantPicker_AnEmptyPoolSucceeds: having nobody to add is not a failure.
+// Nothing went wrong, nothing is left for the user to fix, and in the common
+// case the state they wanted already holds — the same reasoning that makes
+// revoking an already-revoked grant a success rather than a 404. So each of
+// these reports and exits 0.
+//
+// The message still distinguishes them, since "everyone already has a grant",
+// "this org has no members" and "none of its members can be addressed" are
+// different answers to "who can I add?".
+//
+// Not parallel: swaps the activeCoreClient and grantPicker seams.
+func TestGrantPicker_AnEmptyPoolSucceeds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fixture pickerFixture
+		want    string
+	}{
+		"everyone already holds a direct grant": {
+			pickerFixture{
+				members: []coreapi.Membership{member("github:alice", "acct-a")},
+				held:    []holder{{"acct-a", "github:alice"}},
+			},
+			"every member of the org owning project " + pickerProjULID + " already has a grant on it",
+		},
+		"the org has no members": {
+			pickerFixture{},
+			"project " + pickerProjULID + " has no org members to choose from",
+		},
+		"no member can be addressed": {
+			pickerFixture{members: []coreapi.Membership{inactive("github:alice", "acct-a")}},
+			"no member of the org owning project " + pickerProjULID + " can be granted access here",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var grants []string
+			srv := pickerServer(t, tc.fixture, &grants, nil)
+			t.Cleanup(srv.Close)
+			capturePicker(t, func([]grantCandidate, []string, string) ([]grantSelection, error) {
+				t.Error("the picker must not open with nobody to add")
+				return nil, nil
+			})
+
+			out, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID)
+			require.NoError(t, err, "an empty pool is not an error")
+			require.Contains(t, out, tc.want)
+			require.Empty(t, grants)
+		})
+	}
+}
+
+// TestGrantPicker_EmptyPoolWithJSONStaysParseable: the reason is human output,
+// so under --json it moves to stderr and stdout gets the empty array that "no
+// grants were made" means there. Printing the sentence on stdout would hand a
+// caller something it cannot parse.
+//
+// Not parallel: swaps the activeCoreClient and grantPicker seams.
+func TestGrantPicker_EmptyPoolWithJSONStaysParseable(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{
+		members: []coreapi.Membership{member("github:alice", "acct-a")},
+		held:    []holder{{"acct-a", "github:alice"}},
+	}, &grants, nil)
+	t.Cleanup(srv.Close)
+	capturePicker(t, func([]grantCandidate, []string, string) ([]grantSelection, error) {
+		t.Error("the picker must not open with nobody to add")
+		return nil, nil
+	})
+
+	out, errOut, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID, "--json")
+	require.NoError(t, err)
+	var arr []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &arr))
+	require.Empty(t, arr)
+	require.Contains(t, errOut, "already has a grant on it")
+}
+
+// TestGrantPicker_SelectingNobodyIsACleanStop: confirming an empty selection is
+// a decision not to grant anything. It used to exit 1 with no message at all,
+// which is the worst of both.
+//
+// Not parallel: swaps the activeCoreClient and grantPicker seams.
+func TestGrantPicker_SelectingNobodyIsACleanStop(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{
+		members: []coreapi.Membership{member("github:alice", "acct-a")},
+	}, &grants, nil)
+	t.Cleanup(srv.Close)
+	capturePicker(t, func([]grantCandidate, []string, string) ([]grantSelection, error) {
+		return nil, nil
+	})
+
+	out, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID)
+	require.NoError(t, err)
+	require.Empty(t, grants)
+	require.NotContains(t, out, "✓")
 }
 
 // TestGrantPicker_UngrantableMembersAreDropped: a member with no handle or one
@@ -394,29 +512,20 @@ func TestGrantPicker_PartialFailureIsReportedInJSONToo(t *testing.T) {
 	require.Len(t, arr, 1, "the one grant that landed is reported, the failed one is not")
 }
 
-// TestGrantPicker_NoCandidatesCases pins one message per way the picker cannot
-// run. They are separate branches on purpose: "every member already has access"
-// is a claim about members that must not be printed when there are none, and an
-// account-owned project is the absence of a pool rather than an empty one.
+// TestGrantPicker_NoPoolExistsIsAnError covers the case an empty pool is not:
+// a target owned by an account has no membership list anywhere, so the picker
+// cannot run at all and the user has to name a grantee. That is a different
+// thing from an org whose members are all granted already, which succeeds — see
+// TestGrantPicker_AnEmptyPoolSucceeds.
 //
 // Not parallel: swaps the activeCoreClient and grantPicker seams.
-func TestGrantPicker_NoCandidatesCases(t *testing.T) {
+func TestGrantPicker_NoPoolExistsIsAnError(t *testing.T) {
 	for name, tc := range map[string]struct {
 		newCmd  func() *cobra.Command
 		ref     string
 		fixture pickerFixture
 		want    string
 	}{
-		"org has no members": {
-			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{},
-			"has no org members to choose from",
-		},
-		"every member already has access": {
-			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{members: []coreapi.Membership{member("github:alice", "acct-a")}, held: []holder{{"acct-a", ""}}},
-			"every member of the org owning project " + pickerProjULID + " already has access to it",
-		},
 		"project owned by an account": {
 			newProjectGrantCmd, pickerProjULID,
 			pickerFixture{ownerType: coreapi.ProjectOwnerTypeAccount},
