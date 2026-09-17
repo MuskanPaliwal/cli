@@ -112,3 +112,20 @@ func TestParseGitHubMirrorRepoRef_NativeRefIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestForgeQualifiedRefError_NamesOnlyTheForgesServed pins the helper's whole
+// contract, suggestions and shape list alike: a ref a GitHub-only verb cannot
+// read must never be answered with a native shape that same verb refuses.
+func TestForgeQualifiedRefError_NamesOnlyTheForgesServed(t *testing.T) {
+	t.Parallel()
+
+	// A GitLab URL parses as neither grammar and is not a bare pair, so it
+	// falls through to the shape list — the branch that used to name both.
+	mirrorOnly := forgeQualifiedRefError("https://gitlab.com/acme/widget", mirrorCloneForge)
+	require.ErrorContains(t, mirrorOnly, "/gh/<owner>/<repo>")
+	require.NotContains(t, mirrorOnly.Error(), nativeCloneForge+"/<project>/<repo>")
+
+	bothForges := forgeQualifiedRefError("https://gitlab.com/acme/widget")
+	require.ErrorContains(t, bothForges, "/gh/<owner>/<repo>")
+	require.ErrorContains(t, bothForges, "/et/<project>/<repo>")
+}
