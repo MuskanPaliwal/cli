@@ -187,8 +187,7 @@ func (c *ClaudeCodeAgent) parseSessionInfoEvent(stdin io.Reader, eventType agent
 		Timestamp:  time.Now(),
 	}
 	if eventType == agent.TurnEnd {
-		event.FinalResponse = raw.LastAssistantMessage.value
-		event.FinalResponsePresent = raw.LastAssistantMessage.present
+		event.FinalResponse = raw.LastAssistantMessage
 		event.StopHookActive = raw.StopHookActive
 	}
 	return event, nil

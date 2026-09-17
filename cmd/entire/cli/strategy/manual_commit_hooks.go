@@ -2646,6 +2646,7 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 			state.TurnCheckpointIDs = nil
 		}
 		state.TurnEndPending = false
+		state.TurnTokenUsage = nil
 		return nil
 	})
 	if turnStartErr == nil {

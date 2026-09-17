@@ -161,6 +161,10 @@ type StepContext struct {
 
 	// TokenUsage contains the token usage for this checkpoint
 	TokenUsage *agent.TokenUsage
+
+	// TurnTokenUsage is cumulative within a repeatable turn; SaveStep credits
+	// only the increase since its last successful write.
+	TurnTokenUsage *agent.TokenUsage
 }
 
 // TaskStepContext contains all information needed for saving a task step checkpoint.

@@ -173,28 +173,24 @@ func TestParseHookEvent_TurnEnd_PreservesFinalResponseFieldState(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		include     bool
-		value       any
-		wantPresent bool
-		wantValue   *string
-		wantError   bool
+		include   bool
+		value     any
+		wantValue *string
+		wantError bool
 	}{
-		"missing": {wantPresent: false},
+		"missing": {},
 		"null": {
-			include:     true,
-			wantPresent: true,
+			include: true,
 		},
 		"empty": {
-			include:     true,
-			value:       "",
-			wantPresent: true,
-			wantValue:   ptrTo(""),
+			include:   true,
+			value:     "",
+			wantValue: ptrTo(""),
 		},
 		"non-empty": {
-			include:     true,
-			value:       testFinalAssistantMessage,
-			wantPresent: true,
-			wantValue:   ptrTo(testFinalAssistantMessage),
+			include:   true,
+			value:     testFinalAssistantMessage,
+			wantValue: ptrTo(testFinalAssistantMessage),
 		},
 		"wrong type": {
 			include:   true,
@@ -223,7 +219,6 @@ func TestParseHookEvent_TurnEnd_PreservesFinalResponseFieldState(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.wantPresent, event.FinalResponsePresent)
 			require.Equal(t, tt.wantValue, event.FinalResponse)
 		})
 	}

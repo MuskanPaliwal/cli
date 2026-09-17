@@ -105,9 +105,6 @@ type Event struct {
 	// FinalResponse is producer-supplied evidence for the completed turn.
 	FinalResponse *string
 
-	// FinalResponsePresent distinguishes an omitted field from an explicit null.
-	FinalResponsePresent bool
-
 	// StopHookActive reports that this turn-end event followed a continuation
 	// requested by an earlier stop hook. It does not prove this event is final.
 	StopHookActive bool

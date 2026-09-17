@@ -211,6 +211,10 @@ type State struct {
 	// the next user prompt or session end seals the repeatable-stop window.
 	TurnEndPending bool `json:"turn_end_pending,omitempty"`
 
+	// TurnTokenUsage is the last credited total for a repeatable turn. It is
+	// saved with token counters so a repeated Stop cannot credit them twice.
+	TurnTokenUsage *agent.TokenUsage `json:"turn_token_usage,omitempty"`
+
 	// TurnEndRefreshRequired preserves checkpoint IDs until the latest
 	// repeatable-turn transcript has refreshed them, including across resume.
 	TurnEndRefreshRequired bool `json:"turn_end_refresh_required,omitempty"`

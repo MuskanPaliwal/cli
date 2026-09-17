@@ -709,6 +709,13 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 		repeatableTurnEnd = repeatable.TurnEndMayRepeat()
 	}
 
+	if repeatableTurnEnd {
+		if _, err := markPendingTurnForRefresh(ctx, sessionID); err != nil &&
+			!errors.Is(err, strategy.ErrStateNotFound) && !errors.Is(err, strategy.ErrMutationSkip) {
+			return fmt.Errorf("prepare repeatable turn end: %w", err)
+		}
+	}
+
 	// Fill model from hint file if the agent didn't provide it on this hook
 	if event.Model == "" && sessionID != unknownSessionID {
 		if hint := strategy.LoadModelHint(ctx, sessionID); hint != "" {
@@ -726,7 +733,8 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// A capturer makes readiness and reading one ownership transfer. On success,
 	// every Stop consumer below must use the returned bytes and position rather
 	// than reopen transcriptRef. On failure, return before copying the transcript,
-	// transitioning the session, or finalizing provisional checkpoints.
+	// transitioning the session, or finalizing provisional checkpoints. Pending
+	// recovery IDs are marked before capture so a failure remains retryable.
 	//
 	// Claude's final response is scoped to the current turn, so modern capture
 	// also requires the boundary recorded at TurnStart. The explicit captured bit,
@@ -829,7 +837,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// redacts on every Stop. See agent.TranscriptSanitizer for why order matters.
 	// The agent's own rollout is untouched.
 	storageInput := transcriptData
-	if capturedTranscript != nil {
+	if _, sanitizes := agent.AsTranscriptSanitizer(ag); capturedTranscript != nil && sanitizes {
 		// Snapshot bytes stay immutable while storage sanitizers run.
 		storageInput = bytes.Clone(transcriptData)
 	}
@@ -1108,6 +1116,11 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 		TokenUsage:               tokenUsage,
 	}
 
+	if repeatableTurnEnd && capturedTranscript != nil && event.TokenUsage == nil {
+		stepCtx.TurnTokenUsage = tokenUsage
+		stepCtx.TokenUsage = nil
+	}
+
 	// finishTurn is the shared turn-end tail, run whether the save succeeded
 	// or was skipped on a status budget breach. The LastPrompt backfill must
 	// come after SaveStep because SaveStep may reinitialize session state,
@@ -1234,17 +1247,7 @@ func refreshPendingTurnAtSessionEnd(ctx context.Context, ag agent.Agent, event *
 		return
 	}
 
-	transcriptRef := event.SessionRef
-	mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
-		if !state.TurnEndPending {
-			return strategy.ErrMutationSkip
-		}
-		state.TurnEndRefreshRequired = true
-		if transcriptRef == "" {
-			transcriptRef = state.TranscriptPath
-		}
-		return nil
-	})
+	stateTranscriptRef, mutErr := markPendingTurnForRefresh(ctx, event.SessionID)
 	if errors.Is(mutErr, strategy.ErrStateNotFound) || errors.Is(mutErr, strategy.ErrMutationSkip) {
 		return
 	}
@@ -1254,6 +1257,10 @@ func refreshPendingTurnAtSessionEnd(ctx context.Context, ag agent.Agent, event *
 			slog.String("session_id", event.SessionID),
 			slog.String("error", mutErr.Error()))
 		return
+	}
+	transcriptRef := event.SessionRef
+	if transcriptRef == "" {
+		transcriptRef = stateTranscriptRef
 	}
 	if transcriptRef == "" {
 		logging.Warn(logCtx, "cannot refresh pending turn at session end without a transcript",
@@ -1265,12 +1272,27 @@ func refreshPendingTurnAtSessionEnd(ctx context.Context, ag agent.Agent, event *
 	turnEnd.Type = agent.TurnEnd
 	turnEnd.SessionRef = transcriptRef
 	turnEnd.FinalResponse = nil
-	turnEnd.FinalResponsePresent = false
 	if err := handleLifecycleTurnEnd(ctx, ag, &turnEnd); err != nil {
 		logging.Warn(logCtx, "failed to refresh pending turn at session end",
 			slog.String("session_id", event.SessionID),
 			slog.String("error", err.Error()))
 	}
+}
+
+func markPendingTurnForRefresh(ctx context.Context, sessionID string) (string, error) {
+	var transcriptRef string
+	err := strategy.MutateSessionState(ctx, sessionID, func(state *strategy.SessionState) error {
+		if !state.TurnEndPending {
+			return strategy.ErrMutationSkip
+		}
+		state.TurnEndRefreshRequired = true
+		transcriptRef = state.TranscriptPath
+		return nil
+	})
+	if err != nil {
+		return transcriptRef, fmt.Errorf("mark pending turn for refresh: %w", err)
+	}
+	return transcriptRef, nil
 }
 
 // processStart approximates when this hook process began. Package
