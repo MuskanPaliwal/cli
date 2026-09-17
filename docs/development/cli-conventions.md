@@ -123,13 +123,19 @@ the commands are always runnable in every build.
   `GET /mirrors/collaborators` (live GitHub-admin gated against the caller's own
   GitHub identity, so a service-account token cannot answer it). The mirror
   branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
-  mirror endpoint does not report. That endpoint requires a `clusterHost`
-  because a core fronting one cluster serves it, but the answer is the upstream
-  repository's collaborators and is the same wherever it is asked, so the branch
-  reads `defaultClusterHost` and exposes no region flag. `grant add` and
+  mirror endpoint does not report. That endpoint is served by the core fronting
+  one cluster, so the branch first resolves the repo's placements through
+  `resolvePullablePlacements` (the pull-gated lookup `repo clone` and `remote
+  use` share) and reads the collaborators on a cluster the repo actually has —
+  preferring the default, else the first in sorted order. There is no region
+  flag: every placement materializes the same upstream collaborators, so the
+  caller has nothing to choose, but a repo mirrored only outside the default
+  region must still be asked somewhere it exists. `grant add` and
   `grant remove` keep the native path as their whole grammar: a mirror's access
   is the upstream GitHub repository's, so a `/gh/` ref is refused before any
-  request with a message naming `grant list`, rather than accepted into the
+  request — and before required flags are validated, through the target's
+  `unwritableRef` PreRunE hook, so the answer is the repo rather than a missing
+  `--role` — with a message naming `grant list`, rather than accepted into the
   grammar and always failing. The branch is one optional `listBranch` field on
   `grantTarget`, so the shared builder stays forge-unaware for `org` and
   `project`.
