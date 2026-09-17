@@ -883,10 +883,9 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 	return err
 }
 
-// stateLock keeps a display path and rooted coordinates so acquiring a lock
-// cannot follow a session-ID-derived name outside the git common directory.
+// stateLock keeps rooted coordinates so acquiring a lock cannot follow a
+// session-ID-derived name outside the git common directory.
 type stateLock struct {
-	path string
 	root *os.Root
 	name string
 }
@@ -906,7 +905,7 @@ func stateLockPath(ctx context.Context, sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return lock.path, nil
+	return filepath.Join(lock.root.Name(), filepath.FromSlash(lock.name)), nil
 }
 
 func stateLockForSession(ctx context.Context, sessionID string) (stateLock, error) {
@@ -933,7 +932,6 @@ func stateLockInCommonDir(commonDir, sessionID string) (stateLock, error) {
 	}
 	name := SessionLockDirName + "/" + sessionID + ".lock"
 	return stateLock{
-		path: filepath.Join(commonDir, filepath.FromSlash(name)),
 		root: root,
 		name: name,
 	}, nil

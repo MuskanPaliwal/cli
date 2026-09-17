@@ -166,7 +166,8 @@ func TestSessionLocksReleaseOnAcquisitionFailureAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	blocked, err := stateLockInCommonDir(dirs[1], "session")
 	require.NoError(t, err)
-	require.NoError(t, os.Symlink("target", blocked.path))
+	blockedPath := filepath.Join(blocked.root.Name(), filepath.FromSlash(blocked.name))
+	require.NoError(t, os.Symlink("target", blockedPath))
 	called := false
 	err = WithSessionStateLocks(t.Context(), "session", dirs, func() error {
 		called = true
@@ -175,7 +176,7 @@ func TestSessionLocksReleaseOnAcquisitionFailureAndCancellation(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, called)
 	requireSessionLockReleased(t, dirs[0], "session")
-	require.NoFileExists(t, filepath.Join(filepath.Dir(blocked.path), "target"))
+	require.NoFileExists(t, filepath.Join(filepath.Dir(blockedPath), "target"))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

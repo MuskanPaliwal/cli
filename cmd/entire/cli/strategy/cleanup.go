@@ -692,14 +692,11 @@ func DeleteAllCleanupItems(ctx context.Context, items []CleanupItem) (*CleanupRe
 // derived data rebuilt on the next checkpoint, so removing the whole directory is
 // always safe; a missing directory is not an error.
 func deleteRedactCache(ctx context.Context) error {
-	dir, err := redactCacheDir(ctx)
-	if err != nil {
-		return err
-	}
 	root, err := openGitCommonRoot(ctx)
 	if err != nil {
-		return fmt.Errorf("open git common dir: %w", err)
+		return fmt.Errorf("resolve git common dir: %w", err)
 	}
+	dir := filepath.Join(root.Name(), checkpoint.RedactCacheDirName)
 	if err := root.RemoveAll(checkpoint.RedactCacheDirName); err != nil {
 		return fmt.Errorf("remove redaction cache %s: %w", dir, err)
 	}

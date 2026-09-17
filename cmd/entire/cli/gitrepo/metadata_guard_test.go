@@ -40,10 +40,7 @@ func TestGitMetadataTraversalHasCanonicalOwner(t *testing.T) {
 		{source: "session_adopt.go:stateStoreForWorktree", flag: "--git-common-dir"}:                    "adoption validates an arbitrary source repository in the session split",
 		{source: "session_adopt.go:stateStoreForWorktree", flag: "--show-toplevel"}:                     "adoption validates an arbitrary source repository in the session split",
 		{source: "settings/settings.go:clonePreferencesPathForWorktreeRoot", flag: "--git-common-dir"}:  "settings migrates with the remaining consumers",
-		{source: "strategy/common.go:GetGitCommonDir", flag: "--git-common-dir"}:                        "strategy migrates in the strategy-and-hooks split",
-		{source: "strategy/hooks.go:getGitDirInPath", flag: "--git-dir"}:                                "hook directory discovery migrates in the strategy-and-hooks split",
 		{source: "strategy/manual_commit_session.go:gitCommonDirForWorktree", flag: "--git-common-dir"}: "session routing migrates in the strategy-and-hooks split",
-		{source: "strategy/metadata_reconcile.go:loadShallowHashes", flag: "--git-common-dir"}:          "shallow metadata access migrates in the strategy-and-hooks split",
 		{source: "trail_checkout_worktree.go:gitCommonDirForTrailWorktree", flag: "--git-common-dir"}:   "trail storage paths migrate with the remaining consumers",
 		{source: "trail_checkout_worktree.go:validateTrailWorktreeReuse", flag: "--git-common-dir"}:     "trail reuse validation migrates with the remaining consumers",
 		{source: "trail_checkout_worktree.go:validateTrailWorktreeReuse", flag: "--show-toplevel"}:      "trail reuse validation migrates with the remaining consumers",
@@ -481,8 +478,7 @@ func assertMetadataQueryLedgerSeen(t *testing.T, ledger map[guardMetadataQuery]s
 	t.Helper()
 	for query, reason := range ledger {
 		if !seen[query] {
-			// Split migrations retain the shared ledger until all consumers land.
-			t.Logf("retired git metadata query %s %s (%s)", query.source, query.flag, reason)
+			t.Errorf("documented git metadata query %s %s (%s) no longer exists; remove or update the exception", query.source, query.flag, reason)
 		}
 	}
 }
