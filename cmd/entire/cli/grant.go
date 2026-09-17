@@ -47,6 +47,14 @@ type grantTarget[Row any] struct {
 	// resolveGranteeProvider and is refused with the handle form named.
 	revokeByID func(ctx context.Context, c *coreapi.Client, id, granteeID string) error
 
+	// unwritableRef reports a ref that names something this target's `add` and
+	// `remove` cannot write — the repo target's GitHub mirrors, whose access is
+	// the upstream repository's. Checked before required flags are validated or
+	// anything is dialed, so the answer is about the repo the user named rather
+	// than a missing --role they would then supply for nothing. nil where every
+	// ref a target parses is writable (org, project).
+	unwritableRef func(ref string) error
+
 	// listBranch builds the second reading `list` gives a target ref, for a
 	// target whose refs do not all name the same thing: a repo is an Entire
 	// repository or a GitHub mirror, and only the first has grants. nil for org
@@ -95,6 +103,7 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		Long:    fmt.Sprintf("Grant a user (addressed as provider:handle, e.g. github:alice) %s access. The %s is addressed by %s.", t.noun, t.noun, t.refUsage),
 		Example: example,
 		Args:    cobra.ExactArgs(2),
+		PreRunE: refuseUnwritableRef(t),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// A role the user typed is always checked, an explicit `--role=`
 			// included: markRequired asks only whether the flag was given, and
@@ -180,6 +189,7 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		Long:    fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is %s.", t.noun, t.noun, t.refUsage, grantee),
 		Example: fmt.Sprintf("  entire %s grant remove %s github:alice", t.noun, t.exampleRef),
 		Args:    cobra.ExactArgs(2),
+		PreRunE: refuseUnwritableRef(t),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				id, err := t.resolve(ctx, c, args[0])
@@ -201,6 +211,25 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				})
 			})
 		},
+	}
+}
+
+// refuseUnwritableRef is the write verbs' first question: does this ref name
+// something the target can write at all? Cobra runs PreRunE before it validates
+// required flags, which is the point — `repo grant add /gh/acme/widget alice`
+// is answered with what is wrong (a mirror's access lives on GitHub) rather
+// than sending the user to add a --role that changes nothing. nil for a target
+// with no such ref, which leaves the hook off the command entirely.
+func refuseUnwritableRef[Row any](t grantTarget[Row]) func(*cobra.Command, []string) error {
+	if t.unwritableRef == nil {
+		return nil
+	}
+	return func(cmd *cobra.Command, args []string) error {
+		if err := t.unwritableRef(args[0]); err != nil {
+			cmd.SilenceUsage = true
+			return err
+		}
+		return nil
 	}
 }
 
@@ -352,21 +381,15 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 // alone also answers a GitHub mirror ref, from the upstream collaborators the
 // placement materializes — see newMirrorGrantListing.
 var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
-	noun:       cmdRepo,
-	refUsage:   "its /" + nativeCloneForge + "/<project>/<repo> path",
-	exampleRef: "/" + nativeCloneForge + "/acme/web",
-	roles:      accessRoles,
-	columns:    grantColumns,
-	row:        repoGrantRow,
-	listBranch: newMirrorGrantListing,
+	noun:          cmdRepo,
+	refUsage:      "its /" + nativeCloneForge + "/<project>/<repo> path",
+	exampleRef:    "/" + nativeCloneForge + "/acme/web",
+	roles:         accessRoles,
+	columns:       grantColumns,
+	row:           repoGrantRow,
+	listBranch:    newMirrorGrantListing,
+	unwritableRef: mirrorGrantsAreUpstream,
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
-		// A mirror ref reaches this resolver only from `add` and `remove`:
-		// `list` answers it from the mirror branch before resolving anything.
-		// Both need a reason naming the upstream, which resolveRepoPath — whose
-		// subject is the native path's grammar — has no business giving.
-		if declaresForge(ref, mirrorCloneForge) {
-			return "", mirrorGrantsAreUpstreamErr(ref)
-		}
 		return resolveRepoPath(ctx, c, ref)
 	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {

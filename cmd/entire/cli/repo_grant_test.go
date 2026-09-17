@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,16 +18,25 @@ const (
 	repoGrantRepoULID = "01HZX7QABCDEFGHJKMNPQRSTAB"
 )
 
-// nativeGrantServer serves the native half of `repo grant list`: the project
-// and repo by-name lookups behind a /et/<project>/<repo> ref, then the repo's
-// grants. Every request path is recorded so a test can assert that a command
-// which should not reach the control plane made no call at all.
-func nativeGrantServer(t *testing.T, paths *[]string) *httptest.Server {
+// grantActiveCoreServer serves what `repo grant` asks the active context's
+// core: the project and repo by-name lookups behind a /et/<project>/<repo>
+// ref and that repo's grants, plus the placement lookup a mirror ref needs
+// before its collaborators can be read on the cluster that holds it.
+// placements is what that lookup returns, so a test can make a repo mirrored
+// anywhere or nowhere. Every request path is recorded, so a test can assert
+// that a command which should not reach the control plane made no call at all.
+func grantActiveCoreServer(t *testing.T, paths *[]string, placements ...string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*paths = append(*paths, r.URL.Path)
 		var payload any
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/mirrors/placements"):
+			resolved := make([]coreapi.ResolvedPlacement, 0, len(placements))
+			for i, host := range placements {
+				resolved = append(resolved, coreapi.ResolvedPlacement{ClusterHost: host, MirrorId: fmt.Sprintf("01MIRROR%d", i)})
+			}
+			payload = &coreapi.ResolvePlacementsOutputBody{Placements: resolved}
 		case strings.HasSuffix(r.URL.Path, "/grants"):
 			payload = &coreapi.ListRepoGrantsOutputBody{Grants: []coreapi.RepoGrant{{
 				GranteeId: "01ACCT", GranteeName: coreapi.NewOptString("github:alice"),
@@ -48,7 +58,8 @@ func nativeGrantServer(t *testing.T, paths *[]string) *httptest.Server {
 
 // TestRepoGrantList_AnswersBothForges pins the verb's grammar: one question,
 // two sources. A native ref lists the repo's grants from the control plane; a
-// mirror ref lists the collaborators of the placement named by --cluster.
+// mirror ref lists its upstream collaborators, read on a cluster the repo is
+// mirrored on.
 //
 // Not parallel: swaps the package-level core-client seams.
 func TestRepoGrantList_AnswersBothForges(t *testing.T) {
@@ -64,7 +75,7 @@ func TestRepoGrantList_AnswersBothForges(t *testing.T) {
 	})
 	seamClusterCoreClient(t, mirror)
 	var nativePaths []string
-	srv := nativeGrantServer(t, &nativePaths)
+	srv := grantActiveCoreServer(t, &nativePaths, defaultClusterHost)
 
 	t.Run("a native ref lists the repo's grants", func(t *testing.T) {
 		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/et/acme/web")
@@ -83,7 +94,7 @@ func TestRepoGrantList_AnswersBothForges(t *testing.T) {
 		require.Contains(t, stdout, "GRANTEE")
 		require.Contains(t, stdout, "github:alice")
 		require.Equal(t, []string{defaultClusterHost}, clusterHosts,
-			"one upstream answer, so the region is not the caller's to pick")
+			"the repo's placement, which the caller never names")
 	})
 
 	t.Run("no region flag to pick with", func(t *testing.T) {
@@ -104,18 +115,53 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 		args []string
 	}{
 		{"add", []string{"add", "/gh/acme/widget", "github:alice", "--role", "reader"}},
+		// The ref decides before the flags do: a missing --role must not be
+		// what the user is sent to fix on a repo this verb cannot write.
+		{"add without a role", []string{"add", "/gh/acme/widget", "github:alice"}},
 		{"remove", []string{"remove", "/gh/acme/widget", "github:alice"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var paths []string
-			srv := nativeGrantServer(t, &paths)
+			srv := grantActiveCoreServer(t, &paths)
 			_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, tc.args...)
 			require.ErrorContains(t, err, "is a GitHub mirror")
 			require.ErrorContains(t, err, "manage collaborators on GitHub")
 			require.ErrorContains(t, err, "entire repo grant list /gh/acme/widget")
+			require.ErrorContains(t, err, "shows who has access to the repo")
 			require.Empty(t, paths, "a ref the verb cannot act on costs no round trip")
 		})
 	}
+}
+
+// TestRepoGrantList_MirrorWithNoReadablePlacement pins that a mirror the
+// caller cannot reach is reported as that, rather than dialed on a cluster
+// that does not hold it.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestRepoGrantList_MirrorWithNoReadablePlacement(t *testing.T) {
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths) // no placements
+	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+	require.ErrorContains(t, err, "no readable mirror of acme/widget")
+	require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
+}
+
+// TestRepoGrantList_ReadsAPlacementTheRepoHas pins that the region asked is one
+// the repo is actually mirrored on, not a fixed default: every placement
+// materializes the same upstream collaborators, so the caller names none.
+//
+// Not parallel: swaps the package-level core-client seams.
+func TestRepoGrantList_ReadsAPlacementTheRepoHas(t *testing.T) {
+	var clusterHosts []string
+	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		clusterHosts = append(clusterHosts, r.URL.Query().Get("clusterHost"))
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{})
+	}))
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths, "eu.example")
+	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+	require.NoError(t, err)
+	require.Equal(t, []string{"eu.example"}, clusterHosts)
 }
 
 // TestRepoGrant_RefErrorsMatchTheAcceptedGrammar pins that each verb's ref
@@ -125,7 +171,7 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestRepoGrant_RefErrorsMatchTheAcceptedGrammar(t *testing.T) {
 	var paths []string
-	srv := nativeGrantServer(t, &paths)
+	srv := grantActiveCoreServer(t, &paths)
 	run := func(args ...string) error {
 		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, args...)
 		return err
