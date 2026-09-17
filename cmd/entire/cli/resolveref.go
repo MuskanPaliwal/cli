@@ -183,6 +183,12 @@ func ensureGranteeIsHandle(ref string) error {
 	if looksLikeULID(ref) {
 		return fmt.Errorf("grantee %q is an account ULID; this command needs a provider-qualified handle like \"github:alice\"", ref)
 	}
+	// Reuse the split rule, not its message: parseQualifiedHandle also serves
+	// `project create --owner`, where a ULID IS accepted and its "(or a ULID)"
+	// is true. On a grantee that would offer a form this command refuses.
+	if _, _, err := parseQualifiedHandle(ref); err != nil {
+		return fmt.Errorf("grantee %q must be a provider-qualified handle like \"github:alice\"", ref)
+	}
 	return nil
 }
 

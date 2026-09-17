@@ -294,3 +294,32 @@ func TestGrantRemove_HelpDoesNotOfferULIDs(t *testing.T) {
 		})
 	}
 }
+
+// TestGranteeErrorsNeverOfferAULID pins the wording as well as the rule. The
+// split rule is shared with `project create --owner`, which does take a ULID
+// and says so; reusing that message for a grantee offered a form this command
+// refuses. ensureGranteeIsHandle borrows the rule and not the sentence.
+func TestGranteeErrorsNeverOfferAULID(t *testing.T) {
+	t.Parallel()
+	for name, ref := range map[string]string{
+		"unqualified":    "asdasdasd",
+		"empty handle":   "github:",
+		"empty provider": ":alice",
+		"a ULID":         wiringGranteeULID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := ensureGranteeIsHandle(ref)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "grantee")
+			require.Contains(t, err.Error(), "provider-qualified handle")
+			require.NotContains(t, err.Error(), "ULID)", "no grantee error may offer the ULID form")
+		})
+	}
+
+	// The owner ref is the caller that legitimately takes both, and keeps its
+	// own wording.
+	_, _, err := parseQualifiedHandle("asdasdasd")
+	require.ErrorContains(t, err, "(or a ULID)")
+	require.NoError(t, ensureGranteeIsHandle("github:alice"))
+}
