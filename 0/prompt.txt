@@ -1,0 +1,25 @@
+find  bugs in this codebase. this has so many. you can look at some of the docsa already there.
+
+---
+
+use subagents to burn less tokens
+
+---
+
+find more such as ascii characters or checkpoiints etc which is related to trails
+
+---
+
+now check if we already have these bugs listed in the issues?
+
+---
+
+all these are trails related?
+
+---
+
+can we create seperate worktrees for all of them
+
+---
+
+now can we have trails created for each of them
