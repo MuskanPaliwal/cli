@@ -1141,6 +1141,13 @@ func NewStateStoreWithDir(stateDir string) *StateStore {
 // Returns (nil, nil) for missing files or expired records with no pending content.
 // Stale sessions are deleted only when they have no pending checkpoint content.
 func (s *StateStore) Load(ctx context.Context, sessionID string) (*State, error) {
+	return s.load(ctx, sessionID, true)
+}
+
+// load reads one session. When deleteStale is false the record is returned
+// as-is instead of being cleaned up, so a passive caller can report what
+// exists without observation changing it.
+func (s *StateStore) load(ctx context.Context, sessionID string, deleteStale bool) (*State, error) {
 	// Validate session ID to prevent path traversal
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return nil, fmt.Errorf("invalid session ID: %w", err)
@@ -1170,7 +1177,7 @@ func (s *StateStore) Load(ctx context.Context, sessionID string) (*State, error)
 	}
 	state.NormalizeAfterLoad(ctx)
 
-	if state.IsStale() && !state.hasPendingCheckpointContent() {
+	if deleteStale && state.IsStale() && !state.hasPendingCheckpointContent() {
 		logCtx := logging.WithComponent(ctx, "session")
 		logging.Debug(logCtx, "deleting stale session state",
 			slog.String("session_id", sessionID),
@@ -1275,17 +1282,24 @@ func (s *StateStore) RemoveAll() error {
 }
 
 // List returns readable session states, skipping individual load failures.
+// Expired records are deleted only when they have no pending checkpoint content.
 func (s *StateStore) List(ctx context.Context) ([]*State, error) {
-	return s.list(ctx, false)
+	return s.list(ctx, false, true)
 }
 
 // ListStrict refuses an incomplete inventory. Destructive consumers must use
 // this instead of treating an unreadable session as absent.
 func (s *StateStore) ListStrict(ctx context.Context) ([]*State, error) {
-	return s.list(ctx, true)
+	return s.list(ctx, true, true)
 }
 
-func (s *StateStore) list(ctx context.Context, strict bool) ([]*State, error) {
+// ListReadOnly returns readable persisted sessions without deleting or hiding
+// stale records, skipping individual load failures.
+func (s *StateStore) ListReadOnly(ctx context.Context) ([]*State, error) {
+	return s.list(ctx, false, false)
+}
+
+func (s *StateStore) list(ctx context.Context, strict, deleteStale bool) ([]*State, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list session states: %w", err)
 	}
@@ -1317,7 +1331,7 @@ func (s *StateStore) list(ctx context.Context, strict bool) ([]*State, error) {
 		}
 
 		sessionID := strings.TrimSuffix(entry.Name(), ".json")
-		state, err := s.Load(ctx, sessionID)
+		state, err := s.load(ctx, sessionID, deleteStale)
 		if err != nil {
 			if strict {
 				return nil, fmt.Errorf("load session %s: %w", sessionID, err)
