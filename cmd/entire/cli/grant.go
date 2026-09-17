@@ -147,7 +147,7 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return grantEach(ctx, cmd, c, t, pt, id, picked)
+				return grantEach(ctx, cmd, c, t, pt, id, picked, grantee != "")
 			})
 		},
 	}
@@ -224,35 +224,51 @@ func reportNothingToAdd(cmd *cobra.Command, reason string) {
 // grantEach grants every pair in turn. On a failure it stops and returns,
 // having reported the grants that already landed: those are real, and the CLI
 // cannot undo them, so the user needs to know which ones to skip on a retry.
-func grantEach[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, picked []grantSelection) error {
+func grantEach[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, picked []grantSelection, single bool) error {
 	wires := make([]any, 0, len(picked))
 	for _, p := range picked {
 		provider, providerUserID, err := resolveGranteeProvider(ctx, c, p.handle)
 		if err != nil {
-			return errors.Join(err, emitGrantJSON(cmd, wires))
+			return errors.Join(err, emitGrantJSON(cmd, wires, single))
 		}
 		granted, wire, err := t.grant(ctx, c, id, provider, providerUserID, p.role)
 		if err != nil {
-			return errors.Join(err, emitGrantJSON(cmd, wires))
+			return errors.Join(err, emitGrantJSON(cmd, wires, single))
 		}
 		wires = append(wires, wire)
 		if !jsonRequested(cmd) {
 			fmt.Fprintf(cmd.OutOrStdout(), "✓ Granted %s %s access to %s\n", p.handle, granted, pt.describe())
 		}
 	}
-	return emitGrantJSON(cmd, wires)
+	return emitGrantJSON(cmd, wires, single)
 }
 
 // emitGrantJSON writes the wire objects for --json; text mode has already
 // printed a line per grant as it went.
 //
-// Always an array, one entry per grant that landed — including none. `add`
-// grants a set, and a caller should not have to look at what it got back to
-// learn which shape this run chose; an empty run still owes them something
-// parseable rather than empty output.
-func emitGrantJSON(cmd *cobra.Command, wires []any) error {
+// The shape follows the INVOCATION, not the outcome. A grantee named on the
+// command line is one mutation and emits the bare wire object, which is what
+// every other mutation's --json emits (`org create`, `project create`, and what
+// `grant add` itself emitted through runCoreMutation before the picker existed)
+// — so the scripted form neither breaks nor makes this the one command in the
+// CLI answering a mutation with an array. The picker grants a set and emits an
+// array, one entry per grant that landed, including none, so a caller reading
+// it never has to branch.
+//
+// Deciding on the OUTCOME instead — an array only once more than one landed —
+// is the version to avoid: it makes a picker run that granted one person
+// indistinguishable from a typed one, so the shape depends on what the user
+// happened to click.
+func emitGrantJSON(cmd *cobra.Command, wires []any, single bool) error {
 	if !jsonRequested(cmd) {
 		return nil
+	}
+	if single {
+		// A failed single grant emits nothing, as runCoreMutation always did.
+		if len(wires) == 0 {
+			return nil
+		}
+		return printJSON(cmd.OutOrStdout(), wires[0])
 	}
 	return printJSON(cmd.OutOrStdout(), wires)
 }

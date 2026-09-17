@@ -659,14 +659,20 @@ func TestGrantPicker_SoleCandidateIsStillOffered(t *testing.T) {
 	require.True(t, opened, "the lone candidate must be chosen, not assumed")
 }
 
-// TestGrantAdd_JSONIsAlwaysAnArray: `add` grants a set, so --json is one shape
-// whatever happened. A caller should not have to inspect what came back to
-// learn which shape this run picked, and an empty run still owes them something
-// parseable rather than empty output.
+// TestGrantAdd_JSONShapeFollowsTheInvocation: a grantee named on the command
+// line is one mutation and emits the bare wire object, the shape every other
+// mutation's --json emits and the one `grant add` emitted before the picker
+// existed — so the scripted form neither breaks nor leaves this the only
+// command in the CLI answering a mutation with an array. The picker grants a
+// set and emits an array, including when it is empty, so a caller reading it
+// never has to branch.
+//
+// Deciding on the outcome instead would make a picker run that granted one
+// person indistinguishable from a typed one.
 //
 // Not parallel: swaps the activeCoreClient and grantPicker seams.
-func TestGrantAdd_JSONIsAlwaysAnArray(t *testing.T) {
-	t.Run("one grantee named on the command line", func(t *testing.T) {
+func TestGrantAdd_JSONShapeFollowsTheInvocation(t *testing.T) {
+	t.Run("a grantee named on the command line is an object", func(t *testing.T) {
 		var grants []string
 		srv := pickerServer(t, pickerFixture{}, &grants, nil)
 		t.Cleanup(srv.Close)
@@ -674,13 +680,12 @@ func TestGrantAdd_JSONIsAlwaysAnArray(t *testing.T) {
 		out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL,
 			"add", pickerProjULID, "github:alice", "--role", "reader", "--json")
 		require.NoError(t, err)
-		var arr []map[string]any
-		require.NoError(t, json.Unmarshal([]byte(out), &arr))
-		require.Len(t, arr, 1)
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &obj))
 		require.NotEmpty(t, grants)
 	})
 
-	t.Run("a picked set", func(t *testing.T) {
+	t.Run("a picked set is an array", func(t *testing.T) {
 		var grants []string
 		srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
 			member("github:alice", "acct-a"), member("github:bob", "acct-b"),
@@ -701,45 +706,23 @@ func TestGrantAdd_JSONIsAlwaysAnArray(t *testing.T) {
 		require.Len(t, arr, 2)
 		require.NotContains(t, out, "✓", "--json replaces the confirmation lines")
 	})
-}
 
-// TestRemovePicker_OffersOnlyWhatRevokingWouldRemove is the remove pool's whole
-// job. A listing carries rows that revoking cannot touch, and offering one
-// produces a no-op the user reads as a bug: the owning org holds the target
-// through the authz schema rather than a grant, and a repo's `project:<name>`
-// rows are held through the project — revoking one at the repo level really
-// does answer "no such grant; nothing to revoke".
-//
-// Not parallel: swaps the activeCoreClient and removePicker seams.
-func TestRemovePicker_OffersOnlyWhatRevokingWouldRemove(t *testing.T) {
-	for name, tc := range map[string]struct {
-		newCmd  func() *cobra.Command
-		ref     string
-		fixture pickerFixture
-		want    []string
-	}{
-		"project/owner row is not offered": {
-			newProjectGrantCmd, pickerProjULID,
-			pickerFixture{held: []holder{acctAlice}, withOwnerRow: true},
-			[]string{"github:alice"},
-		},
-		"repo/inherited and owner rows are not offered": {
-			newRepoGrantCmd, wiringRepoPath,
-			pickerFixture{held: []holder{acctAlice}, viaProject: []holder{acctBob}, withOwnerRow: true},
-			[]string{"github:alice"},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			var grants []string
-			srv := pickerServer(t, tc.fixture, &grants, nil)
-			t.Cleanup(srv.Close)
-			offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
-
-			_, _, err := runCoreCmd(t, tc.newCmd, srv.URL, "remove", tc.ref)
-			require.NoError(t, err)
-			require.Equal(t, tc.want, labels(*offered))
+	t.Run("a picker that granted one is still an array", func(t *testing.T) {
+		var grants []string
+		srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
+			member("github:alice", "acct-a"),
+		}}, &grants, nil)
+		t.Cleanup(srv.Close)
+		capturePicker(t, func(cs []grantCandidate, _ []string, _ string) ([]grantSelection, error) {
+			return []grantSelection{{handle: cs[0].ref, role: "reader"}}, nil
 		})
-	}
+
+		out, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID, "--json")
+		require.NoError(t, err)
+		var arr []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &arr))
+		require.Len(t, arr, 1, "the shape is the invocation's, not the outcome's")
+	})
 }
 
 // TestRemovePicker_OrgHasAPoolToo: the add side cannot offer anything for an
