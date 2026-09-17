@@ -18,7 +18,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 	"github.com/entireio/cli/cmd/entire/cli/entiredir"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
@@ -519,14 +518,6 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	}
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	condenseStart := time.Now()
-	policy, err := readLocalCheckpointPolicy(logCtx, repo)
-	if err != nil {
-		return nil, fmt.Errorf("checkpoint policy could not be read: %w", err)
-	}
-	if !checkpointpolicy.CanSatisfyPolicy(policy) {
-		warnIfCheckpointPolicyNeedsUpgrade(logCtx, policy)
-		return nil, errors.New("checkpoint policy cannot be satisfied by this Entire CLI")
-	}
 
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	ref, hasShadowBranch := resolveShadowRef(repo, shadowBranchName, o.shadowRef)
@@ -1876,7 +1867,7 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		return nil
 	}
 
-	if err := s.cleanupShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
+	if _, err := DeleteShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
 		logging.Warn(logCtx, "failed to clean up shadow branch",
 			slog.String("shadow_branch", shadowBranchName),
 			slog.String("error", err.Error()),
@@ -2047,44 +2038,12 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	}
 
 	if didCondense && shadowBranchName != "" {
-		if err := s.cleanupShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
+		if _, err := DeleteShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
 			logging.Warn(logCtx, "eager condense: failed to clean up shadow branch",
 				slog.String("shadow_branch", shadowBranchName),
 				slog.String("error", err.Error()),
 			)
 		}
-	}
-	return nil
-}
-
-// cleanupShadowBranchIfUnused deletes a shadow branch if no other active sessions reference it.
-func (s *ManualCommitStrategy) cleanupShadowBranchIfUnused(ctx context.Context, _ *git.Repository, shadowBranchName, excludeSessionID string) error {
-	// List all session states to check if any other session uses this shadow branch
-	allStates, err := s.listAllSessionStates(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list session states: %w", err)
-	}
-
-	for _, state := range allStates {
-		if state.SessionID == excludeSessionID {
-			continue
-		}
-		otherShadow := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
-		// Only SaveStep checkpoints live on the shadow branch; task records do
-		// not, so they no longer pin the branch alive.
-		if otherShadow == shadowBranchName && state.StepCount > 0 {
-			return nil
-		}
-	}
-
-	// No other sessions need it, delete the shadow branch via CLI
-	// (go-git v5's RemoveReference doesn't persist with packed refs/worktrees)
-	if err := DeleteBranchCLI(ctx, shadowBranchName); err != nil {
-		// Branch already gone is not an error
-		if errors.Is(err, ErrBranchNotFound) {
-			return nil
-		}
-		return fmt.Errorf("failed to remove shadow branch: %w", err)
 	}
 	return nil
 }
