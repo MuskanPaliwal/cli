@@ -427,7 +427,9 @@ using `entire` for real while tests run.
   `XDG_CACHE_HOME`, `ENTIRE_AUTH_LOCK_DIR`, `ENTIRE_TOKEN_STORE=file`,
   `ENTIRE_TOKEN_STORE_PATH`, and `ENTIRE_TEST_AUTH_STORE_FILE` process-wide so
   every spawned `entire` (and every agent-invoked hook) inherits isolation.
-  Any new harness that spawns the real binary must do the same.
+  Any new harness that spawns the real binary must do the same. Set
+  `ENTIRE_AUTH_LOCK_DIR` to an absolute path so children in different working
+  directories share the same lock.
 - **Legacy auth store**: `auth.NewStore()` talks straight to the zalando
   keyring; packages whose tests can reach it need `keyring.MockInit()` in
   `TestMain` (see `cmd/entire/cli/global_test.go`) — the `testdirs` fallback
