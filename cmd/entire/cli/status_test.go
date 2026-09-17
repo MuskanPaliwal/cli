@@ -2842,21 +2842,26 @@ func TestRunStatus_CheckpointSyncFailClosed(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 
 	for _, tt := range []struct {
-		name        string
-		remote      string
-		pushurlOnly bool
-		wantReason  string
+		name          string
+		remote        string
+		pushurlOnly   bool
+		emptyFetchURL bool
+		wantReason    string
 	}{
 		{name: "missing remote", remote: "gone"},
 		{name: "pushurl-only remote", remote: "pushonly", pushurlOnly: true, wantReason: "fetch URL"},
+		{name: "empty fetch URL", remote: "empty", emptyFetchURL: true, wantReason: "fetch URL"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			setupTestRepo(t)
 			writeSettings(t, fmt.Sprintf(`{"enabled": true, "strategy_options": {"checkpoint_push_remote": %q}}`, tt.remote))
-			testutil.AddRemote(t, ".", "origin", "https://example.com/origin.git")
 			if tt.pushurlOnly {
 				testutil.RunGit(t, ".", "config", "remote."+tt.remote+".pushurl", "https://example.com/pushonly.git")
 			}
+			if tt.emptyFetchURL {
+				testutil.RunGit(t, ".", "config", "remote."+tt.remote+".url", "")
+			}
+			testutil.AddRemote(t, ".", "origin", "https://example.com/origin.git")
 
 			var stdout bytes.Buffer
 			if err := runStatus(context.Background(), &stdout, false, false); err != nil {

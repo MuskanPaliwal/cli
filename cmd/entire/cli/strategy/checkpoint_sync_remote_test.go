@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -56,12 +57,14 @@ func TestResolveCheckpointSyncRemote_ConfigSettingInvalidRemote_FailsClosed(t *t
 	ctx := context.Background()
 
 	for _, tt := range []struct {
-		name    string
-		remote  string
-		pushURL string
+		name          string
+		remote        string
+		pushURL       string
+		emptyFetchURL bool
 	}{
 		{name: "missing remote", remote: "gone"},
 		{name: "pushurl-only remote", remote: "pushonly", pushURL: "https://example.com/pushonly.git"},
+		{name: "empty fetch URL", remote: "empty", emptyFetchURL: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
@@ -69,10 +72,13 @@ func TestResolveCheckpointSyncRemote_ConfigSettingInvalidRemote_FailsClosed(t *t
 			testutil.WriteFile(t, tmpDir, "f.txt", "init")
 			testutil.GitAdd(t, tmpDir, "f.txt")
 			testutil.GitCommit(t, tmpDir, "init")
-			testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
 			if tt.pushURL != "" {
 				testutil.RunGit(t, tmpDir, "config", "remote."+tt.remote+".pushurl", tt.pushURL)
 			}
+			if tt.emptyFetchURL {
+				testutil.RunGit(t, tmpDir, "config", "remote."+tt.remote+".url", "")
+			}
+			testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
 			testutil.WriteCheckpointPushRemoteSetting(t, tmpDir, tt.remote)
 			t.Chdir(tmpDir)
 
@@ -171,6 +177,33 @@ func TestResolveCheckpointSyncRemote_SettingsLoadErrorFailsClosed(t *testing.T) 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot read settings")
 	assert.Empty(t, got.Name)
+}
+
+// Not parallel: uses t.Chdir()
+func TestResolveCheckpointSyncRemote_GitConfigReadErrorFailsClosed(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	testutil.AddRemote(t, tmpDir, "origin", "https://example.com/origin.git")
+	t.Chdir(tmpDir)
+
+	ctx := settings.WithWorktreeRoot(context.Background(), tmpDir)
+	t.Setenv("PATH", t.TempDir())
+
+	got, err := ResolveCheckpointSyncRemote(ctx)
+	require.ErrorContains(t, err, "executable file not found")
+	assert.Empty(t, got.Name)
+}
+
+func TestReadRemotesInConfigOrder_CanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(settings.WithWorktreeRoot(context.Background(), t.TempDir()))
+	cancel()
+
+	_, err := readRemotesInConfigOrder(ctx)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // Not parallel: uses t.Chdir()
