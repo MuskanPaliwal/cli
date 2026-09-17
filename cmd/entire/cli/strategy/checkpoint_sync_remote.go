@@ -81,7 +81,10 @@ func ResolveCheckpointSyncRemote(ctx context.Context) (CheckpointSyncRemote, err
 	}
 	// Every tier elects from the same fetchable set. `git remote get-url`
 	// accepts a pushurl-only entry even though reads and reconciliation cannot.
-	fetchRemotes := configuredRemotesInConfigOrder(ctx)
+	fetchRemotes, err := configuredRemotesInConfigOrderResult(ctx)
+	if err != nil {
+		return CheckpointSyncRemote{}, fmt.Errorf("cannot read git remotes to resolve the checkpoint sync remote: %w", err)
+	}
 	if name := s.GetCheckpointPushRemote(); name != "" {
 		if !slices.Contains(fetchRemotes, name) {
 			return CheckpointSyncRemote{}, fmt.Errorf(
@@ -159,7 +162,7 @@ func checkpointSyncAllowedForRemote(ctx context.Context, pushRemote, pendingCapt
 // fact, and committing it to the tracked settings.json would fail-close
 // checkpoint sync for every teammate whose clone lacks that remote name.
 func hintGatedCheckpointSync(ctx context.Context, pushRemote string) {
-	if !slices.Contains(configuredRemotesInConfigOrder(ctx), pushRemote) {
+	if !isCheckpointSyncRemoteEligible(ctx, pushRemote) {
 		return
 	}
 	syncRemote, err := ResolveCheckpointSyncRemote(ctx)
@@ -221,6 +224,16 @@ func configuredRemotesInConfigOrder(ctx context.Context) []string {
 	return cachedRemotesInConfigOrder(ctx, readRemotesInConfigOrder)
 }
 
+func configuredRemotesInConfigOrderResult(ctx context.Context) ([]string, error) {
+	return cachedRemotesInConfigOrderResult(ctx, readRemotesInConfigOrder)
+}
+
+// isCheckpointSyncRemoteEligible keeps capture and hinting on the same
+// fetch-URL eligibility rule as election.
+func isCheckpointSyncRemoteEligible(ctx context.Context, name string) bool {
+	return slices.Contains(configuredRemotesInConfigOrder(ctx), name)
+}
+
 // readRemotesInConfigOrder lists remote names, distinguishing "this repo has no
 // remotes" from "the read failed". Both used to collapse to nil, which was
 // harmless while every caller re-ran the command — but the per-invocation cache
@@ -247,8 +260,8 @@ func readRemotesInConfigOrder(ctx context.Context) ([]string, error) {
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		// line: "remote.<name>.url <url>"; <name> may contain dots, so trim
 		// the fixed prefix and the ".url <value>" suffix instead of splitting.
-		key, _, ok := strings.Cut(line, " ")
-		if !ok {
+		key, value, ok := strings.Cut(line, " ")
+		if !ok || strings.TrimSpace(value) == "" {
 			continue
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(key, "remote."), ".url")
