@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -55,7 +54,7 @@ func TestInspectWorktreeSetup_RequiresConfiguredSibling(t *testing.T) {
 	t.Run("sibling enabled only by local override", func(t *testing.T) {
 		linkedRoot := setupClaudeWorktrees(t, testSettingsDisabled, true)
 		repoRoot := filepath.Join(filepath.Dir(linkedRoot), "repo")
-		writeFile(t, filepath.Join(repoRoot, EntireSettingsLocalFile), testSettingsEnabled)
+		testutil.WriteFile(t, repoRoot, EntireSettingsLocalFile, testSettingsEnabled)
 		enterWorktree(t, linkedRoot)
 
 		assertNoWorktreeSetupIssue(t, "sibling without portable project settings")
@@ -72,7 +71,7 @@ func TestInspectWorktreeSetup_RequiresConfiguredSibling(t *testing.T) {
 	t.Run("current worktree disabled by local override", func(t *testing.T) {
 		linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
 		configureClaudeWorktree(t, linkedRoot, testSettingsEnabled, true)
-		writeFile(t, filepath.Join(linkedRoot, EntireSettingsLocalFile), testSettingsDisabled)
+		testutil.WriteFile(t, linkedRoot, EntireSettingsLocalFile, testSettingsDisabled)
 		enterWorktree(t, linkedRoot)
 
 		assertNoWorktreeSetupIssue(t, "current worktree disabled by local override")
@@ -80,7 +79,7 @@ func TestInspectWorktreeSetup_RequiresConfiguredSibling(t *testing.T) {
 
 	t.Run("current hook config inspection fails", func(t *testing.T) {
 		linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
-		writeFile(t, filepath.Join(linkedRoot, ".claude", "settings.json"), `{`)
+		testutil.WriteFile(t, linkedRoot, ".claude/settings.json", `{`)
 		enterWorktree(t, linkedRoot)
 
 		assertNoWorktreeSetupIssue(t, "failed current hook config inspection")
@@ -110,7 +109,7 @@ func TestInspectWorktreeSetup_ReportsOnlyMissingClaudeProjectHooks(t *testing.T)
 
 func TestInspectWorktreeSetup_PreservesCurrentWorktreeVouch(t *testing.T) {
 	linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
-	writeFile(t, filepath.Join(linkedRoot, EntireSettingsLocalFile),
+	testutil.WriteFile(t, linkedRoot, EntireSettingsLocalFile,
 		`{"enabled":true,"allow_symlinked_agent_dirs":[".claude"]}`)
 	enterWorktree(t, linkedRoot)
 	t.Cleanup(func() { agentpkg.SetVouchedSymlinkedDirs("", nil) })
@@ -182,7 +181,7 @@ func TestRunStatus_WorktreeSetupWarning(t *testing.T) {
 func TestRunStatus_SharedClaudeHookWarningAllowsLocalCoverage(t *testing.T) {
 	linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
 	configureClaudeWorktree(t, linkedRoot, testSettingsEnabled, false)
-	writeFile(t, filepath.Join(linkedRoot, ".claude", "settings.local.json"),
+	testutil.WriteFile(t, linkedRoot, ".claude/settings.local.json",
 		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"entire hooks claude-code stop"}]}]}}`)
 	enterWorktree(t, linkedRoot)
 
@@ -213,7 +212,7 @@ func TestRunStatus_SharedClaudeHookWarningAllowsLocalCoverage(t *testing.T) {
 
 func TestRunStatus_LocalOnlyEntireSettingsWarnsAboutProjectPortability(t *testing.T) {
 	linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
-	writeFile(t, filepath.Join(linkedRoot, EntireSettingsLocalFile), testSettingsEnabled)
+	testutil.WriteFile(t, linkedRoot, EntireSettingsLocalFile, testSettingsEnabled)
 	configureClaudeWorktree(t, linkedRoot, "", true)
 	enterWorktree(t, linkedRoot)
 
@@ -245,7 +244,7 @@ func TestRunStatus_LocalOnlyEntireSettingsWarnsAboutProjectPortability(t *testin
 func TestInspectWorktreeSetup_LocalOverrideDoesNotMakeDisabledProjectPortable(t *testing.T) {
 	linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
 	configureClaudeWorktree(t, linkedRoot, testSettingsDisabled, true)
-	writeFile(t, filepath.Join(linkedRoot, EntireSettingsLocalFile), testSettingsEnabled)
+	testutil.WriteFile(t, linkedRoot, EntireSettingsLocalFile, testSettingsEnabled)
 	enterWorktree(t, linkedRoot)
 
 	issue := inspectWorktreeSetup(t.Context())
@@ -283,7 +282,7 @@ func TestDoctor_WorktreeWithoutSettingsDoesNotReportHealthyHooks(t *testing.T) {
 
 func TestDoctor_LocalOnlyEntireSettingsDoesNotReportInactiveHooks(t *testing.T) {
 	linkedRoot := setupClaudeWorktrees(t, testSettingsEnabled, true)
-	writeFile(t, filepath.Join(linkedRoot, EntireSettingsLocalFile), testSettingsEnabled)
+	testutil.WriteFile(t, linkedRoot, EntireSettingsLocalFile, testSettingsEnabled)
 	configureClaudeWorktree(t, linkedRoot, "", true)
 	enterWorktree(t, linkedRoot)
 	issue := inspectWorktreeSetup(t.Context())
@@ -338,7 +337,7 @@ func setupClaudeWorktrees(t *testing.T, sourceSettings string, installClaudeHook
 func configureClaudeWorktree(t *testing.T, worktreeRoot, entireSettings string, installClaudeHooks bool) {
 	t.Helper()
 	if entireSettings != "" {
-		writeFile(t, filepath.Join(worktreeRoot, EntireSettingsFile), entireSettings)
+		testutil.WriteFile(t, worktreeRoot, EntireSettingsFile, entireSettings)
 	}
 	if installClaudeHooks {
 		enterWorktree(t, worktreeRoot)
@@ -355,14 +354,4 @@ func enterWorktree(t *testing.T, worktreeRoot string) {
 	strategy.ClearHooksDirCache()
 	t.Cleanup(paths.ClearWorktreeRootCache)
 	t.Cleanup(strategy.ClearHooksDirCache)
-}
-
-func writeFile(t *testing.T, path, contents string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatalf("WriteFile(%s): %v", path, err)
-	}
 }

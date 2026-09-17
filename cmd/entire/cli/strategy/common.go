@@ -142,7 +142,10 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 	}
 	defer repo.Close()
 	defer func() { _ = repo.Storer.RemoveReference(tmpRefName) }() //nolint:errcheck // cleanup is best-effort
+	return promoteTmpRefSafely(ctx, repo, tmpRefName, destRefName, label)
+}
 
+func promoteTmpRefSafely(ctx context.Context, repo *git.Repository, tmpRefName, destRefName plumbing.ReferenceName, label string) error {
 	tmpRef, err := repo.Reference(tmpRefName, true)
 	if err != nil {
 		return fmt.Errorf("%s not found after fetch (tmp ref %s missing): %w", label, tmpRefName, err)

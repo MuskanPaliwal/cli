@@ -191,10 +191,6 @@ func reconcileOversizedV1ForPush(
 
 	newTip := remoteTip
 	if len(localOnly) > 0 {
-		shallow, shallowErr := loadShallowHashes(ctx, repoPath)
-		if shallowErr != nil {
-			return plumbing.ZeroHash, false, fmt.Errorf("load shallow boundaries: %w", shallowErr)
-		}
 		newTip, err = cherryPickOnto(ctx, repo, remoteTip, localOnly, shallow)
 		if err != nil {
 			return plumbing.ZeroHash, false, fmt.Errorf("replay local checkpoints onto repaired remote: %w", err)
@@ -335,7 +331,7 @@ func hasOversizedMetadataIntroducedSince(
 		if err != nil {
 			return false, fmt.Errorf("parse checkpoint metadata mode %q: %w", fields[1], err)
 		}
-		if !isFileMode(filemode.FileMode(mode)) || found {
+		if !isFileMode(filemode.FileMode(mode)) {
 			continue
 		}
 		hash := plumbing.NewHash(fields[3])
@@ -349,6 +345,13 @@ func hasOversizedMetadataIntroducedSince(
 		}
 		if blob.Size > threshold {
 			found = true
+			if _, drainErr := io.Copy(io.Discard, reader); drainErr != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return false, fmt.Errorf("scan local checkpoint metadata: %w", ctxErr)
+				}
+				return false, fmt.Errorf("drain checkpoint metadata scan: %w", drainErr)
+			}
+			break
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
@@ -453,25 +456,14 @@ func collectFirstParentCommitsSince(
 	repoPath string,
 	tip, boundary plumbing.Hash,
 ) ([]*object.Commit, error) {
-	cmd := exec.CommandContext(
-		ctx, "git", "rev-list", "--first-parent", "--reverse", boundary.String()+".."+tip.String(),
+	commits, err := historyFromRevList(
+		ctx, repo, repoPath, "--first-parent", "--reverse", boundary.String()+".."+tip.String(),
 	)
-	cmd.Dir = repoPath
-	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git rev-list failed: %w", err)
+		return nil, err
 	}
-	hashes := strings.Fields(string(output))
-	if len(hashes) > MaxCommitTraversalDepth {
+	if len(commits) > MaxCommitTraversalDepth {
 		return nil, fmt.Errorf("commit chain exceeded %d commits; aborting rebase", MaxCommitTraversalDepth)
-	}
-	commits := make([]*object.Commit, 0, len(hashes))
-	for _, value := range hashes {
-		commit, err := repo.CommitObject(plumbing.NewHash(value))
-		if err != nil {
-			return nil, fmt.Errorf("load replay commit %s: %w", value, err)
-		}
-		commits = append(commits, commit)
 	}
 	return commits, nil
 }

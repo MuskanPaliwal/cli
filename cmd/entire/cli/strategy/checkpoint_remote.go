@@ -175,15 +175,7 @@ func fetchMetadataBranchWithin(ctx context.Context, remoteURL string, timeout ti
 	if err := fetchURLIntoTmpRef(ctx, "", remoteURL, srcRef, tmpRef.String(), "metadata branch", true, timeout); err != nil {
 		return err
 	}
-	fetchedRef, err := repo.Reference(tmpRef, true)
-	if err != nil {
-		return fmt.Errorf("%s not found after fetch (tmp ref %s missing): %w", branchName, tmpRef, err)
-	}
-	if err := SafelyAdvanceLocalRef(ctx, repo, refs.Primary, fetchedRef.Hash()); err != nil {
-		return fmt.Errorf("failed to advance local %s: %w", branchName, err)
-	}
-
-	return nil
+	return promoteTmpRefSafely(ctx, repo, tmpRef, refs.Primary, branchName)
 }
 
 // fetchURLIntoTmpRef runs `git fetch <remoteURL> +<srcRef>:<tmpRef>` via the

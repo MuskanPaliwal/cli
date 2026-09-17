@@ -1541,23 +1541,11 @@ func TestIsSetUpAndEnabledForWorktreeRoot(t *testing.T) {
 
 	enabledRoot := t.TempDir()
 	testutil.InitRepo(t, enabledRoot)
-	enabledDir := filepath.Join(enabledRoot, ".entire")
-	if err := os.MkdirAll(enabledDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(enabledDir, SettingsName), []byte(`{"enabled":true}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, enabledRoot, EntireSettingsFile, `{"enabled":true}`)
 
 	disabledRoot := t.TempDir()
 	testutil.InitRepo(t, disabledRoot)
-	disabledDir := filepath.Join(disabledRoot, ".entire")
-	if err := os.MkdirAll(disabledDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(disabledDir, SettingsLocalName), []byte(`{"enabled":false}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, disabledRoot, EntireSettingsLocalFile, `{"enabled":false}`)
 
 	if !IsSetUpAndEnabledForWorktreeRoot(t.Context(), enabledRoot) {
 		t.Error("enabled explicit worktree reported inactive")
@@ -1575,16 +1563,8 @@ func TestProjectSettingsEnabledForWorktreeRoot_IgnoresLocalOverride(t *testing.T
 
 	root := t.TempDir()
 	testutil.InitRepo(t, root)
-	settingsDir := filepath.Join(root, ".entire")
-	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(settingsDir, SettingsName), []byte(`{"enabled":false}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(settingsDir, SettingsLocalName), []byte(`{"enabled":true}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, root, EntireSettingsFile, `{"enabled":false}`)
+	testutil.WriteFile(t, root, EntireSettingsLocalFile, `{"enabled":true}`)
 
 	if ProjectSettingsEnabledForWorktreeRoot(root) {
 		t.Error("disabled project settings reported enabled through local override")
