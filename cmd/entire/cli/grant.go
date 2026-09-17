@@ -55,22 +55,23 @@ type grantTarget[Row any] struct {
 	// ref a target parses is writable (org, project).
 	unwritableRef func(ref string) error
 
-	// listBranch builds the second reading `list` gives a target ref, for a
-	// target whose refs do not all name the same thing: a repo is an Entire
-	// repository or a GitHub mirror, and only the first has grants. nil for org
-	// and project, which have one kind of target each. Built per leaf so the
-	// flags it binds get their own variables.
-	listBranch func() *grantListBranch
+	// listBranch is the second reading `list` gives a target ref, for a target
+	// whose refs do not all name the same thing: a repo is an Entire repository
+	// or a GitHub mirror, and only the first has grants. nil for org and
+	// project, which have one kind of target each.
+	listBranch *grantListBranch
 }
 
-// grantListBranch is the second answer a `list` leaf can give. list answers the
-// refs it claims and reports handled=false for the rest, which the target's own
-// resolver takes; long and example become the leaf's help, because a leaf
-// taking two kinds of ref is the only one with more to say than its Short.
+// grantListBranch is the second answer a `list` leaf can give: claims reports
+// which refs it answers for, leaving every other ref to the target's own
+// resolver, and list answers one of them. long and example become the leaf's
+// help, because a leaf taking two kinds of ref is the only one with more to say
+// than its Short.
 type grantListBranch struct {
 	long    string
 	example string
-	list    func(cmd *cobra.Command, ref string) (handled bool, err error)
+	claims  func(ref string) bool
+	list    func(cmd *cobra.Command, ref string) error
 }
 
 func newOrgGrantCmd() *cobra.Command     { return newGrantSubtreeCmd(orgGrantTarget) }
@@ -142,19 +143,13 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 }
 
 func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
-	var branch *grantListBranch
-	if t.listBranch != nil {
-		branch = t.listBranch()
-	}
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("list <%s>", t.noun),
 		Short: fmt.Sprintf("List who has %s access", t.noun),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if branch != nil {
-				if handled, err := branch.list(cmd, args[0]); handled {
-					return err
-				}
+			if t.listBranch != nil && t.listBranch.claims(args[0]) {
+				return t.listBranch.list(cmd, args[0])
 			}
 			return runCoreList(cmd, "No grants found.", t.columns, t.row, func(ctx context.Context, c *coreapi.Client) ([]Row, error) {
 				id, err := t.resolve(ctx, c, args[0])
@@ -172,8 +167,8 @@ func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		},
 	}
 	addJSONFlag(cmd)
-	if branch != nil {
-		cmd.Long, cmd.Example = branch.long, branch.example
+	if t.listBranch != nil {
+		cmd.Long, cmd.Example = t.listBranch.long, t.listBranch.example
 	}
 	return cmd
 }
@@ -387,7 +382,7 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	roles:         accessRoles,
 	columns:       grantColumns,
 	row:           repoGrantRow,
-	listBranch:    newMirrorGrantListing,
+	listBranch:    mirrorGrantListing,
 	unwritableRef: mirrorGrantsAreUpstream,
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
 		return resolveRepoPath(ctx, c, ref)

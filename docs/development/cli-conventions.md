@@ -130,7 +130,12 @@ the commands are always runnable in every build.
   preferring the default, else the first in sorted order. There is no region
   flag: every placement materializes the same upstream collaborators, so the
   caller has nothing to choose, but a repo mirrored only outside the default
-  region must still be asked somewhere it exists. `grant add` and
+  region must still be asked somewhere it exists. That lookup runs as the
+  active login, which scopes the verb to one federation: a mirror on a cluster
+  the active login does not front is reached by acting as the login that does
+  (`--context`), which the empty-placement error names — the removed
+  `--cluster` was doing that identity selection implicitly through
+  `clusterdiscovery.selectLoginContext`. `grant add` and
   `grant remove` keep the native path as their whole grammar: a mirror's access
   is the upstream GitHub repository's, so a `/gh/` ref is refused before any
   request — and before required flags are validated, through the target's

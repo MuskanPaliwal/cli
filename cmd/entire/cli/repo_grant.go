@@ -58,31 +58,26 @@ const repoGrantListLong = "List who can reach a repository.\n\n" +
 const repoGrantListExample = "  entire repo grant list /" + nativeCloneForge + "/acme/web\n" +
 	"  entire repo grant list /" + mirrorCloneForge + "/acme/widget"
 
-// newMirrorGrantListing is the mirror reading of a `repo grant list` ref. It
+// mirrorGrantListing is the mirror reading of a `repo grant list` ref. It
 // claims every ref that does not declare the native forge, which is what keeps
 // the ref errors honest: this verb takes both forges, so a ref naming neither
 // must be offered both readings rather than the native path alone.
-func newMirrorGrantListing() *grantListBranch {
-	return &grantListBranch{
-		long:    repoGrantListLong,
-		example: repoGrantListExample,
-		list: func(cmd *cobra.Command, ref string) (bool, error) {
-			if declaresForge(ref, nativeCloneForge) {
-				return false, nil
-			}
-			// Past the native branch, a failure is about the ref, never the
-			// command's shape.
-			cmd.SilenceUsage = true
-			if !declaresForge(ref, mirrorCloneForge) {
-				return true, forgeQualifiedRefError(ref)
-			}
-			_, owner, repo, err := parseMirrorCloneRef(ref)
-			if err != nil {
-				return true, fmt.Errorf("invalid <repo> %q: %w", ref, err)
-			}
-			return true, listMirrorCollaborators(cmd, owner, repo)
-		},
-	}
+var mirrorGrantListing = &grantListBranch{
+	long:    repoGrantListLong,
+	example: repoGrantListExample,
+	claims:  func(ref string) bool { return !declaresForge(ref, nativeCloneForge) },
+	list: func(cmd *cobra.Command, ref string) error {
+		// Every failure from here is about the ref, never the command's shape.
+		cmd.SilenceUsage = true
+		if !declaresForge(ref, mirrorCloneForge) {
+			return forgeQualifiedRefError(ref)
+		}
+		_, owner, repo, err := parseMirrorCloneRef(ref)
+		if err != nil {
+			return fmt.Errorf("invalid <repo> %q: %w", ref, err)
+		}
+		return listMirrorCollaborators(cmd, owner, repo)
+	},
 }
 
 // listMirrorCollaborators prints who can pull owner/repo's mirror.
@@ -93,6 +88,11 @@ func newMirrorGrantListing() *grantListBranch {
 // upstream GitHub collaborators, so any one answers — but it has to be a
 // placement the repo actually has, which is the whole reason this lookup is
 // here rather than a hard-coded default.
+//
+// Resolving as the active login is also what scopes this to one federation:
+// a cluster can be fronted by cores the active login has no account with, and
+// those mirrors are reached by acting as the login that does (`--context`),
+// not by naming their cluster.
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 	var clusterHost string
 	if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
@@ -102,9 +102,18 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 		if err != nil {
 			return err
 		}
+		if len(placements) == 0 {
+			// The lookup runs as the active login, so "no placements" also
+			// covers a mirror in a federation that login does not front —
+			// which is an identity to switch, not a region to name.
+			return fmt.Errorf("no mirror of %s/%s you can read as this login: it is not mirrored, you have no access to its mirrors, or it lives in a federation this login does not front (`entire auth contexts` lists your logins; --context acts as one)", owner, repo)
+		}
+		// Told apart from "not mirrored" deliberately: the repo IS mirrored, so
+		// blaming access would send the user to fix the wrong thing — and the
+		// command named below would then list the placement and contradict it.
 		clusterHost = mirrorReadCluster(placements)
 		if clusterHost == "" {
-			return fmt.Errorf("no readable mirror of %s/%s (it is not mirrored, or you have no access to its mirrors); `entire repo mirror get /%s/%s/%s` shows its placements", owner, repo, mirrorCloneForge, owner, repo)
+			return fmt.Errorf("%s/%s is mirrored, but no placement names a cluster host this command can dial; `entire repo mirror get /%s/%s/%s` lists them", owner, repo, mirrorCloneForge, owner, repo)
 		}
 		return nil
 	}); err != nil {

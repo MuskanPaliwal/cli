@@ -142,7 +142,21 @@ func TestRepoGrantList_MirrorWithNoReadablePlacement(t *testing.T) {
 	var paths []string
 	srv := grantActiveCoreServer(t, &paths) // no placements
 	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
-	require.ErrorContains(t, err, "no readable mirror of acme/widget")
+	require.ErrorContains(t, err, "no mirror of acme/widget you can read as this login")
+	require.ErrorContains(t, err, "--context")
+}
+
+// TestRepoGrantList_MirrorPlacementWithNoDialableHost pins that a repo which
+// IS mirrored is never reported as unmirrored: a placement whose host this
+// command refuses to dial is its own answer, and it names the verb that lists
+// the placements rather than blaming the caller's access.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestRepoGrantList_MirrorPlacementWithNoDialableHost(t *testing.T) {
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors")
+	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+	require.ErrorContains(t, err, "acme/widget is mirrored, but no placement names a cluster host")
 	require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
 }
 
