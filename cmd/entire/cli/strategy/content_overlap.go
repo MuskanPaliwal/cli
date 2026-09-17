@@ -197,12 +197,6 @@ func stagedFilesOverlapWithContent(ctx context.Context, repo *git.Repository, sh
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	stagedFiles := staged.paths
 
-	// Build set of filesTouched for quick lookup
-	touchedSet := make(map[string]bool)
-	for _, f := range filesTouched {
-		touchedSet[f] = true
-	}
-
 	// Get HEAD tree to determine if files are being modified or newly created
 	head, err := repo.Head()
 	if err != nil {
@@ -226,13 +220,11 @@ func stagedFilesOverlapWithContent(ctx context.Context, repo *git.Repository, sh
 		return hasOverlappingFiles(stagedFiles, filesTouched)
 	}
 
-	// Check each staged file
-	for _, stagedPath := range stagedFiles {
-		if !touchedSet[stagedPath] {
-			logging.Debug(logCtx, "stagedFilesOverlapWithContent: staged file not in files_touched, skipping",
-				slog.String("staged_file", stagedPath),
-			)
-			continue // Not in filesTouched, skip
+	// Check only session-touched files that are present in the staged snapshot.
+	for _, stagedPath := range filesTouched {
+		stagedHash, found := staged.hashes[stagedPath]
+		if !found {
+			continue
 		}
 
 		// Check if this is a modified file (exists in HEAD) or new file
@@ -250,11 +242,6 @@ func stagedFilesOverlapWithContent(ctx context.Context, repo *git.Repository, sh
 		}
 
 		// For new files, check content against shadow branch
-		stagedHash, found := staged.hashes[stagedPath]
-		if !found {
-			continue
-		}
-
 		// Get file from shadow branch tree
 		shadowFile, err := shadowTree.File(stagedPath)
 		if err != nil {

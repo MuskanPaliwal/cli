@@ -1434,8 +1434,13 @@ func stagedChangesFromIndex(t *testing.T, repo *git.Repository, paths []string) 
 	idx, err := repo.Storer.Index()
 	require.NoError(t, err)
 	staged := stagedChanges{paths: paths, hashes: make(map[string]plumbing.Hash)}
+	for _, path := range paths {
+		staged.hashes[path] = plumbing.ZeroHash
+	}
 	for _, entry := range idx.Entries {
-		staged.hashes[entry.Name] = entry.Hash
+		if _, ok := staged.hashes[entry.Name]; ok {
+			staged.hashes[entry.Name] = entry.Hash
+		}
 	}
 	return staged
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,16 +41,15 @@ func testCommitIndex(t *testing.T, backend, mode string, carry, linked, replaced
 	env := NewFeatureBranchEnv(t)
 	env.CheckpointStore = backend
 	mainEnv := env
-	git := gitWithEntireCommitHooks(t, env)
 	if linked {
 		linkedDir := filepath.Join(t.TempDir(), "linked")
-		git("worktree", "add", "-b", "linked", linkedDir)
+		testutil.RunGit(t, env.RepoDir, "worktree", "add", "-b", "linked", linkedDir)
 		linkedEnv := *env
 		linkedEnv.RepoDir = linkedDir
 		env = &linkedEnv
 		env.InitEntire()
-		git = gitWithEntireCommitHooks(t, env)
 	}
+	git := gitWithEntireCommitHooks(t, env)
 	sess := env.NewSession()
 	require.NoError(t, env.SimulateUserPromptSubmitWithPromptAndTranscriptPath(sess.ID, "Create files", sess.TranscriptPath))
 
@@ -100,15 +100,8 @@ func testCommitIndex(t *testing.T, backend, mode string, carry, linked, replaced
 		return
 	}
 	require.NotEmpty(t, cp, "the commit contains the agent's file and must link its idle session")
-	ref := "entire/checkpoints/v1"
-	if backend == StoreGitRefs {
-		ref = checkpointRefName(cp)
-	}
-	metadataPath := SessionMetadataPath(cp)
-	if backend == StoreGitRefs {
-		metadataPath = "0/metadata.json"
-	}
-	metadata := git("show", ref+":"+metadataPath)
+	metadata, ok := checkpointBlob(env, cp, "0/metadata.json")
+	require.True(t, ok)
 	var meta checkpoint.Metadata
 	require.NoError(t, json.Unmarshal([]byte(metadata), &meta))
 	require.Equal(t, sess.ID, meta.SessionID)
@@ -117,8 +110,8 @@ func testCommitIndex(t *testing.T, backend, mode string, carry, linked, replaced
 func gitWithEntireCommitHooks(t *testing.T, env *TestEnv) func(...string) string {
 	t.Helper()
 	hooksDir := t.TempDir()
+	binary := "'" + strings.ReplaceAll(filepath.ToSlash(getTestBinary()), "'", "'\"'\"'") + "'"
 	for _, hook := range []string{"prepare-commit-msg", "post-commit"} {
-		binary := "'" + strings.ReplaceAll(filepath.ToSlash(getTestBinary()), "'", "'\"'\"'") + "'"
 		script := fmt.Sprintf("#!/bin/sh\nexec %s hooks git %s \"$@\"\n", binary, hook)
 		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, hook), []byte(script), 0o755))
 	}
