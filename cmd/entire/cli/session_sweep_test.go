@@ -340,9 +340,14 @@ func TestMaybeSpawnSessionSweep_SeamAndThrottle(t *testing.T) {
 	var gotRoot atomic.Value
 	prevSpawn := sweepSpawn
 	prevMetadata := sweepWorktreeMetadata
+	metadataCalls := 0
 	sweepSpawn = func(worktreeRoot string) {
 		spawns.Add(1)
 		gotRoot.Store(worktreeRoot)
+	}
+	sweepWorktreeMetadata = func(root string) (gitrepo.WorktreeMetadata, error) {
+		metadataCalls++
+		return prevMetadata(root)
 	}
 	t.Cleanup(func() {
 		sweepSpawn = prevSpawn
@@ -353,6 +358,7 @@ func TestMaybeSpawnSessionSweep_SeamAndThrottle(t *testing.T) {
 	// only consulted once a zombie nominates).
 	maybeSpawnSessionSweep(ctx)
 	assert.Equal(t, int32(0), spawns.Load(), "no zombies must not spawn a sweep")
+	assert.Equal(t, 0, metadataCalls, "no-zombie path must not repeat worktree metadata resolution")
 
 	old := time.Now().Add(-48 * time.Hour)
 	zombie := &strategy.SessionState{

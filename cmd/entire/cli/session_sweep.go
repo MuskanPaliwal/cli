@@ -229,12 +229,6 @@ func maybeSpawnSessionSweep(ctx context.Context) {
 			slog.String("error", err.Error()))
 		return
 	}
-	metadata, err := sweepWorktreeMetadata(root)
-	if err != nil {
-		logging.Debug(logCtx, "skipping sweep spawn: could not resolve git common dir",
-			slog.String("error", err.Error()))
-		return
-	}
 	// Zombie discovery deliberately precedes the throttle check. The shared
 	// marker is check-and-record, so consulting it before discovery would burn
 	// the whole throttle window on the overwhelmingly common no-zombie case. A
@@ -247,6 +241,12 @@ func maybeSpawnSessionSweep(ctx context.Context) {
 	}
 	n := countSweepableZombies(states, time.Now())
 	if n == 0 {
+		return
+	}
+	metadata, err := sweepWorktreeMetadata(root)
+	if err != nil {
+		logging.Debug(logCtx, "skipping sweep spawn: could not resolve git common dir",
+			slog.String("error", err.Error()))
 		return
 	}
 	if sweepRecentlySpawned(metadata.CommonDir, time.Now()) {

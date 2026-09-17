@@ -133,10 +133,7 @@ func adoptFromExternalSessionStore(
 	sessionID string,
 	opts adoptOptions,
 ) (*session.State, []string, error) {
-	sourceWorktreeID := ""
-	if metadata, err := gitrepo.ResolveWorktreeMetadata(sourceWorktree); err == nil {
-		sourceWorktreeID = metadata.WorktreeID
-	}
+	sourceWorktreeID := bestEffortAdoptWorktreeID(sourceWorktree)
 
 	var adopted *session.State
 	var filesTouched []string
@@ -223,10 +220,7 @@ func adoptFromSameSessionStore(ctx context.Context, sourceWorktree string, sourc
 		return nil, nil, fmt.Errorf("session %s is already tracked in this repo; rerun with --force to replace it", sourceState.SessionID)
 	}
 
-	sourceWorktreeID := ""
-	if metadata, err := gitrepo.ResolveWorktreeMetadata(sourceWorktree); err == nil {
-		sourceWorktreeID = metadata.WorktreeID
-	}
+	sourceWorktreeID := bestEffortAdoptWorktreeID(sourceWorktree)
 
 	var adopted *session.State
 	var filesTouched []string
@@ -311,10 +305,7 @@ func stateStoreForWorktree(ctx context.Context, worktreePath string) (*session.S
 }
 
 func selectAdoptSourceSession(ctx context.Context, store *session.StateStore, sourceWorktree, sessionID string) (*session.State, error) {
-	sourceWorktreeID := ""
-	if metadata, err := gitrepo.ResolveWorktreeMetadata(sourceWorktree); err == nil {
-		sourceWorktreeID = metadata.WorktreeID
-	}
+	sourceWorktreeID := bestEffortAdoptWorktreeID(sourceWorktree)
 	if sessionID != "" {
 		sourceState, err := store.Load(ctx, sessionID)
 		if err != nil {
@@ -373,6 +364,14 @@ func sessionBelongsToSourceWorktree(state *session.State, sourceWorktree, source
 		return sameAdoptPath(state.WorktreePath, sourceWorktree)
 	}
 	return false
+}
+
+func bestEffortAdoptWorktreeID(worktree string) string {
+	metadata, err := gitrepo.ResolveWorktreeMetadata(worktree)
+	if err != nil {
+		return ""
+	}
+	return metadata.WorktreeID
 }
 
 func adoptSessionWorktreeLabel(state *session.State) string {
