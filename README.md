@@ -344,6 +344,7 @@ Descriptions below are the commands' own summaries. `entire help` always reflect
 
 | Command          | Description                                                                       |
 | ---------------- | --------------------------------------------------------------------------------- |
+| `entire cluster` | Show the Entire clusters you can place projects and repos on (`list`)              |
 | `entire org`     | Manage Entire organizations (`create`, `list`, `get`, `delete`)                    |
 | `entire project` | Manage Entire projects (`create`, `list`, `get`, `delete`)                         |
 | `entire repo`    | Manage Entire repositories (`create`, `list`, `get`, `delete`, `clone`, `mirror`, `visibility`) |
@@ -393,7 +394,7 @@ These are visible in developer and nightly builds and hidden in stable releases,
 | `--agent-help-skill`                        | Install the Entire agent-help skill (points agents at `entire agent-help`) for the selected agent(s)              |
 | `--telemetry=false`                         | Disable anonymous usage analytics                                                                                 |
 
-Run in a directory that is not a git repository, `entire enable` offers to initialize one and (optionally) create a matching GitHub repo via the `gh` CLI. That path is driven by `--init-repo` / `--no-init-repo`, `--no-github`, `--repo-name`, `--repo-owner`, `--repo-visibility`, `--push`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
+Run in a directory that is not a git repository, `entire enable` offers to initialize one and make an initial commit. It is local-only — no remote is created or pushed to, so publish the repository yourself when you are ready (`gh repo create`, `entire repo create`, or your forge's web UI). That path is driven by `--init-repo` / `--no-init-repo`, `--skip-initial-commit`, and `--initial-commit-message`. See `entire enable --help` for the full list.
 
 **Examples:**
 
@@ -619,13 +620,13 @@ When enabled, Entire automatically generates AI summaries for checkpoints at com
 
 Summaries are also generated on demand, with or without this setting, by `entire checkpoint explain --generate`.
 
-**Which agent writes them.** By default Claude Code (`claude` on your `PATH`, model `sonnet`). Set a different one with `summary_generation.provider` — `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini`, or `pi`, plus an optional `summary_generation.model` hint:
+**Which agent writes them.** By default Claude Code (`claude` on your `PATH`, model `sonnet`). Set a different one with `summary_generation.provider` — `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini`, `opencode`, or `pi`, plus an optional `summary_generation.model` hint:
 
 ```bash
 entire configure --summarize-provider codex
 ```
 
-`opencode` and `factoryai-droid` cannot generate summaries. Whichever provider you pick must be installed and authenticated.
+`factoryai-droid` cannot generate summaries. Whichever provider you pick must be installed and authenticated.
 
 **Requirements:**
 
