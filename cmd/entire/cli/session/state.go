@@ -967,8 +967,14 @@ func (s *State) IsEnded() bool {
 	return s.Phase == PhaseEnded || s.EndedAt != nil
 }
 
+// HasShadowBranchContent reports whether this state records checkpoint content
+// written to its shadow branch.
+func (s *State) HasShadowBranchContent() bool {
+	return s.StepCount > 0 || len(s.FilesTouched) > 0
+}
+
 func (s *State) hasPendingCheckpointContent() bool {
-	return (!s.FullyCondensed && (s.StepCount > 0 || len(s.FilesTouched) > 0)) ||
+	return (!s.FullyCondensed && s.HasShadowBranchContent()) ||
 		s.HasTaskContent() || len(s.TurnCheckpointIDs) > 0 || s.CondensationAttempt != nil
 }
 
@@ -1308,9 +1314,6 @@ func (s *StateStore) list(ctx context.Context, strict bool) ([]*State, error) {
 				return nil, fmt.Errorf("session state %s is a directory", entry.Name())
 			}
 			continue
-		}
-		if strings.HasSuffix(entry.Name(), ".tmp") {
-			continue // Skip temp files
 		}
 
 		sessionID := strings.TrimSuffix(entry.Name(), ".json")

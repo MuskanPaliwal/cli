@@ -1876,7 +1876,7 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		return nil
 	}
 
-	if err := s.cleanupShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
+	if _, err := DeleteShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
 		logging.Warn(logCtx, "failed to clean up shadow branch",
 			slog.String("shadow_branch", shadowBranchName),
 			slog.String("error", err.Error()),
@@ -2047,34 +2047,12 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	}
 
 	if didCondense && shadowBranchName != "" {
-		if err := s.cleanupShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
+		if _, err := DeleteShadowBranchIfUnused(ctx, repo, shadowBranchName, sessionID); err != nil {
 			logging.Warn(logCtx, "eager condense: failed to clean up shadow branch",
 				slog.String("shadow_branch", shadowBranchName),
 				slog.String("error", err.Error()),
 			)
 		}
-	}
-	return nil
-}
-
-// cleanupShadowBranchIfUnused deletes a shadow branch if no other active sessions reference it.
-func (s *ManualCommitStrategy) cleanupShadowBranchIfUnused(ctx context.Context, _ *git.Repository, shadowBranchName, excludeSessionID string) error {
-	canDelete, err := CanDeleteShadowBranch(ctx, shadowBranchName, excludeSessionID)
-	if err != nil {
-		return err
-	}
-	if !canDelete {
-		return nil
-	}
-
-	// No other sessions need it, delete the shadow branch via CLI
-	// (go-git v5's RemoveReference doesn't persist with packed refs/worktrees)
-	if err := DeleteBranchCLI(ctx, shadowBranchName); err != nil {
-		// Branch already gone is not an error
-		if errors.Is(err, ErrBranchNotFound) {
-			return nil
-		}
-		return fmt.Errorf("failed to remove shadow branch: %w", err)
 	}
 	return nil
 }

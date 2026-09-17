@@ -434,7 +434,7 @@ func promptSessionAction(ss stuckSession) (string, error) {
 }
 
 // discardSession removes session state and cleans up the shadow branch.
-func discardSession(ctx context.Context, ss stuckSession, _ *git.Repository, errW io.Writer) error {
+func discardSession(ctx context.Context, ss stuckSession, repo *git.Repository, errW io.Writer) error {
 	// Clear session state file
 	if err := strategy.ClearSessionStateWithProgress(ctx, ss.State.SessionID, errW, strategy.SessionLockNoticeDelay); err != nil {
 		return fmt.Errorf("failed to clear session state: %w", err)
@@ -442,15 +442,8 @@ func discardSession(ctx context.Context, ss stuckSession, _ *git.Repository, err
 
 	// Delete shadow branch if it exists and no other sessions need it
 	if ss.HasShadowBranch {
-		if shouldDelete, err := strategy.CanDeleteShadowBranch(ctx, ss.ShadowBranch, ss.State.SessionID); err != nil {
+		if _, err := strategy.DeleteShadowBranchIfUnused(ctx, repo, ss.ShadowBranch, ss.State.SessionID); err != nil {
 			fmt.Fprintf(errW, "Warning: could not check other sessions for shadow branch: %v\n", err)
-		} else if shouldDelete {
-			if err := strategy.DeleteBranchCLI(ctx, ss.ShadowBranch); err != nil {
-				// Branch already gone is not an error — keeps discard idempotent
-				if !errors.Is(err, strategy.ErrBranchNotFound) {
-					return fmt.Errorf("failed to delete shadow branch: %w", err)
-				}
-			}
 		}
 	}
 

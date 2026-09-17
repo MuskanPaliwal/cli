@@ -19,6 +19,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 
+	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
@@ -276,10 +277,7 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 			slog.Int("deleted_count", len(deleted)),
 		)
 	}
-	if safetyErr != nil {
-		return len(deleted), safetyErr
-	}
-	return len(deleted), nil
+	return len(deleted), safetyErr
 }
 
 // DeleteShadowBranchesIfUnchanged deletes shadow branches only if each branch
@@ -376,12 +374,61 @@ func CanDeleteShadowBranch(ctx context.Context, shadowBranch, excludeSessionID s
 		if state.SessionID == excludeSessionID {
 			continue
 		}
-		// Task records never live on the shadow branch, so only SaveStep
-		// checkpoints pin it alive.
+		// SaveStep increments StepCount, while incremental task checkpoints
+		// record FilesTouched. Either proves this session wrote to the branch.
 		otherShadow := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
-		if otherShadow == shadowBranch && state.StepCount > 0 {
+		if otherShadow == shadowBranch && state.HasShadowBranchContent() {
 			return false, nil
 		}
+	}
+	return true, nil
+}
+
+// DeleteShadowBranchIfUnused deletes a branch only if its tip and protecting
+// session inventory remain unchanged while Git holds the ref lock.
+func DeleteShadowBranchIfUnused(
+	ctx context.Context,
+	repo *git.Repository,
+	shadowBranch, excludeSessionID string,
+) (bool, error) {
+	refName := plumbing.NewBranchReferenceName(shadowBranch)
+	ref, err := repo.Reference(refName, false)
+	if err != nil {
+		absent, absenceErr := gitrepo.ReferenceIsAbsent(repo, refName)
+		if absenceErr != nil {
+			return false, fmt.Errorf("verify shadow branch %s absence: %w", shadowBranch, absenceErr)
+		}
+		if absent {
+			return false, nil
+		}
+		return false, fmt.Errorf("read shadow branch %s: %w", shadowBranch, err)
+	}
+
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve worktree root for shadow branch cleanup: %w", err)
+	}
+	runErr := gitrepo.CompareAndSwapRefGuarded(ctx, repoRoot, refName, plumbing.ZeroHash, ref.Hash(), func() error {
+		canDelete, guardErr := CanDeleteShadowBranch(ctx, shadowBranch, excludeSessionID)
+		if guardErr != nil {
+			return guardErr
+		}
+		if !canDelete {
+			return errShadowBranchProtected
+		}
+		return nil
+	})
+	if errors.Is(runErr, errShadowBranchProtected) {
+		if errors.Is(runErr, gitrepo.ErrRefCASAbort) {
+			return false, fmt.Errorf("abort protected shadow branch deletion: %w", runErr)
+		}
+		return false, nil
+	}
+	if errors.Is(runErr, gitrepo.ErrRefCASConflict) {
+		return false, nil
+	}
+	if runErr != nil {
+		return false, fmt.Errorf("delete shadow branch %s: %w", shadowBranch, runErr)
 	}
 	return true, nil
 }

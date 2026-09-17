@@ -109,6 +109,33 @@ func TestResetSession_PreservesCorruptSiblingShadow(t *testing.T) {
 	}
 }
 
+func TestResetSession_PreservesSiblingIncrementalTaskCheckpoint(t *testing.T) {
+	env := newShadowCleanupEnv(t)
+	ctx := t.Context()
+	shadow := env.addShadowBranch(env.baseHash.String(), "")
+	hash := newShadowOnlyCommit(t, env, shadow)
+	recent := time.Now()
+	require.NoError(t, SaveSessionState(ctx, &SessionState{
+		SessionID:  "reset-me",
+		BaseCommit: env.baseHash.String(),
+		StartedAt:  recent,
+		Phase:      session.PhaseActive,
+		StepCount:  1,
+	}))
+	require.NoError(t, SaveSessionState(ctx, &SessionState{
+		SessionID:    "task-session",
+		BaseCommit:   env.baseHash.String(),
+		StartedAt:    recent,
+		Phase:        session.PhaseActive,
+		FilesTouched: []string{"task.go"},
+	}))
+
+	var warnings strings.Builder
+	require.NoError(t, NewManualCommitStrategy().ResetSession(ctx, io.Discard, &warnings, "reset-me"))
+	require.Empty(t, warnings.String())
+	requireShadowBranchAt(t, env, shadow, hash)
+}
+
 func TestListAllSessionStates_PreservesUnreadableShadow(t *testing.T) {
 	env := newShadowCleanupEnv(t)
 	ctx := t.Context()
