@@ -6,7 +6,6 @@ package trailers
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 
 	checkpointID "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -244,26 +243,21 @@ func IsTrailerLine(line string) bool {
 func appendTrailerLine(message, trailerLine string) string {
 	trimmed := strings.TrimRight(message, "\n")
 
-	// Collect the final paragraph, skipping git comment lines. Joining also
-	// requires a blank line above the paragraph so a trailer-shaped subject
-	// line (e.g. "fix: bug") never has the trailer glued onto it.
+	// Collect the final paragraph. Joining also requires a blank line above
+	// the paragraph so a trailer-shaped subject line (e.g. "fix: bug") never
+	// has the trailer glued onto it.
 	lines := strings.Split(trimmed, "\n")
-	var para []string
+	start := len(lines)
 	separated := false
-	for i := len(lines) - 1; i >= 0; i-- {
-		stripped := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(stripped, "#") {
-			continue
-		}
-		if stripped == "" {
+	for start > 0 {
+		if strings.TrimSpace(lines[start-1]) == "" {
 			separated = true
 			break
 		}
-		para = append(para, lines[i])
+		start--
 	}
-	slices.Reverse(para)
 
-	if separated && isTrailerBlock(para) {
+	if separated && isTrailerBlock(lines[start:]) {
 		return trimmed + "\n" + trailerLine + "\n"
 	}
 	return trimmed + "\n\n" + trailerLine + "\n"

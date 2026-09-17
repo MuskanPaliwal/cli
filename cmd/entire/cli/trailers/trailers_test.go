@@ -54,6 +54,16 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			msg:  "Message\n\nSigned-off-by: Test User <test@example.com>\n continuation text\n",
 			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n continuation text\nEntire-Checkpoint: abc123def456\n",
 		},
+		{
+			name: "checkpoint-shaped body line starts a new block",
+			msg:  "Message\n\nEntire-Checkpoint: deadbeefcafe\n\nBody continues here.\n",
+			want: "Message\n\nEntire-Checkpoint: deadbeefcafe\n\nBody continues here.\n\nEntire-Checkpoint: abc123def456\n",
+		},
+		{
+			name: "trailing hash line starts a new block",
+			msg:  "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n",
+			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n\nEntire-Checkpoint: abc123def456\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -63,42 +73,9 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("AppendCheckpointTrailer() = %q, want %q", got, tt.want)
 			}
-		})
-	}
-}
-
-// TestAppendCheckpointTrailerRecognizedByFinalBlockParser pins the
-// writer/reader contract: every message AppendCheckpointTrailer produces must
-// be recognized by ParseCheckpointFromFinalTrailerBlock, because attach amends
-// commits with the writer's output and the PostCommit hook decides checkpoint
-// linkage with the strict reader. A message the writer emits but the reader
-// rejects reports success to the user while the hook silently does nothing.
-func TestAppendCheckpointTrailerRecognizedByFinalBlockParser(t *testing.T) {
-	t.Parallel()
-
-	messages := []struct {
-		name string
-		msg  string
-	}{
-		{"plain subject", "feat: add attach command\n"},
-		{"subject and body", "fix: login\n\nThis fixes the error: connection refused\n"},
-		{"existing trailer block", "Message\n\nSigned-off-by: Test User <test@example.com>\n"},
-		{"existing checkpoint trailer", "Message\n\nEntire-Checkpoint: deadbeefcafe\n"},
-		{"indented pseudo-trailer paragraph", "Message\n\nBody.\n\n  Entire-Checkpoint: deadbeefcafe\n"},
-		{"tab-indented pseudo-trailer paragraph", "Message\n\nBody.\n\n\tEntire-Checkpoint: deadbeefcafe\n"},
-		{"trailer block ending in continuation", "Message\n\nSigned-off-by: Test User <test@example.com>\n continuation text\n"},
-		{"checkpoint-shaped body line", "Message\n\nEntire-Checkpoint: deadbeefcafe\n\nBody continues here.\n"},
-	}
-
-	const appended = "abc123def456"
-	for _, tt := range messages {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := AppendCheckpointTrailer(tt.msg, appended)
-			t.Logf("appended message=%q", got)
 			found := false
 			for _, cpID := range ParseAllCheckpointsFromFinalTrailerBlock(got) {
-				if cpID.String() == appended {
+				if cpID.String() == "abc123def456" {
 					found = true
 				}
 			}
