@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/uiform"
 	"github.com/entireio/cli/internal/coreapi"
 )
 
@@ -260,7 +261,7 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 	if t.revokeByID != nil {
 		grantee += " or an account ULID"
 	}
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("remove <%s> [grantee]", t.noun),
 		Short: fmt.Sprintf("Revoke a user's %s access", t.noun),
 		Long: fmt.Sprintf("Revoke a grantee's %s access. The %s is addressed by %s; the grantee is %s. "+
@@ -289,6 +290,23 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				} else if picked, err = pickGrantsToRevoke(ctx, cmd, c, t, pt, id); err != nil {
 					return err
 				}
+				// Revoking confirms once for the whole set, after the picker so
+				// the prompt names what was actually chosen.
+				//
+				// Only where there is a terminal to ask on, and with no flag to
+				// bypass it. `delete` refuses instead, because a deleted repo
+				// is gone; a revoked grant is one command from being restored,
+				// so a script that has always revoked without being asked keeps
+				// doing so rather than needing an escape hatch invented for it.
+				// The prompt is there for the hand on the keyboard — above all
+				// for a set just picked off a list — and that hand is by
+				// definition at a terminal.
+				if interactive.CanPromptInteractively() {
+					proceed, err := revokeConfirmed(ctx, cmd, pt, picked)
+					if err != nil || !proceed {
+						return err
+					}
+				}
 				for _, p := range picked {
 					if err := revokeOne(ctx, cmd, c, t, pt, id, p); err != nil {
 						return err
@@ -298,6 +316,29 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 			})
 		},
 	}
+	return cmd
+}
+
+// revokeConfirmed is the seam the confirmation sits behind, matching
+// removePicker's role for the picker: the form needs a terminal, which `go
+// test` does not have, so a test answers it here instead.
+var revokeConfirmed = func(ctx context.Context, cmd *cobra.Command, pt grantPickerTarget, picked []grantCandidate) (bool, error) {
+	label, detail := revokeConfirmation(pt, picked)
+	return confirmDestructiveAction(ctx, cmd.OutOrStdout(), revokeAction, label, detail, false, true)
+}
+
+// revokeConfirmation describes what is about to be revoked. A single grantee
+// reads as one sentence; several are counted in the title and listed under it,
+// so the prompt never hides who is in the set behind a number.
+func revokeConfirmation(pt grantPickerTarget, picked []grantCandidate) (label, detail string) {
+	if len(picked) == 1 {
+		return picked[0].label + " from " + pt.describe(), ""
+	}
+	var b strings.Builder
+	for _, p := range picked {
+		fmt.Fprintf(&b, "%s%s\n", uiform.SelectOptionIndent, p.label)
+	}
+	return fmt.Sprintf("%d grants on %s", len(picked), pt.describe()), b.String()
 }
 
 // pickGrantsToRevoke offers who holds the target now. An empty pool is an

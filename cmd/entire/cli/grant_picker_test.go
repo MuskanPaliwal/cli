@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -562,6 +563,9 @@ func TestGrantAdd_JSONShapeFollowsTheRequest(t *testing.T) {
 
 // captureRemovePicker swaps the remove form seam, recording what was offered
 // and answering with the refs of the rows to revoke.
+//
+// ENTIRE_TEST_TTY=1 puts the confirmation in play as well, so it stubs that too
+// and answers yes; a test that cares about declining says so itself.
 func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []string) *[]grantCandidate {
 	t.Helper()
 	t.Setenv("ENTIRE_TEST_TTY", "1")
@@ -571,7 +575,11 @@ func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []s
 		offered = candidates
 		return answer(candidates), nil
 	}
-	t.Cleanup(func() { removePicker = prev })
+	prevConfirm := revokeConfirmed
+	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+		return true, nil
+	}
+	t.Cleanup(func() { removePicker, revokeConfirmed = prev, prevConfirm })
 	return &offered
 }
 
@@ -707,4 +715,114 @@ func TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+// TestGrantRemove_NeedsNoConfirmationBypass pins the shape of the confirmation:
+// it is asked only where there is a terminal to ask on, so a script that has
+// always revoked without being prompted keeps working and there is no flag to
+// bypass. `delete` refuses instead, because a deleted resource is gone, while a
+// revoked grant is one command from being restored.
+//
+// `go test` is non-interactive, so this is the unprompted path.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantRemove_NeedsNoConfirmationBypass(t *testing.T) {
+	var revoked string
+	srv := httptest.NewServer(grantWiringHandler(t,
+		func(_, path string) { revoked = path },
+		func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) },
+	))
+	t.Cleanup(srv.Close)
+
+	out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", wiringProjULID, "github:alice")
+	require.NoError(t, err)
+	require.Contains(t, revoked, "/grants/account/github/12345")
+	require.Contains(t, out, "✓ Revoked github:alice")
+
+	// No bypass exists, on any of the three, because nothing needs bypassing.
+	for name, newCmd := range map[string]func() *cobra.Command{
+		"org": newOrgGrantCmd, "project": newProjectGrantCmd, "repo": newRepoGrantCmd,
+	} {
+		t.Run(name+" has no --force", func(t *testing.T) {
+			require.Nil(t, newCmd().Commands()[2].Flags().Lookup("force"))
+		})
+	}
+}
+
+// TestRevokeConfirmation_NamesEveryGrantee: a prompt that summarised several
+// revokes as a count alone would hide who is in the set, so the count is the
+// title and the names are listed under it. One grantee needs no list and reads
+// as a sentence.
+func TestRevokeConfirmation_NamesEveryGrantee(t *testing.T) {
+	t.Parallel()
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+
+	label, detail := revokeConfirmation(pt, []grantCandidate{{ref: "x", label: "github:alice"}})
+	require.Equal(t, "github:alice from project widgets", label)
+	require.Empty(t, detail, "a single grantee needs no list under it")
+
+	label, detail = revokeConfirmation(pt, []grantCandidate{
+		{ref: "x", label: "github:alice"},
+		{ref: "y", label: "github:bob"},
+	})
+	require.Equal(t, "2 grants on project widgets", label)
+	require.Contains(t, detail, "github:alice")
+	require.Contains(t, detail, "github:bob")
+}
+
+// TestGrantRemove_DecliningRevokesNothing is what the confirmation is for: a
+// no at the prompt leaves every grant in place and exits cleanly, rather than
+// revoking part of the set or reporting a failure.
+//
+// Not parallel: swaps the activeCoreClient, removePicker and revokeConfirmed seams.
+func TestGrantRemove_DecliningRevokesNothing(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice, acctBob}}, &grants, nil)
+	t.Cleanup(srv.Close)
+	captureRemovePicker(t, func(cs []grantCandidate) []string {
+		return []string{cs[0].ref, cs[1].ref}
+	})
+
+	var asked []grantCandidate
+	prev := revokeConfirmed
+	revokeConfirmed = func(_ context.Context, _ *cobra.Command, _ grantPickerTarget, picked []grantCandidate) (bool, error) {
+		asked = picked
+		return false, nil
+	}
+	t.Cleanup(func() { revokeConfirmed = prev })
+
+	out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
+	require.NoError(t, err, "declining is a clean stop, not a failure")
+	require.Empty(t, grants, "nothing may be revoked after a no")
+	require.NotContains(t, out, "✓")
+	// It is asked once for the whole set, naming both, rather than per grantee.
+	require.Equal(t, []string{"github:alice", "github:bob"}, labels(asked))
+}
+
+// TestGrantRemove_ConfirmationIsSkippedWithoutATerminal pins the rule that
+// removes the need for a bypass flag: no terminal, no prompt, and the revoke
+// goes through exactly as it always has.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantRemove_ConfirmationIsSkippedWithoutATerminal(t *testing.T) {
+	asked := false
+	prev := revokeConfirmed
+	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+		asked = true
+		return true, nil
+	}
+	t.Cleanup(func() { revokeConfirmed = prev })
+
+	var revoked string
+	srv := httptest.NewServer(grantWiringHandler(t,
+		func(_, path string) { revoked = path },
+		func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) },
+	))
+	t.Cleanup(srv.Close)
+
+	// No ENTIRE_TEST_TTY here, so CanPromptInteractively is false.
+	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", wiringProjULID, "github:alice")
+	require.NoError(t, err)
+	require.False(t, asked, "a script is never asked a question it cannot answer")
+	require.Contains(t, revoked, "/grants/account/github/12345")
 }
