@@ -31,16 +31,25 @@ func parseGitHubMirrorRepoRef(ref string) (owner, repo string, err error) {
 		}
 		return owner, repo, nil
 	}
-	// A GitHub URL names its forge, so it is unambiguous — but it is still not
-	// how a repository is named here, and accepting it would leave two
-	// spellings for one repo.
-	if o, r, uerr := parseHostedGitHubURL(ref); uerr == nil {
-		return "", "", fmt.Errorf("invalid <repo> %q: pass GitHub repositories as /%s/%s/%s", ref, mirrorCloneForge, o, r)
-	}
 	// GitHub-only, so only the mirror reading is offered: suggesting the
 	// native one would name a ref this same function refuses above.
-	if suggestions := bareRefSuggestions(ref, mirrorCloneForge); len(suggestions) > 0 {
-		return "", "", fmt.Errorf("invalid <repo>: repository reference must name its forge; did you mean %s?", strings.Join(suggestions, " or "))
+	return "", "", forgeQualifiedRefError(ref, mirrorCloneForge)
+}
+
+// forgeQualifiedRefError explains a ref that named no forge token, for a
+// command that serves the forges named in forges (none named means both, as
+// bareRefSuggestions reads it). A command must name the forges it serves, or
+// the suggestion is a ref it refuses on the next run.
+//
+// A GitHub URL names its forge, so it is unambiguous — but it is still not how
+// a repository is named here, and accepting it would leave two spellings for
+// one repo, so it is recognised only to name the ref it should have been.
+func forgeQualifiedRefError(ref string, forges ...string) error {
+	if owner, repo, err := parseHostedGitHubURL(ref); err == nil {
+		return fmt.Errorf("invalid <repo> %q: pass GitHub repositories as /%s/%s/%s", ref, mirrorCloneForge, owner, repo)
 	}
-	return "", "", fmt.Errorf("invalid <repo>: expected a forge-qualified repository reference such as /gh/owner/repo or /et/project/repo, got %q", ref)
+	if suggestions := bareRefSuggestions(ref, forges...); len(suggestions) > 0 {
+		return fmt.Errorf("invalid <repo>: repository reference must name its forge; did you mean %s?", strings.Join(suggestions, " or "))
+	}
+	return fmt.Errorf("invalid <repo>: expected a forge-qualified repository reference such as /%s/<owner>/<repo> or /%s/<project>/<repo>, got %q", mirrorCloneForge, nativeCloneForge, ref)
 }

@@ -92,10 +92,10 @@ the commands are always runnable in every build.
   plus `grant` (`add`/`list`/`remove`): project access for a `provider:handle`
   grantee, roles reader/writer/admin; `remove` also takes an account ULID
 - `repo`: control-plane repository lifecycle — `create`, `list --project`,
-  `view`, `edit`, `delete`, `clone`, plus the `mirror`, `remote`, `access`,
+  `view`, `edit`, `delete`, `clone`, plus the `mirror`, `remote`,
   `visibility`, `protection` and `grant` subtrees (`repo grant` mirrors
-  `project grant`, addressing the repo by its `/et/<project>/<repo>` path
-  only). Verb names follow the GitHub CLI where the job is the same (`view`,
+  `project grant`, addressing the repo by its `/et/<project>/<repo>` path;
+  `grant list` alone also takes a `/gh/` mirror ref). Verb names follow the GitHub CLI where the job is the same (`view`,
   `edit --visibility`, `auth switch`), per the unified-repo-commands proto.
   Git content operations (log, diff, …) are intentionally out of scope.
   `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
@@ -114,9 +114,25 @@ the commands are always runnable in every build.
   whether to replace the remote (preserving the old URL under `--upstream`) or
   add a separate one; non-interactively it repoints `--remote` directly. Both
   `remote use` and `clone` choose a placement through the shared
-  `selectPlacement` picker. `access list` shows who can pull a mirror (live
-  GitHub-admin gated). `edit --visibility` sets a native repo's visibility;
-  `visibility get` reads it.
+  `selectPlacement` picker. `edit --visibility` sets a native repo's
+  visibility; `visibility get` reads it.
+  **"Who can reach this repo?" is one verb, `repo grant`,** because a user
+  asking it need not know which backend the repo has. `grant list` branches on
+  the ref's forge before resolving anything: a `/et/` ref lists the repo's
+  grants, a `/gh/` ref lists the placement's collaborators from
+  `GET /mirrors/collaborators` (live GitHub-admin gated against the caller's own
+  GitHub identity, so a service-account token cannot answer it). The mirror
+  branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
+  mirror endpoint does not report. That endpoint requires a `clusterHost`
+  because a core fronting one cluster serves it, but the answer is the upstream
+  repository's collaborators and is the same wherever it is asked, so the branch
+  reads `defaultClusterHost` and exposes no region flag. `grant add` and
+  `grant remove` keep the native path as their whole grammar: a mirror's access
+  is the upstream GitHub repository's, so a `/gh/` ref is refused before any
+  request with a message naming `grant list`, rather than accepted into the
+  grammar and always failing. The branch is one optional `listBranch` field on
+  `grantTarget`, so the shared builder stays forge-unaware for `org` and
+  `project`.
   **A repository is named `/<forge>/<a>/<b>` and no other way**, across the
   mirror subtree and `clone` alike: a bare `<a>/<b>` is refused because both
   forges take that shape, and a GitHub URL is refused because it would be a
@@ -145,7 +161,9 @@ the commands are always runnable in every build.
   `path` the API returns, and `resolveRepoRef` accepts it for every command
   that takes a repo ref — `view`, `edit`, `delete`, and the `visibility` and
   `protection` subtrees (COR-1632). `repo grant` takes that path and nothing else — no
-  `--project`, no bare name, no ULID — through `resolveRepoPath`, which parses
+  `--project`, no bare name, no ULID (its `list` reads a `/gh/` mirror ref from
+  the mirror endpoint instead, never through this resolver) — through
+  `resolveRepoPath`, which parses
   with `parseNativeCloneRef` and resolves both segments by name only (a project
   or repo can be *named* like a ULID, so path segments never touch the
   `looksLikeULID` passthrough; `resolveRepoPathRef` and `resolveNativeRepo`

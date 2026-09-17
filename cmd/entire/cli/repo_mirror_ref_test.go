@@ -43,7 +43,6 @@ func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
 	for name, newCmd := range map[string]func() *cobra.Command{
 		"mirror add":    newRepoMirrorAddCmd,
 		"mirror remove": newRepoMirrorRemoveCmd,
-		"access list":   newRepoAccessListCmd,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

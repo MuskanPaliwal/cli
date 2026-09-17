@@ -46,6 +46,23 @@ type grantTarget[Row any] struct {
 	// the target has none (org), so a ULID grantee falls through to
 	// resolveGranteeProvider and is refused with the handle form named.
 	revokeByID func(ctx context.Context, c *coreapi.Client, id, granteeID string) error
+
+	// listBranch builds the second reading `list` gives a target ref, for a
+	// target whose refs do not all name the same thing: a repo is an Entire
+	// repository or a GitHub mirror, and only the first has grants. nil for org
+	// and project, which have one kind of target each. Built per leaf so the
+	// flags it binds get their own variables.
+	listBranch func() *grantListBranch
+}
+
+// grantListBranch is the second answer a `list` leaf can give. list answers the
+// refs it claims and reports handled=false for the rest, which the target's own
+// resolver takes; long and example become the leaf's help, because a leaf
+// taking two kinds of ref is the only one with more to say than its Short.
+type grantListBranch struct {
+	long    string
+	example string
+	list    func(cmd *cobra.Command, ref string) (handled bool, err error)
 }
 
 func newOrgGrantCmd() *cobra.Command     { return newGrantSubtreeCmd(orgGrantTarget) }
@@ -116,11 +133,20 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 }
 
 func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
+	var branch *grantListBranch
+	if t.listBranch != nil {
+		branch = t.listBranch()
+	}
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("list <%s>", t.noun),
 		Short: fmt.Sprintf("List who has %s access", t.noun),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if branch != nil {
+				if handled, err := branch.list(cmd, args[0]); handled {
+					return err
+				}
+			}
 			return runCoreList(cmd, "No grants found.", t.columns, t.row, func(ctx context.Context, c *coreapi.Client) ([]Row, error) {
 				id, err := t.resolve(ctx, c, args[0])
 				if err != nil {
@@ -137,6 +163,9 @@ func newGrantListCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		},
 	}
 	addJSONFlag(cmd)
+	if branch != nil {
+		cmd.Long, cmd.Example = branch.long, branch.example
+	}
 	return cmd
 }
 
@@ -210,8 +239,8 @@ func revokeGrant(cmd *cobra.Command, subject string, revoke func() error) error 
 // so they add SOURCE and TYPE. No table prints an internal id: the grantee
 // ULID is in the --json output for anyone who needs it.
 var (
-	orgMemberColumns = []string{"GRANTEE", colHeaderRole, colHeaderStatus}
-	grantColumns     = []string{"GRANTEE", colHeaderRole, "SOURCE", "TYPE"}
+	orgMemberColumns = []string{colHeaderGrantee, colHeaderRole, colHeaderStatus}
+	grantColumns     = []string{colHeaderGrantee, colHeaderRole, "SOURCE", "TYPE"}
 )
 
 func orgMemberRow(m coreapi.Membership) []string {
@@ -319,7 +348,9 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 }
 
 // repoGrantTarget is repo access: roles reader/writer/admin, required, on a
-// repo addressed by its /et/<project>/<repo> path and nothing else.
+// repo addressed by its /et/<project>/<repo> path and nothing else. `list`
+// alone also answers a GitHub mirror ref, from the upstream collaborators the
+// placement materializes — see newMirrorGrantListing.
 var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	noun:       cmdRepo,
 	refUsage:   "its /" + nativeCloneForge + "/<project>/<repo> path",
@@ -327,7 +358,15 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	roles:      accessRoles,
 	columns:    grantColumns,
 	row:        repoGrantRow,
+	listBranch: newMirrorGrantListing,
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
+		// A mirror ref reaches this resolver only from `add` and `remove`:
+		// `list` answers it from the mirror branch before resolving anything.
+		// Both need a reason naming the upstream, which resolveRepoPath — whose
+		// subject is the native path's grammar — has no business giving.
+		if declaresForge(ref, mirrorCloneForge) {
+			return "", mirrorGrantsAreUpstreamErr(ref)
+		}
 		return resolveRepoPath(ctx, c, ref)
 	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {
