@@ -150,11 +150,12 @@ func ParseAllCheckpoints(commitMessage string) []checkpointID.CheckpointID {
 // ParseCheckpointFromFinalTrailerBlock extracts the first checkpoint ID from
 // the final trailer block. Commit body text is not considered.
 func ParseCheckpointFromFinalTrailerBlock(commitMessage string) (checkpointID.CheckpointID, bool) {
-	ids := ParseAllCheckpointsFromFinalTrailerBlock(commitMessage)
-	if len(ids) == 0 {
-		return checkpointID.EmptyCheckpointID, false
+	for _, line := range finalTrailerBlock(commitMessage) {
+		if cpID, ok := checkpointFromTrailerLine(line); ok {
+			return cpID, true
+		}
 	}
-	return ids[0], true
+	return checkpointID.EmptyCheckpointID, false
 }
 
 // ParseAllCheckpointsFromFinalTrailerBlock extracts checkpoint IDs from the
@@ -168,22 +169,23 @@ func ParseAllCheckpointsFromFinalTrailerBlock(commitMessage string) []checkpoint
 	seen := make(map[string]bool)
 	ids := make([]checkpointID.CheckpointID, 0, len(lines))
 	for _, line := range lines {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok || key != CheckpointTrailerKey {
+		cpID, ok := checkpointFromTrailerLine(line)
+		if !ok || seen[cpID.String()] {
 			continue
 		}
-		idStr := strings.TrimSpace(value)
-		if seen[idStr] {
-			continue
-		}
-		cpID, err := checkpointID.NewCheckpointID(idStr)
-		if err != nil {
-			continue
-		}
-		seen[idStr] = true
+		seen[cpID.String()] = true
 		ids = append(ids, cpID)
 	}
 	return ids
+}
+
+func checkpointFromTrailerLine(line string) (checkpointID.CheckpointID, bool) {
+	key, value, ok := strings.Cut(line, ":")
+	if !ok || key != CheckpointTrailerKey {
+		return checkpointID.EmptyCheckpointID, false
+	}
+	cpID, err := checkpointID.NewCheckpointID(strings.TrimSpace(value))
+	return cpID, err == nil
 }
 
 // FormatSourceRef creates a formatted source ref string for the trailer.

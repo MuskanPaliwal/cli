@@ -49,6 +49,8 @@ type ttyResult int
 
 const commitMessageSourceMessage = "message"
 
+const commitLinkComment = " Remove the Entire-Checkpoint trailer above"
+
 const (
 	ttyResultLink       ttyResult = iota // Link: add the checkpoint trailer
 	ttyResultSkip                        // Skip: don't add the trailer
@@ -151,9 +153,11 @@ func (s *ManualCommitStrategy) CommitMsg(ctx context.Context, commitMsgFile stri
 
 	message := string(content)
 	messageForValidation := message
-	commentPrefix := gitCommentPrefix(ctx, message)
-	if strings.Contains(message, commentPrefix+" Remove the Entire-Checkpoint trailer above") {
-		messageForValidation = stripGitCommentLines(message, commentPrefix)
+	if strings.Contains(message, commitLinkComment) {
+		commentPrefix := gitCommentPrefix(ctx, message)
+		if strings.Contains(message, commentPrefix+commitLinkComment) {
+			messageForValidation = stripGitCommentLines(message, commentPrefix)
+		}
 	}
 
 	if _, found := trailers.ParseCheckpointFromFinalTrailerBlock(messageForValidation); !found {
@@ -297,16 +301,9 @@ func stripCheckpointTrailer(message string) string {
 
 func parseCheckpointFromCommitMessageFile(ctx context.Context, message, source string) (id.CheckpointID, bool) {
 	if source != commitMessageSourceMessage {
-		message = cleanPreparedCommitMessage(message, source, gitCommentPrefix(ctx, message))
+		message = stripGitCommentLines(message, gitCommentPrefix(ctx, message))
 	}
 	return trailers.ParseCheckpointFromFinalTrailerBlock(message)
-}
-
-func cleanPreparedCommitMessage(message, source, commentPrefix string) string {
-	if source == commitMessageSourceMessage {
-		return message
-	}
-	return stripGitCommentLines(message, commentPrefix)
 }
 
 func stripGitCommentLines(message, commentPrefix string) string {
@@ -335,10 +332,11 @@ func gitCommentPrefix(ctx context.Context, message string) string {
 		return prefix
 	}
 
+	lines := strings.Split(message, "\n")
 	for _, candidate := range "#;@!$%^&|:" {
 		candidatePrefix := string(candidate)
 		available := true
-		for _, line := range strings.Split(message, "\n") {
+		for _, line := range lines {
 			if strings.HasPrefix(line, candidatePrefix) {
 				available = false
 				break
@@ -495,7 +493,13 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 
 	message := string(content)
 
-	if existingCpID, found := parseCheckpointFromCommitMessageFile(ctx, message, source); found {
+	commentPrefix := ""
+	messageForValidation := message
+	if source != commitMessageSourceMessage {
+		commentPrefix = gitCommentPrefix(ctx, message)
+		messageForValidation = stripGitCommentLines(message, commentPrefix)
+	}
+	if existingCpID, found := trailers.ParseCheckpointFromFinalTrailerBlock(messageForValidation); found {
 		readCommitMessageSpan.End()
 		// Trailer already exists (e.g., amend) - keep it
 		logging.Debug(logCtx, "prepare-commit-msg: trailer already exists",
@@ -578,7 +582,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		}
 	default:
 		// Normal editor flow: add trailer with explanatory comment (will be stripped by git)
-		message = addCheckpointTrailerWithComment(message, checkpointID, string(agentType), displayPrompt, gitCommentPrefix(ctx, message))
+		message = addCheckpointTrailerWithComment(message, checkpointID, string(agentType), displayPrompt, commentPrefix)
 	}
 
 	logging.Info(logCtx, "prepare-commit-msg: trailer added",
@@ -610,11 +614,6 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 	}
 
 	message := string(content)
-	repo, repoErr := OpenRepository(ctx)
-	if repoErr != nil {
-		return nil
-	}
-	defer repo.Close()
 
 	// If message already has a trailer, keep it unchanged
 	if existingCpID, found := parseCheckpointFromCommitMessageFile(ctx, message, "commit"); found {
@@ -640,6 +639,11 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 	// We need to match sessions whose BaseCommit equals HEAD (the commit being amended
 	// was created from this base). This prevents stale sessions from injecting
 	// unrelated checkpoint IDs.
+	repo, repoErr := OpenRepository(ctx)
+	if repoErr != nil {
+		return nil
+	}
+	defer repo.Close()
 	head, headErr := repo.Head()
 	if headErr != nil {
 		return nil
@@ -2499,7 +2503,7 @@ func addCheckpointTrailer(message string, checkpointID id.CheckpointID) string {
 func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointID, agentName, prompt, commentPrefix string) string {
 	trailer := trailers.CheckpointTrailerKey + ": " + checkpointID.String()
 	commentLines := []string{
-		commentPrefix + " Remove the Entire-Checkpoint trailer above if you don't want to link this commit to " + agentName + " session context.",
+		commentPrefix + commitLinkComment + " if you don't want to link this commit to " + agentName + " session context.",
 	}
 	if prompt != "" {
 		commentLines = append(commentLines, commentPrefix+" Last Prompt: "+prompt)

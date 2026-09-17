@@ -1028,8 +1028,9 @@ func TestGitCommentPrefixAutoAvoidsExistingLinePrefix(t *testing.T) {
 	require.Equal(t, ";", gitCommentPrefix(context.Background(), "Message\n# user content\n"))
 }
 
-func TestCleanPreparedCommitMessageFollowsGitCommentCleanup(t *testing.T) {
-	t.Parallel()
+func TestParseCheckpointFromCommitMessageFileFollowsGitCommentCleanup(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
 
 	tests := []struct {
 		name          string
@@ -1061,9 +1062,8 @@ func TestCleanPreparedCommitMessageFollowsGitCommentCleanup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			cleaned := cleanPreparedCommitMessage(tt.message, tt.source, tt.commentPrefix)
-			cpID, found := trailers.ParseCheckpointFromFinalTrailerBlock(cleaned)
+			testutil.RunGit(t, dir, "config", "core.commentChar", tt.commentPrefix)
+			cpID, found := parseCheckpointFromCommitMessageFile(context.Background(), tt.message, tt.source)
 			require.Equal(t, tt.wantFound, found)
 			if tt.wantFound {
 				require.Equal(t, "a1b2c3d4e5f6", cpID.String())
