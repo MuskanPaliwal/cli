@@ -143,9 +143,12 @@ the commands are always runnable in every build.
   keys (`granteeId`, `granteeName`, plus `source` = `github`, where a mirror's
   access does come from) onto the collaborator model through
   `mergeSynthesizedFields`, additive-only, so one script reads either ref.
-  `granteeType` stays absent: the native value distinguishes grantee kinds this
-  endpoint does not report, and `granteeName` is merged only when a name
-  resolved, which is what the native rows do with theirs. That endpoint is served by the core fronting
+  `granteeType` stays absent — the endpoint reports an `accountId` and no kind,
+  so `account` would be a guess about a principal whose kind it never gave, and
+  a sentinel would add a value no server emits; absence carries the fact
+  unambiguously, since the schema makes `granteeType` required on the native
+  rows. `granteeName` is merged only when a name resolved, which is what the
+  native rows do with theirs. That endpoint is served by the core fronting
   one cluster, so the branch resolves the repo's placements through
   `resolvePullablePlacements` (the pull-gated lookup `repo clone`, `remote use`
   and `remote url` share) and reads the collaborators on a cluster the repo

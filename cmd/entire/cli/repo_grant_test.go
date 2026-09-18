@@ -255,6 +255,12 @@ func TestRepoGrantList_JSONSharesOneIdentity(t *testing.T) {
 	require.Equal(t, "01ACCTCAROL", mirror[1]["granteeId"])
 	require.NotContains(t, mirror[1], "granteeName")
 	require.Equal(t, repoProviderGitHub, mirror[1]["source"])
+
+	// granteeType is the one native key never merged: this endpoint reports no
+	// grantee kind, and the native rows always do, so its absence says which
+	// row a script is holding instead of labelling it with a guess.
+	require.Contains(t, native[0], "granteeType")
+	require.NotContains(t, mirror[0], "granteeType")
 }
 
 // TestRepoGrantList_GuessedClusterSaysSo pins that a cluster nothing pointed at

@@ -62,8 +62,17 @@ func mirrorCollaboratorView() listView[coreapi.MirrorCollaborator] {
 // they arrived, and the merged keys are facts about the row rather than
 // guesses. `source` is "github" because that is where a mirror's access comes
 // from — the same vocabulary the native side uses for "direct" or
-// "project:<name>". `granteeType` stays absent: the native value distinguishes
-// grantee kinds this endpoint does not report.
+// "project:<name>".
+//
+// `granteeType` is the one required native key left out, and deliberately: this
+// endpoint reports an accountId and no kind, so "account" would be a guess
+// about a principal whose kind we were never told — a GitHub team materialized
+// as one would be labelled wrong, silently, in the key a script filters on.
+// Absence is not ambiguous here, because the native rows always carry it (the
+// schema makes it required), so a row without one is a mirror row whose kind
+// went unreported. A sentinel like "unknown" would say the same thing while
+// adding a value no server emits, which every consumer switching on the field
+// would then have to learn.
 func mirrorCollaboratorJSON(collaborators []coreapi.MirrorCollaborator) (any, error) {
 	out := make([]map[string]json.RawMessage, 0, len(collaborators))
 	for i := range collaborators {
@@ -97,8 +106,9 @@ const repoGrantListLong = "List who can reach a repository.\n\n" +
 	"service-account token.\n\n" +
 	"--json answers both the same way: every row carries `granteeId`, `role` and " +
 	"`source`, plus `granteeName` when a name resolved, so one script reads either. " +
-	"A mirror's rows also keep the collaborator fields the API returned, and report " +
-	"no `granteeType`, which that endpoint does not distinguish."
+	"A mirror's rows also keep the collaborator fields the API returned. They carry " +
+	"no `granteeType`: that endpoint reports no grantee kind, and a missing key is " +
+	"the answer, since an Entire repository's rows always have one."
 
 const repoGrantListExample = "  entire repo grant list /" + nativeCloneForge + "/acme/web\n" +
 	"  entire repo grant list /" + mirrorCloneForge + "/acme/widget"
