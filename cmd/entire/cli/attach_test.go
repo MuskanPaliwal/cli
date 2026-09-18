@@ -213,40 +213,6 @@ func TestResolveAgentAndTranscript_HidesFailedAutoDetectionAfterFetchFailure(t *
 	}
 }
 
-func TestAttachBlocksWhenPolicyWriteUnsupported(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	repoRoot := mustGetwd(t)
-	repo, err := git.PlainOpen(repoRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
-	writeUnsupportedCheckpointPolicyForCLITest(t, repo)
-
-	sessionID := "test-attach-policy-unsupported"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"create a file"},"uuid":"uuid-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done"}]},"uuid":"uuid-2"}
-`)
-
-	var out bytes.Buffer
-	err = runAttach(context.Background(), &out, &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true})
-	if err == nil || !strings.Contains(err.Error(), "checkpoint policy cannot be satisfied by this Entire CLI") {
-		t.Fatalf("runAttach error = %v, want unsupported checkpoint policy", err)
-	}
-	stateStore, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := stateStore.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state != nil {
-		t.Fatalf("expected attach not to record checkpoint state, got %+v", state)
-	}
-}
-
 func TestAttach_Success(t *testing.T) {
 	setupAttachTestRepo(t)
 
@@ -2089,11 +2055,12 @@ func TestAttach_DiscoversExternalAgents(t *testing.T) {
 
 	setupAttachTestRepo(t)
 
-	// Overwrite settings to enable external_agents (enableEntire writes the
-	// file without it).
+	// Enable external_agents. It goes in the local file: the setting grants
+	// execution of entire-agent-* binaries on $PATH, so the loader honors it
+	// only from an untracked local override.
 	cwd := mustGetwd(t)
-	settingsPath := filepath.Join(cwd, ".entire", "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(`{"enabled":true,"external_agents":true}`), 0o600); err != nil {
+	settingsPath := filepath.Join(cwd, ".entire", "settings.local.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"external_agents":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

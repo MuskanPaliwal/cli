@@ -175,11 +175,11 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 //
 // Goes through auth.ResolveDataAPIToken (the same context-aware path as
 // activity/search/dispatch) so the data host's /.well-known/entire-api.json
-// picks the matching login context and exchanges for the advertised audience;
-// a host that doesn't advertise discovery is a surfaced error, not a fallback.
+// picks the matching login context whose login JWT is the bearer; a host that
+// doesn't advertise discovery is a surfaced error, not a fallback.
 // ErrNotLoggedIn is collapsed back into an empty token so the caller's "render
 // with no bearer, let the server respond 401" path still fires. Every other
-// resolution failure (no eligible/ambiguous context, STS exchange rejected,
+// resolution failure (no eligible/ambiguous context, refresh rejected,
 // network error, keyring locked) surfaces verbatim to the caller — previously
 // these were all relabelled as keyring read failures via keyringReadError,
 // which sent users on wild goose chases when the keyring was fine and the real
@@ -193,20 +193,26 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 // resolved — recap then shows the personal side only.
 //
 // It prefers the caller's home entire-api cell (the shared client) and falls
-// back to the data API on ANY cell-client failure — the cell path is a
+// back to the data API on a cell-client failure — the cell path is a
 // best-effort upgrade, so a cell problem must never break a command that worked
 // before it existed. Expected fallbacks (region has no cell yet, not logged in)
 // are silent; unexpected ones are debug-logged (logCellClientFallback). Only
 // failures of the data-API path itself surface — except ErrNotLoggedIn, which
 // recap tolerates, rendering and letting the server answer 401.
+//
+// The fallback is taken only while the data API can act as the same login
+// (auth.DataAPIServesSelectedLogin), which is true when no login is selected —
+// so the tolerant path still serves the logged-out case, while a selected
+// staging login whose refresh failed is reported rather than answered by an
+// auto-selected production login.
 func newRecapClient(ctx context.Context, insecureHTTP bool) (client *api.Client, repoScope, repoName string, err error) {
-	// Best-effort upgrade: on any cell failure fall back to the data API path
-	// below, which tolerates a missing login (renders, lets the server 401) so
-	// the not-logged-in case keeps working.
 	cellClient, cellErr := auth.NewEntireAPICellClient(ctx, insecureHTTP, nil)
 	if cellErr == nil {
 		repoID, repoSlug := currentRepoRef(ctx)
 		return cellClient, repoID, repoSlug, nil
+	}
+	if !auth.DataAPIServesSelectedLogin() {
+		return nil, "", "", cellErr //nolint:wrapcheck // NewEntireAPICellClient already returns contextual auth errors
 	}
 	logCellClientFallback(ctx, cellErr)
 
@@ -258,7 +264,7 @@ func terminalWidth(w io.Writer) int {
 	if !isatty.IsTerminal(file.Fd()) {
 		return recap.DefaultWidth
 	}
-	width, _, err := term.GetSize(int(file.Fd())) //nolint:gosec // fd values fit in int on supported platforms
+	width, _, err := term.GetSize(int(file.Fd()))
 	if err != nil || width <= 0 {
 		return recap.DefaultWidth
 	}

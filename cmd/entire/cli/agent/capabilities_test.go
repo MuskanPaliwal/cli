@@ -83,6 +83,11 @@ func (m *mockFullAgent) SidecarImages(context.Context, string) ([]CompactedTrans
 	return nil, nil
 }
 
+// InventoryAwareExtractor is built-in only and deliberately has no DeclaredCaps bit.
+func (m *mockFullAgent) ExtractWithSubagentInventory(context.Context, []byte, int, []SubagentReference) (InventoryExtraction, error) {
+	return InventoryExtraction{}, nil
+}
+
 // ModelExtractor
 func (m *mockFullAgent) ExtractModel([]byte) (string, error) { return "mock-model", nil }
 
@@ -286,6 +291,26 @@ func TestAsTokenCalculator(t *testing.T) {
 		_, ok := AsTokenCalculator(ag)
 		if ok {
 			t.Error("expected false")
+		}
+	})
+}
+
+func TestAsInventoryAwareExtractor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsInventoryAwareExtractor(&mockBaseAgent{})
+		if ok {
+			t.Error("expected false")
+		}
+	})
+
+	t.Run("implemented without declared capability", func(t *testing.T) {
+		t.Parallel()
+		extractor, ok := AsInventoryAwareExtractor(&mockFullAgent{})
+		if !ok || extractor == nil {
+			t.Error("expected built-in-only type assertion to succeed")
 		}
 	})
 }

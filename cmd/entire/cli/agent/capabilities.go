@@ -19,11 +19,14 @@ type CapabilityDeclarer interface {
 // Not every optional interface appears here. These capabilities intentionally
 // have no external-protocol declaration:
 //
+//   - CallerSessionIdentifier
 //   - ContextInjector
 //   - EffectiveHookDiagnostics
 //   - HookFreshness
+//   - InventoryAwareExtractor
 //   - ModelExtractor
 //   - ModelLister
+//   - PermissionConfigOwner
 //   - SessionBaseDirProvider
 //   - SessionEndBudgeter
 //   - SidecarImageProvider
@@ -155,6 +158,14 @@ func AsTranscriptFetcher(ag Agent) (TranscriptFetcher, bool) {
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
 func AsTokenCalculator(ag Agent) (TokenCalculator, bool) {
 	return declaredCapability[TokenCalculator](ag, func(c DeclaredCaps) bool { return c.TokenCalculator })
+}
+
+// AsInventoryAwareExtractor returns the agent as InventoryAwareExtractor when
+// it implements the built-in-only inventory protocol. External agents cannot
+// declare this capability because its authoritative child ledger is internal to
+// Entire rather than the external-agent protocol.
+func AsInventoryAwareExtractor(ag Agent) (InventoryAwareExtractor, bool) {
+	return builtinCapability[InventoryAwareExtractor](ag)
 }
 
 // AsTextGenerator returns the agent as TextGenerator if it both

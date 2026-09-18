@@ -36,6 +36,22 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
+// Fixture git identity used by every repo this harness initializes.
+const (
+	testAuthorName  = "Test User"
+	testAuthorEmail = "test@example.com"
+)
+
+// Values from the agent transcript JSONL wire formats the harness synthesizes.
+const (
+	entryTypeMessage    = "message"
+	roleUser            = "user"
+	roleAssistant       = "assistant"
+	blockTypeText       = "text"
+	blockTypeToolUse    = "tool_use"
+	blockTypeToolResult = "tool_result"
+)
+
 // testBinaryPath holds the path to the CLI binary built once in TestMain.
 // All tests share this binary to avoid repeated builds.
 var testBinaryPath string
@@ -227,8 +243,8 @@ func (env *TestEnv) InitRepo() {
 	if err != nil {
 		env.T.Fatalf("failed to get repo config: %v", err)
 	}
-	cfg.User.Name = "Test User"
-	cfg.User.Email = "test@example.com"
+	cfg.User.Name = testAuthorName
+	cfg.User.Email = testAuthorEmail
 
 	// Disable GPG signing for test commits (prevents failures if user has commit.gpgsign=true globally)
 	if cfg.Raw == nil {
@@ -484,8 +500,8 @@ func (env *TestEnv) GitCommit(message string) {
 
 	_, err = worktree.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -515,8 +531,8 @@ func (env *TestEnv) GitCommitWithCheckpointID(message, checkpointID string) {
 
 	_, err = worktree.Commit(fullMessage, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -552,8 +568,8 @@ func (env *TestEnv) GitCommitWithMultipleCheckpoints(message string, checkpointI
 
 	_, err = worktree.Commit(sb.String(), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -1034,8 +1050,8 @@ func (env *TestEnv) gitCommitWithShadowHooks(message string, simulateTTY bool, f
 
 	_, err = worktree.Commit(string(modifiedMsg), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -1112,8 +1128,8 @@ func (env *TestEnv) GitCommitAmendWithShadowHooks(message string, files ...strin
 
 	_, err = worktree.Commit(string(modifiedMsg), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 		Amend: true,
@@ -1218,8 +1234,8 @@ func (env *TestEnv) GitCommitWithTrailerRemoved(message string, files ...string)
 
 	_, err = worktree.Commit(cleanedMsg, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -1293,8 +1309,8 @@ func (env *TestEnv) gitCommitStagedWithShadowHooks(message string, simulateTTY b
 
 	_, err = worktree.Commit(string(modifiedMsg), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
+			Name:  testAuthorName,
+			Email: testAuthorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -1781,28 +1797,16 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 	env.T.Helper()
 
-	ctx := env.T.Context()
-
 	bareDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(bareDir); err == nil {
 		bareDir = resolved
 	}
 
 	// Initialize bare repo
-	cmd := exec.CommandContext(ctx, "git", "init", "--bare")
-	cmd.Dir = bareDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to init bare repo: %v\n%s", err, output)
-	}
+	testutil.RunGit(env.T, bareDir, "init", "--bare")
 
 	// Add as remote
-	cmd = exec.CommandContext(ctx, "git", "remote", "add", remoteName, bareDir)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to add remote %s: %v\n%s", remoteName, err, output)
-	}
+	testutil.RunGit(env.T, env.RepoDir, "remote", "add", remoteName, bareDir)
 
 	env.setGitConfigBaseline()
 
@@ -1814,8 +1818,6 @@ func (env *TestEnv) SetupEmptyNamedBareRemote(remoteName string) string {
 // The clone checks out the same branch as the current env's HEAD.
 func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 	env.T.Helper()
-
-	ctx := env.T.Context()
 
 	cloneDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(cloneDir); err == nil {
@@ -1833,24 +1835,15 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 		cloneArgs = append(cloneArgs, "--branch", currentBranch)
 	}
 	cloneArgs = append(cloneArgs, bareDir, cloneDir)
-	cmd := exec.CommandContext(ctx, "git", cloneArgs...)
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("failed to clone from %s: %v\n%s", bareDir, err, output)
-	}
+	testutil.RunGit(env.T, "", cloneArgs...)
 
 	// Configure git user (clone doesn't inherit local config from the bare repo)
 	for _, kv := range [][2]string{
-		{"user.name", "Test User"},
-		{"user.email", "test@example.com"},
+		{"user.name", testAuthorName},
+		{"user.email", testAuthorEmail},
 		{"commit.gpgsign", "false"},
 	} {
-		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
-		cmd.Dir = cloneDir
-		cmd.Env = testutil.GitIsolatedEnv()
-		if output, err := cmd.CombinedOutput(); err != nil {
-			env.T.Fatalf("failed to set git config %s: %v\n%s", kv[0], err, output)
-		}
+		testutil.RunGit(env.T, cloneDir, "config", kv[0], kv[1])
 	}
 
 	claudeProjectDir := env.T.TempDir()
