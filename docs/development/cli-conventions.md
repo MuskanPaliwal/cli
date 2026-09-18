@@ -162,10 +162,14 @@ the commands are always runnable in every build.
   lookup that resolves nothing, names no dialable host, or fails outright falls
   back to `defaultClusterHost`; what the hint buys is the repo mirrored only
   outside that default. A fallback is a guess, so it never passes for a chosen
-  cluster: the empty-result sentence and every error name the host, say which of
-  those reasons applied, and point at `repo mirror get` — a read that answers
-  nothing on a cell nobody pointed at is not the same statement as "this mirror
-  has no collaborators". There is no region flag either: every placement
+  cluster: every error names the host and the reason, and an empty read says so
+  on **stderr**, which is the only channel `--json` shares — an empty array
+  exits 0 and otherwise reads exactly like a mirror with no collaborators. The
+  reason decides the next step, because only one of them has one that can
+  answer: placements that resolved but named no dialable host point at `repo
+  mirror get`, while a placement no login of yours can see points at
+  `--context`, since `mirror get` reads the affiliation-scoped directory and is
+  narrower than the pull-gated lookup that just came back empty. There is no region flag either: every placement
   materializes the same upstream collaborators, so the caller has nothing to
   choose — the removed `--cluster` was selecting an identity (through
   `clusterdiscovery.selectLoginContext`), which `--context` says directly. `grant add` and
@@ -174,7 +178,10 @@ the commands are always runnable in every build.
   request — and before required flags are validated, through the target's
   `unwritableRef` PreRunE hook, so the answer is the repo rather than a missing
   `--role` — with a message naming `grant list`, rather than accepted into the
-  grammar and always failing. The branch is one optional `listBranch` field on
+  grammar and always failing. A `github.com` URL is claimed by that refusal too,
+  though it is not an accepted spelling: it names the repository unambiguously,
+  so answering it with the native path's grammar would send the reader to
+  rewrite the ref as the one shape that repository can never have. The branch is one optional `listBranch` field on
   `grantTarget`, so the shared builder stays forge-unaware for `org` and
   `project`.
   **A repository is named `/<forge>/<a>/<b>` and no other way**, across the

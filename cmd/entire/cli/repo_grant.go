@@ -165,11 +165,12 @@ var mirrorGrantListing = &grantListBranch{
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 	clusterHost, guess := mirrorReadTarget(cmd, owner, repo)
 	empty := "No collaborators on this mirror; its access follows the upstream GitHub repository."
-	if guess != "" {
+	if guess != nil {
 		// The affirmative sentence is only honest about a cluster something
 		// pointed at. On a guess, an empty answer may just be the wrong cell.
-		empty = fmt.Sprintf("%s reported no collaborators, but %s, so that cluster was a guess.\n%s", clusterHost, guess, mirrorPlacementsHint(owner, repo))
+		empty = fmt.Sprintf("No collaborators reported by %s.", clusterHost)
 	}
+	collaborators := 0
 	err := runCoreListShapedForCluster(cmd, clusterHost, empty, mirrorCollaboratorView(), func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
 		out, err := c.ListMirrorCollaborators(ctx, coreapi.ListMirrorCollaboratorsParams{
 			Provider:    coreapi.ListMirrorCollaboratorsProviderGithub,
@@ -180,23 +181,42 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 		if err != nil {
 			return nil, err
 		}
+		collaborators = len(out.Collaborators)
 		return out.Collaborators, nil
 	})
+	switch {
+	case guess == nil:
+		return err
 	// Every failure on a guessed cluster owns the guess, not just a not-found:
 	// a cluster nothing pointed at is also one the caller may hold no login
 	// for, and "not trusted here" reads as a dead end until you know we picked
 	// the cluster ourselves.
-	if err != nil && guess != "" {
-		return fmt.Errorf("%w (asked %s: %s, so that cluster was a guess — %s)", err, clusterHost, guess, mirrorPlacementsHint(owner, repo))
+	case err != nil:
+		return fmt.Errorf("%w (asked %s: %s, so that cluster was a guess — %s)", err, clusterHost, guess.reason, guess.next)
+	case collaborators == 0:
+		// An empty answer from a guessed cluster is the one success that can
+		// mislead, and --json is where it misleads silently: an empty array
+		// exits 0 and reads exactly like a mirror with no collaborators. The
+		// caveat goes to stderr so it reaches both renderings without putting
+		// anything but rows on stdout (see repo list's partial-fetch note).
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: %s reported no collaborators, but %s, so that cluster was a guess. %s\n", clusterHost, guess.reason, guess.next)
 	}
-	return err
+	return nil
 }
 
+// clusterGuess says why the default cluster is standing in for a placement, and
+// what the reader can do about it. The two travel together because the answer
+// to "what now" depends on the reason: only one of them leaves a `repo mirror
+// get` that can answer.
+type clusterGuess struct{ reason, next string }
+
 // mirrorReadTarget resolves which cluster answers for owner/repo's mirror. The
-// second result is empty when a placement chose it, and otherwise says why the
-// default cluster is standing in — the reason differs, and so does what the
-// user should do about it.
-func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost, guess string) {
+// second result is nil when a placement chose it.
+func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost string, guess *clusterGuess) {
+	// Losing the lookup says nothing about where the repo is mirrored, so it
+	// leaves the reader where an invisible placement does: acting as a login
+	// that can see it.
+	unavailable := &clusterGuess{reason: "the placement lookup was unavailable", next: mirrorLoginHint()}
 	// Advisory, so every failure here is logged and dropped — including
 	// runCore's own, which is the active login failing to dial its control
 	// plane rather than anything about this repo.
@@ -207,22 +227,32 @@ func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost, gues
 		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
 			logging.Debug(ctx, "mirror collaborators: placement hint lookup failed", "error", err)
-			guess = "the placement lookup failed"
+			guess = &clusterGuess{reason: "the placement lookup failed", next: unavailable.next}
 			return nil
 		}
 		switch clusterHost = mirrorReadCluster(placements); {
 		case clusterHost != "":
 		case len(placements) == 0:
-			guess = fmt.Sprintf("no placement of %s/%s resolved", owner, repo)
+			// `repo mirror get` cannot answer here: it resolves through the
+			// affiliation-scoped repo directory, which is narrower than the
+			// pull-gated lookup that just came back empty, so it would fail
+			// for the same reason one step later. What is left is the login —
+			// a placement invisible to this one may be visible to another.
+			guess = &clusterGuess{
+				reason: fmt.Sprintf("no placement of %s/%s is visible to this login", owner, repo),
+				next:   mirrorLoginHint(),
+			}
 		default:
-			// Placements DID resolve, so the hint below will list them — a
-			// message claiming nothing resolved would contradict it.
-			guess = "no placement named a cluster host this command can dial"
+			// Placements DID resolve, so `repo mirror get` will list them.
+			guess = &clusterGuess{
+				reason: "no placement named a cluster host this command can dial",
+				next:   mirrorPlacementsHint(owner, repo),
+			}
 		}
 		return nil
 	}); err != nil {
 		logging.Debug(cmd.Context(), "mirror collaborators: placement hint unavailable", "error", err)
-		guess = "the placement lookup was unavailable"
+		guess = unavailable
 	}
 	if clusterHost == "" {
 		clusterHost = defaultClusterHost
@@ -230,10 +260,18 @@ func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost, gues
 	return clusterHost, guess
 }
 
-// mirrorPlacementsHint names the verb that lists a mirror's real placements,
-// which is what a reader told the cluster was guessed needs next.
+// mirrorLoginHint names the way to a placement the active login cannot see: the
+// lookup is pull-gated, so another login may resolve what this one does not.
+func mirrorLoginHint() string {
+	return "`entire auth contexts` lists your logins; --context acts as one."
+}
+
+// mirrorPlacementsHint names the verb that lists a mirror's real placements. It
+// answers only where placements DID resolve: `repo mirror get` reads the
+// affiliation-scoped repo directory, so it cannot see what the broader
+// pull-gated lookup could not.
 func mirrorPlacementsHint(owner, repo string) string {
-	return fmt.Sprintf("`entire repo mirror get /%s/%s/%s` lists its placements", mirrorCloneForge, owner, repo)
+	return fmt.Sprintf("`entire repo mirror get /%s/%s/%s` lists its placements.", mirrorCloneForge, owner, repo)
 }
 
 // mirrorReadCluster picks which placement answers for the mirror. Any of them
@@ -266,11 +304,26 @@ func mirrorReadCluster(placements []coreapi.ResolvedPlacement) string {
 // mirrorGrantsAreUpstream is what `repo grant add` and `repo grant remove`
 // answer a mirror ref: the grammar they accept is the native path, and a mirror
 // has no grant to write. It names the read path that does answer for a mirror,
-// so the refusal ends somewhere rather than at "unsupported". Every other ref
-// passes, to be judged by the resolver that parses it.
+// so the refusal ends somewhere rather than at "unsupported".
+//
+// A github.com URL is claimed too, though it is not the accepted spelling: it
+// says plainly which repository the user means, and answering it with the
+// native path's grammar — the one shape that repository can never have — would
+// send them to rewrite the ref rather than to the verb that reads it. The hint
+// names the `/gh/` form, since that is what `grant list` takes.
+//
+// Every other ref passes, to be judged by the resolver that parses it.
 func mirrorGrantsAreUpstream(ref string) error {
-	if !declaresForge(ref, mirrorCloneForge) {
-		return nil
+	owner, repo, urlErr := parseHostedGitHubURL(ref)
+	readable := ref
+	switch {
+	case declaresForge(ref, mirrorCloneForge):
+	case urlErr == nil:
+		// A URL is not a spelling these verbs take, so the hint names the ref
+		// `grant list` does.
+		readable = fmt.Sprintf("/%s/%s/%s", mirrorCloneForge, owner, repo)
+	default:
+		return nil // not a GitHub repository; its own resolver judges the ref
 	}
-	return fmt.Errorf("repo %q is a GitHub mirror: its access comes from the upstream GitHub repository, so it cannot be granted or revoked here — manage collaborators on GitHub; `entire repo grant list %s` shows who has access to the repo", ref, ref)
+	return fmt.Errorf("repo %q is a GitHub mirror: its access comes from the upstream GitHub repository, so it cannot be granted or revoked here — manage collaborators on GitHub; `entire repo grant list %s` shows who has access to the repo", ref, readable)
 }

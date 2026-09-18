@@ -120,6 +120,11 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 		// what the user is sent to fix on a repo this verb cannot write.
 		{"add without a role", []string{"add", "/gh/acme/widget", "github:alice"}},
 		{"remove", []string{"remove", "/gh/acme/widget", "github:alice"}},
+		// A github.com URL is not the accepted spelling, but it says which
+		// repository the user means — answering it with the native path's
+		// grammar would send them to rewrite it as the one shape that
+		// repository can never have.
+		{"a GitHub URL", []string{"add", "https://github.com/acme/widget", "github:alice", "--role", "reader"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var paths []string
@@ -286,9 +291,8 @@ func TestRepoGrantList_GuessedClusterSaysSo(t *testing.T) {
 		srv := grantActiveCoreServer(t, &paths) // nothing resolved
 		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 		require.ErrorContains(t, err, "asked "+defaultClusterHost)
-		require.ErrorContains(t, err, "no placement of acme/widget resolved")
+		require.ErrorContains(t, err, "no placement of acme/widget is visible to this login")
 		require.ErrorContains(t, err, "that cluster was a guess")
-		require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
 	})
 
 	t.Run("a login the guessed cluster refuses owns it too", func(t *testing.T) {
@@ -304,12 +308,23 @@ func TestRepoGrantList_GuessedClusterSaysSo(t *testing.T) {
 		status, collaborators = http.StatusOK, nil
 		var paths []string
 		srv := grantActiveCoreServer(t, &paths)
-		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		stdout, stderr, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 		require.NoError(t, err)
-		require.Contains(t, stdout, "reported no collaborators")
-		require.Contains(t, stdout, "that cluster was a guess")
+		require.Contains(t, stdout, "No collaborators reported by "+defaultClusterHost)
 		require.NotContains(t, stdout, "its access follows the upstream GitHub repository",
 			"that sentence answers for a cluster a placement chose")
+		require.Contains(t, stderr, "that cluster was a guess")
+	})
+
+	t.Run("--json says so too, on stderr", func(t *testing.T) {
+		status, collaborators = http.StatusOK, nil
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths)
+		stdout, stderr, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget", "--json")
+		require.NoError(t, err)
+		require.Equal(t, "[]\n", stdout, "stdout carries rows and nothing else")
+		require.Contains(t, stderr, "that cluster was a guess",
+			"an empty array on a guessed cluster reads exactly like a mirror with no collaborators")
 	})
 
 	t.Run("placements that resolved say so, and not the opposite", func(t *testing.T) {
@@ -318,18 +333,36 @@ func TestRepoGrantList_GuessedClusterSaysSo(t *testing.T) {
 		srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors") // resolved, undialable
 		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 		require.ErrorContains(t, err, "no placement named a cluster host this command can dial")
-		require.NotContains(t, err.Error(), "no placement of acme/widget resolved",
-			"the hint names `repo mirror get`, which would list the placements this claims never resolved")
+		require.NotContains(t, err.Error(), "is visible to this login",
+			"placements resolved; only their hosts were unusable")
 	})
 
 	t.Run("a cluster a placement chose is never called a guess", func(t *testing.T) {
 		status, collaborators = http.StatusOK, nil
 		var paths []string
 		srv := grantActiveCoreServer(t, &paths, defaultClusterHost)
-		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		stdout, stderr, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 		require.NoError(t, err)
 		require.Contains(t, stdout, "its access follows the upstream GitHub repository")
 		require.NotContains(t, stdout, "guess")
+		require.NotContains(t, stderr, "guess")
+	})
+
+	t.Run("each reason points where it can be answered", func(t *testing.T) {
+		status = http.StatusNotFound
+		var paths []string
+		invisible := grantActiveCoreServer(t, &paths) // nothing the login can see
+		_, _, err := runCoreCmd(t, newRepoGrantCmd, invisible.URL, "list", "/gh/acme/widget")
+		require.ErrorContains(t, err, "is visible to this login")
+		require.ErrorContains(t, err, "--context acts as one",
+			"`repo mirror get` reads a narrower directory, so it cannot answer what the placements lookup could not")
+		require.NotContains(t, err.Error(), "entire repo mirror get")
+
+		var dialPaths []string
+		undialable := grantActiveCoreServer(t, &dialPaths, "https://eu.example/mirrors")
+		_, _, err = runCoreCmd(t, newRepoGrantCmd, undialable.URL, "list", "/gh/acme/widget")
+		require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget",
+			"placements resolved, so the verb that lists them can answer")
 	})
 }
 
