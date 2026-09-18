@@ -139,7 +139,12 @@ the commands are always runnable in every build.
   `GET /mirrors/collaborators` (live GitHub-admin gated against the caller's own
   GitHub identity, so a service-account token cannot answer it). The mirror
   branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
-  mirror endpoint does not report. That endpoint is served by the core fronting
+  mirror endpoint does not report — and its `--json` merges the native identity
+  keys (`granteeId`, `granteeName`, plus `source` = `github`, where a mirror's
+  access does come from) onto the collaborator model through
+  `mergeSynthesizedFields`, additive-only, so one script reads either ref.
+  `granteeType` stays absent: the native value distinguishes grantee kinds this
+  endpoint does not report. That endpoint is served by the core fronting
   one cluster, so the branch resolves the repo's placements through
   `resolvePullablePlacements` (the pull-gated lookup `repo clone`, `remote use`
   and `remote url` share) and reads the collaborators on a cluster the repo

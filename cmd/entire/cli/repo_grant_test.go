@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,41 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 	}
 }
 
+// TestMirrorReadCluster pins the choice among several placements, which is the
+// only reason this function exists: the default cluster wherever it appears in
+// the list, otherwise the first host in sorted order, and never a host this
+// command would refuse to dial. "" means the placements named nothing usable,
+// which leaves the caller on the default.
+func TestMirrorReadCluster(t *testing.T) {
+	t.Parallel()
+	placements := func(hosts ...string) []coreapi.ResolvedPlacement {
+		out := make([]coreapi.ResolvedPlacement, 0, len(hosts))
+		for i, h := range hosts {
+			out = append(out, coreapi.ResolvedPlacement{ClusterHost: h, MirrorId: fmt.Sprintf("01MIRROR%d", i)})
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name string
+		in   []coreapi.ResolvedPlacement
+		want string
+	}{
+		{"none", nil, ""},
+		{"one", placements("eu.example"), "eu.example"},
+		{"the default wins from anywhere in the list", placements("aa.example", defaultClusterHost, "zz.example"), defaultClusterHost},
+		{"without the default, sorted first", placements("zz.example", "aa.example", "mm.example"), "aa.example"},
+		{"case folds when matching the default", placements("aa.example", strings.ToUpper(defaultClusterHost)), defaultClusterHost},
+		{"an undialable host loses to a usable one", placements("https://aa.example/x", "mm.example"), "mm.example"},
+		{"the default still wins past an undialable host", placements("https://aa.example/x", defaultClusterHost), defaultClusterHost},
+		{"all undialable", placements("https://aa.example/x", "mm.example:not-a-port"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, mirrorReadCluster(tc.in))
+		})
+	}
+}
+
 // TestRepoGrantList_PlacementLookupIsAHint pins that the placement lookup can
 // never veto the read. It is pull-gated; the collaborator endpoint runs a live
 // GitHub-admin check — so a caller who cannot pull the mirror, but can be asked
@@ -147,26 +183,95 @@ func TestRepoGrantList_PlacementLookupIsAHint(t *testing.T) {
 			Collaborators: []coreapi.MirrorCollaborator{{Handle: coreapi.NewOptString("github:alice"), Role: "reader", AccountId: "01ACCT"}},
 		})
 	}))
-
-	t.Run("a lookup that resolves nothing", func(t *testing.T) {
+	readsTheDefault := func(t *testing.T, srv *httptest.Server) {
+		t.Helper()
 		clusterHosts = nil
-		var paths []string
-		srv := grantActiveCoreServer(t, &paths) // no placements
 		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 		require.NoError(t, err)
 		require.Contains(t, stdout, "github:alice")
 		require.Equal(t, []string{defaultClusterHost}, clusterHosts)
+	}
+
+	t.Run("a lookup that resolves nothing", func(t *testing.T) {
+		var paths []string
+		readsTheDefault(t, grantActiveCoreServer(t, &paths))
 	})
 
 	t.Run("a placement naming no dialable host", func(t *testing.T) {
-		clusterHosts = nil
 		var paths []string
-		srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors")
-		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
-		require.NoError(t, err)
-		require.Contains(t, stdout, "github:alice")
-		require.Equal(t, []string{defaultClusterHost}, clusterHosts)
+		readsTheDefault(t, grantActiveCoreServer(t, &paths, "https://eu.example/mirrors"))
 	})
+
+	t.Run("a lookup that fails outright", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeCoreProblem(t, w, http.StatusInternalServerError, "placements unavailable")
+		}))
+		t.Cleanup(srv.Close)
+		readsTheDefault(t, srv)
+	})
+}
+
+// TestRepoGrantList_JSONSharesOneIdentity pins that a script gets one answer
+// from one verb: `.granteeId`, `.granteeName`, `.role` and `.source` read the
+// same for either ref, and the mirror endpoint's own fields are still there.
+//
+// Not parallel: swaps the package-level core-client seams.
+func TestRepoGrantList_JSONSharesOneIdentity(t *testing.T) {
+	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{
+			Collaborators: []coreapi.MirrorCollaborator{
+				{Handle: coreapi.NewOptString("github:alice"), Role: "writer", AccountId: "01ACCTALICE"},
+				{Role: "reader", AccountId: "01ACCTCAROL"}, // no handle resolved
+			},
+		})
+	}))
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths, defaultClusterHost)
+
+	decode := func(t *testing.T, ref string) []map[string]any {
+		t.Helper()
+		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", ref, "--json")
+		require.NoError(t, err)
+		var rows []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout), &rows))
+		return rows
+	}
+
+	native := decode(t, "/et/acme/web")
+	require.Equal(t, "github:alice", native[0]["granteeName"])
+	require.Equal(t, "repo", native[0]["source"])
+
+	mirror := decode(t, "/gh/acme/widget")
+	require.Equal(t, "01ACCTALICE", mirror[0]["granteeId"])
+	require.Equal(t, "github:alice", mirror[0]["granteeName"])
+	require.Equal(t, "writer", mirror[0]["role"])
+	require.Equal(t, repoProviderGitHub, mirror[0]["source"])
+	// Additive: what the endpoint sent is still exactly what it sent.
+	require.Equal(t, "01ACCTALICE", mirror[0]["accountId"])
+	require.Equal(t, "github:alice", mirror[0]["handle"])
+
+	// An unresolved handle omits granteeName, as the native shape does, and
+	// still carries the id every row is keyed by.
+	require.Equal(t, "01ACCTCAROL", mirror[1]["granteeId"])
+	require.NotContains(t, mirror[1], "granteeName")
+	require.Equal(t, repoProviderGitHub, mirror[1]["source"])
+}
+
+// TestRepoGrantList_GuessedClusterSaysSo pins that a read which fails on a
+// cluster nothing pointed at does not read as a missing mirror: the error owns
+// the guess and names the verb that lists the real placements.
+//
+// Not parallel: swaps the package-level core-client seams.
+func TestRepoGrantList_GuessedClusterSaysSo(t *testing.T) {
+	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeCoreProblem(t, w, http.StatusNotFound, "mirror not found on this cluster")
+	}))
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths) // no placements, so the cluster is a guess
+	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+	require.ErrorContains(t, err, "asked "+defaultClusterHost)
+	require.ErrorContains(t, err, "that cluster was a guess")
+	require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
 }
 
 // TestRepoGrantList_ReadsAPlacementTheRepoHas pins that the region asked is one

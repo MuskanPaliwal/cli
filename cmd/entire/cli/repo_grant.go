@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -39,6 +40,47 @@ func mirrorCollaboratorRow(c coreapi.MirrorCollaborator) []string {
 	return []string{granteeName(c.Handle, c.AccountId), c.Role}
 }
 
+// mirrorCollaboratorView is how the mirror half renders: the table above, and
+// a --json object carrying the identity keys the native half uses.
+func mirrorCollaboratorView() listView[coreapi.MirrorCollaborator] {
+	return listView[coreapi.MirrorCollaborator]{
+		table: func([]coreapi.MirrorCollaborator) ([]string, func(coreapi.MirrorCollaborator) []string) {
+			return mirrorCollaboratorColumns, mirrorCollaboratorRow
+		},
+		toJSON: mirrorCollaboratorJSON,
+	}
+}
+
+// mirrorCollaboratorJSON gives one verb one machine-readable answer. The table
+// already reconciles the two sources through granteeName, but --json printed
+// each endpoint's own model, and the two name the grantee differently
+// (`accountId`/`handle` against `granteeId`/`granteeName`) — so a script
+// reading `.granteeName` got nulls for a mirror ref rather than an error, which
+// is the failure folding these verbs together was meant to end.
+//
+// Additive, per mergeSynthesizedFields: the server's own fields stay exactly as
+// they arrived, and the merged keys are facts about the row rather than
+// guesses. `source` is "github" because that is where a mirror's access comes
+// from — the same vocabulary the native side uses for "direct" or
+// "project:<name>". `granteeType` stays absent: the native value distinguishes
+// grantee kinds this endpoint does not report.
+func mirrorCollaboratorJSON(collaborators []coreapi.MirrorCollaborator) (any, error) {
+	out := make([]map[string]json.RawMessage, 0, len(collaborators))
+	for i := range collaborators {
+		c := &collaborators[i]
+		obj, err := mergeSynthesizedFields(c, map[string]func() string{
+			"granteeId":   func() string { return c.AccountId },
+			"granteeName": func() string { return c.Handle.Or("") },
+			"source":      func() string { return repoProviderGitHub },
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, obj)
+	}
+	return out, nil
+}
+
 // repoGrantListLong explains the one question and its two answers, including
 // the two ways a caller can be refused: the native listing is answered by
 // Entire from your Entire access, the mirror listing by GitHub from your GitHub
@@ -53,8 +95,10 @@ const repoGrantListLong = "List who can reach a repository.\n\n" +
 	"against your own GitHub identity — you must be a current admin of the upstream " +
 	"repository, or the owner of a personal one — so run it as yourself rather than with a " +
 	"service-account token.\n\n" +
-	"--json prints what the API returned, which differs between the two: grants for an " +
-	"Entire repository, collaborators for a mirror."
+	"--json answers both the same way: every row carries `granteeId`, `granteeName`, " +
+	"`role` and `source`, so one script reads either. A mirror's rows also keep the " +
+	"collaborator fields the API returned, and report no `granteeType`, which that " +
+	"endpoint does not distinguish."
 
 const repoGrantListExample = "  entire repo grant list /" + nativeCloneForge + "/acme/web\n" +
 	"  entire repo grant list /" + mirrorCloneForge + "/acme/widget"
@@ -88,33 +132,47 @@ var mirrorGrantListing = &grantListBranch{
 // answer to different authorities — /mirrors/placements is pull-gated, while
 // /mirrors/collaborators runs a live GitHub-admin check — so a GitHub admin who
 // holds no Entire grant resolves no placements and must still get their answer.
-// A lookup that says nothing, or fails, therefore falls back to the default
-// cluster, which is where the read went before placements were consulted at
-// all. What the hint buys is the repo mirrored only outside that default.
+// Nothing the hint does can fail the command: not an empty answer, not a failed
+// lookup, and not a control plane the active login cannot even dial, since the
+// read below authenticates through whichever saved login the cluster trusts.
+// The fallback is the default cluster, which is where this read went before
+// placements were consulted at all; what the hint buys is the repo mirrored
+// only outside that default.
+//
+// A fallback is a guess, though, and a guess that misses looks like a missing
+// mirror — so when the read fails on a cluster nothing pointed at, the error
+// says the cluster was ours to pick and names the verb that lists the real ones.
 //
 // The caller is never asked which region they mean: every placement
 // materializes the same upstream GitHub collaborators, so any one answers.
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
-	clusterHost := defaultClusterHost
+	clusterHost := ""
+	// Advisory, so every failure here is logged and dropped — including
+	// runCore's own, which is the active login failing to dial its control
+	// plane rather than anything about this repo.
 	if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 		// The pull-gated placement lookup, the same authority `repo clone`,
 		// `remote use` and `remote url` resolve through, so a public mirror
 		// resolves too.
 		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
-			// Advisory, so its failure is not the command's: the read below
-			// has its own authority and may well succeed where this did not.
 			logging.Debug(ctx, "mirror collaborators: placement hint lookup failed", "error", err)
 			return nil
 		}
-		if host := mirrorReadCluster(placements); host != "" {
-			clusterHost = host
-		}
+		clusterHost = mirrorReadCluster(placements)
 		return nil
 	}); err != nil {
-		return err
+		logging.Debug(cmd.Context(), "mirror collaborators: placement hint unavailable", "error", err)
 	}
-	return runCoreListForCluster(cmd, clusterHost, "No collaborators on this mirror; its access follows the upstream GitHub repository.", mirrorCollaboratorColumns, mirrorCollaboratorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
+	guessed := clusterHost == ""
+	if guessed {
+		clusterHost = defaultClusterHost
+	}
+	// Whether the cluster held the mirror is the typed answer, and it is read
+	// here because runCoreListForCluster renders an API problem down to its
+	// message on the way out, leaving nothing to classify afterwards.
+	missing := false
+	err := runCoreListShapedForCluster(cmd, clusterHost, "No collaborators on this mirror; its access follows the upstream GitHub repository.", mirrorCollaboratorView(), func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
 		out, err := c.ListMirrorCollaborators(ctx, coreapi.ListMirrorCollaboratorsParams{
 			Provider:    coreapi.ListMirrorCollaboratorsProviderGithub,
 			Owner:       owner,
@@ -122,10 +180,15 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 			ClusterHost: clusterHost,
 		})
 		if err != nil {
+			missing = isCoreNotFound(err)
 			return nil, err
 		}
 		return out.Collaborators, nil
 	})
+	if err != nil && guessed && missing {
+		return fmt.Errorf("%w (asked %s: no placement of %s/%s resolved, so that cluster was a guess — `entire repo mirror get /%s/%s/%s` lists the real ones)", err, clusterHost, owner, repo, mirrorCloneForge, owner, repo)
+	}
+	return err
 }
 
 // mirrorReadCluster picks which placement answers for the mirror. Any of them
