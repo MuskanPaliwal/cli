@@ -95,10 +95,10 @@ const repoGrantListLong = "List who can reach a repository.\n\n" +
 	"against your own GitHub identity — you must be a current admin of the upstream " +
 	"repository, or the owner of a personal one — so run it as yourself rather than with a " +
 	"service-account token.\n\n" +
-	"--json answers both the same way: every row carries `granteeId`, `granteeName`, " +
-	"`role` and `source`, so one script reads either. A mirror's rows also keep the " +
-	"collaborator fields the API returned, and report no `granteeType`, which that " +
-	"endpoint does not distinguish."
+	"--json answers both the same way: every row carries `granteeId`, `role` and " +
+	"`source`, plus `granteeName` when a name resolved, so one script reads either. " +
+	"A mirror's rows also keep the collaborator fields the API returned, and report " +
+	"no `granteeType`, which that endpoint does not distinguish."
 
 const repoGrantListExample = "  entire repo grant list /" + nativeCloneForge + "/acme/web\n" +
 	"  entire repo grant list /" + mirrorCloneForge + "/acme/widget"
@@ -146,7 +146,40 @@ var mirrorGrantListing = &grantListBranch{
 // The caller is never asked which region they mean: every placement
 // materializes the same upstream GitHub collaborators, so any one answers.
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
-	clusterHost := ""
+	clusterHost, guess := mirrorReadTarget(cmd, owner, repo)
+	empty := "No collaborators on this mirror; its access follows the upstream GitHub repository."
+	if guess != "" {
+		// The affirmative sentence is only honest about a cluster something
+		// pointed at. On a guess, an empty answer may just be the wrong cell.
+		empty = fmt.Sprintf("%s reported no collaborators, but %s, so that cluster was a guess.\n%s", clusterHost, guess, mirrorPlacementsHint(owner, repo))
+	}
+	err := runCoreListShapedForCluster(cmd, clusterHost, empty, mirrorCollaboratorView(), func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
+		out, err := c.ListMirrorCollaborators(ctx, coreapi.ListMirrorCollaboratorsParams{
+			Provider:    coreapi.ListMirrorCollaboratorsProviderGithub,
+			Owner:       owner,
+			Repo:        repo,
+			ClusterHost: clusterHost,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return out.Collaborators, nil
+	})
+	// Every failure on a guessed cluster owns the guess, not just a not-found:
+	// a cluster nothing pointed at is also one the caller may hold no login
+	// for, and "not trusted here" reads as a dead end until you know we picked
+	// the cluster ourselves.
+	if err != nil && guess != "" {
+		return fmt.Errorf("%w (asked %s: %s, so that cluster was a guess — %s)", err, clusterHost, guess, mirrorPlacementsHint(owner, repo))
+	}
+	return err
+}
+
+// mirrorReadTarget resolves which cluster answers for owner/repo's mirror. The
+// second result is empty when a placement chose it, and otherwise says why the
+// default cluster is standing in — the reason differs, and so does what the
+// user should do about it.
+func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost, guess string) {
 	// Advisory, so every failure here is logged and dropped — including
 	// runCore's own, which is the active login failing to dial its control
 	// plane rather than anything about this repo.
@@ -157,38 +190,33 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
 			logging.Debug(ctx, "mirror collaborators: placement hint lookup failed", "error", err)
+			guess = "the placement lookup failed"
 			return nil
 		}
-		clusterHost = mirrorReadCluster(placements)
+		switch clusterHost = mirrorReadCluster(placements); {
+		case clusterHost != "":
+		case len(placements) == 0:
+			guess = fmt.Sprintf("no placement of %s/%s resolved", owner, repo)
+		default:
+			// Placements DID resolve, so the hint below will list them — a
+			// message claiming nothing resolved would contradict it.
+			guess = "no placement named a cluster host this command can dial"
+		}
 		return nil
 	}); err != nil {
 		logging.Debug(cmd.Context(), "mirror collaborators: placement hint unavailable", "error", err)
+		guess = "the placement lookup was unavailable"
 	}
-	guessed := clusterHost == ""
-	if guessed {
+	if clusterHost == "" {
 		clusterHost = defaultClusterHost
 	}
-	// Whether the cluster held the mirror is the typed answer, and it is read
-	// here because runCoreListForCluster renders an API problem down to its
-	// message on the way out, leaving nothing to classify afterwards.
-	missing := false
-	err := runCoreListShapedForCluster(cmd, clusterHost, "No collaborators on this mirror; its access follows the upstream GitHub repository.", mirrorCollaboratorView(), func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
-		out, err := c.ListMirrorCollaborators(ctx, coreapi.ListMirrorCollaboratorsParams{
-			Provider:    coreapi.ListMirrorCollaboratorsProviderGithub,
-			Owner:       owner,
-			Repo:        repo,
-			ClusterHost: clusterHost,
-		})
-		if err != nil {
-			missing = isCoreNotFound(err)
-			return nil, err
-		}
-		return out.Collaborators, nil
-	})
-	if err != nil && guessed && missing {
-		return fmt.Errorf("%w (asked %s: no placement of %s/%s resolved, so that cluster was a guess — `entire repo mirror get /%s/%s/%s` lists the real ones)", err, clusterHost, owner, repo, mirrorCloneForge, owner, repo)
-	}
-	return err
+	return clusterHost, guess
+}
+
+// mirrorPlacementsHint names the verb that lists a mirror's real placements,
+// which is what a reader told the cluster was guessed needs next.
+func mirrorPlacementsHint(owner, repo string) string {
+	return fmt.Sprintf("`entire repo mirror get /%s/%s/%s` lists its placements", mirrorCloneForge, owner, repo)
 }
 
 // mirrorReadCluster picks which placement answers for the mirror. Any of them

@@ -144,7 +144,8 @@ the commands are always runnable in every build.
   access does come from) onto the collaborator model through
   `mergeSynthesizedFields`, additive-only, so one script reads either ref.
   `granteeType` stays absent: the native value distinguishes grantee kinds this
-  endpoint does not report. That endpoint is served by the core fronting
+  endpoint does not report, and `granteeName` is merged only when a name
+  resolved, which is what the native rows do with theirs. That endpoint is served by the core fronting
   one cluster, so the branch resolves the repo's placements through
   `resolvePullablePlacements` (the pull-gated lookup `repo clone`, `remote use`
   and `remote url` share) and reads the collaborators on a cluster the repo
@@ -155,7 +156,11 @@ the commands are always runnable in every build.
   holding no Entire grant resolves no placement and must still be answered. A
   lookup that resolves nothing, names no dialable host, or fails outright falls
   back to `defaultClusterHost`; what the hint buys is the repo mirrored only
-  outside that default. There is no region flag either: every placement
+  outside that default. A fallback is a guess, so it never passes for a chosen
+  cluster: the empty-result sentence and every error name the host, say which of
+  those reasons applied, and point at `repo mirror get` — a read that answers
+  nothing on a cell nobody pointed at is not the same statement as "this mirror
+  has no collaborators". There is no region flag either: every placement
   materializes the same upstream collaborators, so the caller has nothing to
   choose — the removed `--cluster` was selecting an identity (through
   `clusterdiscovery.selectLoginContext`), which `--context` says directly. `grant add` and

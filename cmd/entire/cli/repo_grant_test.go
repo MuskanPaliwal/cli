@@ -257,21 +257,74 @@ func TestRepoGrantList_JSONSharesOneIdentity(t *testing.T) {
 	require.Equal(t, repoProviderGitHub, mirror[1]["source"])
 }
 
-// TestRepoGrantList_GuessedClusterSaysSo pins that a read which fails on a
-// cluster nothing pointed at does not read as a missing mirror: the error owns
-// the guess and names the verb that lists the real placements.
+// TestRepoGrantList_GuessedClusterSaysSo pins that a cluster nothing pointed at
+// never passes for one that did — on a failed read, on an empty one, and with
+// the reason the guess happened, since "nothing resolved" and "nothing dialable"
+// send the reader to different places.
 //
 // Not parallel: swaps the package-level core-client seams.
 func TestRepoGrantList_GuessedClusterSaysSo(t *testing.T) {
+	var collaborators []coreapi.MirrorCollaborator
+	var status int
 	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeCoreProblem(t, w, http.StatusNotFound, "mirror not found on this cluster")
+		if status != http.StatusOK {
+			writeCoreProblem(t, w, status, "mirror not found on this cluster")
+			return
+		}
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{Collaborators: collaborators})
 	}))
-	var paths []string
-	srv := grantActiveCoreServer(t, &paths) // no placements, so the cluster is a guess
-	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
-	require.ErrorContains(t, err, "asked "+defaultClusterHost)
-	require.ErrorContains(t, err, "that cluster was a guess")
-	require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
+
+	t.Run("a failed read owns the guess", func(t *testing.T) {
+		status = http.StatusNotFound
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths) // nothing resolved
+		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.ErrorContains(t, err, "asked "+defaultClusterHost)
+		require.ErrorContains(t, err, "no placement of acme/widget resolved")
+		require.ErrorContains(t, err, "that cluster was a guess")
+		require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
+	})
+
+	t.Run("a login the guessed cluster refuses owns it too", func(t *testing.T) {
+		status = http.StatusForbidden
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths)
+		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.ErrorContains(t, err, "that cluster was a guess",
+			"a guessed cluster explains any failure, not only a not-found")
+	})
+
+	t.Run("an empty read is not reported as an answer", func(t *testing.T) {
+		status, collaborators = http.StatusOK, nil
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths)
+		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "reported no collaborators")
+		require.Contains(t, stdout, "that cluster was a guess")
+		require.NotContains(t, stdout, "its access follows the upstream GitHub repository",
+			"that sentence answers for a cluster a placement chose")
+	})
+
+	t.Run("placements that resolved say so, and not the opposite", func(t *testing.T) {
+		status = http.StatusNotFound
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors") // resolved, undialable
+		_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.ErrorContains(t, err, "no placement named a cluster host this command can dial")
+		require.NotContains(t, err.Error(), "no placement of acme/widget resolved",
+			"the hint names `repo mirror get`, which would list the placements this claims never resolved")
+	})
+
+	t.Run("a cluster a placement chose is never called a guess", func(t *testing.T) {
+		status, collaborators = http.StatusOK, nil
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths, defaultClusterHost)
+		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "its access follows the upstream GitHub repository")
+		require.NotContains(t, stdout, "guess")
+	})
 }
 
 // TestRepoGrantList_ReadsAPlacementTheRepoHas pins that the region asked is one
