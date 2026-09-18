@@ -216,9 +216,10 @@ func TestCloneRefAlwaysRequiresItsForgePrefix(t *testing.T) {
 	})
 
 	// `repo clone` is no longer the only command parsing a forge-prefixed ref:
-	// resolveRepoRef took the native grammar for `repo get`, `repo delete`, the
-	// visibility and protection subtrees, and `grant repo add/list/remove`
-	// (COR-1632). The guard follows the requirement rather than the command, so
+	// resolveRepoRef took the native grammar for `repo view`, `repo delete`, and
+	// the visibility and protection subtrees (COR-1632); `repo grant` parses
+	// the path with parseNativeCloneRef first (resolveRepoPath), so the guard
+	// covers it by construction. The guard follows the requirement rather than the command, so
 	// the same table runs against the second entry point — a bare pair must not
 	// become resolvable just because it was typed at a different subcommand.
 	t.Run("the shared repo-ref resolver refuses a bare pair too", func(t *testing.T) {
@@ -528,21 +529,21 @@ func TestSelectCloneTarget(t *testing.T) {
 
 	t.Run("single placement returns directly", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast}, "")
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast}, "", clonePlacementPicker())
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
 	t.Run("dedupes repeated host to a single placement", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, usEast}, "")
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, usEast}, "", clonePlacementPicker())
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
 	t.Run("--cluster picks the matching placement", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-eu-west-1.entire.io")
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-eu-west-1.entire.io", clonePlacementPicker())
 		require.NoError(t, err)
 		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
 	})
@@ -551,14 +552,14 @@ func TestSelectCloneTarget(t *testing.T) {
 		t.Parallel()
 		// DNS hosts are case-insensitive: a mixed-case --cluster must still match
 		// the API's lowercase ClusterHost rather than falsely "not mirrored".
-		got, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "AWS-EU-West-1.Entire.IO")
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "AWS-EU-West-1.Entire.IO", clonePlacementPicker())
 		require.NoError(t, err)
 		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
 	})
 
 	t.Run("--cluster with no match errors and lists hosts", func(t *testing.T) {
 		t.Parallel()
-		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-ap-south-1.entire.io")
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-ap-south-1.entire.io", clonePlacementPicker())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
 		require.Contains(t, err.Error(), "aws-eu-west-1.entire.io")
@@ -567,7 +568,7 @@ func TestSelectCloneTarget(t *testing.T) {
 	t.Run("multiple placements with no terminal errors with a --cluster pointer", func(t *testing.T) {
 		t.Parallel()
 		// go test is non-interactive, so the picker path is unreachable here.
-		_, err := selectCloneTarget(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "")
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", clonePlacementPicker())
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--cluster")
 	})
