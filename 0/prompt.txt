@@ -1,9 +1,1 @@
-https://github.com/entireio/cli/pull/2320 fix conflicts
-
----
-
-commit and push
-
----
-
-what .entire has in diff?
+okay
