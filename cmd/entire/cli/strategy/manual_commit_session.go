@@ -156,7 +156,10 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		refName := plumbing.NewBranchReferenceName(shadowBranch)
 		if _, err := repo.Reference(refName, true); err != nil {
-			if !state.Phase.IsActive() && state.LastCheckpointID.IsEmpty() && !state.HasTaskContent() {
+			if isOrphanedSessionState(state) {
+				logging.Debug(logging.WithComponent(ctx, "session"), "removing orphaned session state without a shadow branch",
+					slog.String("session_id", state.SessionID),
+					slog.String("phase", string(state.Phase)))
 				//nolint:errcheck,gosec // G104: Cleanup is best-effort, shouldn't fail the list operation
 				store.Clear(ctx, state.SessionID)
 				continue
@@ -166,6 +169,22 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		states = append(states, state)
 	}
 	return states, nil
+}
+
+// isOrphanedSessionState reports whether a state with no shadow branch may be
+// deleted. ACTIVE sessions may not have created it yet; a LastCheckpointID and
+// task records are kept. An IDLE state with none of those is a live session
+// between turns, and every worktree's hooks list this store, so it counts as an
+// orphan only once its owner is known dead. ENDED and legacy states keep the
+// old rule; owner-less ones age out through the stale threshold.
+func isOrphanedSessionState(state *SessionState) bool {
+	if state.Phase.IsActive() || !state.LastCheckpointID.IsEmpty() || state.HasTaskContent() {
+		return false
+	}
+	if state.Phase == session.PhaseIdle {
+		return state.OwnerExited()
+	}
+	return true
 }
 
 // IsCondensableEndedSession reports whether an ENDED session still carries
