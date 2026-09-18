@@ -133,31 +133,40 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 	}
 }
 
-// TestRepoGrantList_MirrorWithNoReadablePlacement pins that a mirror the
-// caller cannot reach is reported as that, rather than dialed on a cluster
-// that does not hold it.
+// TestRepoGrantList_PlacementLookupIsAHint pins that the placement lookup can
+// never veto the read. It is pull-gated; the collaborator endpoint runs a live
+// GitHub-admin check — so a caller who cannot pull the mirror, but can be asked
+// about its upstream, is still answered, on the default cluster.
 //
-// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
-func TestRepoGrantList_MirrorWithNoReadablePlacement(t *testing.T) {
-	var paths []string
-	srv := grantActiveCoreServer(t, &paths) // no placements
-	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
-	require.ErrorContains(t, err, "no mirror of acme/widget you can read as this login")
-	require.ErrorContains(t, err, "--context")
-}
+// Not parallel: swaps the package-level core-client seams.
+func TestRepoGrantList_PlacementLookupIsAHint(t *testing.T) {
+	var clusterHosts []string
+	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		clusterHosts = append(clusterHosts, r.URL.Query().Get("clusterHost"))
+		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{
+			Collaborators: []coreapi.MirrorCollaborator{{Handle: coreapi.NewOptString("github:alice"), Role: "reader", AccountId: "01ACCT"}},
+		})
+	}))
 
-// TestRepoGrantList_MirrorPlacementWithNoDialableHost pins that a repo which
-// IS mirrored is never reported as unmirrored: a placement whose host this
-// command refuses to dial is its own answer, and it names the verb that lists
-// the placements rather than blaming the caller's access.
-//
-// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
-func TestRepoGrantList_MirrorPlacementWithNoDialableHost(t *testing.T) {
-	var paths []string
-	srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors")
-	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
-	require.ErrorContains(t, err, "acme/widget is mirrored, but no placement names a cluster host")
-	require.ErrorContains(t, err, "entire repo mirror get /gh/acme/widget")
+	t.Run("a lookup that resolves nothing", func(t *testing.T) {
+		clusterHosts = nil
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths) // no placements
+		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "github:alice")
+		require.Equal(t, []string{defaultClusterHost}, clusterHosts)
+	})
+
+	t.Run("a placement naming no dialable host", func(t *testing.T) {
+		clusterHosts = nil
+		var paths []string
+		srv := grantActiveCoreServer(t, &paths, "https://eu.example/mirrors")
+		stdout, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
+		require.NoError(t, err)
+		require.Contains(t, stdout, "github:alice")
+		require.Equal(t, []string{defaultClusterHost}, clusterHosts)
+	})
 }
 
 // TestRepoGrantList_ReadsAPlacementTheRepoHas pins that the region asked is one

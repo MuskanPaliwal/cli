@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/internal/coreapi"
 )
 
@@ -20,7 +21,7 @@ import (
 //     and `remove` write them.
 //   - A GitHub mirror's access is the upstream repository's. Entire only
 //     materializes it per placement, so `list` reads it and nothing writes it
-//     — mirrorGrantsAreUpstreamErr is what `add` and `remove` say instead.
+//     — mirrorGrantsAreUpstream is what `add` and `remove` say instead.
 //
 // The mirror half is deliberately absent from `add`/`remove`'s grammar rather
 // than accepted and always refused: a command that takes a ref it can never act
@@ -82,39 +83,32 @@ var mirrorGrantListing = &grantListBranch{
 
 // listMirrorCollaborators prints who can pull owner/repo's mirror.
 //
-// The collaborator endpoint is served by the core fronting ONE cluster, so the
-// placement to ask is resolved first, on the active context's core. The caller
-// is never asked which region they mean: every placement materializes the same
-// upstream GitHub collaborators, so any one answers — but it has to be a
-// placement the repo actually has, which is the whole reason this lookup is
-// here rather than a hard-coded default.
+// The collaborator endpoint is served by the core fronting ONE cluster, so a
+// cluster has to be named. Which one is a hint, never a gate: the two endpoints
+// answer to different authorities — /mirrors/placements is pull-gated, while
+// /mirrors/collaborators runs a live GitHub-admin check — so a GitHub admin who
+// holds no Entire grant resolves no placements and must still get their answer.
+// A lookup that says nothing, or fails, therefore falls back to the default
+// cluster, which is where the read went before placements were consulted at
+// all. What the hint buys is the repo mirrored only outside that default.
 //
-// Resolving as the active login is also what scopes this to one federation:
-// a cluster can be fronted by cores the active login has no account with, and
-// those mirrors are reached by acting as the login that does (`--context`),
-// not by naming their cluster.
+// The caller is never asked which region they mean: every placement
+// materializes the same upstream GitHub collaborators, so any one answers.
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
-	var clusterHost string
+	clusterHost := defaultClusterHost
 	if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 		// The pull-gated placement lookup, the same authority `repo clone`,
 		// `remote use` and `remote url` resolve through, so a public mirror
 		// resolves too.
 		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
-			return err
+			// Advisory, so its failure is not the command's: the read below
+			// has its own authority and may well succeed where this did not.
+			logging.Debug(ctx, "mirror collaborators: placement hint lookup failed", "error", err)
+			return nil
 		}
-		if len(placements) == 0 {
-			// The lookup runs as the active login, so "no placements" also
-			// covers a mirror in a federation that login does not front —
-			// which is an identity to switch, not a region to name.
-			return fmt.Errorf("no mirror of %s/%s you can read as this login: it is not mirrored, you have no access to its mirrors, or it lives in a federation this login does not front (`entire auth contexts` lists your logins; --context acts as one)", owner, repo)
-		}
-		// Told apart from "not mirrored" deliberately: the repo IS mirrored, so
-		// blaming access would send the user to fix the wrong thing — and the
-		// command named below would then list the placement and contradict it.
-		clusterHost = mirrorReadCluster(placements)
-		if clusterHost == "" {
-			return fmt.Errorf("%s/%s is mirrored, but no placement names a cluster host this command can dial; `entire repo mirror get /%s/%s/%s` lists them", owner, repo, mirrorCloneForge, owner, repo)
+		if host := mirrorReadCluster(placements); host != "" {
+			clusterHost = host
 		}
 		return nil
 	}); err != nil {
@@ -140,7 +134,8 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 // first host in sorted order. A host that is not a bare host[:port] is skipped
 // rather than dialed — it names the core this command authenticates to, so the
 // same guard repoRemoteURL applies to a server-provided host applies here.
-// Returns "" when no placement is usable, which the caller reports.
+// Returns "" when the placements name no usable host, leaving the caller on the
+// default cluster.
 func mirrorReadCluster(placements []coreapi.ResolvedPlacement) string {
 	hosts := make([]string, 0, len(placements))
 	for _, p := range placements {

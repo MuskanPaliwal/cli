@@ -374,7 +374,7 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 // repoGrantTarget is repo access: roles reader/writer/admin, required, on a
 // repo addressed by its /et/<project>/<repo> path and nothing else. `list`
 // alone also answers a GitHub mirror ref, from the upstream collaborators the
-// placement materializes — see newMirrorGrantListing.
+// placement materializes — see mirrorGrantListing.
 var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	noun:          cmdRepo,
 	refUsage:      "its /" + nativeCloneForge + "/<project>/<repo> path",

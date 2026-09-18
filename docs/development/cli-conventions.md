@@ -140,18 +140,20 @@ the commands are always runnable in every build.
   GitHub identity, so a service-account token cannot answer it). The mirror
   branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
   mirror endpoint does not report. That endpoint is served by the core fronting
-  one cluster, so the branch first resolves the repo's placements through
+  one cluster, so the branch resolves the repo's placements through
   `resolvePullablePlacements` (the pull-gated lookup `repo clone`, `remote use`
-  and `remote url` share) and reads the collaborators on a cluster the repo actually has —
-  preferring the default, else the first in sorted order. There is no region
-  flag: every placement materializes the same upstream collaborators, so the
-  caller has nothing to choose, but a repo mirrored only outside the default
-  region must still be asked somewhere it exists. That lookup runs as the
-  active login, which scopes the verb to one federation: a mirror on a cluster
-  the active login does not front is reached by acting as the login that does
-  (`--context`), which the empty-placement error names — the removed
-  `--cluster` was doing that identity selection implicitly through
-  `clusterdiscovery.selectLoginContext`. `grant add` and
+  and `remote url` share) and reads the collaborators on a cluster the repo
+  actually has — preferring the default, else the first in sorted order. That
+  lookup is a **hint, never a gate**: the two endpoints answer to different
+  authorities, `/mirrors/placements` being pull-gated while
+  `/mirrors/collaborators` runs a live GitHub-admin check, so a GitHub admin
+  holding no Entire grant resolves no placement and must still be answered. A
+  lookup that resolves nothing, names no dialable host, or fails outright falls
+  back to `defaultClusterHost`; what the hint buys is the repo mirrored only
+  outside that default. There is no region flag either: every placement
+  materializes the same upstream collaborators, so the caller has nothing to
+  choose — the removed `--cluster` was selecting an identity (through
+  `clusterdiscovery.selectLoginContext`), which `--context` says directly. `grant add` and
   `grant remove` keep the native path as their whole grammar: a mirror's access
   is the upstream GitHub repository's, so a `/gh/` ref is refused before any
   request — and before required flags are validated, through the target's
