@@ -1,13 +1,1 @@
-https://github.com/entireio/cli/pull/2028 resolve conflicts
-
----
-
-commit and push
-
----
-
-what is in settings.json? are these my changes?
-
----
-
-okay
+yupp
