@@ -79,16 +79,18 @@ func runStatus(ctx context.Context, w io.Writer, detailed, jsonOutput bool) erro
 	if err != nil {
 		return err //nolint:wrapcheck // already contextual; a bare %w only changes the concrete type
 	}
+	setupIssue := inspectWorktreeSetup(ctx)
 
 	if !projectExists && !localExists {
 		fmt.Fprintln(w, "○ not set up (run `entire enable` to get started)")
+		writeWorktreeSetupIssue(w, setupIssue)
 		return nil
 	}
 
 	sty := newStatusStyles(w)
 
 	if detailed {
-		return runStatusDetailed(ctx, w, sty, settingsPath, localSettingsPath, projectExists, localExists)
+		return runStatusDetailed(ctx, w, sty, settingsPath, localSettingsPath, projectExists, localExists, setupIssue)
 	}
 
 	// Short output: just show the effective/merged state
@@ -98,6 +100,7 @@ func runStatus(ctx context.Context, w io.Writer, detailed, jsonOutput bool) erro
 	}
 
 	fmt.Fprintln(w, formatSettingsStatusShort(ctx, s, sty))
+	writeWorktreeSetupIssue(w, setupIssue)
 	if s.Enabled {
 		writeActiveSessions(ctx, w, sty)
 	}
@@ -121,13 +124,14 @@ func writeAgentHelpHint(w io.Writer, sty statusStyles) {
 }
 
 // runStatusDetailed shows the effective status plus detailed status for each settings file.
-func runStatusDetailed(ctx context.Context, w io.Writer, sty statusStyles, settingsPath, localSettingsPath string, projectExists, localExists bool) error {
+func runStatusDetailed(ctx context.Context, w io.Writer, sty statusStyles, settingsPath, localSettingsPath string, projectExists, localExists bool, setupIssue *worktreeSetupIssue) error {
 	// First show the effective/merged status
 	effectiveSettings, err := LoadEntireSettings(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 	fmt.Fprintln(w, formatSettingsStatusShort(ctx, effectiveSettings, sty))
+	writeWorktreeSetupIssue(w, setupIssue)
 	fmt.Fprintln(w) // blank line
 
 	// Show project settings if it exists
@@ -711,17 +715,13 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 		return
 	}
 
-	states, err := store.List(ctx)
+	// ListReadOnly, not List: asking what is happening must not change what is
+	// happening. List deletes stale records as it reads them, and status is the
+	// command people run to look. Cleanup stays with doctor and the sweeper,
+	// which still call List.
+	states, err := store.ListReadOnly(ctx)
 	if err != nil || len(states) == 0 {
 		return
-	}
-
-	// Finalize any non-ended session whose agent process has exited without a
-	// SessionStop hook firing, so it doesn't linger as "active" until the
-	// inactivity timeout. The sweep marks them ended in place, so the filter
-	// below drops them.
-	if n := finalizeExitedSessions(ctx, states, time.Now().Add(interactiveSweepCondenseBudget)); n > 0 {
-		fmt.Fprintln(w, sty.render(sty.dim, fmt.Sprintf("Finalized %d exited session(s) (agent process gone).", n)))
 	}
 
 	// Filter to active sessions only, per session.State.IsEnded — the same rule
@@ -1042,6 +1042,9 @@ type statusJSON struct {
 	// CodexHooks reports effective discovery/trust warnings separately from
 	// current-checkout installation and freshness semantics.
 	CodexHooks *codexHooksStatusJSON `json:"codex_hooks,omitempty"`
+	// WorktreeSetup reports missing Entire settings or shared Claude project
+	// hook config only when a configured sibling proves the portable setup.
+	WorktreeSetup *worktreeSetupStatusJSON `json:"worktree_setup,omitempty"`
 	// CheckpointPushDisabled is emitted only when Entire is enabled and the
 	// effective push_sessions setting is false. Its absence does not guarantee
 	// that a push can succeed.
@@ -1084,6 +1087,25 @@ type statusJSON struct {
 	Error          string   `json:"error,omitempty"`
 }
 
+type worktreeSetupStatusJSON struct {
+	State              string   `json:"state"`
+	Agent              string   `json:"agent"`
+	Missing            []string `json:"missing"`
+	ConfiguredWorktree string   `json:"configured_worktree"`
+}
+
+func worktreeSetupStatusFromIssue(issue *worktreeSetupIssue) *worktreeSetupStatusJSON {
+	if issue == nil {
+		return nil
+	}
+	return &worktreeSetupStatusJSON{
+		State:              "incomplete",
+		Agent:              claudeCodeAgentName,
+		Missing:            issue.missingJSONFields(),
+		ConfiguredWorktree: issue.ConfiguredWorktree,
+	}
+}
+
 type codexHooksStatusJSON struct {
 	State            string   `json:"state"`
 	WorktreePath     string   `json:"worktree_path,omitempty"`
@@ -1110,9 +1132,16 @@ func codexHooksStatusFromIssue(issue *codexHookIssue) *codexHooksStatusJSON {
 }
 
 type sessionBriefJSON struct {
-	Agent  string `json:"agent"`
-	Model  string `json:"model,omitempty"`
-	Status string `json:"status"`
+	Agent string `json:"agent"`
+	// SessionID distinguishes two sessions for the same agent, which the
+	// previous one-entry-per-agent shape could not represent.
+	SessionID string `json:"session_id,omitempty"`
+	// WorktreePath and Branch say WHERE a session is, which is the whole
+	// reason two entries for one agent are distinguishable in practice.
+	WorktreePath string `json:"worktree_path,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Status       string `json:"status"`
 	// CaptureDegraded reports that a session for this agent last turned with a
 	// status scan over budget, so new-file detection was skipped.
 	CaptureDegraded bool `json:"capture_degraded,omitempty"`
@@ -1131,9 +1160,10 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 	if presenceErr != nil {
 		return writeJSON(statusJSON{Error: presenceErr.Error()})
 	}
+	setupIssue := inspectWorktreeSetup(ctx)
 
 	if !projectExists && !localExists {
-		return writeJSON(statusJSON{Error: "not set up"})
+		return writeJSON(statusJSON{Error: "not set up", WorktreeSetup: worktreeSetupStatusFromIssue(setupIssue)})
 	}
 
 	s, err := LoadEntireSettings(ctx)
@@ -1146,6 +1176,7 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		Agents:         []string{},
 		ActiveSessions: []sessionBriefJSON{},
 		AgentHelp:      agentHelpCommand,
+		WorktreeSetup:  worktreeSetupStatusFromIssue(setupIssue),
 	}
 
 	if s.Enabled {
@@ -1174,52 +1205,41 @@ func runStatusJSON(ctx context.Context, w io.Writer) error {
 		result.CheckpointRemoteIgnoredReason = syncInfo.IgnoredReason
 
 		if store, err := session.NewStateStore(ctx); err == nil {
-			if states, err := store.List(ctx); err == nil {
-				// Finalize sessions whose agent has exited (matches the human
-				// status path) so --json doesn't leave them orphaned or
-				// report them under active_sessions.
-				finalizeExitedSessions(ctx, states, time.Now().Add(interactiveSweepCondenseBudget))
-				// Deduplicate by agent: one entry per agent, "active" wins over "idle".
-				type agentEntry struct {
-					brief    sessionBriefJSON
-					isActive bool
-				}
-				byAgent := make(map[string]*agentEntry)
+			// Read-only, and one entry per session. Collapsing by agent hid a
+			// second session for the same agent in another worktree, and the
+			// finalize-on-read this replaces made `status --json` mutate the
+			// state it reports.
+			if states, err := store.ListReadOnly(ctx); err == nil {
 				for _, st := range states {
 					if st.IsEnded() {
 						continue
 					}
-					agent := string(st.AgentType)
-					if agent == "" {
-						agent = unknownPlaceholder
+					agentName := string(st.AgentType)
+					if agentName == "" {
+						agentName = unknownPlaceholder
 					}
-					active := st.Phase == session.PhaseActive
-					if existing, ok := byAgent[agent]; ok {
-						if active && !existing.isActive {
-							existing.brief.Model = st.ModelName
-							existing.brief.Status = sessionStatusLabel(st)
-							existing.isActive = true
-						}
-						// Degradation is sticky across the dedupe: any degraded
-						// session for this agent must not be hidden by a healthy one.
-						existing.brief.CaptureDegraded = existing.brief.CaptureDegraded || st.CaptureDegradedAt != nil
-					} else {
-						byAgent[agent] = &agentEntry{
-							brief: sessionBriefJSON{
-								Agent:           agent,
-								Model:           st.ModelName,
-								Status:          sessionStatusLabel(st),
-								CaptureDegraded: st.CaptureDegradedAt != nil,
-							},
-							isActive: active,
-						}
+					branch := st.Branch
+					if branch == "" && st.WorktreePath != "" {
+						branch = resolveWorktreeBranch(ctx, st.WorktreePath)
 					}
+					result.ActiveSessions = append(result.ActiveSessions, sessionBriefJSON{
+						Agent:           agentName,
+						SessionID:       st.SessionID,
+						WorktreePath:    st.WorktreePath,
+						Branch:          branch,
+						Model:           st.ModelName,
+						Status:          sessionStatusLabel(st),
+						CaptureDegraded: st.CaptureDegradedAt != nil,
+					})
 				}
-				for _, e := range byAgent {
-					result.ActiveSessions = append(result.ActiveSessions, e.brief)
-				}
+				// Agent first so the listing stays grouped and readable;
+				// session ID breaks ties so two sessions for one agent have a
+				// deterministic order.
 				sort.Slice(result.ActiveSessions, func(i, j int) bool {
-					return result.ActiveSessions[i].Agent < result.ActiveSessions[j].Agent
+					if result.ActiveSessions[i].Agent != result.ActiveSessions[j].Agent {
+						return result.ActiveSessions[i].Agent < result.ActiveSessions[j].Agent
+					}
+					return result.ActiveSessions[i].SessionID < result.ActiveSessions[j].SessionID
 				})
 			}
 		}
