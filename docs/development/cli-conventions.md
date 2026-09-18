@@ -139,10 +139,12 @@ the commands are always runnable in every build.
   `GET /mirrors/collaborators` (live GitHub-admin gated against the caller's own
   GitHub identity, so a service-account token cannot answer it). The mirror
   branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
-  mirror endpoint does not report — and its `--json` merges the native identity
-  keys (`granteeId`, `granteeName`, plus `source` = `github`, where a mirror's
-  access does come from) onto the collaborator model through
-  `mergeSynthesizedFields`, additive-only, so one script reads either ref.
+  mirror endpoint does not report — and its `--json` rewrites the
+  collaborator model into the grant vocabulary through `mergeSynthesizedFields`
+  — `accountId` → `granteeId`, `handle` → `granteeName`, plus `source` =
+  `github`, where a mirror's access does come from — so one script reads either
+  ref and no value is printed twice under two names. The merge (rather than a
+  struct of our own) is what keeps any field the server adds later.
   `granteeType` stays absent — the endpoint reports an `accountId` and no kind,
   so `account` would be a guess about a principal whose kind it never gave, and
   a sentinel would add a value no server emits; absence carries the fact

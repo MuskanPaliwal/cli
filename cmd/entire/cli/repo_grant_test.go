@@ -211,16 +211,16 @@ func TestRepoGrantList_PlacementLookupIsAHint(t *testing.T) {
 	})
 }
 
-// TestRepoGrantList_JSONSharesOneIdentity pins that a script gets one answer
-// from one verb: `.granteeId`, `.granteeName`, `.role` and `.source` read the
-// same for either ref, and the mirror endpoint's own fields are still there.
+// TestRepoGrantList_JSONNamesEachValueOnce pins the machine-readable contract:
+// one verb, one answer. A mirror row reads in the grant vocabulary, carries
+// nothing twice, and keeps out the one native key it cannot honestly fill.
 //
 // Not parallel: swaps the package-level core-client seams.
-func TestRepoGrantList_JSONSharesOneIdentity(t *testing.T) {
+func TestRepoGrantList_JSONNamesEachValueOnce(t *testing.T) {
 	seamClusterCoreClient(t, newMirrorRequestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONResponse(t, w, http.StatusOK, &coreapi.ListMirrorCollaboratorsOutputBody{
 			Collaborators: []coreapi.MirrorCollaborator{
-				{Handle: coreapi.NewOptString("github:alice"), Role: "writer", AccountId: "01ACCTALICE"},
+				{Handle: coreapi.NewOptString("github:toothbrush"), Role: "writer", AccountId: "01ACCTTOOTH"},
 				{Role: "reader", AccountId: "01ACCTCAROL"}, // no handle resolved
 			},
 		})
@@ -238,29 +238,29 @@ func TestRepoGrantList_JSONSharesOneIdentity(t *testing.T) {
 	}
 
 	native := decode(t, "/et/acme/web")
-	require.Equal(t, "github:alice", native[0]["granteeName"])
-	require.Equal(t, "repo", native[0]["source"])
+	require.Equal(t, map[string]any{
+		"granteeId":   "01ACCT",
+		"granteeName": "github:alice",
+		"granteeType": granteeTypeAccount,
+		"role":        "writer",
+		"source":      "repo",
+	}, native[0], "the server's own model, untouched")
 
 	mirror := decode(t, "/gh/acme/widget")
-	require.Equal(t, "01ACCTALICE", mirror[0]["granteeId"])
-	require.Equal(t, "github:alice", mirror[0]["granteeName"])
-	require.Equal(t, "writer", mirror[0]["role"])
-	require.Equal(t, repoProviderGitHub, mirror[0]["source"])
-	// Additive: what the endpoint sent is still exactly what it sent.
-	require.Equal(t, "01ACCTALICE", mirror[0]["accountId"])
-	require.Equal(t, "github:alice", mirror[0]["handle"])
+	require.Equal(t, map[string]any{
+		"granteeId":   "01ACCTTOOTH",
+		"granteeName": "github:toothbrush",
+		"role":        "writer",
+		"source":      repoProviderGitHub,
+	}, mirror[0])
 
-	// An unresolved handle omits granteeName, as the native shape does, and
-	// still carries the id every row is keyed by.
-	require.Equal(t, "01ACCTCAROL", mirror[1]["granteeId"])
-	require.NotContains(t, mirror[1], "granteeName")
-	require.Equal(t, repoProviderGitHub, mirror[1]["source"])
-
-	// granteeType is the one native key never merged: this endpoint reports no
-	// grantee kind, and the native rows always do, so its absence says which
-	// row a script is holding instead of labelling it with a guess.
-	require.Contains(t, native[0], "granteeType")
-	require.NotContains(t, mirror[0], "granteeType")
+	// A name the server did not resolve is absent, as it is on a native row,
+	// rather than filled with the id the row is already keyed by.
+	require.Equal(t, map[string]any{
+		"granteeId": "01ACCTCAROL",
+		"role":      "reader",
+		"source":    repoProviderGitHub,
+	}, mirror[1])
 }
 
 // TestRepoGrantList_GuessedClusterSaysSo pins that a cluster nothing pointed at
