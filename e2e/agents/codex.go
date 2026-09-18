@@ -88,9 +88,9 @@ func (c *Codex) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 		o(cfg)
 	}
 
-	timeout := 60 * time.Second
-	if cfg.PromptTimeout > 0 {
-		timeout = cfg.PromptTimeout
+	timeout, err := promptTimeout(60*time.Second, cfg)
+	if err != nil {
+		return Output{}, err
 	}
 	promptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -225,7 +225,7 @@ func seedCodexHome(home, projectDir string) error {
 	// Write config with trust, feature flag, and pinned model to skip upgrade dialogs.
 	model := os.Getenv("E2E_CODEX_MODEL")
 	if model == "" {
-		model = "gpt-5.4"
+		model = "gpt-5.6-terra"
 	}
 	config := fmt.Sprintf("model = %q\n\n[features]\nhooks = true\n\n[projects.%q]\ntrust_level = \"trusted\"\n", model, projectDir)
 
