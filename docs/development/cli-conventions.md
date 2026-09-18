@@ -112,10 +112,26 @@ the commands are always runnable in every build.
   git remote at a mirror (local git config only — it creates nothing
   server-side). Interactively it picks among the repo's placements and asks
   whether to replace the remote (preserving the old URL under `--upstream`) or
-  add a separate one; non-interactively it repoints `--remote` directly. Both
-  `remote use` and `clone` choose a placement through the shared
-  `selectPlacement` picker. `edit --visibility` sets a native repo's
-  visibility; `visibility get` reads it.
+  add a separate one; non-interactively it repoints `--remote` directly.
+  `remote url` is the read-only half of the same subtree: it resolves a repo to
+  its `entire://` URL and prints it, changing nothing.
+  `remote use`, `remote url` and `clone` all choose a placement through the shared
+  `selectPlacement` picker, each passing its own `placementPicker` wording. The
+  picker renders on stderr when that is a terminal and on the controlling
+  terminal otherwise (`openPlacementPromptTerminal`), because Bubble Tea fails
+  *silently* on a redirected writer — no window size, a 0x0 viewport, and stdin
+  still in raw mode — and `remote url` exists to have its stdout captured. The
+  cancellation message follows the same writer, so it is never explained into a
+  stream the user is not reading.
+  `remote url` is `clone` without the clone: it resolves the same three ref
+  shapes through the same `resolveRepoRemoteURL` and prints the `entire://` URL
+  to stdout for `git remote add entire "$(…)"`, so the two always accept the
+  same refs. It deliberately does **not** take the `resolveRepoRef` grammar the
+  rest of the group shares (no ULID, no `--project`) — a URL producer matches
+  its sibling `clone`, not `view`. Because it prints rather than execs, its
+  `entire://` passthrough is validated (`validateEntireURLForPrinting`) where
+  `clone`'s is forwarded verbatim. `edit --visibility` sets a native repo's visibility;
+  `visibility get` reads it.
   **"Who can reach this repo?" is one verb, `repo grant`,** because a user
   asking it need not know which backend the repo has. `grant list` branches on
   the ref's forge before resolving anything: a `/et/` ref lists the repo's
@@ -125,8 +141,8 @@ the commands are always runnable in every build.
   branch renders `GRANTEE`/`ROLE` — `grantColumns` without the provenance the
   mirror endpoint does not report. That endpoint is served by the core fronting
   one cluster, so the branch first resolves the repo's placements through
-  `resolvePullablePlacements` (the pull-gated lookup `repo clone` and `remote
-  use` share) and reads the collaborators on a cluster the repo actually has —
+  `resolvePullablePlacements` (the pull-gated lookup `repo clone`, `remote use`
+  and `remote url` share) and reads the collaborators on a cluster the repo actually has —
   preferring the default, else the first in sorted order. There is no region
   flag: every placement materializes the same upstream collaborators, so the
   caller has nothing to choose, but a repo mirrored only outside the default

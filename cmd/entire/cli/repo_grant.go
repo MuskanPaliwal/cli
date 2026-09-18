@@ -96,8 +96,9 @@ var mirrorGrantListing = &grantListBranch{
 func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 	var clusterHost string
 	if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
-		// The pull-gated placement lookup, the same authority `repo clone` and
-		// `remote use` resolve through, so a public mirror resolves too.
+		// The pull-gated placement lookup, the same authority `repo clone`,
+		// `remote use` and `remote url` resolve through, so a public mirror
+		// resolves too.
 		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
 			return err
