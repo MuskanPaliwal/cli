@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -15,7 +14,11 @@ import (
 )
 
 // Ensure FactoryAIDroidAgent implements HookSupport
-var _ agent.HookSupport = (*FactoryAIDroidAgent)(nil)
+var (
+	_ agent.HookSupport           = (*FactoryAIDroidAgent)(nil)
+	_ agent.HookConfigLocator     = (*FactoryAIDroidAgent)(nil)
+	_ agent.PermissionConfigOwner = (*FactoryAIDroidAgent)(nil)
+)
 
 // Factory AI Droid hook names - these become subcommands under `entire hooks factoryai-droid`
 const (
@@ -33,9 +36,6 @@ const (
 // FactorySettingsFileName is the settings file used by Factory AI Droid.
 // This is Factory-specific and not shared with other agents.
 const FactorySettingsFileName = "settings.json"
-
-// metadataDenyRule blocks Factory Droid from reading Entire session metadata
-const metadataDenyRule = "Read(./.entire/metadata/**)"
 
 // factoryHookConfig returns .factory/settings.json for the current worktree,
 // opened through the worktree's root. That directory lives in the working tree,
@@ -55,7 +55,47 @@ func factoryHookConfig(ctx context.Context) (*agent.HookConfigFile, error) {
 			return nil, fmt.Errorf("failed to get current directory: %w", err)
 		}
 	}
-	return agent.OpenHookConfig(repoRoot, ".factory/"+FactorySettingsFileName) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+	return agent.OpenHookConfig(repoRoot, (&FactoryAIDroidAgent{}).HookConfigRelPath()) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+}
+
+// hookCommandPrefix is what every hook command Entire writes for droid begins
+// with; the verb is one of the HookName* constants.
+const hookCommandPrefix = "entire hooks factoryai-droid "
+
+// silentHookCommand wraps one hook verb in the silent production wrapper for
+// this host.
+//
+// Droid's Windows build runs every hook command as an argument of cmd.exe,
+// while its macOS/Linux build runs the same string under sh. cmd.exe reads the
+// sh wrapper's `>` and `&` as its own redirections and separators, so the
+// command is cut apart and no `entire hooks` process is ever created — the
+// session never starts, so a commit produces no checkpoint and nothing says
+// why.
+//
+// Unlike Codex and Cursor the choice is NOT gated on
+// agent.UseWindowsProductionHooks: droid never hands a hook to sh on Windows,
+// so whether a working sh exists there changes nothing. See
+// agent.HookHostIsWindows.
+//
+// Scope: this fixes droid 0.178.0 and later, the two compositions verified end
+// to end on Windows. 0.109.1 spawned `cmd.exe /c <H>` WITHOUT
+// windowsVerbatimArguments, so libuv quotes the argument and backslash-escapes
+// the inner quotes of the silent wrapper's nested `cmd.exe /d /s /c "…"` — an
+// escape cmd.exe does not understand. That version stays broken, but it was
+// equally broken before: the sh wrapper never survived its cmd.exe either. The
+// bare (unnested) wrapper shape the Stop hook uses would likely work there too,
+// and switching every hook to it is the fix if anyone still runs 0.109.1 — it
+// is not taken here because it would trade the shape actually verified on
+// current droid for one that is not.
+func silentHookCommand(verb string, useWindows bool) string {
+	return agent.WrapProductionSilentHookCommandForOS(hookCommandPrefix+verb, useWindows)
+}
+
+// stopHookCommand is silentHookCommand for the Stop hook, which carries the
+// plain-text warning wrapper rather than the silent one.
+func stopHookCommand(useWindows bool) string {
+	return agent.WrapProductionPlainTextWarningHookCommandForOS(
+		hookCommandPrefix+HookNameStop, agent.WarningFormatSingleLine, useWindows)
 }
 
 // InstallHooks installs Factory AI Droid hooks in .factory/settings.json.
@@ -123,14 +163,15 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, force bool) (int
 		preCompact = removeEntireHooks(preCompact)
 	}
 
-	// Define hook commands
-	sessionStartCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid session-start")
-	sessionEndCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid session-end")
-	stopCmd := agent.WrapProductionPlainTextWarningHookCommand("entire hooks factoryai-droid stop", agent.WarningFormatSingleLine)
-	userPromptSubmitCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid user-prompt-submit")
-	preTaskCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid pre-tool-use")
-	postTaskCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid post-tool-use")
-	preCompactCmd := agent.WrapProductionSilentHookCommand("entire hooks factoryai-droid pre-compact")
+	// Wrapper form is host-dependent; see silentHookCommand.
+	useWindowsHooks := agent.HookHostIsWindows()
+	sessionStartCmd := silentHookCommand(HookNameSessionStart, useWindowsHooks)
+	sessionEndCmd := silentHookCommand(HookNameSessionEnd, useWindowsHooks)
+	stopCmd := stopHookCommand(useWindowsHooks)
+	userPromptSubmitCmd := silentHookCommand(HookNameUserPromptSubmit, useWindowsHooks)
+	preTaskCmd := silentHookCommand(HookNamePreToolUse, useWindowsHooks)
+	postTaskCmd := silentHookCommand(HookNamePostToolUse, useWindowsHooks)
+	preCompactCmd := silentHookCommand(HookNamePreCompact, useWindowsHooks)
 
 	// Drop Entire hooks left by older versions before adding the current ones,
 	// so a stale command (e.g. the removed local-dev launcher) does not survive
@@ -191,22 +232,12 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, force bool) (int
 		count++
 	}
 
-	// Add permissions.deny rule if not present
-	permissionsChanged := false
-	var denyRules []string
-	if denyRaw, ok := rawPermissions["deny"]; ok {
-		if err := json.Unmarshal(denyRaw, &denyRules); err != nil {
-			return 0, fmt.Errorf("failed to parse permissions.deny in settings.json: %w", err)
-		}
-	}
-	if !slices.Contains(denyRules, metadataDenyRule) {
-		denyRules = append(denyRules, metadataDenyRule)
-		denyJSON, err := json.Marshal(denyRules)
-		if err != nil {
-			return 0, fmt.Errorf("failed to marshal permissions.deny: %w", err)
-		}
-		rawPermissions["deny"] = denyJSON
-		permissionsChanged = true
+	// Unconditional, like the stale-hook migration above: a plain
+	// `entire enable` must drop the retired metadata deny rule, not just
+	// --force. See agent.MetadataDenyRule for why it is retired.
+	permissionsChanged, err := agent.RemoveMetadataDenyRule(rawPermissions)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update permissions in %s: %w", cfg.Path(), err)
 	}
 
 	// staleDropped forces a write even when nothing was added: a file holding
@@ -232,12 +263,17 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, force bool) (int
 	}
 	rawSettings["hooks"] = hooksJSON
 
-	// Marshal permissions and update raw settings
-	permJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal permissions: %w", err)
+	// An emptied permissions block is deleted, not written back as {} — see the
+	// same branch in claudecode's writeClaudeSettingsFile.
+	if len(rawPermissions) == 0 {
+		delete(rawSettings, "permissions")
+	} else {
+		permJSON, permErr := jsonutil.MarshalWithNoHTMLEscape(rawPermissions)
+		if permErr != nil {
+			return 0, fmt.Errorf("failed to marshal permissions: %w", permErr)
+		}
+		rawSettings["permissions"] = permJSON
 	}
-	rawSettings["permissions"] = permJSON
 
 	// Write back to file
 	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
@@ -346,27 +382,9 @@ func (f *FactoryAIDroidAgent) UninstallHooks(ctx context.Context) error {
 	}
 
 	if rawPermissions != nil {
-		if denyRaw, ok := rawPermissions["deny"]; ok {
-			var denyRules []string
-			if err := json.Unmarshal(denyRaw, &denyRules); err == nil {
-				// Filter out the metadata deny rule
-				filteredRules := make([]string, 0, len(denyRules))
-				for _, rule := range denyRules {
-					if rule != metadataDenyRule {
-						filteredRules = append(filteredRules, rule)
-					}
-				}
-				if len(filteredRules) > 0 {
-					denyJSON, err := json.Marshal(filteredRules)
-					if err == nil {
-						rawPermissions["deny"] = denyJSON
-					}
-				} else {
-					// Remove empty deny array
-					delete(rawPermissions, "deny")
-				}
-			}
-		}
+		// Same removal InstallHooks now performs; best-effort so a marshal
+		// failure cannot abort the rest of the hook removal.
+		_, _ = agent.RemoveMetadataDenyRule(rawPermissions) //nolint:errcheck // best-effort during uninstall
 
 		// If permissions is empty, remove it entirely
 		if len(rawPermissions) > 0 {
@@ -518,4 +536,16 @@ func hookEntryCommand(e FactoryHookEntry) string { return e.Command }
 func removeEntireHooks(matchers []FactoryHookMatcher) []FactoryHookMatcher {
 	out, _ := dropStaleEntireHooks(matchers)
 	return out
+}
+
+// PermissionConfig implements agent.PermissionConfigOwner so the shared
+// retired-deny-rule diagnostics and repair can reach .factory/settings.json
+// without knowing Factory Droid's layout.
+func (f *FactoryAIDroidAgent) PermissionConfig(ctx context.Context) (*agent.HookConfigFile, error) {
+	return factoryHookConfig(ctx)
+}
+
+// HookConfigRelPath implements agent.HookConfigLocator.
+func (f *FactoryAIDroidAgent) HookConfigRelPath() string {
+	return ".factory/" + FactorySettingsFileName
 }

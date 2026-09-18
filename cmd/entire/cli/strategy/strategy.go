@@ -159,12 +159,17 @@ type StepContext struct {
 	StepTranscriptIdentifier string // Last identifier when step started (UUID for Claude, message ID for Gemini)
 	StepTranscriptStart      int    // Transcript line count when this step/turn started
 
-	// TokenUsage contains the token usage for this checkpoint
+	// TokenUsage contains the token usage for this checkpoint.
 	TokenUsage *agent.TokenUsage
 
 	// TurnTokenUsage is cumulative within a repeatable turn; SaveStep credits
 	// only the increase since its last successful write.
 	TurnTokenUsage *agent.TokenUsage
+
+	// SubagentLedgerVersion is the authoritative inventory version observed
+	// while token evidence was extracted. nil means no inventory snapshot;
+	// a pointer to zero is a valid snapshot before the first child is observed.
+	SubagentLedgerVersion *uint64
 }
 
 // TaskStepContext contains all information needed for saving a task step checkpoint.

@@ -28,6 +28,67 @@ import (
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
 
+func TestCodexInventoryInitialization(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "initial.txt", "initial\n")
+	testutil.GitAdd(t, dir, "initial.txt")
+	testutil.GitCommit(t, dir, "initial")
+	t.Chdir(dir)
+
+	s := NewManualCommitStrategy()
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err)
+	defer repo.Close()
+	require.NoError(t, s.initializeSession(context.Background(), repo, "codex-inventory-new", agent.AgentTypeCodex, "", "", ""))
+	newState, err := s.loadSessionState(context.Background(), "codex-inventory-new")
+	require.NoError(t, err)
+	require.NotNil(t, newState.SubagentInventoryComplete)
+	assert.True(t, *newState.SubagentInventoryComplete)
+	require.NotNil(t, newState.SubagentTokensBaselineComplete)
+	assert.True(t, *newState.SubagentTokensBaselineComplete)
+
+	incomplete := false
+	pendingAt := time.Now().UTC().Truncate(time.Second)
+	partialInventory := []session.SubagentInventoryEntry{{
+		AgentID:          "child-observed-before-parent",
+		ObservedTurnIDs:  []string{"turn-pending", "turn-finalized"},
+		FinalizedTurnIDs: []string{"turn-finalized"},
+	}}
+	partialTokenUsage := &agent.TokenUsage{InputTokens: 100, SubagentTokens: &agent.TokenUsage{InputTokens: 60}, SubagentTokensComplete: &incomplete}
+	partialCheckpointUsage := &agent.TokenUsage{OutputTokens: 50, SubagentTokens: &agent.TokenUsage{OutputTokens: 30}, SubagentTokensComplete: &incomplete}
+	partialBaseline := &agent.TokenUsage{SubagentTokens: &agent.TokenUsage{InputTokens: 40}, SubagentTokensComplete: &incomplete}
+	partialRecords := []session.TaskRecord{
+		{ToolUseID: "child-live", AgentID: "child-observed-before-parent", StartedAt: pendingAt},
+		{ToolUseID: "child-completed", AgentID: "child-observed-before-parent", StartedAt: pendingAt, CompletedAt: pendingAt.Add(time.Second)},
+	}
+	require.NoError(t, s.saveSessionState(context.Background(), &SessionState{
+		SessionID:                      "codex-inventory-partial",
+		StartedAt:                      time.Now(),
+		AgentType:                      agent.AgentTypeCodex,
+		SubagentInventory:              partialInventory,
+		SubagentLedgerVersion:          9,
+		SubagentInventoryComplete:      &incomplete,
+		SubagentTokensBaselineComplete: &incomplete,
+		TokenUsage:                     partialTokenUsage,
+		CheckpointTokenUsage:           partialCheckpointUsage,
+		SubagentTokensBaseline:         partialBaseline,
+		TaskRecords:                    partialRecords,
+	}))
+	require.NoError(t, s.initializeSession(context.Background(), repo, "codex-inventory-partial", agent.AgentTypeCodex, "", "", ""))
+	partial, err := s.loadSessionState(context.Background(), "codex-inventory-partial")
+	require.NoError(t, err)
+	assert.False(t, *partial.SubagentInventoryComplete, "partial-state repair must not promote unknown inventory coverage")
+	assert.False(t, *partial.SubagentTokensBaselineComplete)
+	assert.Equal(t, uint64(9), partial.SubagentLedgerVersion)
+	assert.Equal(t, partialInventory, partial.SubagentInventory)
+	assert.True(t, partial.HasTaskContent(), "repair must retain both live and completed-unmaterialized task content")
+	assert.Equal(t, partialRecords, partial.TaskRecords)
+	assert.Equal(t, partialTokenUsage, partial.TokenUsage)
+	assert.Equal(t, partialCheckpointUsage, partial.CheckpointTokenUsage)
+	assert.Equal(t, partialBaseline, partial.SubagentTokensBaseline)
+}
+
 // testTranscriptPromptResponse is a minimal transcript used across strategy tests.
 const testTranscriptPromptResponse = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
 
@@ -427,6 +488,77 @@ func TestShadowStrategy_ClearSessionState(t *testing.T) {
 	}
 }
 
+// TestClearSessionState_SerializesAgainstConcurrentMutation is a real
+// concurrency reproduction of the race clearSessionState's gate closes:
+// before the fix, it acquired no lock at all, so a clear racing a
+// concurrently-running MutateSessionState for the same session could run
+// while that mutation was still in flight -- deleting the state file out
+// from under a write that had not yet landed, silently destroying it. This
+// drives both paths with real goroutines and explicit channel
+// synchronization (no sleeps to fake a race): a writer goroutine holds the
+// real gate (via MutateSessionState) and blocks mid-mutation; a concurrent
+// clearSessionState call must block until the writer releases, not run
+// concurrently with it.
+func TestClearSessionState_SerializesAgainstConcurrentMutation(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	s := &ManualCommitStrategy{}
+	const sessionID = "race-session"
+	require.NoError(t, s.saveSessionState(context.Background(), &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}))
+
+	writerStarted := make(chan struct{})
+	writerMayFinish := make(chan struct{})
+	writerFinished := make(chan struct{})
+	go func() {
+		defer close(writerFinished)
+		if err := MutateSessionState(context.Background(), sessionID, func(state *SessionState) error {
+			close(writerStarted)
+			<-writerMayFinish
+			state.StepCount = 1
+			return nil
+		}); err != nil {
+			t.Errorf("MutateSessionState: %v", err)
+		}
+	}()
+	<-writerStarted // writer holds the gate now, mid-mutation
+
+	clearStarted := make(chan struct{})
+	clearReturned := make(chan struct{})
+	go func() {
+		defer close(clearReturned)
+		close(clearStarted)
+		if err := s.clearSessionState(context.Background(), sessionID); err != nil {
+			t.Errorf("clearSessionState: %v", err)
+		}
+	}()
+	// Wait until the goroutine is genuinely running before timing anything.
+	// Without this, "clearReturned is not closed" is also satisfied by a
+	// goroutine the scheduler never started, so the assertion below could
+	// pass without the gate doing any work at all.
+	<-clearStarted
+
+	// clearSessionState must be blocked waiting for the writer's gate right
+	// now. Before the fix (no locking at all in clearSessionState) it would
+	// return almost immediately here, well within this window, proving the
+	// race is real.
+	select {
+	case <-clearReturned:
+		t.Fatal("clearSessionState returned while a concurrent MutateSessionState was still mid-mutation -- not serialized")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: still blocked on the gate.
+	}
+
+	close(writerMayFinish)
+	<-writerFinished
+	<-clearReturned
+}
+
 func TestShadowStrategy_ListPendingCheckpoints_NoShadowBranch(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
@@ -800,7 +932,7 @@ func TestShadowStrategy_PrepareCommitMsg_SkipsSessionWhenContentCheckFails(t *te
 
 func TestAddCheckpointTrailer_NoComment(t *testing.T) {
 	// Test that addCheckpointTrailer adds trailer without any comment lines
-	message := "Test commit message\n" //nolint:goconst // already present in codebase
+	message := "Test commit message\n"
 
 	result := addCheckpointTrailer(message, testTrailerCheckpointID)
 

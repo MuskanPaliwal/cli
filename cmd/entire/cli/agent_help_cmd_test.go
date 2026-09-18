@@ -19,12 +19,6 @@ import (
 
 const agentHelpTestRepo = "gh/acme/app"
 
-// testTrailCellRoutedFullName is the "owner/repo" fullName the entire-api
-// cell-routed client (trailRefreshAPIClient) is expected to receive when a
-// repo-scoped trails probe routes correctly through it, shared by the tests
-// covering the two legacy-BFF-routing fixes.
-const testTrailCellRoutedFullName = "acme/widget"
-
 // commandNames returns the Use-name of each command, for assertions.
 func commandNames(cmds []*cobra.Command) []string {
 	names := make([]string, 0, len(cmds))
@@ -230,10 +224,10 @@ func TestRefreshAgentHelpTrailsEnabledCacheIfStaleForScope_RoutesThroughRepoCell
 	t.Chdir(t.TempDir())
 
 	previous := trailRefreshAPIClient
-	var gotFullName string
+	var gotForge, gotOwner, gotRepo string
 	wantErr := errors.New("cell client unavailable")
-	trailRefreshAPIClient = func(_ context.Context, _ bool, fullName string) (*api.Client, error) {
-		gotFullName = fullName
+	trailRefreshAPIClient = func(_ context.Context, _ bool, forge, owner, repo string) (*api.Client, error) {
+		gotForge, gotOwner, gotRepo = forge, owner, repo
 		return nil, wantErr
 	}
 	t.Cleanup(func() { trailRefreshAPIClient = previous })
@@ -242,16 +236,16 @@ func TestRefreshAgentHelpTrailsEnabledCacheIfStaleForScope_RoutesThroughRepoCell
 		Forge:     "gh",
 		Owner:     "acme",
 		Repo:      "widget",
-		RepoKey:   trailEnablementRepoKey("gh", "acme", "widget"),
 		APIBase:   api.BaseURL(),
 		AuthKey:   "test-auth-key",
 		Supported: true,
 	}
+	scope.RepoKey = trailEnablementRepoKey(scope.Forge, scope.Owner, scope.Repo)
 
 	err := refreshAgentHelpTrailsEnabledCacheIfStaleForScope(t.Context(), scope)
 
-	if gotFullName != testTrailCellRoutedFullName {
-		t.Fatalf("trailRefreshAPIClient fullName = %q, want %s", gotFullName, testTrailCellRoutedFullName)
+	if gotForge != scope.Forge || gotOwner != scope.Owner || gotRepo != scope.Repo {
+		t.Fatalf("trailRefreshAPIClient repo = (%q,%q,%q), want (gh,acme,widget)", gotForge, gotOwner, gotRepo)
 	}
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
@@ -272,7 +266,7 @@ func TestRefreshAgentHelpTrailsEnabledCacheIfStaleForScope_NotOnboardedSavesDisa
 	runGitInDir(t, ".", "remote", "add", "origin", "https://github.com/acme/widget.git")
 
 	previous := trailRefreshAPIClient
-	trailRefreshAPIClient = func(context.Context, bool, string) (*api.Client, error) {
+	trailRefreshAPIClient = func(context.Context, bool, string, string, string) (*api.Client, error) {
 		return nil, fmt.Errorf("resolve the Entire cell for acme/widget: %w", errRepoNotOnboarded)
 	}
 	t.Cleanup(func() { trailRefreshAPIClient = previous })
@@ -643,8 +637,8 @@ func TestAgentHelpClassification_CoversEveryAdvertisedCommand(t *testing.T) {
 
 // A group's audience is a claim about all of its subcommands, so a read-only
 // group may not contain a subcommand that writes. checkpoint and session read
-// as read-only from their Short help but are not (`checkpoint policy` updates
-// policy; session carries adopt/attach/resume/stop) — both were misclassified
+// as read-only from their Short help but are not (`checkpoint explain --generate`
+// writes a summary; session carries adopt/attach/resume/stop) — both were misclassified
 // read-only in an earlier revision of this table.
 func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.T) {
 	t.Parallel()
@@ -663,12 +657,60 @@ func TestAgentHelpClassification_ReadOnlyGroupsHaveNoWritingChildren(t *testing.
 		}
 	}
 	for name, why := range map[string]string{
-		"checkpoint": "`checkpoint policy` updates policy",
+		"checkpoint": "`checkpoint explain --generate` writes a summary",
 		"session":    "adopt/attach/resume/stop mutate session state",
 	} {
 		if agentHelpFactsFor(name).audience == agentHelpAudienceReadOnly {
 			t.Errorf("%q must not be classified read-only: %s", name, why)
 		}
+	}
+}
+
+// agentHelpAudienceNote falls back to a group's OWN audience whenever its
+// classified children agree with each other. That fallback is correct — the
+// group's audience also covers children this listing never counts, the hidden
+// ones and the unclassified ones — but it means a group can silently begin
+// advertising an audience every one of its children contradicts, without anyone
+// editing the group's entry.
+//
+// That is not hypothetical: it is what deleting `checkpoint policy` did. policy
+// was the checkpoint group's only task-driven child, so removing it left four
+// read-only children under a group still classified task-driven, and the bare
+// listing rendered "checkpoint … task-driven" over a drill-down that said
+// read-only four times.
+//
+// Which side should move is a product judgment — lower the group, or classify a
+// child to match it — so this fails the build and makes a human choose instead
+// of picking for them.
+func TestAgentHelpClassification_GroupAudienceMatchesUnanimousChildren(t *testing.T) {
+	t.Parallel()
+
+	for _, sub := range agentHelpCommands(NewRootCmd(), true) {
+		facts, ok := agentHelpClassified(agentHelpPath(sub))
+		if !ok {
+			continue
+		}
+		var children []string
+		unanimous, agreed := true, agentHelpAudience(0)
+		for _, child := range agentHelpCommands(sub, true) {
+			cf, ok := agentHelpClassified(agentHelpPath(child))
+			if !ok {
+				continue
+			}
+			if len(children) == 0 {
+				agreed = cf.audience
+			} else if cf.audience != agreed {
+				unanimous = false
+			}
+			children = append(children, child.Name())
+		}
+		if len(children) == 0 || !unanimous || agreed == facts.audience {
+			continue
+		}
+		t.Errorf("group %q is classified %s, but every classified child (%s) is %s; "+
+			"the bare listing renders the group's own audience here, so one side has to move",
+			agentHelpPath(sub), agentHelpAudienceSlug(facts.audience),
+			strings.Join(children, ", "), agentHelpAudienceSlug(agreed))
 	}
 }
 
@@ -685,7 +727,7 @@ func TestRenderAgentHelpTop_ListsCuratedSubsetWithInlineAudience(t *testing.T) {
 	// Listed commands appear with their audience.
 	for _, want := range []string{
 		"status", "trail", "checkpoint", "session", "why", "search",
-		"read-only except: policy",                      // checkpoint, one line
+		"read-only except: explain",                     // checkpoint, one line
 		"read-only except: adopt, attach, resume, stop", // session, one line
 		"read-only: approvals, list, show, watch",       // trail: minority side named
 	} {
@@ -737,7 +779,7 @@ func TestRenderAgentHelpCommand_SubcommandsCarryAudienceNote(t *testing.T) {
 		t.Fatal("checkpoint command not found")
 	}
 	out := renderAgentHelpCommand(child, agentHelpTestRepo, true)
-	if !strings.Contains(out, "read-only except: policy") {
+	if !strings.Contains(out, "read-only except: explain") {
 		t.Errorf("text drill-down must state which subcommands write:\n%s", out)
 	}
 }
@@ -777,8 +819,8 @@ func TestRenderAgentHelpJSON_CarriesAudienceWhereClassified(t *testing.T) {
 
 	drill := drillJSON(t, root, "checkpoint")
 	want := map[string]string{
-		"list": "read-only", "explain": "read-only", "search": "read-only",
-		"tokens": "read-only", "policy": "task-driven",
+		"list": "read-only", "explain": "task-driven", "search": "read-only",
+		"tokens": "read-only",
 	}
 	for _, sub := range drill.Subcommands {
 		if w, ok := want[sub.Name]; ok && sub.Audience != w {

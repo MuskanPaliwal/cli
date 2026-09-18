@@ -99,7 +99,8 @@ Pass --skills to declare which skills were actually run; omit to
 attach a review without a declared skills list.
 
 Works with any registered agent, including external agents enabled via
-external_agents in settings. Run 'entire agent list' to see the full list.
+external_agents in .entire/settings.local.json (that file only, and only
+when it is untracked). Run 'entire agent list' to see the full list.
 
 If --agent doesn't locate a transcript, Entire auto-detects the agent from
 the transcript and prints the detected agent name.`,
@@ -252,10 +253,6 @@ func runAttach(ctx context.Context, w, errW io.Writer, sessionID string, agentNa
 		fmt.Fprintf(w, "Session %s already has checkpoint %s\n", sessionID, cpID)
 		amendOrPrintTrailer(logCtx, w, errW, headCommit, cpID, opts.Force)
 		return nil
-	}
-
-	if err := ensureCheckpointPolicyAllowsCheckpointData(ctx, repo); err != nil {
-		return err
 	}
 
 	// Resolve agent and transcript path.

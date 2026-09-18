@@ -59,13 +59,13 @@ func SetResolveContextForAPIForTest(t interface{ Helper() }, fn resolveContextFu
 // another environment therefore still takes two steps, because the acting
 // identity is never inferred from the target host:
 //
-//	entire auth use staging
+//	entire auth switch staging
 //	ENTIRE_API_BASE_URL=https://partial.to entire activity
 //
 // A host that doesn't advertise discovery (unreachable / 404 / 503 /
 // malformed) is an error — without it we can't know which login servers the
 // host trusts, and guessing risks presenting a token to a host that doesn't
-// accept that core (see clusterdiscovery.requireActiveContext).
+// accept that core (see clusterdiscovery.selectLoginContext).
 //
 // Callers that honour --insecure-http-auth must call EnableInsecureHTTP before
 // invoking this (as they already do); the per-context refresh reads that

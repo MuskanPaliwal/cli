@@ -67,7 +67,7 @@ func TestResolveControlPlaneTarget_ActiveContextWins(t *testing.T) {
 // A cluster-addressed control-plane command dials the core that fronts the
 // cluster (discovered from /.well-known) using the matching local context —
 // NOT the active context, which may belong to a different federation. This is
-// the fix for `repo mirror collaborators list … <prod-cluster>` 400ing with
+// the fix for `repo access list … --cluster <prod-cluster>` 400ing with
 // "unknown cluster_host" while the active context is a staging login.
 func TestResolveControlPlaneTargetForCluster_DialsClusterCoreNotActive(t *testing.T) {
 	configDir := t.TempDir()
@@ -97,7 +97,7 @@ func TestResolveControlPlaneTargetForCluster_DialsClusterCoreNotActive(t *testin
 	}
 
 	// Stub cluster discovery so the test doesn't hit the network: the cluster
-	// resolves to the prod context (what /.well-known + requireActiveContext would
+	// resolves to the prod context (what /.well-known + selectLoginContext would
 	// yield), NOT the active partial context.
 	prev := resolveContextForCluster
 	resolveContextForCluster = func(_ context.Context, _, _, host string, _ *http.Client, _ clusterdiscovery.DebugFunc) (*contexts.Context, error) {
