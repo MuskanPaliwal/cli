@@ -258,9 +258,24 @@ func TestHTTPS_PushCheckpointBranchToRemote(t *testing.T) {
 // git-branch only: asserts on v1 commit counts/subjects and the rebased tip's
 // parent count. checkpoint_remote routing and non-FF rebase for git-refs
 // per-checkpoint refs are separate future work (test plan B5/D2, git-refs only).
+//
+// Runs for both supported checkpoint_remote providers: neither push nor fetch
+// routing above consults config.Provider except through providerHost, which
+// this test never reaches (the checkpoint URL is derived from the seeded
+// HTTPS server's own host, not the provider's canonical host) — so github and
+// gitlab are expected to behave identically here.
 func TestHTTPS_CheckpointRemoteRoutesToSeparateRepo(t *testing.T) {
 	t.Parallel()
 
+	for _, provider := range []string{"github", "gitlab"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Parallel()
+			testHTTPSCheckpointRemoteRoutesToSeparateRepo(t, provider)
+		})
+	}
+}
+
+func testHTTPSCheckpointRemoteRoutesToSeparateRepo(t *testing.T, provider string) {
 	srv := startGitHTTPSServer(t, "testorg/main-repo", "testorg/checkpoints")
 	env := NewFeatureBranchEnv(t)
 
@@ -272,7 +287,7 @@ func TestHTTPS_CheckpointRemoteRoutesToSeparateRepo(t *testing.T) {
 	checkpointRemoteSettings := map[string]any{
 		"strategy_options": map[string]any{
 			"checkpoint_remote": map[string]any{
-				"provider": "github",
+				"provider": provider,
 				"repo":     "testorg/checkpoints",
 			},
 		},

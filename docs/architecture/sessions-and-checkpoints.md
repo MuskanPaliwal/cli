@@ -484,7 +484,9 @@ both the git-branch and git-refs backends (git-refs leaves its push queue
 intact for the next elected-remote push). The dedicated `checkpoint_remote`
 URL mode is exempt — it addresses a separate metadata store directly. `entire
 status` shows the sync destination and how many checkpoints have not reached
-it yet.
+it yet. Git-refs push failures never block the user's push: refs stay queued, and
+confirmed remote rejections show one bounded warning with the remote's reason
+rather than being mislabeled as divergence (see [pre-push flow](ref-checkpoint-backend.md#pre-push-flow)).
 
 A gated push is not fully silent: when checkpoints are waiting for the
 elected remote, the hook prints a two-line stderr hint naming the elected

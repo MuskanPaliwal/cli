@@ -32,6 +32,7 @@ const (
 	colHeaderGrantee  = "GRANTEE"
 	colHeaderName     = "NAME"
 	colHeaderRegion   = "REGION"
+	colHeaderRepo     = "REPO"
 	colHeaderRole     = "ROLE"
 	colHeaderStatus   = "STATUS"
 )

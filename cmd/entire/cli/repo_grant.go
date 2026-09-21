@@ -131,14 +131,16 @@ var mirrorGrantListing = &grantListBranch{
 	list: func(cmd *cobra.Command, ref string) error {
 		// Every failure from here is about the ref, never the command's shape.
 		cmd.SilenceUsage = true
-		if !declaresForge(ref, mirrorCloneForge) {
-			return forgeQualifiedRefError(ref)
-		}
-		_, owner, repo, err := parseMirrorCloneRef(ref)
+		// Both forges, because this verb serves both: a ref naming neither is
+		// offered both readings, and a github.com URL is named back as the
+		// `/gh/` ref it should have been. The native half never reaches here —
+		// claims sends it to the shared resolver — so the parse below is only
+		// ever a mirror's.
+		target, err := parseMirrorRepoRef(ref)
 		if err != nil {
-			return fmt.Errorf("invalid <repo> %q: %w", ref, err)
+			return err
 		}
-		return listMirrorCollaborators(cmd, owner, repo)
+		return listMirrorCollaborators(cmd, target.owner, target.repo)
 	},
 }
 

@@ -5,59 +5,81 @@ import (
 	"strings"
 )
 
-const mirrorRepoRefHelp = "Repository references name their forge: /gh/<owner>/<repo> for GitHub, " +
-	"/et/<project>/<repo> for Entire. This operation currently supports GitHub mirrors only."
+const mirrorRepoRefHelp = "Repository references name their forge: /gh/<owner>/<repo> for a GitHub " +
+	"mirror, /et/<project>/<repo> for an Entire-native repository."
 
-// parseGitHubMirrorRepoRef separates repository syntax from the forges that
-// mirror operations support. A repository is named /<forge>/<a>/<b> and no
-// other way, so a bare pair cannot select a forge implicitly and a GitHub URL
-// is recognised only to say which ref it should have been — the same trade
-// `repo clone` makes in invalidCloneRefError.
-func parseGitHubMirrorRepoRef(ref string) (owner, repo string, err error) {
-	ref = strings.TrimSpace(ref)
-	// Declaring the native forge is the whole answer, so the ref is never
-	// parsed: these verbs refuse every /et/ ref, which makes how the project
-	// and repo are spelled irrelevant. Validating first gave one answer for a
-	// well-formed ref and a name-rule lecture for a malformed one, sending the
-	// reader to fix a name that would be refused either way. The name is worth
-	// checking in `repo grant`, which can act on it.
-	if declaresForge(ref, nativeCloneForge) {
-		return "", "", fmt.Errorf("this operation does not support Entire repository %q; it currently supports GitHub mirrors only", ref)
-	}
-	if declaresForge(ref, mirrorCloneForge) {
-		_, owner, repo, err = parseMirrorCloneRef(ref)
-		if err != nil {
-			return "", "", fmt.Errorf("invalid <repo> %q: %w", ref, err)
-		}
-		return owner, repo, nil
-	}
-	// GitHub-only, so only the mirror reading is offered: suggesting the
-	// native one would name a ref this same function refuses above.
-	return "", "", forgeQualifiedRefError(ref, mirrorCloneForge)
+// mirrorRepoRef is a repository named the one way this subtree names one:
+// /<forge>/<a>/<b>. The pair reads owner/repo on GitHub and project/repo on
+// Entire, which is the same shape with different words, so the fields carry the
+// forge-neutral names and forge says how to read them.
+type mirrorRepoRef struct {
+	forge string
+	owner string // GitHub owner, or Entire project
+	repo  string
 }
 
-// forgeQualifiedRefError explains a ref that named no forge token, for a
-// command that serves the forges named in forges (none named means both, as
-// bareRefSuggestions reads it). A command must name the forges it serves, or
-// the shape it prints is a ref it refuses on the next run — which is why the
-// closing list is built from forges too, not just the suggestions above it.
+// qualified renders the ref back the way the user must type it.
+func (r mirrorRepoRef) qualified() string {
+	return "/" + r.forge + "/" + r.owner + "/" + r.repo
+}
+
+// forgeNoun / forgePluralNoun name a forge the way an error should: what KIND
+// of repository is being talked about, not which path token spells it.
+var (
+	forgeNoun = map[string]string{
+		nativeCloneForge: "Entire repository",
+		mirrorCloneForge: "GitHub mirror",
+	}
+	forgePluralNoun = map[string]string{
+		nativeCloneForge: "Entire repositories",
+		mirrorCloneForge: "GitHub mirrors",
+	}
+)
+
+// parseMirrorRepoRef separates repository syntax from the forges a given verb
+// serves. A repository is named /<forge>/<a>/<b> and no other way, so a bare
+// pair cannot select a forge implicitly and a GitHub URL is recognised only to
+// say which ref it should have been — the same trade `repo clone` makes in
+// invalidCloneRefError.
 //
-// A GitHub URL names its forge, so it is unambiguous — but it is still not how
-// a repository is named here, and accepting it would leave two spellings for
-// one repo, so it is recognised only to name the ref it should have been.
-func forgeQualifiedRefError(ref string, forges ...string) error {
-	if owner, repo, err := parseHostedGitHubURL(ref); err == nil {
-		return fmt.Errorf("invalid <repo> %q: pass GitHub repositories as /%s/%s/%s", ref, mirrorCloneForge, owner, repo)
+// forges narrows the answer to the grammars the CALLING verb acts on, exactly
+// as bareRefSuggestions does and for the same reason: a verb that serves one
+// forge must say so, or it suggests a ref it refuses on the next line. Empty
+// means every forge.
+func parseMirrorRepoRef(ref string, forges ...string) (mirrorRepoRef, error) {
+	ref = strings.TrimSpace(ref)
+	// Declaring a forge is the whole answer about which grammar was meant, so a
+	// verb that does not serve it never parses the ref: validating first gave
+	// one answer for a well-formed ref and a name-rule lecture for a malformed
+	// one, sending the reader to fix a name that would be refused either way.
+	for _, forge := range []string{nativeCloneForge, mirrorCloneForge} {
+		if !declaresForge(ref, forge) {
+			continue
+		}
+		if !suggestsForge(forges, forge) {
+			return mirrorRepoRef{}, unsupportedForgeErr(ref, forge, forges)
+		}
+		return parseDeclaredMirrorRepoRef(ref, forge)
+	}
+	// A GitHub URL names its forge, so it is unambiguous — but it is still not
+	// how a repository is named here, and accepting it would leave two
+	// spellings for one repo.
+	if suggestsForge(forges, mirrorCloneForge) {
+		if o, r, uerr := parseHostedGitHubURL(ref); uerr == nil {
+			return mirrorRepoRef{}, fmt.Errorf("invalid <repo> %q: pass GitHub repositories as /%s/%s/%s", ref, mirrorCloneForge, o, r)
+		}
 	}
 	if suggestions := bareRefSuggestions(ref, forges...); len(suggestions) > 0 {
-		return fmt.Errorf("invalid <repo>: repository reference must name its forge; did you mean %s?", strings.Join(suggestions, " or "))
+		return mirrorRepoRef{}, fmt.Errorf("invalid <repo>: repository reference must name its forge; did you mean %s?", strings.Join(suggestions, " or "))
 	}
-	return fmt.Errorf("invalid <repo>: expected a forge-qualified repository reference such as %s, got %q", strings.Join(forgeRefShapes(forges), " or "), ref)
+	return mirrorRepoRef{}, fmt.Errorf("invalid <repo>: expected a forge-qualified repository reference such as %s, got %q", strings.Join(forgeRefShapes(forges), " or "), ref)
 }
 
-// forgeRefShapes spells the ref shape of each forge a command serves, in the
-// order a reader meets them in the grammar (GitHub first, as mirrorRepoRefHelp
-// has it). No forges named means the command serves both.
+// forgeRefShapes spells the ref shape of each forge a verb serves, in the order
+// a reader meets them in mirrorRepoRefHelp. The closing shape list is built
+// from forges for the same reason bareRefSuggestions is: a verb that names a
+// shape it would refuse teaches a ref that fails on the next run. No forges
+// named means every grammar.
 func forgeRefShapes(forges []string) []string {
 	var shapes []string
 	if suggestsForge(forges, mirrorCloneForge) {
@@ -67,4 +89,36 @@ func forgeRefShapes(forges []string) []string {
 		shapes = append(shapes, "/"+nativeCloneForge+"/<project>/<repo>")
 	}
 	return shapes
+}
+
+// parseDeclaredMirrorRepoRef reads a ref that has already named a forge the
+// caller serves, through that forge's own grammar — the same parsers `repo
+// clone` uses, so the two can never disagree about what a name may contain.
+func parseDeclaredMirrorRepoRef(ref, forge string) (mirrorRepoRef, error) {
+	var owner, repo string
+	var err error
+	switch forge {
+	case nativeCloneForge:
+		owner, repo, err = parseNativeCloneRef(ref)
+	case mirrorCloneForge:
+		_, owner, repo, err = parseMirrorCloneRef(ref)
+	}
+	if err != nil {
+		return mirrorRepoRef{}, fmt.Errorf("invalid <repo> %q: %w", ref, err)
+	}
+	return mirrorRepoRef{forge: forge, owner: owner, repo: repo}, nil
+}
+
+// unsupportedForgeErr reports a ref whose forge this verb does not act on. It
+// names the kind of repository rather than the token, and says what the verb
+// does serve, so the reader learns the boundary rather than just being stopped
+// at it. Callers that know where the answer lives append their own pointer
+// (see `repo grant list`, which names the login that can resolve a placement).
+func unsupportedForgeErr(ref, forge string, served []string) error {
+	supported := make([]string, 0, len(served))
+	for _, f := range served {
+		supported = append(supported, forgePluralNoun[f])
+	}
+	return fmt.Errorf("this operation does not support %s %q; it currently supports %s only",
+		forgeNoun[forge], ref, strings.Join(supported, " and "))
 }
