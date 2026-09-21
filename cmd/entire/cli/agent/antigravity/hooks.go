@@ -186,11 +186,11 @@ func buildEntireHookConfig() HookConfig {
 		PreToolUse: []ToolHandler{
 			{
 				Matcher: "*",
-				Hooks:   []HookCommand{{Type: "command", Command: makeCmd("pre-tool-use")}},
+				Hooks:   []HookCommand{{Type: hookTypeCommand, Command: makeCmd("pre-tool-use")}},
 			},
 		},
-		PreInvocation: []SimpleHandler{{Type: "command", Command: makeCmd("pre-invocation")}},
-		Stop:          []SimpleHandler{{Type: "command", Command: makeCmd("stop"), Timeout: stopHookTimeoutSeconds}},
+		PreInvocation: []SimpleHandler{{Type: hookTypeCommand, Command: makeCmd("pre-invocation")}},
+		Stop:          []SimpleHandler{{Type: hookTypeCommand, Command: makeCmd("stop"), Timeout: stopHookTimeoutSeconds}},
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -179,8 +180,7 @@ func TestClient_Get(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("my-token")
-	c.baseURL = server.URL
+	c := NewClientWithBaseURL("my-token", server.URL)
 
 	resp, err := c.Get(context.Background(), "/api/v1/test")
 	if err != nil {
@@ -210,8 +210,7 @@ func TestClient_Post_JSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := NewClientWithBaseURL("tok", server.URL)
 
 	resp, err := c.Post(context.Background(), "/api/v1/things", map[string]string{"name": "test"})
 	if err != nil {
@@ -241,8 +240,7 @@ func TestClient_Post_NilBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := NewClientWithBaseURL("tok", server.URL)
 
 	resp, err := c.Post(context.Background(), "/api/v1/action", nil)
 	if err != nil {
@@ -518,5 +516,22 @@ func TestClient_Request_RespectsCallerContentType(t *testing.T) {
 	_ = resp.Body.Close()
 	if gotCT != jsonContentType {
 		t.Errorf("default Content-Type = %q, want application/json", gotCT)
+	}
+}
+
+func TestCheckResponse_ErrorWithHumaDetail(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Body:       io.NopCloser(strings.NewReader(`{"title":"Not Found","status":404,"detail":"repository not found: a/b"}`)),
+	}
+	err := CheckResponse(resp)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *HTTPError, got %T", err)
+	}
+	if httpErr.Message != "repository not found: a/b" {
+		t.Fatalf("expected huma detail as message, got %q", httpErr.Message)
 	}
 }

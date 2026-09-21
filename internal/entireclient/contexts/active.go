@@ -69,11 +69,24 @@ func requestedContext() (name, source string) {
 	return "", ""
 }
 
+// Requested reports whether this invocation named an identity explicitly, via
+// `--context` or $ENTIRE_CONTEXT, without resolving it.
+//
+// It exists for callers that must behave differently when the user already
+// knows which login is acting — the acting-login notice, which would otherwise
+// echo back the name just typed. Resolving through Active would answer the same
+// question but costs a contexts.json read, and the notice runs on paths that
+// have one in flight already.
+func Requested() bool {
+	name, _ := requestedContext()
+	return name != ""
+}
+
 // Selection is a resolved acting identity plus where the choice came from.
 //
 // Source is what lets callers name the right remedy, which differs by origin: a
 // wrong `--context` is fixed by correcting the argument, a wrong
-// current_context by `entire auth use`. Telling someone to run `auth use` when
+// current_context by `entire auth switch`. Telling someone to run `auth switch` when
 // they passed an explicit flag sends them to change the wrong thing.
 type Selection struct {
 	// Context is the login to act as, or nil when there is none (logged out, or

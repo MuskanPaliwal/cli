@@ -258,11 +258,12 @@ func (a *Antigravity) RunPrompt(ctx context.Context, dir string, prompt string, 
 		o(cfg)
 	}
 
-	timeout := 60 * time.Second
-	if cfg.PromptTimeout > 0 {
-		timeout = cfg.PromptTimeout
+	// Resolve the per-prompt deadline through the shared chain so E2E_TIMEOUT
+	// and WithPromptTimeout apply to agy like every other runner.
+	promptCtx, cancel, err := boundPrompt(ctx, 60*time.Second, cfg)
+	if err != nil {
+		return Output{}, err
 	}
-	promptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	startedAt := time.Now().Add(-2 * time.Second)
 

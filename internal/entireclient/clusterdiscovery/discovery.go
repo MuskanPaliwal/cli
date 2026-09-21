@@ -48,7 +48,9 @@ type Response struct {
 	//
 	// Never a member of CoreURLs, and never eligible to be: the apex issues
 	// no tokens, so no login can carry it as an issuer. It answers "what do
-	// I type", not "whose tokens are accepted".
+	// I type", not "whose tokens are accepted". For the same reason it is
+	// outside requireSameSiteIssuers' gate: no token is ever sent because
+	// of it, only a URL shown in a hint.
 	LoginURL string `json:"login_url"`
 }
 
@@ -163,6 +165,12 @@ func Discover(ctx context.Context, clusterHost string, c *http.Client, debugf De
 type loginTargets struct {
 	coreURLs []string
 	loginURL string
+	// autoSelect lets the sole eligible saved login act unasked. Cluster-
+	// addressed operations opt in — git remotes and the control-plane
+	// commands that name a cluster (repo mirror …) — because the cluster
+	// pins the host, so the login follows it. Every other API follows the
+	// selected login instead.
+	autoSelect bool
 }
 
 // renderLoginHint formats a fatal-ready "no auth context for <subject>"

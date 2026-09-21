@@ -1,6 +1,8 @@
 package strategy
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -31,8 +33,8 @@ func TestCountTranscriptItems_AntigravitySkipsBlankLines(t *testing.T) {
 	analyzer, ok := agent.AsTranscriptAnalyzer(ag)
 	require.True(t, ok)
 	dir := t.TempDir()
-	path := dir + "/transcript_full.jsonl"
-	require.NoError(t, writeTestFile(path, content))
+	path := filepath.Join(dir, "transcript_full.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	pos, err := analyzer.GetTranscriptPosition(path)
 	require.NoError(t, err)
 	require.Equal(t, pos, got, "countTranscriptItems and GetTranscriptPosition must use the same metric")

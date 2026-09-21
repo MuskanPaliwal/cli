@@ -51,8 +51,8 @@ const (
 
 | Type | Contents | Use Case |
 |------|----------|----------|
-| Ephemeral | Full state (code + metadata) | Intra-session rewind, pre-commit |
-| Persistent | Metadata + commit reference | Permanent record, post-commit rewind |
+| Ephemeral | Full state (code + metadata) | Pending session state, pre-commit |
+| Persistent | Metadata + commit reference | Permanent record, post-commit |
 
 ## Interface
 
@@ -355,7 +355,7 @@ re-creating state would resurrect a zombie session; state present but
 `PhaseEnded` → complete the record, then eagerly condense
 (`CondenseAndMarkFullyCondensed`) so it doesn't linger as post-condensation
 data. Hard-killed agents get the same terminal state from the exited-owner
-sweep (`finalizeExitedSessions`, run inside `entire status`/`doctor`), which
+sweep (`finalizeExitedSessions`, run inside `entire doctor` and the session sweeper — not `entire status`, which is read-only), which
 completes live records before ending the session — the transcript-so-far
 still reaches a permanent checkpoint.
 
@@ -451,13 +451,42 @@ For the fork setup where `origin` is an unpushable base repo, capture elects
 the fork automatically on the first tracked push; `checkpoint_push_remote`
 remains the explicit override.
 
+`entire enable` offers a named-remote picker during interactive **first-time**
+setup when multiple remotes need resolution. It uses the existing election and
+destination checks; it does not introduce another election tier. Keeping the
+current selection writes no override — which is why a bare re-enable in a
+configured repo never prompts: the conditions would be unchanged on the next
+run, and there would be no way to say "stop asking" short of pinning a remote.
+Selecting a different remote, or supplying `--checkpoint-push-remote <name>`
+(the path for changing the destination later, and for repairing a saved remote
+that no longer exists), persists an explicit override in the clone-local
+settings file. The write preserves unrelated settings and is verified through
+the effective settings loader before reporting success. On fresh enable, agent
+selection precedes remote selection; both happen before hook/settings setup
+side effects. Persistence happens after setup's settings saves but before
+destination-dependent checkpoint initialization.
+
+The picker is skipped for valid explicit or elected dedicated destinations,
+disabled checkpoint pushing, a rejected local settings layer (the choice could
+not be saved), and non-interactive invocations; `esc` at the picker means the
+same as keeping the current destination. An explicit remote flag is still
+honored without prompting and does not enable disabled pushing. Destination
+selection does not migrate, publish, or delete existing remote checkpoint data.
+Alternatives that still resolve to dedicated storage are not offered as
+ordinary named destinations. The closing destination report is printed only
+when the destination was touched (explicit flag, picker shown, or
+`--checkpoint-remote`) or is unusable; a healthy destination nobody asked about
+ends at `Ready.`, and the multi-remote ambiguity note covers the rest.
+
 The pre-push hook carries checkpoint data only when the push targets the
 elected remote; pushes to any other remote or to a raw URL sync nothing, on
 both the git-branch and git-refs backends (git-refs leaves its push queue
 intact for the next elected-remote push). The dedicated `checkpoint_remote`
 URL mode is exempt — it addresses a separate metadata store directly. `entire
 status` shows the sync destination and how many checkpoints have not reached
-it yet.
+it yet. Git-refs push failures never block the user's push: refs stay queued, and
+confirmed remote rejections show one bounded warning with the remote's reason
+rather than being mislabeled as divergence (see [pre-push flow](ref-checkpoint-backend.md#pre-push-flow)).
 
 A gated push is not fully silent: when checkpoints are waiting for the
 elected remote, the hook prints a two-line stderr hint naming the elected
@@ -485,17 +514,17 @@ elected something else. `strategy.CheckpointReadRemotes` (and
 callers that need both) resolves the chain, failing *open* to `[origin]` when
 the election fails — failing reads closed would only prevent *finding* data.
 Every checkpoint-data read iterates the chain per operation (metadata-branch
-fetches, tracking-ref readers, per-checkpoint ref fetches, blob hydration,
-checkpoint-policy reads). Metadata-branch fetches refresh every candidate's
-tracking ref because branch existence alone does not prove that branch contains
-the requested checkpoint; they succeed when any candidate fetch succeeds.
+fetches, tracking-ref readers, per-checkpoint ref fetches, blob hydration).
+Metadata-branch fetches refresh every candidate's tracking ref because branch
+existence alone does not prove that branch contains the requested checkpoint;
+they succeed when any candidate fetch succeeds.
 Other reads try candidates in order, advancing on missing data or transport
-failure and surfacing the first candidate's error when all fail. Local-ref advancement stays
-**elected-remote-only** — `EnsurePrimaryRef`, the metadata-fetch advance step,
-`promoteRemoteTrackingPrimary`, and the local checkpoint-policy ref update
-never act on the legacy tier, keyed on the explicit election result rather
-than the chain's first entry (a stale origin feeding `SafelyAdvanceLocalRef`
-would replay local v1 onto stale history — the issue-#1374 hazard). Legacy
+failure and surfacing the first candidate's error when all fail. Local-ref
+advancement stays **elected-remote-only** — `EnsurePrimaryRef`, the
+metadata-fetch advance step, and `promoteRemoteTrackingPrimary` never act on
+the legacy tier, keyed on the explicit election result rather than the chain's
+first entry (a stale origin feeding `SafelyAdvanceLocalRef` would replay local
+v1 onto stale history — the issue-#1374 hazard). Legacy
 data on origin is therefore served through origin's *tracking ref* (resume's
 final metadata tier and the store's tracking-ref fallback), never by moving
 local refs. A repository with no remotes keeps its "checkpoint absent"
@@ -510,7 +539,7 @@ Metadata only, sharded by checkpoint ID. Supports **multiple sessions per checkp
 ├── metadata.json        # CheckpointSummary (aggregated stats)
 ├── 0/                   # First session (0-based indexing)
 │   ├── metadata.json    # Session-specific Metadata
-│   ├── full.jsonl       # Agent transcript, sanitized + redacted (CLI rewind/resume/explain)
+│   ├── full.jsonl       # Agent transcript, sanitized + redacted (CLI resume/explain)
 │   ├── transcript.jsonl # Full compacted session (slice at compact_transcript_start)
 │   ├── prompt.txt       # Checkpoint-scoped user prompts
 │   └── content_hash.txt # sha256 of full.jsonl (dedup short-circuit)
@@ -548,7 +577,7 @@ root `metadata.json` `sessions[].transcript` pointer keeps targeting
 `full.jsonl`; when a compact transcript was generated the session entry also
 carries a `compact_transcript` path pointing at `transcript.jsonl` (omitted
 otherwise) so external readers can find it next to `full.jsonl`.
-CLI read paths (rewind/resume/explain) read `full.jsonl` by filename. Compact
+CLI read paths (resume/explain) read `full.jsonl` by filename. Compact
 generation is best-effort: failures are logged but never fail the checkpoint
 write. It is also **skipped when the compacted output exceeds the 50MB blob cap**
 — unlike `full.jsonl`, `transcript.jsonl` is not chunked, so a very long session
@@ -611,82 +640,25 @@ When condensing multiple concurrent sessions:
 - `sessions` array in `CheckpointSummary` maps each session to its file paths
 - `files_touched` is merged from all sessions
 
-Checkpoints written by `entire import <agent>` additionally carry a `commit_sha`
+Checkpoints written by the import path — `entire import <agent>` and `entire
+enable`'s optional history import — additionally carry a `commit_sha`
 (omitempty) on both the session `Metadata` and the root `CheckpointSummary`,
 set to the default branch's head at import time — origin's tip is preferred
 (the commit the server already knows about), falling back to the local branch
-tip, then HEAD, then empty when nothing resolves. When the transcript itself
+tip, then HEAD. Each candidate must resolve to an actual commit object, and an
+import that finds none (an empty repository, say) is refused before anything is
+written rather than producing anchorless checkpoints; onboarding reports the
+same condition and skips its optional import instead of failing `entire
+enable`. When the transcript itself
 records the commit(s) a turn made (Claude Code `gitOperation` records), the
 turn's checkpoint instead anchors to the last such commit that resolves and is
 reachable from the resolved link anchor (the default-branch head when
 resolvable) — see `turnAnchorResolver` (`agentimport/turn_anchor.go`);
 otherwise (older transcripts, or a recorded commit that's been
 squashed/rebased away) it falls back to the default-branch head as described
-above. It is a best-effort anchor for UI display only, not
-an attribution signal, and pre-existing imported checkpoints are not
-backfilled with it.
-
-### Checkpoint Policy
-
-Repo-wide checkpoint policy lives at `refs/entire/policies/checkpoint`. The ref
-points at a commit whose tree contains `policy.json`:
-
-```json
-{
-  "checkpoint_version": "branch-v1",
-  "checkpoint_min_version": "branch-v1"
-}
-```
-
-Either field may be omitted. An empty policy file means both fields inherit the
-CLI defaults:
-
-```json
-{}
-```
-
-`checkpoint_version` is a checkpoint-data write guard. If no policy is
-configured, a policy omits `checkpoint_version`, or the field was set to an
-empty string with `entire checkpoint policy --checkpoint-version ""`, the CLI
-uses its default checkpoint version for policy decisions. The quotes are
-required so the shell passes an empty value instead of omitting the flag value.
-If another client configures a `checkpoint_version` this CLI cannot write,
-explicit checkpoint-data writers fail until the CLI is upgraded.
-
-`checkpoint_min_version` is an upgrade nudge and checkpoint-data write guard.
-Clients that cannot read that version warn users to upgrade. Explicit
-checkpoint-data writers fail until the CLI is upgraded. If no policy is
-configured, a policy omits `checkpoint_min_version`, or the field was set to an
-empty string with `entire checkpoint policy --checkpoint-min-version ""`, the
-CLI uses its default minimum checkpoint version for policy decisions.
-
-Unsetting a field is still evaluated against the normal downgrade guard. If the
-field's current effective version is newer than the default inherited after
-unsetting, `entire checkpoint policy` rejects the change unless `--force` is
-passed.
-
-`entire checkpoint policy` validates requested policy values against the
-current CLI, so it rejects setting unsupported checkpoint versions.
-
-Policy follows the configured checkpoint remote. `entire checkpoint policy`
-fetches the latest remote policy before validating requested changes, updates
-the local policy ref, and pushes only `refs/entire/policies/checkpoint`.
-Policy commits use the same signing settings as checkpoint commits.
-
-Agent session-start hooks warn that checkpoint capture is disabled for the
-session and exit successfully. Other agent hooks fail with a checkpoint-disabled
-message so the agent can see that no Entire checkpoints will be generated until
-the CLI is upgraded.
-
-Git hooks never block Git because of checkpoint policy. When the policy cannot
-be satisfied, Git hooks log the violation, warn only in an interactive
-terminal, skip Entire checkpoint work, and exit successfully. Pre-push refreshes
-policy first, then applies the same skip behavior to checkpoint push work.
-
-User-driven commands warn when the local policy indicates the CLI should be
-upgraded. Explicit checkpoint-data writers such as `entire session attach`,
-`entire checkpoint explain --generate`, and `entire import <agent>` fail when
-the local policy cannot be satisfied.
+above. It is an anchor for UI display only, not an attribution signal — an
+imported session's local `session.State.BaseCommit` stays empty — and
+pre-existing imported checkpoints are not backfilled with it.
 
 ### Checkpoint ID Linking
 
@@ -832,9 +804,29 @@ Strategies determine checkpoint timing and type:
 | On Task Complete | Task record on session state → materialized at condensation |
 | On User Commit | Condense → Committed |
 
-## Rewind
+## Pending Checkpoints
 
-Each `RewindPoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
+Each `PendingCheckpoint` includes `SessionID` and `SessionPrompt` to help identify which checkpoint belongs to which session when multiple sessions are interleaved.
+
+`checkpoint list --pending` is the resume view of the current branch, and a
+`PendingCheckpoint` row is one of two things:
+
+- a **live checkpoint** on the session's shadow branch, not yet condensed onto
+  `entire/checkpoints/v1`; or
+- a **logs-only resume point** — a commit on the current branch whose
+  `Entire-Checkpoint` trailer resolves to a checkpoint that *is* already
+  condensed onto `entire/checkpoints/v1`, listed so its session transcript can
+  be restored from there (file state would need a git checkout).
+
+So "pending" describes the listing, not a guarantee that the work behind every
+row is un-condensed: `ListLogsOnlyPendingCheckpoints` builds the second kind by
+scanning branch history against committed checkpoint storage.
+
+Either shape can be listed and resumed from, but the CLI cannot restore working
+files to it: the file-restoring path (`Rewind`, `PreviewRewind`, `CanRewind`) was
+removed along with the `rewind` commands. `RestoreLogsOnly` still writes a
+checkpoint's session logs into the agent's session directory for
+`entire resume`, and leaves the worktree alone.
 
 ## Concurrent Sessions
 
@@ -842,7 +834,7 @@ Multiple AI sessions can run concurrently on the same base commit:
 
 1. **Warning on start** - When a second session starts while another has uncommitted checkpoints, a warning is shown
 2. **Both proceed** - User can continue; checkpoints interleave on the same shadow branch
-3. **Identification** - Each checkpoint is tagged with its session ID; rewind UI shows session prompt
+3. **Identification** - Each checkpoint is tagged with its session ID; `checkpoint list --pending` shows the session prompt
 4. **Condensation** - On commit, all sessions are condensed together with archived subfolders
 
 ### Conflict Handling

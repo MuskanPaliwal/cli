@@ -23,7 +23,7 @@ const apiBasePath = "/api/v1"
 // The host and bearer come from auth.ResolveControlPlaneTarget. Control-plane
 // commands target a login server directly — unlike `git clone` or the data
 // API, there's no resource host to match a context against — so the active
-// contexts.json login is used as-is, and `entire auth use <ctx>` retargets the
+// contexts.json login is used as-is, and `entire auth switch <ctx>` retargets the
 // control plane onto that login server; with no active context this errors
 // with the `entire login` hint. The Core API is served at <host>/api/v1. The
 // bearer is resolved lazily per request, re-minting silently from the stored
@@ -44,14 +44,14 @@ func New() (*Client, error) {
 }
 
 // NewForCluster returns a *Client for a resource-provider control-plane command
-// whose subject is a mirror on clusterHost (mirror create/remove, mirror
-// collaborators list).
+// whose subject is a mirror on clusterHost (mirror add/remove, repo access
+// list).
 //
 // Unlike New — which dials the active context — the core is discovered from the
 // cluster's /.well-known/entire-cluster.json and the matching local context
 // supplies the bearer (see auth.ResolveControlPlaneTargetForCluster). This is
 // what lets a command act on a cluster fronted by a federation other than the
-// active login, e.g. running `repo mirror collaborators list … aws-us-east-2.entire.io`
+// active login, e.g. running `repo access list … --cluster aws-us-east-2.entire.io`
 // while the active context is a partial.to login: without it the active
 // context's core 400s with "unknown cluster_host" because it doesn't front the
 // cluster. ENTIRE_TOKEN is honoured identically to New.
@@ -117,7 +117,12 @@ func clientFromEnvToken() (*Client, bool, error) {
 // NewForCluster.
 func clientForTarget(target auth.ControlPlaneTarget) (*Client, error) {
 	src := &providerSource{provide: target.TokenSource}
-	client, err := NewClient(strings.TrimRight(target.CoreURL, "/")+apiBasePath, src, WithClient(newCrossJurisHTTPClient()))
+	base := strings.TrimRight(target.CoreURL, "/")
+	httpClient, err := newCrossJurisHTTPClient(base)
+	if err != nil {
+		return nil, fmt.Errorf("build cross-juris HTTP client: %w", err)
+	}
+	client, err := NewClient(base+apiBasePath, src, WithClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("build Entire API client: %w", err)
 	}
@@ -145,7 +150,11 @@ func (c *Client) CoreOrigin() string {
 // this token for that core's audience (see newCrossJurisHTTPClient).
 func NewWithBearer(coreBaseURL, token string) (*Client, error) {
 	base := strings.TrimRight(coreBaseURL, "/")
-	client, err := NewClient(base+apiBasePath, staticBearer{token: token}, WithClient(newCrossJurisHTTPClient()))
+	httpClient, err := newCrossJurisHTTPClient(base)
+	if err != nil {
+		return nil, fmt.Errorf("build cross-juris HTTP client: %w", err)
+	}
+	client, err := NewClient(base+apiBasePath, staticBearer{token: token}, WithClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("build Entire API client: %w", err)
 	}

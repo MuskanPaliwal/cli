@@ -26,6 +26,10 @@ type ToolHandler struct {
 	Hooks   []HookCommand `json:"hooks,omitempty"`
 }
 
+// hookTypeCommand is the only handler type agy defines for hooks.json and
+// for the global title slot: a shell command.
+const hookTypeCommand = "command"
+
 // SimpleHandler is a direct handler entry used for PreInvocation, PostInvocation, and Stop.
 type SimpleHandler struct {
 	Type    string `json:"type,omitempty"`

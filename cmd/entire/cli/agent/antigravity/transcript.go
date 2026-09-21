@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -107,9 +109,11 @@ func forEachNonBlankLine(data []byte, fromOffset int, fn func(raw []byte)) int {
 // carries no prompt, so the user prompt is recovered from the transcript's
 // USER_INPUT steps. fromOffset is a count of non-blank lines already consumed.
 func (a *AntigravityAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]string, error) {
-	data, err := os.ReadFile(sessionRef) //nolint:gosec // path supplied by agent hook stdin
+	// Route through ReadTranscript so the package has a single unconfined
+	// transcript read (see agent/transcript_read_guard_test.go).
+	data, err := a.ReadTranscript(sessionRef)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("antigravity: read transcript for prompts: %w", err)

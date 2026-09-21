@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"os"
 	"path/filepath"
 	"slices"
@@ -53,14 +54,14 @@ func TestInstallHooks_FreshInstall(t *testing.T) {
 	}
 
 	// Verify hook commands
-	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid session-start"), "SessionStart")
-	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid user-prompt-submit"), "SessionStart user-prompt-submit")
-	assertFactoryHookExists(t, settings.Hooks.SessionEnd, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid session-end"), "SessionEnd")
-	assertFactoryHookExists(t, settings.Hooks.Stop, "", agentpkg.WrapProductionPlainTextWarningHookCommand("entire hooks factoryai-droid stop", agentpkg.WarningFormatSingleLine), "Stop")
-	assertFactoryHookExists(t, settings.Hooks.UserPromptSubmit, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid user-prompt-submit"), "UserPromptSubmit")
-	assertFactoryHookExists(t, settings.Hooks.PreToolUse, "Task", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid pre-tool-use"), "PreToolUse[Task]")
-	assertFactoryHookExists(t, settings.Hooks.PostToolUse, "Task", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid post-tool-use"), "PostToolUse[Task]")
-	assertFactoryHookExists(t, settings.Hooks.PreCompact, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid pre-compact"), "PreCompact")
+	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", droidHookCommand("session-start"), "SessionStart")
+	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", droidHookCommand("user-prompt-submit"), "SessionStart user-prompt-submit")
+	assertFactoryHookExists(t, settings.Hooks.SessionEnd, "", droidHookCommand("session-end"), "SessionEnd")
+	assertFactoryHookExists(t, settings.Hooks.Stop, "", droidStopHookCommand(), "Stop")
+	assertFactoryHookExists(t, settings.Hooks.UserPromptSubmit, "", droidHookCommand("user-prompt-submit"), "UserPromptSubmit")
+	assertFactoryHookExists(t, settings.Hooks.PreToolUse, "Task", droidHookCommand("pre-tool-use"), "PreToolUse[Task]")
+	assertFactoryHookExists(t, settings.Hooks.PostToolUse, "Task", droidHookCommand("post-tool-use"), "PostToolUse[Task]")
+	assertFactoryHookExists(t, settings.Hooks.PreCompact, "", droidHookCommand("pre-compact"), "PreCompact")
 
 	// Verify AreHooksInstalled returns true
 	if !hooksInstalledNow(t, agent) {
@@ -110,7 +111,7 @@ func TestInstallHooks_ReplacesLegacyLocalDevHook(t *testing.T) {
 
 	testutil.AssertLegacyHookReplaced(t,
 		filepath.Join(tempDir, ".factory", "settings.json"),
-		agentpkg.WrapProductionPlainTextWarningHookCommand("entire hooks factoryai-droid stop", agentpkg.WarningFormatSingleLine),
+		droidStopHookCommand(),
 		testutil.LegacyLocalDevCommand("hooks factoryai-droid stop"),
 		func() {
 			if _, err := ag.InstallHooks(ctx, false); err != nil {
@@ -141,80 +142,83 @@ func TestInstallHooks_Force(t *testing.T) {
 	}
 }
 
-func TestInstallHooks_PermissionsDeny_FreshInstall(t *testing.T) {
+// TestInstallHooks_DoesNotAddDenyRule pins the retirement: a fresh install must
+// leave no metadata deny rule behind. See agent.MetadataDenyRule for why.
+func TestInstallHooks_DoesNotAddDenyRule(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
-	agent := &FactoryAIDroidAgent{}
-	_, err := agent.InstallHooks(context.Background(), false)
+	a := &FactoryAIDroidAgent{}
+	_, err := a.InstallHooks(context.Background(), false)
 	if err != nil {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
 
 	perms := readFactoryPermissions(t, tempDir)
-
-	// Verify permissions.deny contains our rule
-	if !slices.Contains(perms.Deny, metadataDenyRule) {
-		t.Errorf("permissions.deny = %v, want to contain %q", perms.Deny, metadataDenyRule)
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
+		t.Errorf("permissions.deny = %v, want no metadata deny rule", perms.Deny)
 	}
 }
 
-func TestInstallHooks_PermissionsDeny_Idempotent(t *testing.T) {
+// TestInstallHooks_RemovesStaleDenyRule is the migration: a config written by an
+// older CLI still carries the rule, and a plain `entire enable` (no --force) has
+// to drop it. This is the only thing that heals an existing repo on reinstall.
+func TestInstallHooks_RemovesStaleDenyRule(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
-	agent := &FactoryAIDroidAgent{}
-	// First install
-	_, err := agent.InstallHooks(context.Background(), false)
-	if err != nil {
-		t.Fatalf("first InstallHooks() error = %v", err)
-	}
-
-	// Second install
-	_, err = agent.InstallHooks(context.Background(), false)
-	if err != nil {
-		t.Fatalf("second InstallHooks() error = %v", err)
-	}
-
-	perms := readFactoryPermissions(t, tempDir)
-
-	// Count occurrences of our rule
-	count := 0
-	for _, rule := range perms.Deny {
-		if rule == metadataDenyRule {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("permissions.deny contains %d copies of rule, want 1", count)
-	}
-}
-
-func TestInstallHooks_PermissionsDeny_PreservesUserRules(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Chdir(tempDir)
-
-	// Create settings.json with existing user deny rule
 	writeFactorySettingsFile(t, tempDir, `{
   "permissions": {
-    "deny": ["Bash(rm -rf *)"]
+    "deny": ["`+agentpkg.MetadataDenyRule+`"]
   }
 }`)
 
-	agent := &FactoryAIDroidAgent{}
-	_, err := agent.InstallHooks(context.Background(), false)
-	if err != nil {
+	a := &FactoryAIDroidAgent{}
+	if _, err := a.InstallHooks(context.Background(), false); err != nil {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
 
 	perms := readFactoryPermissions(t, tempDir)
-
-	// Verify both rules exist
-	if !slices.Contains(perms.Deny, "Bash(rm -rf *)") {
-		t.Errorf("permissions.deny = %v, want to contain user rule", perms.Deny)
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
+		t.Errorf("permissions.deny = %v, want the stale rule removed", perms.Deny)
 	}
-	if !slices.Contains(perms.Deny, metadataDenyRule) {
-		t.Errorf("permissions.deny = %v, want to contain Entire rule", perms.Deny)
+
+	// And a second install stays clean rather than re-adding it.
+	if _, err := a.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("second InstallHooks() error = %v", err)
+	}
+	perms = readFactoryPermissions(t, tempDir)
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
+		t.Errorf("permissions.deny = %v, want it to stay removed", perms.Deny)
+	}
+}
+
+// TestInstallHooks_RemovesOnlyOurDenyRule is the safety half of the migration:
+// removal is keyed on the exact rule string Entire wrote, so a user's own deny
+// rules survive untouched.
+func TestInstallHooks_RemovesOnlyOurDenyRule(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	writeFactorySettingsFile(t, tempDir, `{
+  "permissions": {
+    "deny": ["Bash(rm -rf *)", "`+agentpkg.MetadataDenyRule+`", "Read(./.env)"]
+  }
+}`)
+
+	a := &FactoryAIDroidAgent{}
+	if _, err := a.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	perms := readFactoryPermissions(t, tempDir)
+	for _, want := range []string{"Bash(rm -rf *)", "Read(./.env)"} {
+		if !slices.Contains(perms.Deny, want) {
+			t.Errorf("permissions.deny = %v, want to still contain user rule %q", perms.Deny, want)
+		}
+	}
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
+		t.Errorf("permissions.deny = %v, want the Entire rule removed", perms.Deny)
 	}
 }
 
@@ -273,13 +277,16 @@ func TestInstallHooks_PermissionsDeny_PreservesUnknownFields(t *testing.T) {
 		t.Errorf("permissions.ask = %v, want [Write(**), Bash(*)]", askRules)
 	}
 
-	// Verify the deny rule was added
-	var denyRules []string
-	if err := json.Unmarshal(rawPermissions["deny"], &denyRules); err != nil {
-		t.Fatalf("failed to parse permissions.deny: %v", err)
-	}
-	if !slices.Contains(denyRules, metadataDenyRule) {
-		t.Errorf("permissions.deny = %v, want to contain %q", denyRules, metadataDenyRule)
+	// The deny rule is no longer added, and an empty deny array is dropped
+	// rather than left behind.
+	if denyRaw, ok := rawPermissions["deny"]; ok {
+		var denyRules []string
+		if err := json.Unmarshal(denyRaw, &denyRules); err != nil {
+			t.Fatalf("failed to parse permissions.deny: %v", err)
+		}
+		if slices.Contains(denyRules, agentpkg.MetadataDenyRule) {
+			t.Errorf("permissions.deny = %v, want no metadata deny rule", denyRules)
+		}
 	}
 
 	// Verify "allow" is preserved
@@ -336,7 +343,7 @@ func TestInstallHooks_PreservesUserHooksOnSameType(t *testing.T) {
 			t.Fatalf("failed to parse Stop hooks: %v", err)
 		}
 		assertFactoryHookExists(t, matchers, "", "echo user stop hook", "user Stop hook")
-		assertFactoryHookExists(t, matchers, "", agentpkg.WrapProductionPlainTextWarningHookCommand("entire hooks factoryai-droid stop", agentpkg.WarningFormatSingleLine), "Entire Stop hook")
+		assertFactoryHookExists(t, matchers, "", droidStopHookCommand(), "Entire Stop hook")
 	})
 
 	t.Run("SessionStart", func(t *testing.T) {
@@ -346,8 +353,8 @@ func TestInstallHooks_PreservesUserHooksOnSameType(t *testing.T) {
 			t.Fatalf("failed to parse SessionStart hooks: %v", err)
 		}
 		assertFactoryHookExists(t, matchers, "", "echo user session start", "user SessionStart hook")
-		assertFactoryHookExists(t, matchers, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid session-start"), "Entire SessionStart hook")
-		assertFactoryHookExists(t, matchers, "", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid user-prompt-submit"), "Entire SessionStart user-prompt-submit hook")
+		assertFactoryHookExists(t, matchers, "", droidHookCommand("session-start"), "Entire SessionStart hook")
+		assertFactoryHookExists(t, matchers, "", droidHookCommand("user-prompt-submit"), "Entire SessionStart user-prompt-submit hook")
 	})
 
 	t.Run("PostToolUse", func(t *testing.T) {
@@ -357,7 +364,7 @@ func TestInstallHooks_PreservesUserHooksOnSameType(t *testing.T) {
 			t.Fatalf("failed to parse PostToolUse hooks: %v", err)
 		}
 		assertFactoryHookExists(t, matchers, "Write", "echo user wrote file", "user Write hook")
-		assertFactoryHookExists(t, matchers, "Task", agentpkg.WrapProductionSilentHookCommand("entire hooks factoryai-droid post-tool-use"), "Entire Task hook")
+		assertFactoryHookExists(t, matchers, "Task", droidHookCommand("post-tool-use"), "Entire Task hook")
 	})
 }
 
@@ -548,29 +555,22 @@ func TestUninstallHooks_RemovesDenyRule(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
+	// Install no longer adds the rule, so stand in for a config written by an
+	// older CLI: uninstall still has to clean it up.
+	writeFactorySettingsFile(t, tempDir, `{
+  "permissions": {
+    "deny": ["`+agentpkg.MetadataDenyRule+`"]
+  }
+}`)
+
 	agent := &FactoryAIDroidAgent{}
 
-	// First install (which adds the deny rule)
-	_, err := agent.InstallHooks(context.Background(), false)
-	if err != nil {
-		t.Fatalf("InstallHooks() error = %v", err)
-	}
-
-	// Verify deny rule was added
-	perms := readFactoryPermissions(t, tempDir)
-	if !slices.Contains(perms.Deny, metadataDenyRule) {
-		t.Fatal("deny rule should be present after install")
-	}
-
-	// Uninstall
-	err = agent.UninstallHooks(context.Background())
-	if err != nil {
+	if err := agent.UninstallHooks(context.Background()); err != nil {
 		t.Fatalf("UninstallHooks() error = %v", err)
 	}
 
-	// Verify deny rule was removed
-	perms = readFactoryPermissions(t, tempDir)
-	if slices.Contains(perms.Deny, metadataDenyRule) {
+	perms := readFactoryPermissions(t, tempDir)
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
 		t.Error("deny rule should be removed after uninstall")
 	}
 }
@@ -607,7 +607,7 @@ func TestUninstallHooks_PreservesUserDenyRules(t *testing.T) {
 	}
 
 	// Verify entire deny rule is removed
-	if slices.Contains(perms.Deny, metadataDenyRule) {
+	if slices.Contains(perms.Deny, agentpkg.MetadataDenyRule) {
 		t.Errorf("entire deny rule should be removed, got: %v", perms.Deny)
 	}
 }
@@ -726,6 +726,24 @@ func readFactorySettings(t *testing.T, tempDir string) FactorySettings {
 	return settings
 }
 
+// droidHookCommand is the silent-wrapper command InstallHooks writes on THIS
+// host. The wrapper form is host-dependent — sh off Windows, cmd.exe on it —
+// so an expectation that names one form directly passes on Linux and fails on
+// Windows against the very same install.
+//
+// Tests that assert WHICH form is chosen do not use this: they pin the host
+// with agentpkg.SetWindowsHookProbeForTesting and name the wrapper outright,
+// or the assertion would restate the implementation and pass either way.
+func droidHookCommand(verb string) string {
+	return silentHookCommand(verb, agentpkg.HookHostIsWindows())
+}
+
+// droidStopHookCommand is droidHookCommand for the Stop hook, which uses the
+// plain-text-warning wrapper rather than the silent one.
+func droidStopHookCommand() string {
+	return stopHookCommand(agentpkg.HookHostIsWindows())
+}
+
 func assertFactoryHookExists(t *testing.T, matchers []FactoryHookMatcher, matcher, command, description string) {
 	t.Helper()
 	for _, m := range matchers {
@@ -754,4 +772,118 @@ func hooksInstalledNow(t *testing.T, ag interface {
 		t.Fatalf("AreHooksInstalled() error = %v", err)
 	}
 	return installed
+}
+
+// droidWindowsHookCommand names the Windows wrapper outright rather than
+// reusing the ForOS selector InstallHooks uses: these tests assert WHICH form
+// is chosen, so sharing the selector would restate the implementation and pass
+// either way.
+func droidWindowsHookCommand(verb string) string {
+	return agentpkg.WrapWindowsProductionSilentHookCommand("entire hooks factoryai-droid " + verb)
+}
+
+func droidWindowsStopHookCommand() string {
+	return agentpkg.WrapWindowsProductionPlainTextWarningHookCommand(
+		"entire hooks factoryai-droid stop", agentpkg.WarningFormatSingleLine)
+}
+
+func assertDroidWindowsHooks(t *testing.T, settings FactorySettings) {
+	t.Helper()
+	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", droidWindowsHookCommand("session-start"), "SessionStart")
+	assertFactoryHookExists(t, settings.Hooks.SessionStart, "", droidWindowsHookCommand("user-prompt-submit"), "SessionStart user-prompt-submit")
+	assertFactoryHookExists(t, settings.Hooks.SessionEnd, "", droidWindowsHookCommand("session-end"), "SessionEnd")
+	assertFactoryHookExists(t, settings.Hooks.Stop, "", droidWindowsStopHookCommand(), "Stop")
+	assertFactoryHookExists(t, settings.Hooks.UserPromptSubmit, "", droidWindowsHookCommand("user-prompt-submit"), "UserPromptSubmit")
+	assertFactoryHookExists(t, settings.Hooks.PreToolUse, "Task", droidWindowsHookCommand("pre-tool-use"), "PreToolUse[Task]")
+	assertFactoryHookExists(t, settings.Hooks.PostToolUse, "Task", droidWindowsHookCommand("post-tool-use"), "PostToolUse[Task]")
+	assertFactoryHookExists(t, settings.Hooks.PreCompact, "", droidWindowsHookCommand("pre-compact"), "PreCompact")
+}
+
+// TestInstallHooks_WindowsUsesCmdWrappersDespiteWorkingSh pins that droid picks
+// the native cmd.exe wrappers on a Windows host even when a POSIX sh is
+// runnable there. The probe deliberately reports a working sh: droid's Windows
+// build never spawns sh for a hook, so its presence must not keep the sh
+// wrapper — which cmd.exe would cut apart at the first `>`, firing no hook at
+// all. Mutates the shared probe, so no t.Parallel().
+func TestInstallHooks_WindowsUsesCmdWrappersDespiteWorkingSh(t *testing.T) {
+	t.Cleanup(agentpkg.SetWindowsHookProbeForTesting("windows", func(context.Context, string) bool {
+		return true // a working sh, which must not change the decision
+	}))
+
+	tempDir := t.TempDir()
+	// Installing hooks anchors a process-wide os.Root on the worktree root
+	// (worktreedir.OpenAt -> osroot.Shared), which is never closed. Windows
+	// cannot remove a directory while a handle to it is open, so the registry
+	// must be closed before t.TempDir's RemoveAll — t.Cleanup is LIFO, and
+	// TempDir registered its removal first, so this runs before it.
+	t.Cleanup(osroot.ResetShared)
+	t.Chdir(tempDir)
+
+	ag := &FactoryAIDroidAgent{}
+	if _, err := ag.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	assertDroidWindowsHooks(t, readFactorySettings(t, tempDir))
+}
+
+// TestInstallHooks_WindowsMigratesShWrappers pins that a repo whose hooks were
+// installed from a non-Windows host is migrated to the cmd.exe wrappers by a
+// plain (non-force) reinstall, replacing the sh entries rather than leaving
+// both — two entries would fire the same hook twice. Mutates the shared probe,
+// so no t.Parallel().
+func TestInstallHooks_WindowsMigratesShWrappers(t *testing.T) {
+	t.Cleanup(agentpkg.SetWindowsHookProbeForTesting("linux", func(context.Context, string) bool {
+		return true
+	}))
+
+	tempDir := t.TempDir()
+	// See TestInstallHooks_WindowsUsesCmdWrappersDespiteWorkingSh for why the
+	// root registry is reset before t.TempDir removes the directory.
+	t.Cleanup(osroot.ResetShared)
+	t.Chdir(tempDir)
+
+	ag := &FactoryAIDroidAgent{}
+	if _, err := ag.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("first InstallHooks() error = %v", err)
+	}
+	assertFactoryHookExists(t, readFactorySettings(t, tempDir).Hooks.Stop, "",
+		agentpkg.WrapProductionPlainTextWarningHookCommand("entire hooks factoryai-droid stop", agentpkg.WarningFormatSingleLine),
+		"sh-wrapped Stop hook")
+
+	restore := agentpkg.SetWindowsHookProbeForTesting("windows", func(context.Context, string) bool {
+		return true
+	})
+	t.Cleanup(restore)
+
+	if _, err := ag.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("second InstallHooks() error = %v", err)
+	}
+
+	settings := readFactorySettings(t, tempDir)
+	assertDroidWindowsHooks(t, settings)
+
+	// SessionStart legitimately carries two Entire hooks (session-start and
+	// user-prompt-submit); every other type carries exactly one.
+	for _, tc := range []struct {
+		name     string
+		matchers []FactoryHookMatcher
+		want     int
+	}{
+		{"SessionStart", settings.Hooks.SessionStart, 2},
+		{"SessionEnd", settings.Hooks.SessionEnd, 1},
+		{"Stop", settings.Hooks.Stop, 1},
+		{"UserPromptSubmit", settings.Hooks.UserPromptSubmit, 1},
+		{"PreToolUse", settings.Hooks.PreToolUse, 1},
+		{"PostToolUse", settings.Hooks.PostToolUse, 1},
+		{"PreCompact", settings.Hooks.PreCompact, 1},
+	} {
+		got := 0
+		for _, m := range tc.matchers {
+			got += len(m.Hooks)
+		}
+		if got != tc.want {
+			t.Errorf("%s hook count = %d, want %d (stale sh entry left behind?)", tc.name, got, tc.want)
+		}
+	}
 }

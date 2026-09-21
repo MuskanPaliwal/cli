@@ -95,7 +95,7 @@ func InstallTitleTee() error {
 
 	// Build new title config, wrapping any pre-existing command.
 	cfg := titleConfig{
-		Type:    "command",
+		Type:    hookTypeCommand,
 		Command: titleTeeCommand(existing.Command),
 	}
 
@@ -179,7 +179,7 @@ func UninstallTitleTee() error {
 	if hasWrap {
 		// Restore the original command.
 		restored := titleConfig{
-			Type:    "command",
+			Type:    hookTypeCommand,
 			Command: wrapped,
 		}
 		restoredBytes, err := jsonutil.MarshalWithNoHTMLEscape(restored)

@@ -23,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/pi"
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	cliReview "github.com/entireio/cli/cmd/entire/cli/review"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
@@ -63,8 +64,8 @@ func postReviewToTrail(ctx context.Context, out io.Writer, profileName, verdict 
 		fmt.Fprintln(out, "Nothing to report, so nothing was posted to the trail.")
 		return nil
 	}
-	return runAuthenticatedTrailAPI(ctx, out, false, "", func(ctx context.Context, client *api.Client) error {
-		target, err := resolveTrailReviewTarget(ctx, client, "", "", "")
+	return runAuthenticatedTrailAPI(ctx, out, false, "", func(ctx context.Context, client *api.Client, repoID string) error {
+		target, err := resolveTrailReviewTarget(ctx, client, repoID, "", "", "")
 		if err != nil {
 			return err
 		}
@@ -370,9 +371,12 @@ func trailReviewWebURL(target trailReviewTarget) string {
 	if target.Trail.Number <= 0 || target.Host == "" || target.Owner == "" || target.Repo == "" {
 		return ""
 	}
-	base := strings.TrimRight(api.BaseURL(), "/")
+	base, err := auth.DataBaseURL()
+	if err != nil {
+		return ""
+	}
 	return fmt.Sprintf("%s/%s/%s/%s/trails/%d/%s",
-		base, target.Host, target.Owner, target.Repo, target.Trail.Number, target.Trail.Branch)
+		strings.TrimRight(base, "/"), target.Host, target.Owner, target.Repo, target.Trail.Number, target.Trail.Branch)
 }
 
 // launchableReviewerFor returns the AgentReviewer for agents with a review-runner

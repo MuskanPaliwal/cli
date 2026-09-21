@@ -8,7 +8,7 @@ For step-by-step implementation instructions, code templates, and testing patter
 
 Entire stores the **complete session transcript** at every checkpoint, not incremental diffs. This enables:
 
-- Simple rewind: restore the full transcript, agent resumes from that state
+- Simple resume: `RestoreLogsOnly` writes the full transcript back to the agent's session directory, and the agent resumes from that state
 - No dependency on previous checkpoints being intact
 - Consistent behavior across all checkpoint types (committed, uncommitted)
 
@@ -16,7 +16,7 @@ Entire stores the **complete session transcript** at every checkpoint, not incre
 
 ## Core Principle: Native Format Preservation
 
-Store transcripts in the **agent's native format**. Any transformation or normalization should only be done to support CLI features (rewind, resume, summarization, file extraction), not for backend or web UI consumption.
+Store transcripts in the **agent's native format**. Any transformation or normalization should only be done to support CLI features (resume, summarization, file extraction), not for backend or web UI consumption.
 
 **Why:**
 - The backend/web UI should handle format differences, not the CLI
@@ -91,6 +91,21 @@ See Guide: [Step 6 - InstallHooks](agent-guide.md)
       path that resolves inside the working tree. A repo-relative command runs
       whatever the checked-out branch contains, on every agent turn, and any repo
       could opt its cloners into it. This is why `local_dev` was removed.
+- [ ] **The config file is opened through `agent.OpenHookConfig`**, never a
+      `filepath.Join` handed to `os.ReadFile`/`os.WriteFile`. An agent's hook
+      config is one of the trees CLAUDE.md's "Root Anchors" gives an owner: a
+      symlinked `.youragent` arriving with the checkout is otherwise resolved
+      before any boundary exists, and this is the file naming the command Entire
+      runs every turn. Implement `HookConfigLocator.HookConfigRelPath` for it —
+      `TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent` requires it of
+      every agent whose config is a worktree file.
+- [ ] **The hook wrapper is chosen per host**, via the `*ForOS` selectors and one
+      of `agent.UseWindowsProductionHooks(ctx)` (the agent may reach a real sh on
+      Windows) or `agent.HookHostIsWindows()` (it always hands hooks to
+      `cmd.exe` there). An unconditional sh wrapper is cut apart by cmd.exe at
+      exit 0, so hooks silently never fire — droid shipped that way. Decide by
+      reading the agent's runner; the probe only proves a metacharacter-free
+      command runs, so a Git Bash host passes it while still being broken.
 - [ ] **Stale Entire hooks are dropped on every install, not just `--force`**, via
       `agent.DropStaleManagedHooks`. Adding the current hook without removing an
       older one leaves both firing. Two agents got this wrong independently, so
@@ -102,9 +117,8 @@ See Guide: [Step 6 - InstallHooks](agent-guide.md)
       `testutil.AssertCommittedDogfoodFile` / `AssertCommittedDogfoodConfigStable`
       if this repo commits the agent's config for its own dogfooding.
 
-### Rewind/Resume Support
+### Resume Support
 
-- [ ] **Rewind restores full state**: After rewind, agent can continue from that point with full context
 - [ ] **Resume command**: `FormatResumeCommand()` returns the CLI command to resume a session
 - [ ] **Session ID preservation**: Restored sessions maintain original session ID where possible
 
@@ -114,6 +128,6 @@ See Guide: [Testing Patterns](agent-guide.md#testing-patterns)
 
 - [ ] **New session**: Create session, multiple turns, verify full transcript at each checkpoint
 - [ ] **Resumed session**: Resume existing session, add turns, verify checkpoint includes historical messages
-- [ ] **Rewind**: Rewind to earlier checkpoint, verify agent can continue from that state
+- [ ] **Restored session**: Restore logs from an earlier checkpoint, verify the agent can continue from that state
 - [ ] **Agent shutdown**: Verify graceful handling if agent exits during checkpoint
 - [ ] **Manual token validation for session-wide aggregate agents**: If an agent emits authoritative token totals only at session end (for example Copilot CLI `session.shutdown`), manually verify checkpoint-scoped metadata and full-session status separately. See [Copilot Token Validation](copilot-token-validation.md).

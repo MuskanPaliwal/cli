@@ -4,6 +4,7 @@ package integration
 
 import (
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"net/http/httptest"
 	"os"
@@ -37,6 +38,28 @@ func (s *httpGitServer) tokenEnv(token string) []string {
 	}
 }
 
+// plainGitPushEnv is tokenEnv plus the Authorization header a plain `git push`
+// needs to reach this server. The backend requires a non-empty Authorization
+// header on receive-pack, and the test environment has no credential helper
+// and no terminal to prompt at, so git has nothing to send — the 401 it gets
+// back carries no WWW-Authenticate challenge either, so there is not even a
+// scheme to answer. ENTIRE_CHECKPOINT_TOKEN covers only Entire's own checkpoint
+// pushes, not the user's code push. http.extraHeader supplies a header
+// unconditionally — the same mechanism appendCheckpointTokenEnv uses, which
+// appends at the next free index and so coexists with this entry.
+//
+// Needed only by tests that push the user's code branch with the real git
+// binary (GitPushWithHooks); tests that drive the hook directly (RunPrePush)
+// want tokenEnv.
+func (s *httpGitServer) plainGitPushEnv(token string) []string {
+	auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	return append(s.tokenEnv(token),
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.extraHeader",
+		"GIT_CONFIG_VALUE_0=Authorization: Basic "+auth,
+	)
+}
+
 // sslEnv returns env vars for HTTPS git operations without token auth.
 func (s *httpGitServer) sslEnv() []string {
 	return []string{
@@ -65,12 +88,7 @@ func startGitHTTPSServer(t *testing.T, repoNames ...string) *httpGitServer {
 		if err := os.MkdirAll(bareDir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", bareDir, err)
 		}
-		cmd := exec.CommandContext(t.Context(), "git", "init", "--bare")
-		cmd.Dir = bareDir
-		cmd.Env = testutil.GitIsolatedEnv()
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git init --bare %s: %v\n%s", bareDir, err, output)
-		}
+		testutil.RunGit(t, bareDir, "init", "--bare")
 		bareDirs[name] = bareDir
 	}
 
@@ -107,30 +125,14 @@ func startGitHTTPSServer(t *testing.T, repoNames ...string) *httpGitServer {
 // remote with initial content so subsequent HTTPS operations have a base.
 func seedBareRepo(t *testing.T, env *TestEnv, bareDir, httpsOriginURL string) {
 	t.Helper()
-	ctx := t.Context()
 
 	// Add origin pointing to the bare repo on disk (no auth needed).
-	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", bareDir)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("remote add origin: %v\n%s", err, output)
-	}
+	testutil.RunGit(t, env.RepoDir, "remote", "add", "origin", bareDir)
 
-	cmd = exec.CommandContext(ctx, "git", "push", "--no-verify", "-u", "origin", "HEAD")
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("push to bare: %v\n%s", err, output)
-	}
+	testutil.RunGit(t, env.RepoDir, "push", "--no-verify", "-u", "origin", "HEAD")
 
 	// Switch origin to the HTTPS URL for subsequent operations.
-	cmd = exec.CommandContext(ctx, "git", "remote", "set-url", "origin", httpsOriginURL)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("set-url to https: %v\n%s", err, output)
-	}
+	testutil.RunGit(t, env.RepoDir, "remote", "set-url", "origin", httpsOriginURL)
 
 	// Re-baseline the git config guard so the URL change isn't flagged.
 	env.setGitConfigBaseline()
@@ -142,12 +144,7 @@ func cloneFromBareWithHTTPS(t *testing.T, env *TestEnv, bareDir, httpsOriginURL 
 	t.Helper()
 	clone := env.CloneFrom(bareDir)
 
-	cmd := exec.CommandContext(t.Context(), "git", "remote", "set-url", "origin", httpsOriginURL)
-	cmd.Dir = clone.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("set-url to https in clone: %v\n%s", err, output)
-	}
+	testutil.RunGit(t, clone.RepoDir, "remote", "set-url", "origin", httpsOriginURL)
 
 	clone.setGitConfigBaseline()
 	return clone
@@ -261,9 +258,24 @@ func TestHTTPS_PushCheckpointBranchToRemote(t *testing.T) {
 // git-branch only: asserts on v1 commit counts/subjects and the rebased tip's
 // parent count. checkpoint_remote routing and non-FF rebase for git-refs
 // per-checkpoint refs are separate future work (test plan B5/D2, git-refs only).
+//
+// Runs for both supported checkpoint_remote providers: neither push nor fetch
+// routing above consults config.Provider except through providerHost, which
+// this test never reaches (the checkpoint URL is derived from the seeded
+// HTTPS server's own host, not the provider's canonical host) — so github and
+// gitlab are expected to behave identically here.
 func TestHTTPS_CheckpointRemoteRoutesToSeparateRepo(t *testing.T) {
 	t.Parallel()
 
+	for _, provider := range []string{"github", "gitlab"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Parallel()
+			testHTTPSCheckpointRemoteRoutesToSeparateRepo(t, provider)
+		})
+	}
+}
+
+func testHTTPSCheckpointRemoteRoutesToSeparateRepo(t *testing.T, provider string) {
 	srv := startGitHTTPSServer(t, "testorg/main-repo", "testorg/checkpoints")
 	env := NewFeatureBranchEnv(t)
 
@@ -275,7 +287,7 @@ func TestHTTPS_CheckpointRemoteRoutesToSeparateRepo(t *testing.T) {
 	checkpointRemoteSettings := map[string]any{
 		"strategy_options": map[string]any{
 			"checkpoint_remote": map[string]any{
-				"provider": "github",
+				"provider": provider,
 				"repo":     "testorg/checkpoints",
 			},
 		},
