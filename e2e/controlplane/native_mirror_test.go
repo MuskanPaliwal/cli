@@ -249,11 +249,11 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.Equal(t, primaryURL, testutil.GitOutput(t, clone, "remote", "get-url", "home"),
 			"a non-interactive add with no --cluster takes the repo's primary")
 
-		_, stderr, err = runEntire(t, clone, "repo", "remote", "add", "home", "--cluster", target.Host, "--override")
+		stdout, stderr, err := runEntire(t, clone, "repo", "remote", "add", "home", "--cluster", target.Host, "--override")
 		require.NoError(t, err, stderr)
 		require.Equal(t, cloneURL, testutil.GitOutput(t, clone, "remote", "get-url", "home"))
-		require.Equal(t, primaryURL, testutil.GitOutput(t, clone, "remote", "get-url", "upstream"),
-			"--override preserves the replaced URL under --upstream")
+		require.Contains(t, stdout, primaryURL,
+			"the replaced URL is echoed, since --override copies it nowhere")
 	})
 
 	phase("remove tears the replica down", func(t *testing.T) {

@@ -164,9 +164,13 @@ the commands are always runnable in every build.
   placements are its primary plus each **ready** mirror. One URL per remote
   either way — a placement serves pushes as well as fetches, so there is no
   split fetch/push remote to maintain. An occupied `<remote-name>` is refused
-  the way `git remote add` refuses one; `--override` repoints it instead,
-  preserving the replaced URL under `--upstream`. A remote already carrying that
-  exact URL is a reported no-op, not a collision, so re-running is safe.
+  the way `git remote add` refuses one; `--override` repoints it instead. A
+  remote already carrying that exact URL is a reported no-op, not a collision,
+  so re-running is safe. `--override` writes exactly the remote it names and
+  copies the replaced URL nowhere — the report echoes it (redacted) and that is
+  its only record. Saving it under a second remote the caller never named was
+  the previous design, and its failure mode was a name collision that reported
+  a clean ✓ over a URL that had left git config for good.
   There is no URL-printing verb: `repo mirror get` already lists a clone URL per
   cluster for both forges, in a table and in `--json`.
   `remote add` and `clone` choose a placement through the shared
@@ -174,11 +178,17 @@ the commands are always runnable in every build.
   picker matches on the cluster host, which is what `--cluster` takes, and both
   verbs resolve native placements — a repo's primary and its ready mirrors —
   identically. With several placements and no `--cluster`, a terminal gets the
-  picker and a script gets the **primary**: the cluster the repo itself lives
-  on, passed to `selectPlacement` by host rather than inferred from list order.
-  A GitHub repo has no primary — its placements are peer mirrors of an upstream
-  that is not itself a placement — so that case still errors pointing at
-  `--cluster`. The picker renders on stderr when that is a terminal and on the
+  picker and a script gets the **primary**, passed to `selectPlacement` by host
+  rather than inferred from list order. For a native repo that is the cluster it
+  lives on. For a GitHub repo it takes a second read: `/mirrors/placements`
+  returns peers with no primary among them, so `githubPrimaryHost` asks POST
+  `/repos/resolve` for `primaries.processing` — an id from the same space as
+  `ResolvedPlacement.MirrorId` — and matches it back to a listed placement. Its
+  sibling `data_primary` is the **forge** for a GitHub repo (`github:<id>`, not
+  a cluster) and can never name a remote. That second read is skipped unless its
+  answer would be used — an explicit `--cluster`, a lone placement, or a
+  terminal all decide without it — and is best-effort: a failure leaves the
+  caller its `--cluster` pointer rather than failing outright. The picker renders on stderr when that is a terminal and on the
   controlling terminal otherwise (`openPlacementPromptTerminal`), because Bubble
   Tea fails *silently* on a redirected writer — no window size, a 0x0 viewport,
   and stdin still in raw mode. The cancellation message follows the same writer,

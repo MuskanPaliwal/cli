@@ -527,13 +527,15 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	}
 
 	var placements []coreapi.ResolvedPlacement
+	var primaryHost string
 	lister := func(ctx context.Context, c *coreapi.Client) error {
 		ps, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
 			return err
 		}
 		placements = ps
-		return nil
+		primaryHost, err = githubPrimaryHost(ctx, c, owner, repo, placements, cluster)
+		return err
 	}
 	// An explicit --cluster may name a cluster in a different federation
 	// than the active context, whose mirrors the active-context core can't
@@ -560,9 +562,7 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	// No primary: these are peer mirrors of a GitHub upstream, which is not
-	// itself a placement, so a repo on several clusters still needs --cluster.
-	chosen, err := selectPlacement(cmd, placements, cluster, "", picker)
+	chosen, err := selectPlacement(cmd, placements, cluster, primaryHost, picker)
 	if err != nil {
 		return "", err
 	}
@@ -639,6 +639,57 @@ func resolvePullablePlacements(ctx context.Context, c *coreapi.Client, owner, re
 		return nil, fmt.Errorf("resolve mirror placements: %w", err)
 	}
 	return out.Placements, nil
+}
+
+// githubPrimaryHost resolves the cluster host of a GitHub repo's Entire-side
+// primary placement — the one a caller that named no cluster should get.
+//
+// /mirrors/placements, which lists the placements, does not say which is
+// primary: every row is a mirror of an upstream that is not itself a placement.
+// POST /repos/resolve does, as `primaries.processing`, whose value is the id of
+// one of those same rows (ResolvedPlacement.MirrorId). Note the sibling
+// `data_primary` is the FORGE for a GitHub repo — github:<id>, not a cluster —
+// so it can never name a remote; the processing primary is the Entire cell that
+// owns the repo.
+//
+// The lookup is skipped entirely unless its answer would be used: an explicit
+// selector decides on its own, a single placement has nothing to choose, and a
+// terminal gets the picker. That keeps the extra round trip off the paths that
+// were already answered.
+//
+// Best-effort, like nativePlacements' extra reads: a failure here leaves the
+// caller to report "pass --cluster", which is the same actionable message this
+// path produced before the primary was resolvable at all. A cancelled context
+// still surfaces, so Ctrl+C never resolves a cluster the user did not choose.
+func githubPrimaryHost(ctx context.Context, c *coreapi.Client, owner, repo string, placements []coreapi.ResolvedPlacement, clusterSel string) (string, error) {
+	if clusterSel != "" || len(placements) < 2 || interactive.CanPromptInteractively() {
+		return "", nil
+	}
+	out, err := c.ResolveRepos(ctx, &coreapi.ResolveReposInputBody{
+		Repositories: []coreapi.RepoReference{{
+			Provider: mirrorCloneProviderGitHub,
+			FullName: owner + "/" + repo,
+		}},
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("resolve repo primary: %w", err)
+		}
+		logging.Debug(ctx, "repo resolve failed; leaving the cluster choice to --cluster", "error", err)
+		return "", nil
+	}
+	for _, res := range out.Resolutions {
+		primary := strings.TrimSpace(res.Primaries.Or(coreapi.RepoPrimaries{}).Processing)
+		if primary == "" {
+			continue
+		}
+		for _, p := range placements {
+			if p.MirrorId == primary {
+				return strings.TrimSpace(p.ClusterHost), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // placementPicker adapts selectPlacement's messages to the calling verb. The

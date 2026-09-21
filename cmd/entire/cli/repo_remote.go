@@ -23,11 +23,6 @@ import (
 // that names the repo the user is standing in.
 const defaultMirrorRemote = "origin"
 
-// defaultMirrorUpstreamRemote is where a replaced URL is preserved, so
-// repointing origin is never a lossy operation — the forge stays reachable under
-// the name git's own fork workflow uses for it.
-const defaultMirrorUpstreamRemote = "upstream"
-
 // gitRemoteNameRe is the remote-name charset `remote add` accepts. Git itself is
 // laxer, but these names are written into `.git/config` section headers and
 // passed as argv to `git remote`, so the value is pinned to a conservative
@@ -108,18 +103,9 @@ type mirrorRemotePlan struct {
 	// `git remote set-url`).
 	add bool
 	// replacedURL is the URL remote currently holds, when it is being
-	// repointed. Empty when add is true.
+	// repointed. Empty when add is true. It is echoed by the report, which is
+	// the only record of it once the write lands.
 	replacedURL string
-	// preserveAs, when non-empty, is a new remote that will be created holding
-	// replacedURL so the previous URL stays reachable.
-	preserveAs string
-	// preserveSkipped names the remote replacedURL would have been kept under,
-	// when preservation was asked for but could not be done (the name is already
-	// taken). Mutually exclusive with preserveAs, and empty when preservation was
-	// never requested (`--upstream ''`). Set so the report can say out loud that
-	// the previous URL did not make it into git config — the difference matters:
-	// this is the one path where a successful-looking run drops the old URL.
-	preserveSkipped string
 	// noop is true when remote already points at mirrorURL.
 	noop bool
 }
@@ -134,14 +120,12 @@ type mirrorRemotePlan struct {
 // it is the requested end state — so it reports as a no-op and a re-run stays
 // safe.
 //
-// upstream is the requested preserve-under name; it is honored only when the
-// target remote is actually being repointed and the name is free. An occupied
-// name is never clobbered — silently rewriting an existing `upstream` would be
-// the one genuinely destructive thing this command could do — but it is recorded
-// in preserveSkipped rather than dropped quietly, because a fork checkout
-// (`origin` + `upstream` both already configured) hits that path by default and
-// would otherwise see a clean ✓ while the replaced URL left git config for good.
-func planMirrorRemote(remote, mirrorURL, currentURL, upstream string, override bool, remotes map[string]bool) (mirrorRemotePlan, error) {
+// A repointed URL is not copied anywhere. `--override` is the caller saying they
+// mean to overwrite this remote, so saving the old value under a remote they
+// never named would be a write they did not ask for — and the name to save it
+// under can itself be taken, which is how the previous design could report a
+// clean ✓ over a lost URL. The report echoes the replaced URL instead.
+func planMirrorRemote(remote, mirrorURL, currentURL string, override bool, remotes map[string]bool) (mirrorRemotePlan, error) {
 	plan := mirrorRemotePlan{remote: remote, mirrorURL: mirrorURL}
 	if !remotes[remote] {
 		plan.add = true
@@ -156,33 +140,15 @@ func planMirrorRemote(remote, mirrorURL, currentURL, upstream string, override b
 			remote, gitremote.RedactURL(currentURL))
 	}
 	plan.replacedURL = currentURL
-	if upstream != "" {
-		// `remote` is known to exist in this branch, so an upstream naming it is
-		// "occupied" too and lands in the skipped case — no separate check needed.
-		if remotes[upstream] {
-			plan.preserveSkipped = upstream
-		} else {
-			plan.preserveAs = upstream
-		}
-	}
 	return plan, nil
 }
 
-// applyMirrorRemotePlan performs the plan's git-config writes. The preserve step
-// runs first so a failure there aborts before the original URL is overwritten.
+// applyMirrorRemotePlan performs the plan's single git-config write.
 func applyMirrorRemotePlan(ctx context.Context, dir string, plan mirrorRemotePlan) error {
 	if plan.noop {
 		return nil
 	}
-	// Deferred, not tail-positioned: the preserve step below is itself a remote
-	// mutation, so a failure in the second write would otherwise leave the first
-	// one uninvalidated and the invocation's memoized remote reads stale.
 	defer strategy.InvalidateGitRemoteCache(ctx)
-	if plan.preserveAs != "" {
-		if _, err := gitRunner(ctx, dir, "remote", "add", plan.preserveAs, plan.replacedURL); err != nil {
-			return fmt.Errorf("preserve current %s URL as %q: %w", plan.remote, plan.preserveAs, err)
-		}
-	}
 	verb := "set-url"
 	if plan.add {
 		verb = "add"
@@ -193,16 +159,12 @@ func applyMirrorRemotePlan(ctx context.Context, dir string, plan mirrorRemotePla
 	return nil
 }
 
-// reportMirrorRemotePlan echoes what was written, in recovery-friendly terms:
-// every replaced URL is printed even when it was also preserved under another
-// remote, so the previous value is always visible in the transcript.
-//
-// When preservation was requested but skipped, that gets an explicit stderr
-// warning rather than just the absence of the "Kept the previous URL" line — the
-// old URL is then only in this output, and an omitted line is far too quiet a
-// signal for "your previous remote URL is no longer in git config" (a reader, or
-// an agent scanning for ✓, would miss it).
-func reportMirrorRemotePlan(out, errW io.Writer, plan mirrorRemotePlan) {
+// reportMirrorRemotePlan echoes what was written. A replaced URL is printed
+// because this output is now the only record of it: nothing copies it into git
+// config. It is redacted (a remote URL can embed a token, and this text reaches
+// logs and pasted transcripts), so a caller who needs the credentialed original
+// has to keep it themselves — which is what --override asks them to accept.
+func reportMirrorRemotePlan(out io.Writer, plan mirrorRemotePlan) {
 	if plan.noop {
 		fmt.Fprintf(out, "Remote %q already points at the mirror:\n  %s\n", plan.remote, plan.mirrorURL)
 		return
@@ -212,22 +174,8 @@ func reportMirrorRemotePlan(out, errW io.Writer, plan mirrorRemotePlan) {
 	} else {
 		fmt.Fprintf(out, "✓ Repointed remote %q at the mirror\n  %s\n", plan.remote, plan.mirrorURL)
 		fmt.Fprintf(out, "  was: %s\n", gitremote.RedactURL(plan.replacedURL))
-		if plan.preserveAs != "" {
-			fmt.Fprintf(out, "✓ Kept the previous URL as remote %q\n", plan.preserveAs)
-		}
 	}
 	fmt.Fprintf(out, "\nFetch through it:\n  git fetch %s\n", plan.remote)
-
-	if plan.preserveSkipped != "" {
-		// The URL is redacted here for the same reason it is on the "was:" line:
-		// a replaced URL can carry credentials, and this warning is as likely to
-		// end up in a log or a pasted transcript as anything else we print. Say so,
-		// so a reader who needs the credentialed original knows to reconstruct it.
-		fmt.Fprintf(errW, "\nWARNING: the previous URL of %q was NOT saved to git config — remote %q already exists.\n", plan.remote, plan.preserveSkipped)
-		fmt.Fprintf(errW, "         It now only appears in the output above. To keep it under another name:\n")
-		fmt.Fprintf(errW, "           git remote add <name> %s\n", gitremote.RedactURL(plan.replacedURL))
-		fmt.Fprintf(errW, "         (credentials, if the URL had any, are redacted and must be re-supplied.)\n")
-	}
 }
 
 // resolveMirrorUseUpstream determines the repository `remote add` should look
@@ -297,7 +245,7 @@ func newRepoRemoteCmd() *cobra.Command {
 	return requireSubcommand(cmd)
 }
 func newRepoRemoteAddCmd() *cobra.Command {
-	var upstream, cluster string
+	var cluster string
 	var override bool
 	cmd := &cobra.Command{
 		Use:   "add <remote-name> [repo]",
@@ -310,29 +258,21 @@ func newRepoRemoteAddCmd() *cobra.Command {
 			"--cluster selects one either way, the same as `entire repo clone`.\n\n" +
 			"<remote-name> must not already exist: as with `git remote add`, an " +
 			"occupied name is refused rather than repointed. --override repoints " +
-			"it instead, preserving the replaced URL under --upstream so the " +
-			"forge stays reachable.\n\n" +
+			"it instead, printing the URL it replaced — which is the only record " +
+			"of that URL, so keep it if you need it.\n\n" +
 			"It only ever edits local git config — the cluster must already serve " +
 			"the repo (`entire repo mirror add`); nothing server-side is " +
 			"changed.\n\n" + mirrorRepoRefHelp,
 		Example: "  entire repo remote add entire\n" +
 			"  entire repo remote add entire --cluster aws-us-east-2.entire.io\n" +
 			"  entire repo remote add entire /gh/octocat/hello-world\n" +
-			"  entire repo remote add origin --override\n" +
-			"  entire repo remote add origin --override --upstream ''",
+			"  entire repo remote add origin --override",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			remote := strings.TrimSpace(args[0])
 			if err := validateGitRemoteName(remote); err != nil {
 				return fmt.Errorf("invalid remote name: %w", err)
-			}
-			// An empty --upstream is the documented opt-out of preserving the
-			// replaced URL, so only a non-empty value is validated.
-			if upstream != "" {
-				if err := validateGitRemoteName(upstream); err != nil {
-					return fmt.Errorf("invalid --upstream: %w", err)
-				}
 			}
 			// Arguments are validated before the repo is resolved so a
 			// malformed invocation fails identically inside and outside a clone.
@@ -368,8 +308,9 @@ func newRepoRemoteAddCmd() *cobra.Command {
 			// which the catalog turns into the cluster hosts a placement is
 			// addressed by.
 			var (
-				placements []coreapi.ResolvedPlacement
-				nativeRepo *coreapi.Repo
+				placements    []coreapi.ResolvedPlacement
+				nativeRepo    *coreapi.Repo
+				githubPrimary string
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				if repoRef.forge == nativeCloneForge {
@@ -390,7 +331,8 @@ func newRepoRemoteAddCmd() *cobra.Command {
 					return lerr
 				}
 				placements = ps
-				return nil
+				githubPrimary, lerr = githubPrimaryHost(ctx, c, repoRef.owner, repoRef.repo, placements, clusterHost)
+				return lerr
 			}); err != nil {
 				return err
 			}
@@ -398,10 +340,10 @@ func newRepoRemoteAddCmd() *cobra.Command {
 				return fmt.Errorf("%s has no cluster you can fetch from; create a mirror first:\n  entire repo mirror add %s", qualified, qualified)
 			}
 
-			// Only a native repo has a primary — the cluster it lives on, which
-			// a script that named no cluster wants. A GitHub repo's placements
-			// are peer mirrors, so that case still asks for --cluster.
-			primaryHost := ""
+			// The cluster a script that named none should get: for a native
+			// repo the one it lives on, for a GitHub repo its Entire-side
+			// primary placement.
+			primaryHost := githubPrimary
 			if repoRef.forge == nativeCloneForge {
 				primaryHost = strings.TrimSpace(nativeRepo.ClusterHost.Or(""))
 			}
@@ -441,18 +383,17 @@ func newRepoRemoteAddCmd() *cobra.Command {
 				}
 			}
 
-			plan, err := planMirrorRemote(remote, mirrorURL, currentURL, upstream, override, remotes)
+			plan, err := planMirrorRemote(remote, mirrorURL, currentURL, override, remotes)
 			if err != nil {
 				return err
 			}
 			if err := applyMirrorRemotePlan(ctx, repoRoot, plan); err != nil {
 				return err
 			}
-			reportMirrorRemotePlan(cmd.OutOrStdout(), cmd.ErrOrStderr(), plan)
+			reportMirrorRemotePlan(cmd.OutOrStdout(), plan)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&upstream, "upstream", defaultMirrorUpstreamRemote, "Remote to preserve a replaced URL under; empty to discard it")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to use when the repo is on several")
 	cmd.Flags().BoolVar(&override, "override", false, "Repoint <remote-name> when it already exists instead of refusing")
 	return cmd
