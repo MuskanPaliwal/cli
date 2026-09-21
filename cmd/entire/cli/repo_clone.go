@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"charm.land/huh/v2"
@@ -714,6 +715,12 @@ type placementPicker struct {
 	// ("Clone", "Remote update") — handleFormCancellation prints
 	// "<action> cancelled."
 	action string
+	// probe measures round-trip time to each candidate cluster, so the picker
+	// can offer the nearest first and a non-interactive caller can be given a
+	// default instead of an error. A nil probe disables latency ordering
+	// entirely and restores the alphabetical picker — which is what every
+	// unit test wants, since a probe is the one part of this file that dials.
+	probe latencyProbe
 }
 
 const clusterSelectorFlag = "--cluster"
@@ -727,6 +734,7 @@ func clonePlacementPicker() placementPicker {
 		selector: clusterSelectorFlag,
 		title:    "This repo is mirrored on more than one cluster — pick one to clone from",
 		action:   "Clone",
+		probe:    dialLatencies,
 	}
 }
 
@@ -756,8 +764,18 @@ var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 // selectPlacement resolves which mirror placement a verb should act on. With one
 // placement it returns it directly. With an explicit clusterSel it picks the
 // matching one (or errors listing the available hosts). With more than one and no
-// selector it prompts interactively, failing fast with a p.selector pointer when
-// there's no terminal.
+// selector it probes the candidates (see placement_latency.go), offers them
+// nearest-first, and prompts interactively — or, with no terminal, defaults to a
+// placement that is clearly nearer than the incumbent, failing with a p.selector
+// pointer when no measurement makes that call.
+//
+// The incumbent is hosts[0] in alphabetical order, which is a placeholder: on
+// the native path nativePlacements puts the home cluster first, but that
+// ordering is lost to the sort here, and the /gh/ path has no primary at all in
+// the coreapi shape (ResolvedPlacement carries no role). The public resolve
+// contract already models one — publicv1.RoleProcessingPrimary — so the
+// incumbent should become the announced primary once that field reaches this
+// client, and the margin rule below then means what it says.
 func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
@@ -776,6 +794,18 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 	sort.Strings(hosts)
 
+	// Alphabetical is the fallback order, not the intended one: it ranks
+	// aws-ap-southeast-2 above us-east-1 on the letter `a`. Probe only when
+	// there is a choice left to make — one host is not a choice, and an
+	// explicit --cluster is a choice already made, so neither earns a dial.
+	incumbent := hosts[0]
+	var rtt map[string]time.Duration
+	if clusterSel == "" && len(hosts) > 1 && p.probe != nil {
+		rtt = p.probe(cmd.Context(), hosts)
+		hosts = orderHostsByLatency(hosts, rtt)
+		logging.Debug(cmd.Context(), "probed placement latency", "hosts", hosts, "measured", len(rtt))
+	}
+
 	if clusterSel != "" {
 		match, ok := byHost[strings.ToLower(strings.TrimSpace(clusterSel))]
 		if !ok {
@@ -789,12 +819,26 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
+		// A measured winner is a better answer than an error: it is the choice
+		// the human would have made at the prompt, and it makes the multi-
+		// placement repo scriptable, which it was not before.
+		//
+		// Without one, the error stands. Guessing alphabetically here would be
+		// the original bug with a confident face on it, and the failure mode is
+		// silent — a clone from the wrong side of the planet still succeeds.
+		if nearest, ok := nearestHost(hosts, incumbent, rtt); ok {
+			logging.Debug(cmd.Context(), "defaulting to the nearest placement", "host", nearest, "incumbent", incumbent)
+			return byHost[nearest], nil
+		}
 		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
 	}
 
+	// hosts is already nearest-first, and huh preselects the first option, so
+	// the ordering IS the recommendation — no separate default to keep in sync.
 	options := make([]huh.Option[string], len(hosts))
 	for i, h := range hosts {
-		options[i] = huh.NewOption(mirrorCellLabel(byHost[h]), h)
+		measured, ok := rtt[h]
+		options[i] = huh.NewOption(mirrorCellLabel(byHost[h], formatProbedRTT(measured, ok)), h)
 	}
 
 	// The answer is read from the terminal, so the question has to be visible
@@ -870,17 +914,25 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 // the physical cell and jurisdiction when known, always anchored by the cluster
 // host that goes into the clone URL — the value the same command takes as
 // --cluster, so a reader who cancels the picker knows what to type next.
-func mirrorCellLabel(p coreapi.ResolvedPlacement) string {
+func mirrorCellLabel(p coreapi.ResolvedPlacement, rtt string) string {
 	cell := strings.TrimSpace(p.Cell.Or(""))
 	jur := strings.TrimSpace(p.Jurisdiction.Or(""))
+	var label string
 	switch {
 	case cell != "" && jur != "":
-		return fmt.Sprintf("%s (%s) — %s", cell, jur, p.ClusterHost)
+		label = fmt.Sprintf("%s (%s) — %s", cell, jur, p.ClusterHost)
 	case cell != "":
-		return fmt.Sprintf("%s — %s", cell, p.ClusterHost)
+		label = fmt.Sprintf("%s — %s", cell, p.ClusterHost)
 	default:
-		return p.ClusterHost
+		label = p.ClusterHost
 	}
+	// An unmeasured host is labelled like any other. Annotating it as unknown
+	// would read as a warning about the placement, when all it records is that
+	// one 400ms probe went unanswered.
+	if rtt != "" {
+		label += " [" + rtt + "]"
+	}
+	return label
 }
 
 // runGitClone shells out to `git clone <cloneURL> [target-dir]`, wiring the

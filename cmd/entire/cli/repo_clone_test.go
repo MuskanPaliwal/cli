@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -438,7 +439,10 @@ func TestResolveNativeCloneURL(t *testing.T) {
 
 	resolve := func(t *testing.T, c *coreapi.Client, clusterSel string) (string, error) {
 		t.Helper()
-		return resolveNativeCloneURL(t.Context(), newCloneTestCmd(), c, "paul", "dogbark", clusterSel, clonePlacementPicker())
+		// A nil probe keeps these hermetic: the real picker dials every
+		// candidate host, and these cases are about URL construction, not
+		// about which placement wins. The probed native path has its own case.
+		return resolveNativeCloneURL(t.Context(), newCloneTestCmd(), c, "paul", "dogbark", clusterSel, stubPlacementPicker(nil))
 	}
 
 	t.Run("builds the URL from the server's clusterHost and path", func(t *testing.T) {
@@ -510,6 +514,25 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "pass --cluster")
 		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
+	})
+
+	t.Run("a clearly nearer native mirror resolves without a terminal", func(t *testing.T) {
+		t.Parallel()
+		// End to end on the native path: home is the far cluster, the ready
+		// mirror is near, and the clone URL follows the measurement instead of
+		// demanding --cluster.
+		c := serveNativeRepoFixture(t, nativeRepoFixture{
+			repo:     native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
+			mirrors:  []coreapi.NativeMirrorPlacement{readyNativeMirror("aws-us-east-2")},
+			clusters: []coreapi.Cluster{usEast},
+		})
+		got, err := resolveNativeCloneURL(t.Context(), newCloneTestCmd(), c, "paul", "dogbark", "",
+			stubPlacementPicker(map[string]time.Duration{
+				"aws-ap-southeast-2.entire.io": 190 * time.Millisecond,
+				"aws-us-east-2.entire.io":      16 * time.Millisecond,
+			}))
+		require.NoError(t, err)
+		require.Equal(t, "entire://aws-us-east-2.entire.io/et/paul/dogbark", got)
 	})
 
 	t.Run("a mirror that is not ready or marked deleted is not a placement", func(t *testing.T) {
@@ -652,6 +675,7 @@ func TestMirrorCellLabel(t *testing.T) {
 	tests := []struct {
 		name   string
 		mirror coreapi.ResolvedPlacement
+		rtt    string
 		want   string
 	}{
 		{
@@ -676,11 +700,20 @@ func TestMirrorCellLabel(t *testing.T) {
 			},
 			want: "aws-us-east-2 — aws-us-east-2.entire.io",
 		},
+		{
+			name: "measured round trip is appended",
+			mirror: coreapi.ResolvedPlacement{
+				ClusterHost: "aws-us-east-2.entire.io",
+				Cell:        coreapi.NewOptString("aws-us-east-2"),
+			},
+			rtt:  "18ms",
+			want: "aws-us-east-2 — aws-us-east-2.entire.io [18ms]",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tt.want, mirrorCellLabel(tt.mirror))
+			require.Equal(t, tt.want, mirrorCellLabel(tt.mirror, tt.rtt))
 		})
 	}
 }
@@ -757,10 +790,60 @@ func TestSelectCloneTarget(t *testing.T) {
 	t.Run("multiple placements with no terminal errors with a --cluster pointer", func(t *testing.T) {
 		t.Parallel()
 		// go test is non-interactive, so the picker path is unreachable here.
-		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", clonePlacementPicker())
+		// A nil probe is what keeps this hermetic: the real one dials.
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", stubPlacementPicker(nil))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--cluster")
 	})
+
+	t.Run("no terminal defaults to a clearly nearer placement", func(t *testing.T) {
+		t.Parallel()
+		// The scriptability win: a multi-placement repo resolves without a
+		// terminal and without --cluster, because one placement measurably wins.
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "",
+			stubPlacementPicker(map[string]time.Duration{
+				"aws-eu-west-1.entire.io": 210 * time.Millisecond,
+				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			}))
+		require.NoError(t, err)
+		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
+	})
+
+	t.Run("no terminal still errors when the placements are equally near", func(t *testing.T) {
+		t.Parallel()
+		// Inside the margin there is no winner to default to, and picking one
+		// anyway would be the alphabetical bug wearing a measurement.
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "",
+			stubPlacementPicker(map[string]time.Duration{
+				"aws-eu-west-1.entire.io": 20 * time.Millisecond,
+				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			}))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--cluster")
+	})
+
+	t.Run("an explicit --cluster is never probed", func(t *testing.T) {
+		t.Parallel()
+		// A choice already made must not cost a dial, so a probe that fails the
+		// test if called proves the short-circuit.
+		picker := clonePlacementPicker()
+		picker.probe = func(context.Context, []string) map[string]time.Duration {
+			t.Error("probed despite an explicit --cluster")
+			return nil
+		}
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-eu-west-1.entire.io", picker)
+		require.NoError(t, err)
+		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
+	})
+}
+
+// stubPlacementPicker is `repo clone`'s picker with the dialling probe replaced
+// by a fixed table, so placement-selection tests stay hermetic and parallel. A
+// nil table means "every probe failed", the fallback every path must survive.
+func stubPlacementPicker(rtt map[string]time.Duration) placementPicker {
+	p := clonePlacementPicker()
+	p.probe = func(context.Context, []string) map[string]time.Duration { return rtt }
+	return p
 }
 
 // TestResolvePullablePlacements_ReturnsPlacements verifies the clone-discovery
