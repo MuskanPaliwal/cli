@@ -167,7 +167,7 @@ func TestNativeRepoDetailRow(t *testing.T) {
 	})
 }
 
-// TestNativeUsePlacements pins which clusters `repo remote use` will point a
+// TestNativeUsePlacements pins which clusters `repo remote add` will point a
 // remote at: the primary always, and only mirrors that can actually serve a
 // fetch.
 func TestNativeUsePlacements(t *testing.T) {

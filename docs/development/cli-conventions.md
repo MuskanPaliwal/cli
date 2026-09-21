@@ -80,7 +80,7 @@ the commands are always runnable in every build.
   --region`; CLUSTER is the placement slug `repo mirror list --cluster` filters
   on and the key the native-mirror API is addressed by; HOST is the bare public
   host every targeting `--cluster` takes (`repo mirror add`/`remove`, `repo
-  access list`, `repo clone`, `repo remote use`), reduced through
+  access list`, `repo clone`, `repo remote add`), reduced through
   `hostFromPublicURL` so a publicUrl that fails validation renders `-` rather
   than a spoofable host. It is also what goes into an `entire://` clone URL and
   what `runCoreForCluster` dials. `--json` is the wire model, `apiUrl` and `isDefault`
@@ -158,39 +158,32 @@ the commands are always runnable in every build.
   native-mirror routes are home-core-scoped and answer 421 for a repo in another
   jurisdiction, which `coreapi`'s transport follows and re-authenticates on its
   own, so they run on the plain active-context client with no cluster-fronting
-  detour. `remote use` repoints the *current clone's*
-  git remote at a mirror (local git config only — it creates nothing
-  server-side). Interactively it picks among the repo's placements and asks
-  whether to replace the remote (preserving the old URL under `--upstream`) or
-  add a separate one; non-interactively it repoints `--remote` directly. It
-  serves both forges: for a native repo the placements are its primary plus each
-  **ready** mirror. One URL per remote either way — a placement serves pushes as
-  well as fetches, so there is no split fetch/push remote to maintain.
-  `remote url` is the read-only half of the same subtree: it resolves a repo to
-  its `entire://` URL and prints it, changing nothing.
-  `remote use`, `remote url` and `clone` all choose a placement through the shared
+  detour. `remote add <remote-name> [repo]` is the whole `remote` subtree: it
+  writes one git remote in the *current clone* (local git config only — it
+  creates nothing server-side). It serves both forges: for a native repo the
+  placements are its primary plus each **ready** mirror. One URL per remote
+  either way — a placement serves pushes as well as fetches, so there is no
+  split fetch/push remote to maintain. An occupied `<remote-name>` is refused
+  the way `git remote add` refuses one; `--override` repoints it instead,
+  preserving the replaced URL under `--upstream`. A remote already carrying that
+  exact URL is a reported no-op, not a collision, so re-running is safe.
+  There is no URL-printing verb: `repo mirror get` already lists a clone URL per
+  cluster for both forges, in a table and in `--json`.
+  `remote add` and `clone` choose a placement through the shared
   `selectPlacement` picker, each passing its own `placementPicker` wording. The
-  picker matches on the cluster host, which is what `--cluster` takes. That
-  selection is **GitHub-only**
-  in `clone` and `remote url`: a native ref there resolves the repo's primary
-  and `--cluster` is refused, so the way to target a native mirror is
-  `remote use --cluster <host>` or a full `entire://` URL (which both `clone`
-  and `remote url` forward untouched). Teaching those two to select among native
-  placements is unfinished work, not a decision. It renders on stderr when that is
-  a terminal and on the controlling
-  terminal otherwise (`openPlacementPromptTerminal`), because Bubble Tea fails
-  *silently* on a redirected writer — no window size, a 0x0 viewport, and stdin
-  still in raw mode — and `remote url` exists to have its stdout captured. The
-  cancellation message follows the same writer, so it is never explained into a
-  stream the user is not reading.
-  `remote url` is `clone` without the clone: it resolves the same three ref
-  shapes through the same `resolveRepoRemoteURL` and prints the `entire://` URL
-  to stdout for `git remote add entire "$(…)"`, so the two always accept the
-  same refs. It deliberately does **not** take the `resolveRepoRef` grammar the
-  rest of the group shares (no ULID, no `--project`) — a URL producer matches
-  its sibling `clone`, not `view`. Because it prints rather than execs, its
-  `entire://` passthrough is validated (`validateEntireURLForPrinting`) where
-  `clone`'s is forwarded verbatim. `access list` shows who can pull a mirror (live
+  picker matches on the cluster host, which is what `--cluster` takes, and both
+  verbs resolve native placements — a repo's primary and its ready mirrors —
+  identically. With several placements and no `--cluster`, a terminal gets the
+  picker and a script gets the **primary**: the cluster the repo itself lives
+  on, passed to `selectPlacement` by host rather than inferred from list order.
+  A GitHub repo has no primary — its placements are peer mirrors of an upstream
+  that is not itself a placement — so that case still errors pointing at
+  `--cluster`. The picker renders on stderr when that is a terminal and on the
+  controlling terminal otherwise (`openPlacementPromptTerminal`), because Bubble
+  Tea fails *silently* on a redirected writer — no window size, a 0x0 viewport,
+  and stdin still in raw mode. The cancellation message follows the same writer,
+  so it is never explained into a stream the user is not reading.
+  `access list` shows who can pull a mirror (live
   GitHub-admin gated). `edit --visibility` sets a native repo's visibility;
   `visibility get` reads it.
   **A repository is named `/<forge>/<a>/<b>` and no other way**, across the

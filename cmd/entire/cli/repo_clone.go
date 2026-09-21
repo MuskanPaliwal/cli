@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
 
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
@@ -48,50 +47,9 @@ const entireCloneURLScheme = "entire://"
 //
 // It is a prefix test only — it answers "which branch of the ref grammar is
 // this", not "is this well-formed". `repo clone` wants exactly that, since it
-// forwards the string to git and lets git complain. A caller that prints the
-// URL wants validateEntireURLForPrinting as well.
+// forwards the string to git and lets git complain.
 func isEntireCloneURL(ref string) bool {
 	return strings.HasPrefix(strings.TrimSpace(ref), entireCloneURLScheme)
-}
-
-// validateEntireURLForPrinting checks a full entire:// URL for callers that
-// PRINT it instead of handing it to git.
-//
-// `repo clone` deliberately skips this (see resolveRepoRemoteURL): a bad URL
-// there makes `git clone` fail immediately, in front of the user who typed it.
-// A printed URL has no such backstop — it is pasted into `git remote add` and
-// surfaces as a broken remote later, far from the command that produced it.
-//
-// Two checks, for the two ways a passthrough went wrong:
-//
-//   - No interior whitespace or control characters. The contract is one URL
-//     and one newline on stdout, so an embedded newline does not produce a bad
-//     URL, it produces two lines — and `$(…)` hands both to `git remote add`.
-//   - A valid host, via the same guard the synthesized paths use. `entire://`
-//     alone used to print and exit 0.
-//
-// Everything after the host is left alone: the repo path is the server's to
-// interpret, and git-remote-entire reports a bad one against a remote that at
-// least resolves.
-func validateEntireURLForPrinting(ref string) error {
-	name := strings.TrimSuffix(entireCloneURLScheme, "://")
-	trimmed := strings.TrimSpace(ref)
-	// Every message quotes trimmed, never ref: the offset below indexes trimmed,
-	// so quoting ref would report a position into a different string whenever
-	// the caller passed leading whitespace. resolveRepoRemoteURL happens to trim
-	// first, which is what keeps that from being reachable today — but this
-	// function trims for itself rather than trusting a caller to, so the two
-	// halves of the message have to agree on their own.
-	if i := strings.IndexFunc(trimmed, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r)
-	}); i >= 0 {
-		return fmt.Errorf("invalid %s URL %q: contains whitespace or a control character at offset %d", name, trimmed, i)
-	}
-	host, _, _ := strings.Cut(strings.TrimPrefix(trimmed, entireCloneURLScheme), "/")
-	if err := validateClusterHost(host); err != nil {
-		return fmt.Errorf("invalid %s URL %q: %w", name, trimmed, err)
-	}
-	return nil
 }
 
 // forgeCloneURL synthesizes the entire:// clone URL for a repository placement
@@ -241,7 +199,10 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 	if err != nil {
 		return "", err
 	}
-	chosen, err := selectPlacement(cmd, placements, clusterSel, picker)
+	// The repo's own cluster is the primary; its native mirrors are replicas of
+	// it. nativePlacements lists the home cluster first, but position is not a
+	// contract, so the host is named outright.
+	chosen, err := selectPlacement(cmd, placements, clusterSel, strings.TrimSpace(repo.ClusterHost.Or("")), picker)
 	if err != nil {
 		return "", err
 	}
@@ -269,8 +230,8 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 // failing the whole resolution on either would regress the home-cluster clone
 // that has always worked. With a selector the placement list IS the answer, so
 // the error surfaces. A done context also surfaces: a cancelled command must
-// fail, not quietly resolve the home cluster and exit 0 (`repo remote url`'s
-// stdout is captured by `$(…)`, so a URL printed after Ctrl+C is acted on).
+// fail, not quietly resolve the home cluster and exit 0: a clone that silently
+// used the wrong cluster after Ctrl+C is worse than one that stops.
 func nativePlacements(ctx context.Context, c *coreapi.Client, repo *coreapi.Repo, explicitCluster bool) ([]coreapi.ResolvedPlacement, error) {
 	home := coreapi.ResolvedPlacement{
 		ClusterHost:  strings.TrimSpace(repo.ClusterHost.Or("")),
@@ -494,9 +455,7 @@ func newRepoCloneCmd() *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			// passthroughNeedsHost is false: an entire:// URL typed here goes
-			// straight to `git clone`, which reports a bad one itself.
-			cloneURL, err := resolveRepoRemoteURL(cmd, args[0], cluster, clonePlacementPicker(), false)
+			cloneURL, err := resolveRepoRemoteURL(cmd, args[0], cluster, clonePlacementPicker())
 			if err != nil {
 				return err
 			}
@@ -511,18 +470,10 @@ func newRepoCloneCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveRepoRemoteURL shares ref parsing, cluster routing, and URL validation
-// between clone and `remote url`. Full URLs pass through without a lookup.
-//
-// It serves two verbs, so its messages name neither: `repo clone` execs the
-// result while `repo remote url` prints it for `git remote add`, and a user who
-// asked for a URL should not be told about cloning. The per-verb wording that
-// does exist lives in the placementPicker.
-//
-// passthroughNeedsHost asks for the entire:// passthrough to be validated. It
-// is false for clone (see the branch below) and true for callers that print the
-// URL rather than handing it to git.
-func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placementPicker, passthroughNeedsHost bool) (string, error) {
+// resolveRepoRemoteURL owns `repo clone`'s ref parsing, cluster routing and URL
+// validation. Full URLs pass through without a lookup. The wording that varies
+// with the calling verb lives in the placementPicker rather than here.
+func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placementPicker) (string, error) {
 	// Trim once up front so the entire:// detection and the value forwarded
 	// to git clone agree (the shorthand path trims inside parseMirrorCloneRef).
 	ref = strings.TrimSpace(ref)
@@ -537,18 +488,7 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	// `git clone entire://…` directly. The guard applies on the shorthand path
 	// where we *synthesize* the URL from a --cluster flag or an API-supplied
 	// host — values that flow into the STS audience under our own construction.
-	//
-	// A caller that PRINTS the URL gets the guard, because that argument does
-	// not reach it: the value is pasted into `git remote add` / git config
-	// rather than exec'd, so a malformed one is written to .git/config and
-	// fails later, far from the command that produced it. `entire://` alone
-	// used to print and exit 0.
 	if isEntireCloneURL(ref) {
-		if passthroughNeedsHost {
-			if err := validateEntireURLForPrinting(ref); err != nil {
-				return "", err
-			}
-		}
 		return ref, nil
 	}
 
@@ -620,7 +560,9 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	chosen, err := selectPlacement(cmd, placements, cluster, picker)
+	// No primary: these are peer mirrors of a GitHub upstream, which is not
+	// itself a placement, so a repo on several clusters still needs --cluster.
+	chosen, err := selectPlacement(cmd, placements, cluster, "", picker)
 	if err != nil {
 		return "", err
 	}
@@ -742,8 +684,7 @@ type placementPromptTerminal struct {
 }
 
 // openPlacementPromptTerminal is a var so tests can drive the interactive path
-// without a real terminal. The picker's output routing is the whole contract
-// behind `repo remote url`'s shell substitution and is otherwise unreachable
+// without a real terminal: the picker's output routing is otherwise unreachable
 // under go test, where CanPromptInteractively() is false.
 var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 	tty, err := interactive.OpenPromptTTY()
@@ -756,9 +697,17 @@ var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 // selectPlacement resolves which mirror placement a verb should act on. With one
 // placement it returns it directly. With an explicit clusterSel it picks the
 // matching one (or errors listing the available hosts). With more than one and no
-// selector it prompts interactively, failing fast with a p.selector pointer when
-// there's no terminal.
-func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel string, p placementPicker) (coreapi.ResolvedPlacement, error) {
+// selector it prompts interactively.
+//
+// primaryHost is the host of the repo's own placement — the cluster it lives on,
+// as opposed to a replica of it. With several placements, no selector and no
+// terminal to prompt at, that is what the verb resolves: a script that did not
+// name a cluster wants the repo's own, and refusing there would break every
+// non-interactive caller the moment someone adds a mirror. It is empty when the
+// caller has no primary to name — a GitHub repo's placements are peer mirrors of
+// an upstream that is not itself a placement — and then the same case still
+// errors with a p.selector pointer, because there is no defensible default.
+func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel, primaryHost string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
 	// case-folded host — DNS is case-insensitive, so a selector value differing
@@ -789,6 +738,14 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
+		// Matched against the deduped set rather than trusted: a primary the
+		// placement list does not contain is a disagreement between two reads,
+		// and resolving a host no placement vouched for is worse than asking.
+		if key := strings.ToLower(strings.TrimSpace(primaryHost)); key != "" {
+			if primary, ok := byHost[key]; ok {
+				return primary, nil
+			}
+		}
 		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
 	}
 
@@ -799,11 +756,10 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 
 	// The answer is read from the terminal, so the question has to be visible
 	// there. Neither of the command's own streams is guaranteed to be one:
-	// `repo remote url` exists to have its stdout captured (`git remote add
-	// entire "$(...)"`), and stderr is redirected often enough
-	// (`repo clone /gh/o/r 2>log`) that picking either unconditionally just
-	// moves which redirect breaks the prompt. Bubble Tea makes that failure
-	// silent rather than loud — it sets ttyOutput only when the writer is a
+	// stdout carries output a caller may be capturing, and stderr is redirected
+	// often enough (`repo clone /gh/o/r 2>log`) that picking either
+	// unconditionally just moves which redirect breaks the prompt. Bubble Tea
+	// makes that failure silent rather than loud — it sets ttyOutput only when the writer is a
 	// terminal and then cannot query the window size, so it renders into a 0x0
 	// viewport while stdin is still in raw mode: an invisible prompt on an
 	// apparently hung command. Its /dev/tty fallback covers input only.

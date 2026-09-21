@@ -204,23 +204,56 @@ func TestControlPlane_NativeMirrorLifecycle(t *testing.T) {
 		require.NoError(t, err, "cloning a mirror with the home-region login failed; if this is COR-1043, record it: %s", stderr)
 	})
 
-	// A placement serves pushes as well as fetches, so `remote use` writes ONE
+	// A placement serves pushes as well as fetches, so `remote add` writes ONE
 	// URL and git needs no pushurl. This pins that: a remote pointed at a mirror
 	// both fetches and pushes through it. If mirrors ever became read-only, the
 	// push below is what would say so, rather than a user discovering it.
-	phase("remote use points one URL at the mirror, and pushing through it works", func(t *testing.T) {
-		_, stderr, err := runEntire(t, clone, "repo", "remote", "use", "--cluster", target.Host)
+	phase("remote add points one URL at the mirror, and pushing through it works", func(t *testing.T) {
+		_, stderr, err := runEntire(t, clone, "repo", "remote", "add", "mirror", "--cluster", target.Host)
 		require.NoError(t, err, stderr)
 
 		remotes := testutil.GitOutput(t, clone, "remote", "-v")
-		assert.Contains(t, remotes, "origin\t"+cloneURL+" (fetch)")
-		assert.Contains(t, remotes, "origin\t"+cloneURL+" (push)",
+		assert.Contains(t, remotes, "mirror\t"+cloneURL+" (fetch)")
+		assert.Contains(t, remotes, "mirror\t"+cloneURL+" (push)",
 			"one URL per remote: a mirror serves pushes too, so there is no split push target")
 
 		require.NoError(t, os.WriteFile(filepath.Join(clone, "through-the-mirror.txt"), []byte("hello\n"), 0o644))
 		testutil.CommitIfDirty(t, clone, "push through the mirror")
-		out, perr := testutil.GitOutputErr(clone, "push", "origin", "HEAD")
+		out, perr := testutil.GitOutputErr(clone, "push", "mirror", "HEAD")
 		require.NoError(t, perr, "pushing through a mirror must work:\n%s", out)
+	})
+
+	// The whole point of naming the remote: a second add of the same name is an
+	// error, not a silent repoint — and the URL already there survives it.
+	phase("an occupied remote name is refused without --override", func(t *testing.T) {
+		_, stderr, err := runEntire(t, clone, "repo", "remote", "add", "mirror", "--cluster", home.Host)
+		require.Error(t, err)
+		require.Contains(t, stderr, "--override")
+		require.Equal(t, cloneURL, testutil.GitOutput(t, clone, "remote", "get-url", "mirror"),
+			"a refused add leaves the remote exactly as it was")
+
+		// Re-adding the URL the remote already carries is the requested end
+		// state, not a collision, so it reports instead of failing.
+		stdout, stderr, err := runEntire(t, clone, "repo", "remote", "add", "mirror", "--cluster", target.Host)
+		require.NoError(t, err, stderr)
+		require.Contains(t, stdout, "already points at")
+	})
+
+	// With several placements and no --cluster, a script gets the repo's own
+	// cluster. This runs non-interactively, which is exactly the path that used
+	// to refuse outright the moment a repo gained a second placement.
+	primaryURL := "entire://" + home.Host + ref
+	phase("no --cluster resolves the primary, and --override repoints", func(t *testing.T) {
+		_, stderr, err := runEntire(t, clone, "repo", "remote", "add", "home")
+		require.NoError(t, err, stderr)
+		require.Equal(t, primaryURL, testutil.GitOutput(t, clone, "remote", "get-url", "home"),
+			"a non-interactive add with no --cluster takes the repo's primary")
+
+		_, stderr, err = runEntire(t, clone, "repo", "remote", "add", "home", "--cluster", target.Host, "--override")
+		require.NoError(t, err, stderr)
+		require.Equal(t, cloneURL, testutil.GitOutput(t, clone, "remote", "get-url", "home"))
+		require.Equal(t, primaryURL, testutil.GitOutput(t, clone, "remote", "get-url", "upstream"),
+			"--override preserves the replaced URL under --upstream")
 	})
 
 	phase("remove tears the replica down", func(t *testing.T) {

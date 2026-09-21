@@ -127,7 +127,7 @@ func TestMirrorCommands_NativeRepoUnsupported(t *testing.T) {
 	})
 }
 
-// TestResolveMirrorUseUpstream_BothForges pins that `repo remote use` now reads
+// TestResolveMirrorUseUpstream_BothForges pins that `repo remote add` reads
 // a native ref as readily as a GitHub one — a clone of either kind can have its
 // remote repointed at another cluster.
 func TestResolveMirrorUseUpstream_BothForges(t *testing.T) {
