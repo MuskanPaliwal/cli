@@ -99,6 +99,12 @@ func reviewTrailFindingInputs(profileName, verdict string) []api.TrailReviewComm
 	}
 	items := splitReviewVerdictFindings(verdict)
 	if len(items) == 0 {
+		// A clean verdict is review metadata, not a finding. Posting it as a
+		// severity-less whole-change comment makes the Trail show an
+		// "Unspecified finding" even though the review found nothing.
+		if isCleanReviewVerdict(verdict) {
+			return nil
+		}
 		// The verdict spans the whole change, so it uses "verdict" kind:
 		// the API requires a valid granularity and rejects an empty value.
 		return []api.TrailReviewCommentInput{reviewTrailFindingInputWithKind(profileName, verdict, "verdict")}
@@ -110,6 +116,25 @@ func reviewTrailFindingInputs(profileName, verdict string) []api.TrailReviewComm
 		inputs = append(inputs, input)
 	}
 	return inputs
+}
+
+func isCleanReviewVerdict(verdict string) bool {
+	line := strings.ToLower(strings.TrimSpace(lastNonEmptyLine(verdict)))
+	line = strings.TrimSpace(strings.TrimLeft(line, "#>"))
+	rest, ok := strings.CutPrefix(line, "approve")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return true
+	}
+	for _, separator := range []string{"-", "—", "–", ":", ","} {
+		if strings.HasPrefix(rest, separator) {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewTrailFindingInputsFromJSON(verdict string) ([]api.TrailReviewCommentInput, bool) {
