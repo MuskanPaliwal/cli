@@ -1045,9 +1045,10 @@ limitations while in preview:
 - **Token capture depends on the global title slot**: `entire hooks antigravity
   title-tee` must own (or wrap) agy's `title` command in the global
   settings.json. `entire doctor` checks this and setup repairs it.
-- **Live E2E / CI is dispatch-only**: agy's Gemini API-key mode (≥ 1.1.13) works
-  for auth but agy does not execute hooks on that route (1.1.22), and the
-  default `cloudcode-pa` backend (OAuth/ADC) remains entitlement-gated. See
+- **Live E2E / CI runs in agy's Gemini API-key mode** (≥ 1.1.13 for auth,
+  ≥ 1.1.25 for hooks to execute on that route — earlier releases loaded them
+  and never ran them, upstream #893). CI installs the latest agy. The default
+  `cloudcode-pa` backend (OAuth/ADC) remains entitlement-gated. See
   `e2e/README.md` → "Antigravity credentials".
 - **Wire format captured on agy 1.0.14/1.0.15, re-verified unchanged on agy
   1.1.1** (2026-07-13, docs + binary + live run): hook payloads, hooks.json

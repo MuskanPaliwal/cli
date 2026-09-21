@@ -28,7 +28,9 @@ hook payloads); tool args can arrive double-encoded.
   `GOOGLE_GEMINI_BASE_URL`. agy prefers `GOOGLE_API_KEY` when both keys are set.
   The default (`cloudcode-pa.googleapis.com`) backend remains entitlement-gated;
   see `e2e/README.md`.
-- Version notes (1.1.1 → 1.1.22): hook surface unchanged (5 hook types);
+- Version notes (1.1.1 → 1.2.7): hook surface unchanged (5 hook types);
+  1.1.25 started executing hooks in Gemini API-key mode (see Known
+  limitations); 1.2.x dropped the Gemini 3.5 models from `agy models`;
   1.1.10 fixed hook ordering so `Stop`/`PostInvocation` fire reliably;
   1.1.12 answers `-p "/hooks"` (and `/help`, `/changelog`) locally without a
   model turn — `entire doctor` uses `agy -p /hooks --add-dir <root>
@@ -159,11 +161,13 @@ worktree than the install still cleans up, including the legacy local-dev
   content (see Transcript above).
 - **Token capture depends on the title slot** staying routed through the tee
   (doctor-checked, setup-repaired).
-- **agy does not execute hooks in Gemini API-key mode** (verified 1.1.22: hooks
-  load, tools run, no hook fires — on OAuth/ADC the same hooks fire; reported as
-  google-antigravity/antigravity-cli#893). So the
-  e2e harness's API-key mode authenticates fine but cannot produce checkpoints,
-  and the CI leg stays dispatch-only (ADC or OAuth needed to pass). The default
+- **Gemini API-key mode needs agy ≥ 1.1.25 for hooks.** Through 1.1.24 agy
+  loaded `.agents/hooks.json` on that auth route but never executed the hooks
+  (on OAuth/ADC the same hooks fired; reported as
+  google-antigravity/antigravity-cli#893, still open). Bisecting the release
+  binaries with a probe hook shows 1.1.25 and every later release execute them,
+  so the e2e harness's API-key mode (CI installs the latest agy) produces
+  checkpoints and the leg runs in the default matrix. The default
   `cloudcode-pa` backend stays entitlement-gated (AUTH_PERMISSION_DENIED,
   subject 110002 without a Gemini Code Assist subscription); the harness fails
   fast on those walls and on `GEMINI_API_KEY … not set` / `API_KEY_INVALID`.

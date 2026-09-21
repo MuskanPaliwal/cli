@@ -39,8 +39,8 @@ func TestAntigravityDefaultConcurrencyIsSerial(t *testing.T) {
 func TestAntigravityModelUsesDefault(t *testing.T) {
 	t.Setenv("E2E_ANTIGRAVITY_MODEL", "")
 
-	if got := antigravityModel(); got != "gemini-3.5-flash-low" {
-		t.Fatalf("antigravityModel() = %q, want stable default gemini-3.5-flash-low slug", got)
+	if got := antigravityModel(); got != antigravityDefaultModel {
+		t.Fatalf("antigravityModel() = %q, want the default slug %q", got, antigravityDefaultModel)
 	}
 }
 

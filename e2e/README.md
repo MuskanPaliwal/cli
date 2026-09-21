@@ -70,7 +70,7 @@ Run it with `mise run test:e2e:controlplane [filter]`; the task installs the Pla
 | `E2E_ARTIFACT_DIR` | Override artifact output directory | `e2e/artifacts/<timestamp>` |
 | `ANTHROPIC_API_KEY` | Required for Claude Code | — |
 | `GEMINI_API_KEY` | Required for Gemini CLI | — |
-| `GEMINI_API_KEY` | Also enables Antigravity's API-key mode (agy ≥ 1.1.13); the default in CI | — |
+| `GEMINI_API_KEY` | Also enables Antigravity's API-key mode (agy ≥ 1.1.13; hooks execute on that route from agy 1.1.25); the default in CI | — |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional Antigravity ADC (service account); takes precedence over `GEMINI_API_KEY` when set | — |
 | `GOOGLE_CLOUD_PROJECT` | Optional Antigravity ADC project override | ADC JSON `project_id` |
 | `E2E_ANTIGRAVITY_PROJECT` | Optional Antigravity E2E project override; takes precedence over `GOOGLE_CLOUD_PROJECT` | ADC JSON `project_id` |
@@ -96,10 +96,13 @@ Antigravity E2E resolves its auth mode from the environment, in this order:
    `HOME` per repo, writes `{"modelProvider":"gemini"}` into that home's
    `~/.gemini/antigravity-cli/settings.json`, passes `GEMINI_API_KEY` (and
    `GOOGLE_GEMINI_BASE_URL` if set) through, and scrubs `GOOGLE_API_KEY` — agy
-   prefers it over `GEMINI_API_KEY` when both are set. **Caveat (agy 1.1.22):** on
-   this route agy loads `.agents/hooks.json` but never executes the hooks, so
-   Entire records nothing and e2e cannot pass; the mode is wired and ready for
-   when agy fixes that (google-antigravity/antigravity-cli#893). The CI hook probe (`.entire/logs/agy-hook-probe.log` in
+   prefers it over `GEMINI_API_KEY` when both are set. **Needs agy ≥ 1.1.25:**
+   up to 1.1.24 agy loaded `.agents/hooks.json` on this route but never executed
+   the hooks (google-antigravity/antigravity-cli#893, still open upstream; the
+   fix shipped silently in 1.1.25 — verified by bisecting the release binaries
+   with a probe hook), so Entire recorded nothing. CI installs the latest
+   release, so this is the default CI mode. The hook probe
+   (`E2E_ANTIGRAVITY_HOOK_PROBE=1`, log at `.entire/logs/agy-hook-probe.log` in
    artifacts) is how to tell "hooks not executed" from "hooks not loaded".
 
 Both isolated modes also pre-trust the test repo (`trustedWorkspaces` in that

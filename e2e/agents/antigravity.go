@@ -27,15 +27,19 @@ func init() {
 const (
 	antigravityBinary = "agy"
 	// antigravityDefaultModel is the model slug agy lists in `agy models`
-	// (gemini-3.5-flash-low ↔ "Gemini 3.5 Flash (Low)"). Slugs are the
-	// documented --model form and resolve in every auth mode.
-	antigravityDefaultModel       = "gemini-3.5-flash-low"
+	// (gemini-3.8-flash-low ↔ "Gemini 3.8 Flash (Low)"). Slugs are the
+	// documented --model form and resolve in every auth mode. agy rejects a
+	// slug missing from its catalog outright ("invalid model selection"), and
+	// the catalog drops old models: gemini-3.5-flash-low vanished by agy 1.2.7,
+	// so bump this when `agy models` no longer lists it.
+	antigravityDefaultModel       = "gemini-3.8-flash-low"
 	antigravityDefaultConcurrency = 1
 	antigravityADCEnvKey          = "USE_ADC"
 	googleCredentialsEnvKey       = "GOOGLE_APPLICATION_CREDENTIALS"
 	googleCloudProjectEnvKey      = "GOOGLE_CLOUD_PROJECT"
 	antigravityProjectEnvKey      = "E2E_ANTIGRAVITY_PROJECT"
-	// geminiAPIKeyEnvKey enables agy's API-key auth (agy >= 1.1.13): with
+	// geminiAPIKeyEnvKey enables agy's API-key auth (agy >= 1.1.13; hooks only
+	// execute on that route from agy 1.1.25, see antigravity/AGENT.md): with
 	// modelProvider "gemini" in the isolated HOME's settings.json, model
 	// requests go straight to the Gemini API and no account session, keyring
 	// or browser flow is involved. This is what lets antigravity run in the
