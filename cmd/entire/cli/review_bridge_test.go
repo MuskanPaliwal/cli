@@ -143,8 +143,12 @@ func TestReviewTrailFindingInputsCleanVerdictProducesNoFindings(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"single verdict": "APPROVE - no actionable findings.",
-		"agent fallback": "## codex\n\nI checked the scoped diff and all call sites.\napprove — no actionable defects found.",
+		"single verdict":        "APPROVE - no actionable findings.",
+		"agent fallback":        "## codex\n\nI checked the scoped diff and all call sites.\napprove — no actionable defects found.",
+		"period separator":      "approve. no actionable findings.",
+		"plain-language reason": "approve with no actionable findings",
+		"bold verdict":          "**approve** — no actionable findings.",
+		"punctuation boundary":  "approve! looks good.",
 	}
 	for name, verdict := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -160,8 +164,10 @@ func TestReviewTrailFindingInputsPreservesUnstructuredNonCleanVerdict(t *testing
 	t.Parallel()
 
 	tests := map[string]string{
-		"request changes":   "REQUEST CHANGES - missing input validation.",
-		"approve with nits": "APPROVE WITH NITS - rename the confusing variable.",
+		"request changes":          "REQUEST CHANGES - missing input validation.",
+		"approve with nits":        "APPROVE WITH NITS - rename the confusing variable.",
+		"punctuated approve nits":  "APPROVE: WITH NITS - rename the confusing variable.",
+		"non-verdict approve word": "APPROVED pending another review.",
 	}
 	for name, verdict := range tests {
 		t.Run(name, func(t *testing.T) {

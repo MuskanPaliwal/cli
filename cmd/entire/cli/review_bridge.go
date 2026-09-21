@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
@@ -121,20 +123,22 @@ func reviewTrailFindingInputs(profileName, verdict string) []api.TrailReviewComm
 func isCleanReviewVerdict(verdict string) bool {
 	line := strings.ToLower(strings.TrimSpace(lastNonEmptyLine(verdict)))
 	line = strings.TrimSpace(strings.TrimLeft(line, "#>"))
+	line = strings.TrimLeft(line, "*_`")
 	rest, ok := strings.CutPrefix(line, "approve")
 	if !ok {
 		return false
 	}
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return true
-	}
-	for _, separator := range []string{"-", "—", "–", ":", ","} {
-		if strings.HasPrefix(rest, separator) {
-			return true
+	if rest != "" {
+		first, _ := utf8.DecodeRuneInString(rest)
+		if !unicode.IsSpace(first) && !unicode.IsPunct(first) && !unicode.IsSymbol(first) {
+			return false
 		}
 	}
-	return false
+
+	rest = strings.TrimLeftFunc(rest, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	return !strings.HasPrefix(rest, "with nits")
 }
 
 func reviewTrailFindingInputsFromJSON(verdict string) ([]api.TrailReviewCommentInput, bool) {
