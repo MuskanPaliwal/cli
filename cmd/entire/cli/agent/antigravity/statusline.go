@@ -61,21 +61,32 @@ type statuslinePayload struct {
 
 // statusDir returns the directory used to store snapshot files.
 // It honours the ENTIRE_ANTIGRAVITY_STATUS_DIR env override (tests, ops),
-// otherwise uses <userdirs.Cache()>/antigravity/status. userdirs is the
-// mandated resolver: it honours $XDG_CACHE_HOME on every platform (os.
-// UserCacheDir ignores it on darwin, defeating harness isolation) and falls
-// back to a throwaway per-process dir under `go test`.
-func statusDir() string {
+// otherwise uses <cache dir>/antigravity/status. userdirs is the mandated
+// resolver: it honours $XDG_CACHE_HOME on every platform (os.UserCacheDir
+// ignores it on darwin, defeating harness isolation) and falls back to a
+// throwaway per-process dir under `go test`. The checked form is used because
+// this package creates the directory and writes into it: a rejected cache-dir
+// override must surface here, before anything is created (see
+// userdirs_consumers_guard_test.go).
+func statusDir() (string, error) {
 	if override := os.Getenv(statusDirEnv); override != "" {
-		return override
+		return override, nil
 	}
-	return filepath.Join(userdirs.Cache(), "antigravity", "status")
+	cacheDir, err := userdirs.CacheDirChecked()
+	if err != nil {
+		return "", fmt.Errorf("antigravity: resolve status dir: %w", err)
+	}
+	return filepath.Join(cacheDir, "antigravity", "status"), nil
 }
 
 // statusFilePath returns the path for the JSONL snapshot file of a conversation.
 // filepath.Base guards against path traversal in the conversation ID.
-func statusFilePath(conversationID string) string {
-	return filepath.Join(statusDir(), filepath.Base(conversationID)+".jsonl")
+func statusFilePath(conversationID string) (string, error) {
+	dir, err := statusDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filepath.Base(conversationID)+".jsonl"), nil
 }
 
 // AppendStatusSnapshot parses an agy state-JSON payload and appends a snapshot
@@ -90,7 +101,10 @@ func AppendStatusSnapshot(payload []byte) error {
 		return nil // missing required fields — silently skip
 	}
 
-	filePath := statusFilePath(p.ConversationID)
+	filePath, err := statusFilePath(p.ConversationID)
+	if err != nil {
+		return err
+	}
 	isNew := false
 	if _, statErr := os.Stat(filePath); os.IsNotExist(statErr) {
 		isNew = true
@@ -160,7 +174,11 @@ func AppendStatusSnapshot(payload []byte) error {
 // hasn't written a snapshot before the first TurnStart will over-count the
 // prior cumulative total on that first tracked turn.
 func (a *AntigravityAgent) SnapshotTokenBaseline(_ context.Context, sessionID string) (json.RawMessage, error) {
-	snap, err := readLastStatusSnapshot(statusFilePath(sessionID))
+	filePath, err := statusFilePath(sessionID)
+	if err != nil {
+		return nil, nil //nolint:nilerr // ditto: an unusable status dir means no baseline
+	}
+	snap, err := readLastStatusSnapshot(filePath)
 	if err != nil || snap == nil {
 		return nil, nil //nolint:nilerr // ditto (missing file, no lines, malformed)
 	}
@@ -284,7 +302,10 @@ func readLastStatusSnapshot(filePath string) (*statusSnapshot, error) {
 // readStatusSnapshots reads all valid snapshot lines from the JSONL file for
 // the given conversationID. A missing file returns nil, nil (not an error).
 func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
-	filePath := statusFilePath(conversationID)
+	filePath, err := statusFilePath(conversationID)
+	if err != nil {
+		return nil, err
+	}
 
 	//nolint:gosec // filePath is derived from filepath.Base(conversationID)
 	f, err := os.Open(filePath)
