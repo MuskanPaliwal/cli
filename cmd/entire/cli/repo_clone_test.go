@@ -499,12 +499,10 @@ func TestResolveNativeCloneURL(t *testing.T) {
 		require.Equal(t, "entire://aws-ap-southeast-2.entire.io/et/paul/dogbark", got)
 	})
 
-	// A script that named no cluster gets the cluster the repo itself lives on,
-	// rather than a refusal it cannot act on. Before native mirrors existed this
-	// path had one placement and always resolved; adding a mirror must not turn
-	// a working non-interactive clone into an error.
-	t.Run("several placements and no terminal resolve the primary", func(t *testing.T) {
+	t.Run("several placements and no terminal resolve the home cluster", func(t *testing.T) {
 		t.Parallel()
+		// A native repo's home cluster is its data primary, so it is the answer
+		// a script gets when there is no terminal to pick a mirror on.
 		c := serveNativeRepoFixture(t, nativeRepoFixture{
 			repo:     native("aws-ap-southeast-2.entire.io", "/et/paul/dogbark"),
 			mirrors:  []coreapi.NativeMirrorPlacement{readyNativeMirror("aws-us-east-2")},
@@ -757,38 +755,38 @@ func TestSelectCloneTarget(t *testing.T) {
 		require.Contains(t, err.Error(), "aws-eu-west-1.entire.io")
 	})
 
-	t.Run("multiple placements with no terminal resolve the primary", func(t *testing.T) {
+	t.Run("--cluster loses to nothing: an explicit miss errors even when a default would match", func(t *testing.T) {
 		t.Parallel()
-		// go test is non-interactive, so the picker path is unreachable here.
-		// A repo that names a primary resolves it rather than demanding a
-		// selector: a script that did not ask for a particular cluster wants
-		// the one the repo lives on.
-		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io", clonePlacementPicker())
-		require.NoError(t, err)
-		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
+		// The default only stands in for an absent selector. A --cluster the repo
+		// is not on is a typo the user must see, not a reason to clone elsewhere.
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "aws-ap-south-1.entire.io", "aws-us-east-2.entire.io", clonePlacementPicker())
+		require.ErrorContains(t, err, "aws-ap-south-1.entire.io")
 	})
 
-	t.Run("primary matches case-insensitively", func(t *testing.T) {
+	t.Run("no terminal resolves the default placement", func(t *testing.T) {
 		t.Parallel()
-		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "AWS-US-East-2.Entire.IO", clonePlacementPicker())
+		// go test is non-interactive, so this is the path a script or CI run takes.
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{euWest, usEast}, "", "aws-us-east-2.entire.io", clonePlacementPicker())
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
-	t.Run("multiple placements with no terminal and no primary errors with a --cluster pointer", func(t *testing.T) {
-		t.Parallel()
-		// A GitHub repo's placements are peer mirrors of an upstream that is not
-		// itself a placement, so there is no primary to fall back to.
-		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "", clonePlacementPicker())
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "--cluster")
-	})
-
-	t.Run("a primary that is not among the placements errors rather than guessing", func(t *testing.T) {
+	t.Run("no terminal and the default is not one of the placements errors", func(t *testing.T) {
 		t.Parallel()
 		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-ap-south-1.entire.io", clonePlacementPicker())
-		require.Error(t, err)
+		require.ErrorContains(t, err, "none of them is aws-ap-south-1.entire.io")
 		require.Contains(t, err.Error(), "--cluster")
+		require.Contains(t, err.Error(), "aws-us-east-2.entire.io")
+		require.Contains(t, err.Error(), "aws-eu-west-1.entire.io")
+	})
+
+	t.Run("no terminal and no known primary asks only for the selector", func(t *testing.T) {
+		t.Parallel()
+		// A caller that could not determine a primary passes none. Phrasing that
+		// as a primary the repo lacks would name an empty host.
+		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "", clonePlacementPicker())
+		require.ErrorContains(t, err, "repo is on 2 clusters; pass --cluster")
+		require.NotContains(t, err.Error(), "none of them is")
 	})
 }
 
@@ -861,104 +859,4 @@ func TestListMirrorsForRepo_FiltersByRepo(t *testing.T) {
 	for _, m := range got {
 		require.Equal(t, "entire-api", m.Repo)
 	}
-}
-
-// TestGitHubPrimaryHost covers the one placement a GitHub repo's mirror list
-// cannot identify on its own. /mirrors/placements returns peers; POST
-// /repos/resolve names the primary as `primaries.processing`, an id from the
-// same space as ResolvedPlacement.MirrorId.
-func TestGitHubPrimaryHost(t *testing.T) {
-	t.Parallel()
-
-	const primaryID, mirrorID = "01KSFAN13YPQ0EWBV5KRE7F5HV", "01KSJ0MTMNSX253M6RF86J35EC"
-	placements := []coreapi.ResolvedPlacement{
-		{MirrorId: mirrorID, ClusterHost: "aws-eu-central-1.entire.io"},
-		{MirrorId: primaryID, ClusterHost: "aws-us-east-2.entire.io"},
-	}
-
-	// resolveCalls counts the extra round trip so the skip cases can assert it
-	// never happened, which is the whole point of skipping them.
-	serve := func(t *testing.T, processing string, resolveCalls *int) *coreapi.Client {
-		t.Helper()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/repos/resolve" {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			*resolveCalls++
-			w.Header().Set("Content-Type", "application/json")
-			// data_primary and git_data are required by the schema and are the
-			// FORGE for a GitHub repo, not a cluster — carried here so the
-			// fixture decodes, and so the shape that must not be mistaken for a
-			// remote is visible in the test.
-			body := &coreapi.ResolveReposResponse{Resolutions: []coreapi.RepoResolution{{
-				Provider:          "github",
-				RequestedFullName: "entireio/cli",
-				Status:            coreapi.RepoResolutionStatusReady,
-				Primaries: coreapi.NewOptRepoPrimaries(coreapi.RepoPrimaries{
-					Processing:  processing,
-					GitData:     "github:1126841840",
-					DataPrimary: coreapi.ForgeRepoIdentity{Forge: "github", RepoID: "1126841840"},
-				}),
-			}}}
-			if err := printJSON(w, body); err != nil {
-				t.Errorf("encode response: %v", err)
-			}
-		}))
-		t.Cleanup(srv.Close)
-		c, err := coreapi.NewWithBearer(srv.URL, "tok")
-		require.NoError(t, err)
-		return c
-	}
-
-	t.Run("resolves the placement the processing primary names", func(t *testing.T) {
-		t.Parallel()
-		calls := 0
-		host, err := githubPrimaryHost(t.Context(), serve(t, primaryID, &calls), "entireio", "cli", placements, "")
-		require.NoError(t, err)
-		require.Equal(t, "aws-us-east-2.entire.io", host)
-		require.Equal(t, 1, calls)
-	})
-
-	// A primary naming no listed placement is a disagreement between two reads;
-	// selectPlacement then falls through to its --cluster pointer.
-	t.Run("an unlisted primary resolves nothing", func(t *testing.T) {
-		t.Parallel()
-		calls := 0
-		host, err := githubPrimaryHost(t.Context(), serve(t, "01KXQV9NJY31Q6PKSQPWEWDWYR", &calls), "entireio", "cli", placements, "")
-		require.NoError(t, err)
-		require.Empty(t, host)
-	})
-
-	for name, tc := range map[string]struct {
-		placements []coreapi.ResolvedPlacement
-		clusterSel string
-	}{
-		"an explicit --cluster decides on its own": {placements, "aws-us-east-2.entire.io"},
-		"a single placement has nothing to choose": {placements[:1], ""},
-	} {
-		t.Run(name+" costs no round trip", func(t *testing.T) {
-			t.Parallel()
-			calls := 0
-			host, err := githubPrimaryHost(t.Context(), serve(t, primaryID, &calls), "entireio", "cli", tc.placements, tc.clusterSel)
-			require.NoError(t, err)
-			require.Empty(t, host)
-			require.Zero(t, calls)
-		})
-	}
-
-	// A resolve the server cannot answer leaves the caller its --cluster
-	// pointer rather than failing a clone that only needed a default.
-	t.Run("a failed resolve is not fatal", func(t *testing.T) {
-		t.Parallel()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}))
-		t.Cleanup(srv.Close)
-		c, err := coreapi.NewWithBearer(srv.URL, "tok")
-		require.NoError(t, err)
-		host, err := githubPrimaryHost(t.Context(), c, "entireio", "cli", placements, "")
-		require.NoError(t, err)
-		require.Empty(t, host)
-	})
 }

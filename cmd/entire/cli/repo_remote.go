@@ -308,9 +308,17 @@ func newRepoRemoteAddCmd() *cobra.Command {
 			// which the catalog turns into the cluster hosts a placement is
 			// addressed by.
 			var (
-				placements    []coreapi.ResolvedPlacement
-				nativeRepo    *coreapi.Repo
-				githubPrimary string
+				placements []coreapi.ResolvedPlacement
+				nativeRepo *coreapi.Repo
+				// The primary's host as the placement list spells it. Resolved
+				// through the catalog, exactly as nativeUsePlacements resolves
+				// every host it offers, so the default is byte-identical to the
+				// entry it has to match. Repo.ClusterHost names the same cluster
+				// but is a second derivation of it, and any drift between the
+				// two (an explicit port in the catalog's publicUrl, say) would
+				// make the no-terminal branch report that the repo is on no
+				// cluster it is plainly on.
+				nativePrimaryHost string
 			)
 			if err := runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				if repoRef.forge == nativeCloneForge {
@@ -323,6 +331,7 @@ func newRepoRemoteAddCmd() *cobra.Command {
 						return lerr
 					}
 					nativeRepo = repo
+					nativePrimaryHost = clusterHostBySlug(cat)[repo.ClusterSlug.Or("")]
 					placements = nativeUsePlacements(repo, mirrors, cat)
 					return nil
 				}
@@ -331,8 +340,7 @@ func newRepoRemoteAddCmd() *cobra.Command {
 					return lerr
 				}
 				placements = ps
-				githubPrimary, lerr = githubPrimaryHost(ctx, c, repoRef.owner, repoRef.repo, placements, clusterHost)
-				return lerr
+				return nil
 			}); err != nil {
 				return err
 			}
@@ -340,14 +348,14 @@ func newRepoRemoteAddCmd() *cobra.Command {
 				return fmt.Errorf("%s has no cluster you can fetch from; create a mirror first:\n  entire repo mirror add %s", qualified, qualified)
 			}
 
-			// The cluster a script that named none should get: for a native
-			// repo the one it lives on, for a GitHub repo its Entire-side
-			// primary placement.
-			primaryHost := githubPrimary
-			if repoRef.forge == nativeCloneForge {
-				primaryHost = strings.TrimSpace(nativeRepo.ClusterHost.Or(""))
+			// The repo's primary cluster, which a run with no terminal repoints
+			// to: a native repo's own cluster, and defaultClusterHost for a
+			// GitHub repo, which onboarding always places.
+			defaultHost := defaultClusterHost
+			if nativeRepo != nil {
+				defaultHost = nativePrimaryHost
 			}
-			chosen, err := selectPlacement(cmd, placements, clusterHost, primaryHost, placementPicker{
+			chosen, err := selectPlacement(cmd, placements, clusterHost, defaultHost, placementPicker{
 				selector: clusterSelectorFlag,
 				title:    qualified + " is on more than one cluster — pick the one to use",
 				action:   "Remote update",

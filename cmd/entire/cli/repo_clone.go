@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -199,9 +201,8 @@ func resolveNativeCloneURL(ctx context.Context, cmd *cobra.Command, c *coreapi.C
 	if err != nil {
 		return "", err
 	}
-	// The repo's own cluster is the primary; its native mirrors are replicas of
-	// it. nativePlacements lists the home cluster first, but position is not a
-	// contract, so the host is named outright.
+	// The home cluster is the repo's data primary, so it is what a run with no
+	// terminal resolves to.
 	chosen, err := selectPlacement(cmd, placements, clusterSel, strings.TrimSpace(repo.ClusterHost.Or("")), picker)
 	if err != nil {
 		return "", err
@@ -442,8 +443,8 @@ func newRepoCloneCmd() *cobra.Command {
 			"Either ref looks up where the repo is readable — a native repo's home " +
 			"cluster and its ready native mirrors, or a GitHub repo's mirror " +
 			"clusters. On a single cluster it clones directly; on more than one, it " +
-			"prompts you to pick which to clone from (or pass --cluster to choose " +
-			"non-interactively).\n\n" +
+			"prompts you to pick which to clone from, and without a terminal it " +
+			"uses the repo's primary cluster. Pass --cluster to choose either way.\n\n" +
 			"A full `entire://` URL already names the cluster, so it's passed straight " +
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
@@ -488,6 +489,12 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	// `git clone entire://…` directly. The guard applies on the shorthand path
 	// where we *synthesize* the URL from a --cluster flag or an API-supplied
 	// host — values that flow into the STS audience under our own construction.
+	//
+	// A caller that PRINTS the URL gets the guard, because that argument does
+	// not reach it: the value is pasted into `git remote add` / git config
+	// rather than exec'd, so a malformed one is written to .git/config and
+	// fails later, far from the command that produced it. `entire://` alone
+	// used to print and exit 0.
 	if isEntireCloneURL(ref) {
 		return ref, nil
 	}
@@ -527,15 +534,13 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	}
 
 	var placements []coreapi.ResolvedPlacement
-	var primaryHost string
 	lister := func(ctx context.Context, c *coreapi.Client) error {
 		ps, err := resolvePullablePlacements(ctx, c, owner, repo)
 		if err != nil {
 			return err
 		}
 		placements = ps
-		primaryHost, err = githubPrimaryHost(ctx, c, owner, repo, placements, cluster)
-		return err
+		return nil
 	}
 	// An explicit --cluster may name a cluster in a different federation
 	// than the active context, whose mirrors the active-context core can't
@@ -545,16 +550,40 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	// authenticated with the matching local context, the same path
 	// `mirror add <repo> --cluster <host>` uses — so the lookup resolves against
 	// the right federation. With no --cluster, list from the active context.
-	runWithCore := runCore
 	if cluster != "" {
 		if err := validateClusterHost(cluster); err != nil {
 			return "", fmt.Errorf("invalid --cluster: %w", err)
 		}
-		runWithCore = func(cmd *cobra.Command, fn func(context.Context, *coreapi.Client) error) error {
-			return runCoreForCluster(cmd, cluster, fn)
+		if err := runCoreForCluster(cmd, cluster, lister); err != nil {
+			// A name that does not resolve, and nothing else. DNS answering
+			// "no such host" is the one failure that says the host is not a
+			// cluster at all, so the active context can be asked instead and
+			// selectPlacement can name the clusters the repo IS on — the
+			// answer the /et/ path gives for the same typo.
+			//
+			// Deliberately narrower than ErrUnreachable, which also covers a
+			// timeout, a refused connection and a TLS failure; its own doc
+			// says the client cannot tell a typo from a real-but-down cluster.
+			// Treating those as typos would let a momentary blip on a cluster
+			// in another federation answer "not mirrored" — or, with nothing
+			// mirrored here, tell the user to onboard a repo that is already
+			// mirrored there. That is the exact bug the cluster-addressed dial
+			// above exists to fix, so every other failure surfaces unchanged.
+			if !hostDoesNotResolve(err) {
+				return "", err
+			}
+			logging.Debug(cmd.Context(), "cluster host does not resolve; listing placements from the active context", "cluster", cluster, "error", err)
+			if fallbackErr := runCore(cmd, lister); fallbackErr != nil {
+				// Both routes to a placement list are gone. Each half names a
+				// different thing the user may have to fix — a mistyped host,
+				// and whatever stopped the active context from standing in
+				// (an expired login, say) — and they would otherwise learn the
+				// second only after fixing the first. Nothing is joined on the
+				// path that matters, where the fallback answers.
+				return "", errors.Join(err, fallbackErr)
+			}
 		}
-	}
-	if err := runWithCore(cmd, lister); err != nil {
+	} else if err := runCore(cmd, lister); err != nil {
 		return "", err
 	}
 
@@ -562,7 +591,10 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 		return "", fmt.Errorf("no mirror found for /gh/%s/%s; run 'entire repo mirror add /gh/%s/%s' to onboard it", owner, repo, owner, repo)
 	}
 
-	chosen, err := selectPlacement(cmd, placements, cluster, primaryHost, picker)
+	// Onboarding a GitHub repo always places it on defaultClusterHost, so it is
+	// the one placement every mirror set has in common and the run with no
+	// terminal resolves it.
+	chosen, err := selectPlacement(cmd, placements, cluster, defaultClusterHost, picker)
 	if err != nil {
 		return "", err
 	}
@@ -576,6 +608,19 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	}
 	cloneURL := forgeCloneURL(mirrorCloneForge, chosen.ClusterHost, owner, repo)
 	return cloneURL, nil
+}
+
+// hostDoesNotResolve reports whether err bottoms out in DNS answering "no such
+// host" for the name that was dialled.
+//
+// This is the only transport failure that is evidence about the HOST rather
+// than about the network between here and it: a name that does not resolve
+// cannot be a cluster, whereas a timeout or a refused connection says nothing
+// about whether the cluster exists. Callers use it to decide when they may
+// speak about a host they never reached.
+func hostDoesNotResolve(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 // mirrorLister is the subset of the control-plane client listMirrorsForRepo
@@ -641,57 +686,6 @@ func resolvePullablePlacements(ctx context.Context, c *coreapi.Client, owner, re
 	return out.Placements, nil
 }
 
-// githubPrimaryHost resolves the cluster host of a GitHub repo's Entire-side
-// primary placement — the one a caller that named no cluster should get.
-//
-// /mirrors/placements, which lists the placements, does not say which is
-// primary: every row is a mirror of an upstream that is not itself a placement.
-// POST /repos/resolve does, as `primaries.processing`, whose value is the id of
-// one of those same rows (ResolvedPlacement.MirrorId). Note the sibling
-// `data_primary` is the FORGE for a GitHub repo — github:<id>, not a cluster —
-// so it can never name a remote; the processing primary is the Entire cell that
-// owns the repo.
-//
-// The lookup is skipped entirely unless its answer would be used: an explicit
-// selector decides on its own, a single placement has nothing to choose, and a
-// terminal gets the picker. That keeps the extra round trip off the paths that
-// were already answered.
-//
-// Best-effort, like nativePlacements' extra reads: a failure here leaves the
-// caller to report "pass --cluster", which is the same actionable message this
-// path produced before the primary was resolvable at all. A cancelled context
-// still surfaces, so Ctrl+C never resolves a cluster the user did not choose.
-func githubPrimaryHost(ctx context.Context, c *coreapi.Client, owner, repo string, placements []coreapi.ResolvedPlacement, clusterSel string) (string, error) {
-	if clusterSel != "" || len(placements) < 2 || interactive.CanPromptInteractively() {
-		return "", nil
-	}
-	out, err := c.ResolveRepos(ctx, &coreapi.ResolveReposInputBody{
-		Repositories: []coreapi.RepoReference{{
-			Provider: mirrorCloneProviderGitHub,
-			FullName: owner + "/" + repo,
-		}},
-	})
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("resolve repo primary: %w", err)
-		}
-		logging.Debug(ctx, "repo resolve failed; leaving the cluster choice to --cluster", "error", err)
-		return "", nil
-	}
-	for _, res := range out.Resolutions {
-		primary := strings.TrimSpace(res.Primaries.Or(coreapi.RepoPrimaries{}).Processing)
-		if primary == "" {
-			continue
-		}
-		for _, p := range placements {
-			if p.MirrorId == primary {
-				return strings.TrimSpace(p.ClusterHost), nil
-			}
-		}
-	}
-	return "", nil
-}
-
 // placementPicker adapts selectPlacement's messages to the calling verb. The
 // picker logic is identical for every consumer (dedupe by host, honor an
 // explicit selector, prompt only when there's a real choice); only the words
@@ -748,17 +742,14 @@ var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
 // selectPlacement resolves which mirror placement a verb should act on. With one
 // placement it returns it directly. With an explicit clusterSel it picks the
 // matching one (or errors listing the available hosts). With more than one and no
-// selector it prompts interactively.
-//
-// primaryHost is the host of the repo's own placement — the cluster it lives on,
-// as opposed to a replica of it. With several placements, no selector and no
-// terminal to prompt at, that is what the verb resolves: a script that did not
-// name a cluster wants the repo's own, and refusing there would break every
-// non-interactive caller the moment someone adds a mirror. It is empty when the
-// caller has no primary to name — a GitHub repo's placements are peer mirrors of
-// an upstream that is not itself a placement — and then the same case still
-// errors with a p.selector pointer, because there is no defensible default.
-func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel, primaryHost string, p placementPicker) (coreapi.ResolvedPlacement, error) {
+// selector it prompts interactively, and where there is no terminal it resolves
+// defaultHost — the repo's primary cluster, which the caller names because the
+// two forges hold it in different places (a native repo's home cluster comes
+// back on the repo itself; a GitHub repo's mirror set always includes
+// defaultClusterHost). A script therefore gets the primary rather than a
+// refusal, and only a repo whose placements don't include it has to be told to
+// pass p.selector.
+func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement, clusterSel, defaultHost string, p placementPicker) (coreapi.ResolvedPlacement, error) {
 	// Dedupe by cluster host: one placement per cluster is what a caller acts on,
 	// and the same host appearing twice would only confuse the picker. Key on the
 	// case-folded host — DNS is case-insensitive, so a selector value differing
@@ -789,15 +780,20 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	if !interactive.CanPromptInteractively() {
-		// Matched against the deduped set rather than trusted: a primary the
-		// placement list does not contain is a disagreement between two reads,
-		// and resolving a host no placement vouched for is worse than asking.
-		if key := strings.ToLower(strings.TrimSpace(primaryHost)); key != "" {
-			if primary, ok := byHost[key]; ok {
-				return primary, nil
-			}
+		wanted := strings.TrimSpace(defaultHost)
+		if match, ok := byHost[strings.ToLower(wanted)]; ok {
+			return match, nil
 		}
-		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is mirrored on %d clusters; pass %s to choose one of: %s", len(hosts), p.selector, strings.Join(hosts, ", "))
+		// No default at all is the caller saying it could not determine a
+		// primary — a native repo whose response omitted its cluster, say —
+		// which is a different thing from a primary missing from the list, and
+		// naming it would print an empty host. Then the selector is all there
+		// is to ask for.
+		missing := ""
+		if wanted != "" {
+			missing = " and none of them is " + wanted
+		}
+		return coreapi.ResolvedPlacement{}, fmt.Errorf("repo is on %d clusters%s; pass %s to choose one of: %s", len(hosts), missing, p.selector, strings.Join(hosts, ", "))
 	}
 
 	options := make([]huh.Option[string], len(hosts))
@@ -809,8 +805,8 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	// there. Neither of the command's own streams is guaranteed to be one:
 	// stdout carries output a caller may be capturing, and stderr is redirected
 	// often enough (`repo clone /gh/o/r 2>log`) that picking either
-	// unconditionally just moves which redirect breaks the prompt. Bubble Tea
-	// makes that failure silent rather than loud — it sets ttyOutput only when the writer is a
+	// unconditionally just moves which redirect breaks the prompt. Bubble Tea makes that failure
+	// silent rather than loud — it sets ttyOutput only when the writer is a
 	// terminal and then cannot query the window size, so it renders into a 0x0
 	// viewport while stdin is still in raw mode: an invisible prompt on an
 	// apparently hung command. Its /dev/tty fallback covers input only.
