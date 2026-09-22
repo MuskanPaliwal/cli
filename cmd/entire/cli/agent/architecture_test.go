@@ -57,8 +57,12 @@ func TestAgentPackages_NoForbiddenImports(t *testing.T) {
 		repoPrefix + "telemetry",  // telemetry
 		repoPrefix + "validation", // validation utilities
 		repoPrefix + "settings",   // settings (read-only access)
-		repoPrefix + "review",     // review env contract + AgentReviewer types (used by per-agent reviewer.go files)
-		repoPrefix + "testutil",   // canonical isolated repository fixtures for agent tests
+		// Cross-process advisory locks. agy fires its title command on every
+		// state change without serializing, so the Antigravity title-tee
+		// takes a per-conversation flock around its dedup-and-append.
+		repoPrefix + "internal/flock",
+		repoPrefix + "review",   // review env contract + AgentReviewer types (used by per-agent reviewer.go files)
+		repoPrefix + "testutil", // canonical isolated repository fixtures for agent tests
 	}
 
 	agentDir := findAgentDir(t)
