@@ -150,6 +150,81 @@ func extractPromptsFromContent(data []byte, fromOffset int) []string {
 	return prompts
 }
 
+// CondensedStep is one summarizable unit of an agy transcript. It exists for
+// the summarizer (cmd/entire/cli/summarize), which owns the prompt shape but
+// not agy's wire format: without it, agy transcripts fell through to the
+// Claude JSONL parser, condensed to nothing, and `explain --generate` reported
+// "transcript has no content to summarize" for a 2.4 KB transcript.
+type CondensedStep struct {
+	// Role is one of the CondensedRole* constants.
+	Role string
+	// Text is the user request (unwrapped from <USER_REQUEST>) or the
+	// assistant's text; empty for tool steps.
+	Text string
+	// ToolName and ToolArgs describe a tool call; ToolArgs values are decoded
+	// from agy's double-encoded JSON strings where possible.
+	ToolName string
+	ToolArgs map[string]any
+}
+
+// Roles of a CondensedStep.
+const (
+	CondensedRoleUser      = "user"
+	CondensedRoleAssistant = "assistant"
+	CondensedRoleTool      = "tool"
+)
+
+// CondenseTranscript reduces agy step JSONL to user requests, assistant text
+// and tool calls, in order. GENERIC steps (tool output) and SYSTEM_MESSAGE
+// steps (agy's own injected notices) are skipped; malformed lines are skipped.
+func CondenseTranscript(content []byte) []CondensedStep {
+	var steps []CondensedStep
+	forEachNonBlankLine(content, 0, func(raw []byte) {
+		var step agyStep
+		if json.Unmarshal(raw, &step) != nil {
+			return
+		}
+		switch step.Type {
+		case "USER_INPUT":
+			if text := extractUserRequest(step.Content); text != "" {
+				steps = append(steps, CondensedStep{Role: CondensedRoleUser, Text: text})
+			}
+		case "PLANNER_RESPONSE":
+			if text := strings.TrimSpace(step.Content); text != "" {
+				steps = append(steps, CondensedStep{Role: CondensedRoleAssistant, Text: text})
+			}
+			for _, tc := range step.ToolCalls {
+				if tc.Name == "" {
+					continue
+				}
+				steps = append(steps, CondensedStep{Role: CondensedRoleTool, ToolName: tc.Name, ToolArgs: decodeAgyArgs(tc.Args)})
+			}
+		}
+	})
+	return steps
+}
+
+// decodeAgyArgs decodes a tool call's args, undoing agy's double encoding of
+// string values (decodeAgyString) and leaving other JSON values as decoded Go
+// values. Best-effort: an undecodable value is dropped.
+func decodeAgyArgs(args map[string]json.RawMessage) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(args))
+	for key, raw := range args {
+		if s := decodeAgyString(raw); s != "" {
+			out[key] = s
+			continue
+		}
+		var v any
+		if json.Unmarshal(raw, &v) == nil && v != nil {
+			out[key] = v
+		}
+	}
+	return out
+}
+
 // GetTranscriptPosition implements agent.TranscriptAnalyzer. It returns the
 // number of non-blank JSONL lines in the transcript, which the framework uses
 // as a stable offset to bound subsequent extraction to a single checkpoint

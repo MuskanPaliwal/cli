@@ -186,6 +186,13 @@ worktree than the install still cleans up, including the legacy local-dev
   `ExtractModifiedFilesFromOffset` logs a WARN per dropped call instead of
   silently skipping; live PreToolUse stdin is never truncated, so normal turns
   are unaffected — only the late-flush / first-turn mid-turn fallbacks are.
+- **Headless prompt goes in argv**: agy ≥ 1.2.x ignores stdin in print mode
+  (`-p " "` → "Error: empty prompt"; `-p -` is answered as the literal message
+  "-"), so `GenerateText` (summaries, `dispatch --local`) passes the prompt as
+  the `-p` value. The summarizer condenses agy step JSONL through
+  `antigravity.CondenseTranscript` (USER_INPUT, PLANNER_RESPONSE text and tool
+  calls; GENERIC/SYSTEM_MESSAGE skipped) — without it agy transcripts fell
+  through to the Claude parser and summarized to nothing.
 - **First-run onboarding in a fresh HOME**: interactive `agy` shows a
   color-scheme chooser and a Terms of Service & Data Use consent before the
   prompt (Enter on the consent only toggles its checkbox; Down, Right, Enter

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/antigravity"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/copilotcli"
@@ -71,18 +70,9 @@ func TestGenerateText_PromptViaStdin(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:          "antigravity",
-			agent:         &antigravity.AntigravityAgent{},
-			requiredFlags: []string{"-p"},
-			extraCheck: func(t *testing.T, args []string) {
-				t.Helper()
-				pIdx := slices.Index(args, "-p")
-				if pIdx < 0 || pIdx+1 >= len(args) || args[pIdx+1] != " " {
-					t.Fatalf("expected -p followed by space placeholder, got %v", args)
-				}
-			},
-		},
+		// antigravity is deliberately absent: agy 1.2.x ignores stdin in print
+		// mode, so its prompt travels in argv. That contract is pinned in the
+		// antigravity package (TestGenerateText_PassesPromptInArgv).
 	}
 
 	for _, tt := range tests {
@@ -127,8 +117,6 @@ func setRunner(tg agent.TextGenerator, runner agent.TextCommandRunner) {
 	case *cursor.CursorAgent:
 		a.CommandRunner = runner
 	case *geminicli.GeminiCLIAgent:
-		a.CommandRunner = runner
-	case *antigravity.AntigravityAgent:
 		a.CommandRunner = runner
 	}
 }

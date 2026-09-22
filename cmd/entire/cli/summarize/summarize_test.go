@@ -1228,3 +1228,31 @@ func TestResolveModel(t *testing.T) {
 		})
 	}
 }
+
+// An agy transcript used to fall through to the Claude parser and condense to
+// nothing, so `explain --generate` with agy as the provider failed with
+// "transcript has no content to summarize" on a 2.4 KB transcript.
+func TestBuildCondensedTranscriptFromBytes_Antigravity(t *testing.T) {
+	t.Parallel()
+	agy := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nCreate red.md\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"write_to_file","args":{"TargetFile":"\"/ws/red.md\""}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","content":"tool output"}
+{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Created red.md."}
+`
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(agy)), agent.AgentTypeAntigravity)
+	if err != nil {
+		t.Fatalf("BuildCondensedTranscriptFromBytes: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("got %d entries, want 3: %+v", len(entries), entries)
+	}
+	if entries[0].Type != EntryTypeUser || entries[0].Content != "Create red.md" {
+		t.Errorf("entry 0 = %+v, want the user request", entries[0])
+	}
+	if entries[1].Type != EntryTypeTool || entries[1].ToolName != "write_to_file" || entries[1].ToolDetail != "/ws/red.md" {
+		t.Errorf("entry 1 = %+v, want the tool call with its target file as detail", entries[1])
+	}
+	if entries[2].Type != EntryTypeAssistant || entries[2].Content != "Created red.md." {
+		t.Errorf("entry 2 = %+v, want the assistant text", entries[2])
+	}
+}

@@ -489,3 +489,31 @@ func TestExtractPromptsFromTranscript_MatchesPathBasedExtractor(t *testing.T) {
 		t.Fatalf("path-based extractor disagrees: %v, %v", fromPath, err)
 	}
 }
+
+// CondenseTranscript is what the summarizer sees. Shapes are the ones agy 1.2.7
+// really writes: a wrapped USER_REQUEST, a PLANNER_RESPONSE carrying only
+// tool_calls with double-encoded args, a GENERIC tool-output step (skipped),
+// and a PLANNER_RESPONSE with the assistant's text.
+func TestCondenseTranscript_RealStepShapes(t *testing.T) {
+	t.Parallel()
+	content := []byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nCreate red.md\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"write_to_file","args":{"TargetFile":"\"/ws/red.md\"","Overwrite":"false"}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","content":"Created At: ..."}
+{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Created [red.md](file:///ws/red.md)."}
+{"step_index":4,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"not from the user"}
+not json
+`)
+	steps := CondenseTranscript(content)
+	if len(steps) != 3 {
+		t.Fatalf("got %d steps, want 3: %+v", len(steps), steps)
+	}
+	if steps[0].Role != CondensedRoleUser || steps[0].Text != "Create red.md" {
+		t.Errorf("step 0 = %+v, want the unwrapped user request", steps[0])
+	}
+	if steps[1].Role != CondensedRoleTool || steps[1].ToolName != "write_to_file" || steps[1].ToolArgs["TargetFile"] != "/ws/red.md" {
+		t.Errorf("step 1 = %+v, want the tool call with its TargetFile decoded", steps[1])
+	}
+	if steps[2].Role != CondensedRoleAssistant || steps[2].Text != "Created [red.md](file:///ws/red.md)." {
+		t.Errorf("step 2 = %+v, want the assistant text", steps[2])
+	}
+}

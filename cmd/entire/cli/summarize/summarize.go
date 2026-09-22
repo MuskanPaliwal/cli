@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/antigravity"
 	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
@@ -163,6 +164,8 @@ func BuildCondensedTranscriptFromBytes(content redact.RedactedBytes, agentType t
 		return buildCondensedTranscriptFromCodex(content)
 	case agent.AgentTypePi:
 		return buildCondensedTranscriptFromPi(content)
+	case agent.AgentTypeAntigravity:
+		return buildCondensedTranscriptFromAntigravity(content), nil
 	case agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeUnknown:
 		// Claude/cursor format - fall through to shared logic below
 	}
@@ -269,6 +272,32 @@ func buildCondensedTranscriptFromGemini(redacted redact.RedactedBytes) ([]Entry,
 	}
 
 	return entries, nil
+}
+
+// buildCondensedTranscriptFromAntigravity condenses agy's step JSONL. The
+// format knowledge lives in the antigravity package (CondenseTranscript); this
+// only maps its roles onto Entry. agy tool args name the file as TargetFile,
+// which extractGenericToolDetail does not know, so it is offered as file_path
+// too.
+func buildCondensedTranscriptFromAntigravity(redacted redact.RedactedBytes) []Entry {
+	var entries []Entry
+	for _, step := range antigravity.CondenseTranscript(redacted.Bytes()) {
+		switch step.Role {
+		case antigravity.CondensedRoleUser:
+			entries = append(entries, Entry{Type: EntryTypeUser, Content: step.Text})
+		case antigravity.CondensedRoleAssistant:
+			entries = append(entries, Entry{Type: EntryTypeAssistant, Content: step.Text})
+		case antigravity.CondensedRoleTool:
+			args := step.ToolArgs
+			if target, ok := args["TargetFile"].(string); ok && target != "" {
+				if _, has := args["file_path"]; !has {
+					args["file_path"] = target
+				}
+			}
+			entries = append(entries, Entry{Type: EntryTypeTool, ToolName: step.ToolName, ToolDetail: extractGenericToolDetail(args)})
+		}
+	}
+	return entries
 }
 
 // buildCondensedTranscriptFromOpenCode parses OpenCode export JSON transcript and extracts a condensed view.

@@ -10,18 +10,22 @@ import (
 // GenerateText submits a non-interactive prompt to the Antigravity CLI. The
 // binary is `agy`; -p is the short alias for --print (single-prompt mode).
 //
-// The prompt is piped via stdin with a single-space -p placeholder, mirroring
-// the Gemini CLI convention (agy's predecessor): the placeholder triggers
-// headless mode while stdin carries the actual content, avoiding argv size
-// limits. agy's --help doesn't document the stdin behavior, so it was verified
-// live (agy 1.0.16, 2026-07-07): a prompt piped to `agy -p " "` is what the
-// model receives and answers — the space is not summarized in its place.
+// The prompt travels in argv. Earlier releases accepted it on stdin behind a
+// single-space -p placeholder (the Gemini CLI convention, verified on agy
+// 1.0.16), but agy 1.2.7 ignores stdin in print mode: `-p " "` fails with
+// "Error: empty prompt", and `-p -` is answered as the literal message "-"
+// (both observed live, trail 444, 2026-09-22), which is how
+// `entire dispatch --local --agent antigravity` came to hand agy an empty
+// prompt. argv is the only documented route ("Usage: agy --print 'your
+// prompt here'"). Summary prompts are a few tens of KB at most, well inside
+// the Unix per-argument limit; Windows' 32K command-line limit is the one
+// place a very long prompt could fail, and it fails loudly.
 func (a *AntigravityAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
-	args := []string{"-p", " "}
+	args := []string{"-p", prompt}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	result, capturedStderr, stdoutBytes, err := agent.RunIsolatedTextGeneratorCLI(ctx, a.CommandRunner, "agy", "antigravity", args, prompt)
+	result, capturedStderr, stdoutBytes, err := agent.RunIsolatedTextGeneratorCLI(ctx, a.CommandRunner, "agy", "antigravity", args, "")
 	if err != nil {
 		return "", &agent.TextGenerationError{
 			Err:         fmt.Errorf("antigravity text generation failed: %w", err),
