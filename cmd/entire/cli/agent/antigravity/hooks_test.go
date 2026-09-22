@@ -6,7 +6,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
@@ -456,5 +459,40 @@ func TestHooks_RefuseSymlinkedHooksFile(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Error("the user's symlink was replaced by a regular file")
+	}
+}
+
+// agy runs hook commands through cmd.exe /C on Windows, so the installed
+// command must be the bare direct-shell wrapper there: no `sh -c` (cmd.exe
+// tears its redirects apart) and no nested `cmd.exe /d /s /c "…"` block (cmd.exe
+// /C takes the quoted block as one program name). Confirmed on Windows 11 with
+// agy 1.2.7 in trail 444.
+func TestBuildEntireHookConfig_WindowsHostUsesDirectCmdWrapper(t *testing.T) {
+	t.Parallel()
+
+	cfg := buildEntireHookConfigForHost(true)
+	commands := []string{
+		cfg.PreToolUse[0].Hooks[0].Command,
+		cfg.PreInvocation[0].Command,
+		cfg.Stop[0].Command,
+	}
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, "sh -c") {
+			t.Errorf("Windows host got the sh wrapper: %s", cmd)
+		}
+		if strings.HasPrefix(cmd, "cmd.exe") {
+			t.Errorf("Windows host got the nested cmd.exe wrapper, which agy's own cmd.exe /C rejects: %s", cmd)
+		}
+		if !strings.HasPrefix(cmd, "where.exe entire >nul 2>nul & if errorlevel 1 (ver>nul) else (entire hooks antigravity ") {
+			t.Errorf("unexpected Windows hook command shape: %s", cmd)
+		}
+		if !agent.IsManagedHookCommand(cmd) {
+			t.Errorf("uninstall and drift detection must still recognise the Windows command as Entire's: %s", cmd)
+		}
+	}
+
+	posix := buildEntireHookConfigForHost(false)
+	if !strings.HasPrefix(posix.Stop[0].Command, "sh -c ") {
+		t.Errorf("POSIX host must keep the sh wrapper, got %s", posix.Stop[0].Command)
 	}
 }

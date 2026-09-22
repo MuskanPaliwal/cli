@@ -186,10 +186,28 @@ func (a *AntigravityAgent) AreHooksInstalled(ctx context.Context) (bool, error) 
 // large repos, in which case agy kills the hook mid-checkpoint with no trace.
 const stopHookTimeoutSeconds = 300
 
-// buildEntireHookConfig constructs the HookConfig for the "entire" entry.
+// buildEntireHookConfig constructs the HookConfig for the "entire" entry for
+// the host this binary runs on.
 func buildEntireHookConfig() HookConfig {
+	return buildEntireHookConfigForHost(agent.HookHostIsWindows())
+}
+
+// buildEntireHookConfigForHost constructs the "entire" entry for a Windows or
+// POSIX hook host. agy hands every hook command to cmd.exe /C on Windows
+// whatever else is installed (a Git Bash sh on PATH changes nothing), so the
+// gate is agent.HookHostIsWindows, not the UseWindowsProductionHooks sh probe,
+// and the wrapper is the bare direct-shell form: the sh wrapper is cut apart by
+// cmd.exe (`>/dev/null` becomes a redirect to a missing path) and the nested
+// cmd.exe form becomes one unrecognised program name. Both fail the hook with
+// exit 1, visible only in agy's own log while the turn reports SUCCESS —
+// silent, total loss of tracking (trail 444, confirmed on Windows 11 ARM64 with
+// agy 1.2.7).
+func buildEntireHookConfigForHost(windowsHost bool) HookConfig {
 	const cmdPrefix = "entire hooks antigravity "
 	makeCmd := func(verb string) string {
+		if windowsHost {
+			return agent.WrapWindowsProductionSilentHookCommandDirect(cmdPrefix + verb)
+		}
 		return agent.WrapProductionSilentHookCommand(cmdPrefix + verb)
 	}
 
