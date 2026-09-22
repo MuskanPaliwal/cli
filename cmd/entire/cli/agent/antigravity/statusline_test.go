@@ -839,3 +839,26 @@ func TestReaders_DegradeWhenTheLockIsStuck(t *testing.T) {
 		t.Fatal("reader hung behind a stuck lock holder; the wait must be bounded")
 	}
 }
+
+// Without the override the store lives at <cache root>/antigravity/status: a
+// two-segment name that must be slash-separated for osroot to create it. Every
+// other test here runs under ENTIRE_ANTIGRAVITY_STATUS_DIR, where the dir is
+// "" and the mkdir is skipped — which is how a filepath.Join here shipped.
+func TestStatusStore_DefaultDirIsCreatedUnderTheCacheRoot(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv(statusDirEnv, "")
+	t.Setenv("XDG_CACHE_HOME", cache)
+
+	payload := []byte(`{"conversation_id":"conv-default","context_window":{"total_input_tokens":7,"total_output_tokens":1}}`)
+	if err := AppendStatusSnapshot(payload); err != nil {
+		t.Fatalf("AppendStatusSnapshot: %v", err)
+	}
+	want := filepath.Join(cache, "entire", "antigravity", "status", "conv-default.jsonl")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("snapshot file not created under the cache root: %v", err)
+	}
+	snaps, err := readStatusSnapshots(context.Background(), "conv-default")
+	if err != nil || len(snaps) != 1 {
+		t.Fatalf("readStatusSnapshots = %d snapshots, %v; want 1", len(snaps), err)
+	}
+}

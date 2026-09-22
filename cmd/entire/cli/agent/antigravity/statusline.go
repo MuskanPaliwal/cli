@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -81,7 +82,11 @@ type statusStore struct {
 }
 
 // statusDefaultDir is the store's location inside the per-user cache root.
-var statusDefaultDir = filepath.Join("antigravity", "status")
+// Slash-separated on every platform: names inside an os.Root are slash paths
+// by contract, and osroot splits them on "/" only — a filepath.Join here made
+// "antigravity\status" a single component on Windows, so the store was never
+// created and no snapshot was ever persisted there (trail 444).
+const statusDefaultDir = "antigravity/status"
 
 // openStatusStore resolves the store. It honours the ENTIRE_ANTIGRAVITY_STATUS_DIR
 // env override (tests, ops), otherwise anchors on userdirs.CacheRoot. userdirs is
@@ -120,10 +125,11 @@ func (st statusStore) dirName() string {
 	return st.dir
 }
 
-// fileName returns the name inside the root of a conversation's JSONL file.
-// filepath.Base guards against path traversal in the conversation ID.
+// fileName returns the slash-separated name inside the root of a
+// conversation's JSONL file. filepath.Base guards against path traversal in
+// the conversation ID (it strips either separator on Windows).
 func (st statusStore) fileName(conversationID string) string {
-	return filepath.Join(st.dir, filepath.Base(conversationID)+".jsonl")
+	return path.Join(st.dir, filepath.Base(conversationID)+".jsonl")
 }
 
 // statusFilePath returns the absolute path of a conversation's snapshot file.
@@ -133,7 +139,7 @@ func statusFilePath(conversationID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(st.root.Name(), st.fileName(conversationID)), nil
+	return filepath.Join(st.root.Name(), filepath.FromSlash(st.fileName(conversationID))), nil
 }
 
 // AppendStatusSnapshot parses an agy state-JSON payload and appends a snapshot
@@ -507,7 +513,7 @@ func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			if osroot.RemoveNoSymlinks(st.root, filepath.Join(st.dir, name)) == nil {
+			if osroot.RemoveNoSymlinks(st.root, path.Join(st.dir, name)) == nil {
 				delete(present, name)
 			}
 		}
@@ -527,6 +533,6 @@ func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 		if err != nil || !info.ModTime().Before(cutoff) {
 			continue
 		}
-		_ = osroot.RemoveNoSymlinks(st.root, filepath.Join(st.dir, name)) //nolint:errcheck // best-effort prune
+		_ = osroot.RemoveNoSymlinks(st.root, path.Join(st.dir, name)) //nolint:errcheck // best-effort prune
 	}
 }
