@@ -4,9 +4,10 @@
 
 The `agy` binary (Antigravity 2.0, Google's Gemini CLI successor) supports
 workspace-scoped hooks via `.agents/hooks.json` and writes JSONL transcripts to
-a predictable per-conversation location. The integration is marked
-**Preview** (`IsPreview() == true`) — the label shows in the hook-install
-message, as it does for every preview agent. Wire format captured on
+a predictable per-conversation location. The integration is **Preview**
+status: documented here and in `docs/architecture/agent-guide.md`, with the
+known limitations listed below (the CLI no longer renders a preview label
+anywhere — `agent.IsPreview` was removed in #2554). Wire format captured on
 agy **1.0.14/1.0.15** (real captured stdin, not docs) and re-verified
 unchanged against agy **1.1.1** (2026-07-13); agy is fast-moving.
 

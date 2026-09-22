@@ -37,12 +37,6 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// previewLabel marks agent integrations whose IsPreview() is true in the
-// hook-install message. Deliberately NOT in the selector or `entire agent
-// list`: with most integrations flagged preview, a label on nearly every row
-// reads as "all of this is beta" and says nothing about the one that is new.
-const previewLabel = " (Preview)"
-
 // Config path display strings
 const (
 	configDisplayProject = ".entire/settings.json"
@@ -2282,17 +2276,9 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	strategy.CheckAndWarnHookManagers(ctx, w, hookAbsoluteGitHookPath)
 
 	if installedHooks == 0 {
-		msg := fmt.Sprintf("Hooks for %s already installed", ag.Description())
-		if ag.IsPreview() {
-			msg += previewLabel
-		}
-		fmt.Fprintf(w, "  %s\n", msg)
+		fmt.Fprintf(w, "  Hooks for %s already installed\n", ag.Description())
 	} else {
-		msg := fmt.Sprintf("Installed %d hooks for %s", installedHooks, ag.Description())
-		if ag.IsPreview() {
-			msg += previewLabel
-		}
-		fmt.Fprintf(w, "  %s\n", msg)
+		fmt.Fprintf(w, "  Installed %d hooks for %s\n", installedHooks, ag.Description())
 	}
 	fmt.Fprintln(w, "  ✓ Configured project")
 	fmt.Fprintf(w, "    %s\n", configDisplay)

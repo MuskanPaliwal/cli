@@ -231,16 +231,19 @@ the commands are always runnable in every build.
   `--project`, no bare name, no ULID — through `resolveRepoPath`, which parses
   with `parseNativeCloneRef` and resolves both segments by name only (a project
   or repo can be *named* like a ULID, so path segments never touch the
-  `looksLikeULID` passthrough; `resolveRepoPathRef` and `resolveNativeRepo`
-  still do, pending the removal of repo-ULID addressing). The other two
-  clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
-  lookup resolves a project and then a repo inside it, and a mirror is in no
-  project — so a mirror is addressed by ULID), and an `entire://` URL is not
-  parsed at all. `--project` serves the **bare-name** spelling alone, because
-  the control plane has no by-name repo route that is not project-scoped; the
-  path form is checked against it for agreement, and a ULID warns that it is
-  ignored rather than validating, which would cost a `GetRepo` on every command
-  but `repo view`.
+  `looksLikeULID` passthrough). The other two clone shapes are not: a `/gh/`
+  mirror ref is refused there (a mirror is in no project, so it is addressed by
+  ULID), and an `entire://` URL is not parsed at all.
+  Every `<project>/<repo>` name pair resolves through **one** call,
+  `POST /repos/resolve` (`resolveNativeRepoByPath`), because that route needs
+  `repo#pull` alone. The project-scoped routes (`GET /projects?name=`,
+  `GET /projects/{id}/repos?name=`) need `project#inspect`, which a direct
+  repo grant does not confer, so a repo shared with one person must never
+  resolve through them. Only a `--project` **ULID** with a bare name takes the
+  project-scoped listing, since there is no ULID→name route. Alongside the
+  path form, `--project` is checked for agreement: a name compares
+  case-insensitively before any request, a ULID against the resolved repo's
+  owning project at the cost of one `GetRepo`.
   Native names are validated client-side against the server's own rules
   (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
   `core/resource/project_name.go`); those bounds are server parity only and buy
@@ -252,7 +255,7 @@ the commands are always runnable in every build.
   that declared a forge token keeps its own parser's reason, a bare pair is
   offered the forge-qualified readings that would actually parse
   (`bareRefSuggestions`), and anything left lists the accepted shapes.
-  A native ref resolves project → repo ULID → `GetRepo`, whose response is the
+  A native ref resolves name → repo ULID → `GetRepo`, whose response is the
   only one carrying both `clusterHost` and `path`, then picks among the repo's
   readable placements — the home cluster plus ready native mirrors
   (`nativePlacements`, joining mirror slugs against the cluster catalog) —

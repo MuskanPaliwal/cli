@@ -40,7 +40,6 @@ func (a *AntigravityAgent) Type() types.AgentType { return agent.AgentTypeAntigr
 func (a *AntigravityAgent) Description() string {
 	return "Antigravity CLI - Google's agentic coding CLI (Gemini CLI successor)"
 }
-func (a *AntigravityAgent) IsPreview() bool { return true }
 
 // DetectPresence reports whether Entire's Antigravity hooks are configured for
 // this workspace. Antigravity 2.0 stores runtime data user-scope in
