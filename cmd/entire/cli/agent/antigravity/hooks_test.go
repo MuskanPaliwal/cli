@@ -525,3 +525,46 @@ func TestUninstallHooks_LeavesAForeignOnlyFileUntouched(t *testing.T) {
 		t.Fatalf("foreign-only hooks.json was rewritten:\n%s", got)
 	}
 }
+
+// HooksEntryMatchesHost is doctor's zero-cost replacement for the probe: it
+// must call a fresh install current, a foreign-shaped entry stale, and a
+// user-disabled entry current (install leaves it alone too).
+func TestHooksEntryMatchesHost(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv(configDirEnv, t.TempDir())
+	a := &AntigravityAgent{}
+	ctx := context.Background()
+
+	installed, current, err := a.HooksEntryMatchesHost(ctx)
+	if err != nil || installed || current {
+		t.Fatalf("no file: installed=%v current=%v err=%v; want false,false,nil", installed, current, err)
+	}
+
+	if _, err := a.InstallHooks(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	installed, current, err = a.HooksEntryMatchesHost(ctx)
+	if err != nil || !installed || !current {
+		t.Fatalf("fresh install: installed=%v current=%v err=%v; want true,true,nil", installed, current, err)
+	}
+
+	hooksPath := filepath.Join(dir, ".agents", AgentsHooksFileName)
+	stale := `{"entire":{"PreInvocation":[{"type":"command","command":"sh -c 'exec entire hooks antigravity pre-invocation'"}]}}`
+	if err := os.WriteFile(hooksPath, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, current, err = a.HooksEntryMatchesHost(ctx)
+	if err != nil || !installed || current {
+		t.Fatalf("foreign shape: installed=%v current=%v err=%v; want true,false,nil", installed, current, err)
+	}
+
+	disabled := `{"entire":{"enabled":false,"PreInvocation":[{"type":"command","command":"echo off"}]}}`
+	if err := os.WriteFile(hooksPath, []byte(disabled), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, current, err = a.HooksEntryMatchesHost(ctx)
+	if err != nil || !installed || !current {
+		t.Fatalf("user-disabled: installed=%v current=%v err=%v; want true,true,nil", installed, current, err)
+	}
+}

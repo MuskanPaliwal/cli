@@ -49,6 +49,24 @@ type HooksProbe struct {
 // "not loaded".
 var ErrHooksProbeUnsupported = errors.New("agy too old to answer /hooks in print mode")
 
+// ErrHooksProbeVersionUnknown is returned when `agy --version` printed
+// something semver cannot parse (a build suffix, a banner line). It is
+// deliberately distinct from ErrHooksProbeUnsupported: the agy may well be
+// newer than the requirement, so "run `agy update`" would be wrong advice.
+// The probe is skipped either way — a wrong guess is a real model turn.
+var ErrHooksProbeVersionUnknown = errors.New("could not determine the agy version")
+
+// DoctorProbeEnv opts `entire doctor` into running ProbeLoadedHooks. Off by
+// default: the probe's zero-quota argument rested on the version gate alone,
+// and on Windows 11 with agy 1.2.7 `agy -p "/hooks"` was observed to run a
+// full model turn (~12k input tokens) instead of answering locally. Until the
+// local-answer behaviour is verified per platform rather than assumed from a
+// version number, a default doctor run must not risk the user's quota. The
+// probe also only proves agy PARSED hooks.json, not that the command in it can
+// run; HooksEntryMatchesHost is the check that catches the failure that
+// actually occurs.
+const DoctorProbeEnv = "ENTIRE_ANTIGRAVITY_DOCTOR_PROBE"
+
 // ProbeLoadedHooks asks the agy binary on PATH which hooks it loads for
 // repoRoot, via `agy -p /hooks --add-dir <repoRoot> --output-format json`.
 // --add-dir is what makes agy treat repoRoot as the workspace (the same flag
@@ -80,8 +98,8 @@ func ProbeLoadedHooks(ctx context.Context, repoRoot string) (HooksProbe, error) 
 		return probe, fmt.Errorf("agy --version: %w", err)
 	}
 	probe.Version = strings.TrimSpace(string(versionOut))
-	if !HooksProbeSupported(probe.Version) {
-		return probe, fmt.Errorf("%w: have %s, need >= %s", ErrHooksProbeUnsupported, probe.Version, MinHooksProbeVersion)
+	if err := classifyProbeVersion(probe.Version); err != nil {
+		return probe, err
 	}
 
 	cmd := exec.CommandContext(ctx, agyPath, "-p", "/hooks", "--add-dir", repoRoot, "--output-format", "json")
@@ -110,11 +128,24 @@ func ProbeLoadedHooks(ctx context.Context, repoRoot string) (HooksProbe, error) 
 // locally in print mode. Unparseable versions are treated as unsupported —
 // the failure mode of a wrong guess is a real model turn on the user's quota.
 func HooksProbeSupported(version string) bool {
+	return classifyProbeVersion(version) == nil
+}
+
+// classifyProbeVersion returns nil for a version that answers /hooks locally,
+// ErrHooksProbeVersionUnknown for one semver cannot parse, and
+// ErrHooksProbeUnsupported for one that is too old.
+func classifyProbeVersion(version string) error {
 	v := strings.TrimSpace(version)
 	if !strings.HasPrefix(v, "v") {
 		v = "v" + v
 	}
-	return semver.IsValid(v) && semver.Compare(v, "v"+MinHooksProbeVersion) >= 0
+	if !semver.IsValid(v) {
+		return fmt.Errorf("%w: agy --version printed %q", ErrHooksProbeVersionUnknown, strings.TrimSpace(version))
+	}
+	if semver.Compare(v, "v"+MinHooksProbeVersion) < 0 {
+		return fmt.Errorf("%w: have %s, need >= %s", ErrHooksProbeUnsupported, strings.TrimSpace(version), MinHooksProbeVersion)
+	}
+	return nil
 }
 
 // hooksProbeEnvelope is the subset of agy's --output-format json envelope the

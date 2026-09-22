@@ -65,24 +65,13 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 			"error", err.Error())
 	}
 
-	// Idempotency check: compare candidate against existing "entire" entry by
-	// re-marshaling both to compact JSON for a stable comparison.
+	// Idempotency check: an entry the user disabled or one that already matches
+	// the candidate is left alone. --force remains the explicit override.
 	if !force {
 		if existing, ok := rawFile["entire"]; ok {
-			var existingCfg HookConfig
-			if err := json.Unmarshal(existing, &existingCfg); err == nil {
-				// A user-set "enabled": false (agy's documented per-entry
-				// disable knob) is a deliberate choice — leave the entry
-				// untouched rather than rewriting it and silently re-arming
-				// tracking. --force remains the explicit override.
-				if existingCfg.Enabled != nil && !*existingCfg.Enabled {
-					return 0, nil
-				}
-				existingBytes, err1 := jsonutil.MarshalWithNoHTMLEscape(existingCfg)
-				candidateBytes, err2 := jsonutil.MarshalWithNoHTMLEscape(candidate)
-				if err1 == nil && err2 == nil && bytes.Equal(existingBytes, candidateBytes) {
-					return 0, nil
-				}
+			disabled, same := entireEntryMatches(existing, candidate)
+			if disabled || same {
+				return 0, nil
 			}
 		}
 	}
@@ -100,6 +89,57 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 
 	// 3 hooks: pre-tool-use, pre-invocation, stop
 	return 3, nil
+}
+
+// entireEntryMatches compares an installed "entire" entry against candidate by
+// re-marshaling both to compact JSON. disabled reports a user-set
+// "enabled": false — agy's documented per-entry disable knob, a deliberate
+// choice that install must not rewrite and silently re-arm.
+func entireEntryMatches(existing json.RawMessage, candidate HookConfig) (disabled, same bool) {
+	var existingCfg HookConfig
+	if err := json.Unmarshal(existing, &existingCfg); err != nil {
+		return false, false
+	}
+	if existingCfg.Enabled != nil && !*existingCfg.Enabled {
+		return true, false
+	}
+	existingBytes, err1 := jsonutil.MarshalWithNoHTMLEscape(existingCfg)
+	candidateBytes, err2 := jsonutil.MarshalWithNoHTMLEscape(candidate)
+	return false, err1 == nil && err2 == nil && bytes.Equal(existingBytes, candidateBytes)
+}
+
+// HooksEntryMatchesHost reports whether the repo's installed "entire" entry is
+// exactly what InstallHooks would write on THIS host. installed is false when
+// there is no entry. A user-disabled entry counts as current.
+//
+// It exists for `entire doctor`: the hook command's SHAPE is host-specific
+// (agy runs it through cmd.exe on Windows and sh elsewhere), and a hooks.json
+// committed from a macOS checkout carries a sh wrapper that cmd.exe tears
+// apart — the hook exits 1, the failure shows only in agy's log, and nothing
+// is tracked. A file that merely exists proves nothing about that; comparing
+// against the candidate does, at zero cost and without spawning agy.
+func (a *AntigravityAgent) HooksEntryMatchesHost(ctx context.Context) (installed, current bool, err error) {
+	cfg, err := a.hookConfig(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	data, err := cfg.Read()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, false, nil
+		}
+		return false, false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+	}
+	var rawFile map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawFile); err != nil {
+		return false, false, fmt.Errorf("parse hook config: %w", err)
+	}
+	existing, ok := rawFile["entire"]
+	if !ok {
+		return false, false, nil
+	}
+	disabled, same := entireEntryMatches(existing, buildEntireHookConfig())
+	return true, disabled || same, nil
 }
 
 // hookConfig opens the repo's .agents/hooks.json through agent.HookConfigFile,

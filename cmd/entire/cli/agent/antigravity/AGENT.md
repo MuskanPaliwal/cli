@@ -38,8 +38,11 @@ hook payloads); tool args can arrive double-encoded.
   limitations); 1.2.x dropped the Gemini 3.5 models from `agy models`;
   1.1.10 fixed hook ordering so `Stop`/`PostInvocation` fire reliably;
   1.1.12 answers `-p "/hooks"` (and `/help`, `/changelog`) locally without a
-  model turn — `entire doctor` uses `agy -p /hooks --add-dir <root>
-  --output-format json` to verify the workspace hooks actually load;
+  model turn on the platforms where that was checked — but agy 1.2.7 on
+  Windows 11 ran a full model turn for it, so `entire doctor` runs the
+  `agy -p /hooks --add-dir <root> --output-format json` probe only with
+  `ENTIRE_ANTIGRAVITY_DOCTOR_PROBE=1`; by default it checks, at zero cost,
+  that the installed hook command is the shape this host needs;
   1.1.8/1.1.20 added `--output-format json|stream-json` and made headless exit
   codes reflect only run-level failures; 1.1.9 expands `/skill` in `-p`.
 

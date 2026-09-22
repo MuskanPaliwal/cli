@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/antigravity"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -1608,6 +1609,7 @@ func writeAntigravityHooksForDoctor(t *testing.T, dir string) string {
 func TestCheckAntigravityHooksLoaded_OKWhenAgyListsWorkspaceHooks(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
 	hooksPath := writeAntigravityHooksForDoctor(t, dir)
 	stubAgyHooksProbeOnPath(t, "1.1.22", hooksPath)
 
@@ -1619,6 +1621,7 @@ func TestCheckAntigravityHooksLoaded_OKWhenAgyListsWorkspaceHooks(t *testing.T) 
 func TestCheckAntigravityHooksLoaded_WarnsWhenAgyDoesNotLoadThem(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
 	writeAntigravityHooksForDoctor(t, dir)
 	stubAgyHooksProbeOnPath(t, "1.1.22", "")
 
@@ -1633,6 +1636,7 @@ func TestCheckAntigravityHooksLoaded_WarnsWhenAgyDoesNotLoadThem(t *testing.T) {
 func TestCheckAntigravityHooksLoaded_SkipsOldAgy(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
 	hooksPath := writeAntigravityHooksForDoctor(t, dir)
 	stubAgyHooksProbeOnPath(t, "1.1.1", hooksPath)
 
@@ -2131,4 +2135,72 @@ func TestCheckAgentDirSymlinks_VouchedLinkWithCleanTargetReportsOnlyTheLink(t *t
 	assert.Contains(t, got, "FOLLOWING SYMLINKS")
 	assert.NotContains(t, got, "SYMLINKS PRESENT", "a clean target is not a fault")
 	assert.NotContains(t, got, "NOT READABLE")
+}
+
+// The `/hooks` probe spends quota on at least one platform (agy 1.2.7 on
+// Windows ran a full model turn for it), so a default doctor run must not
+// invoke it at all — only ENTIRE_ANTIGRAVITY_DOCTOR_PROBE=1 does.
+func TestCheckAntigravityHooksLoaded_ProbeIsOptIn(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	writeAntigravityHooksForDoctor(t, dir)
+	marker := filepath.Join(t.TempDir(), "probe-ran")
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  --version) echo '1.2.7' ;;\n" +
+		"  -p) : > '" + marker + "'; printf '%s' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"hooks\",\"data\":{\"hooks\":[]}}}' ;;\n" +
+		"  *) exit 0 ;;\n" +
+		"esac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "agy"), []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(antigravity.DoctorProbeEnv, "")
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("doctor ran `agy -p /hooks` without the opt-in (stat err = %v)", err)
+	}
+	require.NotContains(t, stdout.String(), "LOADED by agy")
+	require.NotContains(t, stdout.String(), "NOT VERIFIED")
+}
+
+// The zero-cost check that replaces the probe by default: an installed entry
+// that is not what this host needs (here a bare command with no wrapper at all)
+// is reported with the reinstall remedy, and a freshly installed one is not.
+func TestCheckAntigravityHooksLoaded_ReportsAnEntryStaleForThisHost(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", t.TempDir())
+	stubAgyOnPath(t)
+	writeAntigravityHooksForDoctor(t, dir)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "Antigravity hooks: STALE FOR THIS HOST")
+	require.Contains(t, stdout.String(), "entire agent add antigravity")
+
+	// A current install is silent.
+	_, err := (&antigravity.AntigravityAgent{}).InstallHooks(cmd.Context(), true)
+	require.NoError(t, err)
+	cmd, stdout = newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.NotContains(t, stdout.String(), "STALE FOR THIS HOST")
+}
+
+// A version string semver cannot parse is not "too old": the agy may be newer
+// than the requirement, so the advice must not be `agy update`.
+func TestCheckAntigravityHooksLoaded_UnparseableVersionSkipsProbeWithoutUpgradeAdvice(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
+	hooksPath := writeAntigravityHooksForDoctor(t, dir)
+	stubAgyHooksProbeOnPath(t, "Antigravity CLI build 2026.09", hooksPath)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "could not determine the agy version")
+	require.NotContains(t, stdout.String(), "agy update")
+	require.NotContains(t, stdout.String(), "LOADED by agy")
 }

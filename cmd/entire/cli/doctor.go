@@ -1551,25 +1551,30 @@ func writeCodexHookStatus(w io.Writer, diagnostics codex.HookDiagnostics, active
 	}
 }
 
-// checkAntigravityTitleTee warns when Antigravity hooks are installed in this
-// repo but agy's global title slot has NOT been claimed by the title-tee shim.
-// agy exposes token usage only through the title/statusline state JSON, so a
-// missing title-tee means token counts will be absent from every Antigravity
-// checkpoint. Stays silent when Antigravity hooks aren't installed here, and
-// when there is no agy binary on PATH — .agents/hooks.json is committable, so
-// a teammate's checkout can carry the hooks on a machine that never uses agy;
-// warning there (and repairing into agy's global settings) is a false
-// positive. Warn-only.
-func checkAntigravityTitleTee(cmd *cobra.Command) {
+// antigravityDoctorSubject gates both Antigravity checks the same way: they
+// only apply where Entire's Antigravity hooks are installed AND agy is on PATH.
+// A teammate's checkout can carry the hooks on a machine that never uses agy;
+// reporting there would be a false positive. One gate, evaluated once.
+func antigravityDoctorSubject(cmd *cobra.Command) (*antigravity.AntigravityAgent, bool) {
 	ag := &antigravity.AntigravityAgent{}
 	installed, err := ag.AreHooksInstalled(cmd.Context())
 	if err != nil || !installed {
-		return
+		return nil, false
 	}
 	if _, err := exec.LookPath("agy"); err != nil {
+		return nil, false
+	}
+	return ag, true
+}
+
+// checkAntigravityTitleTee warns when Antigravity hooks are installed in this
+// repo but agy's global title slot — agy's only token-usage surface — is not
+// routed through Entire, which leaves token counts missing from checkpoints.
+// Warn-only.
+func checkAntigravityTitleTee(cmd *cobra.Command) {
+	if _, ok := antigravityDoctorSubject(cmd); !ok {
 		return
 	}
-
 	w := cmd.OutOrStdout()
 	if antigravity.TitleTeeInstalled() {
 		fmt.Fprintln(w, "✓ Antigravity title-tee: OK")
@@ -1582,32 +1587,48 @@ func checkAntigravityTitleTee(cmd *cobra.Command) {
 	fmt.Fprintln(w, "  Re-run agent setup (`entire agent add antigravity`) to configure it.")
 }
 
-// checkAntigravityHooksLoaded asks agy itself whether it loads this
-// workspace's .agents/hooks.json — the file being on disk is not enough: agy
-// only loads workspace hooks for a trusted workspace, and `agy -p` in an
-// untrusted folder silently runs in agy's scratch workspace where no hooks
-// fire and no session is created (exit 0, no warning). The probe is
-// zero-quota on agy >= 1.1.12 (`/hooks` is answered locally in print mode)
-// and is skipped, with an upgrade hint, on older releases where it would run
-// a real model turn. Warn-only: a failed probe (e.g. agy not logged in) means
-// "could not verify", not "broken". Same gating as the title-tee check.
+// checkAntigravityHooksLoaded reports two things about the installed hooks.
+//
+// Always, at zero cost: whether the "entire" entry in .agents/hooks.json is
+// the one this host needs. The command's shape is host-specific — agy runs it
+// through cmd.exe on Windows and sh elsewhere — and a file committed from a
+// macOS checkout carries a sh wrapper that cmd.exe tears apart: the hook exits
+// 1, the failure shows only in agy's log, the turn reports SUCCESS and nothing
+// is tracked. The file being present said nothing about that, and a green
+// doctor over zero tracked sessions is worse than no check.
+//
+// Only when ENTIRE_ANTIGRAVITY_DOCTOR_PROBE=1: ask agy itself whether it loads
+// this workspace's hooks (`agy -p /hooks --add-dir <root>`), which catches the
+// untrusted-workspace trap. Opt-in because agy 1.2.7 on Windows was observed
+// to answer that with a full model turn, and the probe must never spend the
+// user's quota by default. Warn-only throughout.
 func checkAntigravityHooksLoaded(cmd *cobra.Command) {
-	ag := &antigravity.AntigravityAgent{}
-	installed, err := ag.AreHooksInstalled(cmd.Context())
-	if err != nil || !installed {
+	ag, ok := antigravityDoctorSubject(cmd)
+	if !ok {
 		return
 	}
-	if _, err := exec.LookPath("agy"); err != nil {
+	w := cmd.OutOrStdout()
+
+	if installed, current, err := ag.HooksEntryMatchesHost(cmd.Context()); err == nil && installed && !current {
+		fmt.Fprintln(w, "Antigravity hooks: STALE FOR THIS HOST")
+		fmt.Fprintln(w, "  The \"entire\" entry in .agents/hooks.json is not the command this host")
+		fmt.Fprintln(w, "  needs (agy runs hooks through cmd.exe on Windows and sh elsewhere), so")
+		fmt.Fprintln(w, "  the hooks fail silently and nothing is tracked.")
+		fmt.Fprintln(w, "  Re-run `entire agent add antigravity` to reinstall them for this host.")
+	}
+
+	if os.Getenv(antigravity.DoctorProbeEnv) == "" {
 		return
 	}
 	repoRoot, err := paths.WorktreeRoot(cmd.Context())
 	if err != nil {
 		return
 	}
-
-	w := cmd.OutOrStdout()
 	probe, err := antigravity.ProbeLoadedHooks(cmd.Context(), repoRoot)
 	switch {
+	case errors.Is(err, antigravity.ErrHooksProbeVersionUnknown):
+		fmt.Fprintf(w, "Antigravity hooks: NOT VERIFIED (could not determine the agy version from %q; skipping the `/hooks` probe)\n",
+			probe.Version)
 	case errors.Is(err, antigravity.ErrHooksProbeUnsupported):
 		fmt.Fprintf(w, "Antigravity hooks: NOT VERIFIED (agy %s is too old to answer `/hooks` headlessly; %s+ needed — run `agy update`)\n",
 			probe.Version, antigravity.MinHooksProbeVersion)
