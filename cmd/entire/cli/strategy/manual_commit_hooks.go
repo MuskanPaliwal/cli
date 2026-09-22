@@ -1516,15 +1516,18 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	// State is saved by the outer MutateSessionState in PostCommit.
 
 	// Only preserve the shadow branch for active sessions that were NOT
-	// condensed AND still track files — their uncondensed checkpoints are the
-	// only copy of that work. An active session with no tracked files has
-	// nothing on the branch to lose (SaveStep recreates shadow branches on
+	// condensed AND still have content on it — their uncondensed checkpoints
+	// are the only copy of that work. An active session with nothing on the
+	// branch has nothing to lose (SaveStep recreates shadow branches on
 	// demand), so it must not pin the branch. Observed with Antigravity:
 	// a subagent runs as its own conversation and does all the work, while
 	// the parent conversation's final fullyIdle Stop never arrives in
 	// headless mode — leaving a "ghost" session that is ACTIVE forever with
-	// zero files, which would otherwise preserve the branch indefinitely.
-	if state.Phase.IsActive() && !handler.condensed && len(handler.filesTouchedBefore) > 0 {
+	// zero files and zero steps, which would otherwise preserve the branch
+	// indefinitely. Content is judged the same way condensation judges it
+	// (sessionHasShadowContent): a session whose first checkpoint captured a
+	// transcript but no file edits yet still has a commit to lose.
+	if state.Phase.IsActive() && !handler.condensed && sessionHasShadowContent(handler.filesTouchedBefore, state) {
 		uncondensedActiveOnBranch[shadowBranchName] = true
 	}
 
@@ -2369,6 +2372,19 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 	return false
 }
 
+// sessionHasShadowContent reports whether a session has checkpoints on its
+// shadow branch that a later condensation still needs: tracked files, at least
+// one written step, or task checkpoints. StepCount only counts checkpoint
+// commits that were actually written (a dedup-skipped step returns before the
+// increment) and is reset to zero when the session is condensed, so a non-zero
+// value means an uncondensed commit exists even when no file has been edited
+// yet — a read-only first turn, or a question answered without touching the
+// tree. filesTouched is passed separately because the post-commit handler
+// judges the snapshot it took before mutating state.
+func sessionHasShadowContent(filesTouched []string, state *SessionState) bool {
+	return len(filesTouched) > 0 || state.StepCount > 0 || state.HasTaskContent()
+}
+
 // sessionLacksCondensableContent reports whether an ACTIVE session has nothing
 // CondenseSession could turn into a checkpoint: no tracked files, no shadow
 // branch data (StepCount == 0), no task records, and no transcript content. Stamping a trailer
@@ -2387,7 +2403,7 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 // NOTE: conservative approximation of the skip gate in CondenseSession (which
 // checks extracted data, not raw state). Keep aligned.
 func sessionLacksCondensableContent(state *SessionState) bool {
-	if len(state.FilesTouched) > 0 || state.StepCount > 0 || state.HasTaskContent() {
+	if sessionHasShadowContent(state.FilesTouched, state) {
 		return false
 	}
 	if state.TranscriptPath == "" {

@@ -73,47 +73,68 @@ func TestPostCommit_GhostActiveSessionDoesNotPinShadowBranch(t *testing.T) {
 		"shadow branch must be deleted: the only active session has no tracked files and no uncondensed content to lose")
 }
 
-// TestPostCommit_ActiveSessionWithFilesStillPinsShadowBranch is the inverse
-// guard: an ACTIVE session that DOES have uncommitted tracked files must keep
-// pinning the shadow branch (its uncondensed checkpoints are still needed).
-func TestPostCommit_ActiveSessionWithFilesStillPinsShadowBranch(t *testing.T) {
-	dir := setupGitRepo(t)
-	t.Chdir(dir)
-
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	s := &ManualCommitStrategy{}
-	workerID := "test-pin-worker"
-	activeID := "test-pin-active"
-
-	setupSessionWithCheckpoint(t, s, repo, dir, workerID)
-	worker, err := s.loadSessionState(context.Background(), workerID)
-	require.NoError(t, err)
-	now := time.Now()
-	worker.Phase = session.PhaseIdle
-	worker.LastInteractionTime = &now
-	require.NoError(t, s.saveSessionState(context.Background(), worker))
-	shadowBranch := getShadowBranchNameForCommit(worker.BaseCommit, worker.WorktreeID)
-
-	// A genuinely mid-turn session with its own uncommitted tracked file.
-	active := &SessionState{
-		SessionID:           activeID,
-		AgentType:           worker.AgentType,
-		BaseCommit:          worker.BaseCommit,
-		WorktreeID:          worker.WorktreeID,
-		WorktreePath:        worker.WorktreePath, // PostCommit filters sessions by worktree path
-		Phase:               session.PhaseActive,
-		StartedAt:           now,
-		LastInteractionTime: &now,
-		FilesTouched:        []string{"other-uncommitted.txt"},
+// TestPostCommit_ActiveSessionWithShadowContentStillPinsShadowBranch is the
+// inverse guard: an ACTIVE session that still has content on the shadow branch
+// must keep pinning it (its uncondensed checkpoints are still needed). Files
+// are not the only such content — StepCount only counts checkpoint commits
+// that were actually written and is reset on condensation, so a session whose
+// first checkpoint captured a transcript before any edit (a read-only tool
+// call, a question answered without touching the tree) has exactly one commit
+// on the branch and nothing else to prove it by.
+func TestPostCommit_ActiveSessionWithShadowContentStillPinsShadowBranch(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(active *SessionState)
+	}{
+		{name: "uncommitted tracked file", mutate: func(a *SessionState) {
+			a.FilesTouched = []string{"other-uncommitted.txt"}
+		}},
+		{name: "written step with no files yet", mutate: func(a *SessionState) {
+			a.StepCount = 1
+		}},
 	}
-	require.NoError(t, s.saveSessionState(context.Background(), active))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Not parallel: t.Chdir is process-global.
+			dir := setupGitRepo(t)
+			t.Chdir(dir)
 
-	commitWithCheckpointTrailer(t, repo, dir, "ccdd00112233")
-	require.NoError(t, s.PostCommit(context.Background()))
+			repo, err := git.PlainOpen(dir)
+			require.NoError(t, err)
 
-	_, err = repo.Reference(plumbing.NewBranchReferenceName(shadowBranch), true)
-	assert.NoError(t, err,
-		"shadow branch must be preserved for an active session with uncommitted tracked files")
+			s := &ManualCommitStrategy{}
+			workerID := "test-pin-worker"
+			activeID := "test-pin-active"
+
+			setupSessionWithCheckpoint(t, s, repo, dir, workerID)
+			worker, err := s.loadSessionState(context.Background(), workerID)
+			require.NoError(t, err)
+			now := time.Now()
+			worker.Phase = session.PhaseIdle
+			worker.LastInteractionTime = &now
+			require.NoError(t, s.saveSessionState(context.Background(), worker))
+			shadowBranch := getShadowBranchNameForCommit(worker.BaseCommit, worker.WorktreeID)
+
+			// A genuinely mid-turn session with its own uncondensed content.
+			active := &SessionState{
+				SessionID:           activeID,
+				AgentType:           worker.AgentType,
+				BaseCommit:          worker.BaseCommit,
+				WorktreeID:          worker.WorktreeID,
+				WorktreePath:        worker.WorktreePath, // PostCommit filters sessions by worktree path
+				Phase:               session.PhaseActive,
+				StartedAt:           now,
+				LastInteractionTime: &now,
+			}
+			tc.mutate(active)
+			require.NoError(t, s.saveSessionState(context.Background(), active))
+
+			commitWithCheckpointTrailer(t, repo, dir, "ccdd00112233")
+			require.NoError(t, s.PostCommit(context.Background()))
+
+			_, err = repo.Reference(plumbing.NewBranchReferenceName(shadowBranch), true)
+			assert.NoError(t, err,
+				"shadow branch must be preserved for an active session with uncondensed shadow content")
+		})
+	}
 }
