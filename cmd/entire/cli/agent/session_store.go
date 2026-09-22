@@ -237,24 +237,14 @@ func (s *SessionStore) CreateExclusive(name string, perm os.FileMode) error {
 // dangling symlink is still a file that exists and must not be overwritten
 // silently (see the rewind restore path, which distinguishes the two).
 func (s *SessionStore) Exists(name string) bool {
-	root, err := s.openRoot()
-	if err != nil {
-		return false
-	}
-	defer root.Close()
-	_, err = osroot.LstatNoSymlinks(root, name)
+	_, err := s.Lstat(name)
 	return err == nil
 }
 
 // IsDir reports whether name is a real directory in the store. Symlinks in the
 // path are rejected by LstatNoSymlinks rather than followed.
 func (s *SessionStore) IsDir(name string) bool {
-	root, err := s.openRoot()
-	if err != nil {
-		return false
-	}
-	defer root.Close()
-	info, err := osroot.LstatNoSymlinks(root, name)
+	info, err := s.Lstat(name)
 	return err == nil && info.IsDir()
 }
 

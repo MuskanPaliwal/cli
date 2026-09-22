@@ -14,8 +14,14 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
-// Ensure AntigravityAgent implements HookSupport
-var _ agent.HookSupport = (*AntigravityAgent)(nil)
+// Ensure AntigravityAgent implements HookSupport and declares where its hook
+// config lives (HookConfigRelPath in antigravity.go), so doctor's symlink scan
+// and the vouchable-directory guard cover .agents/hooks.json like every other
+// agent's config.
+var (
+	_ agent.HookSupport       = (*AntigravityAgent)(nil)
+	_ agent.HookConfigLocator = (*AntigravityAgent)(nil)
+)
 
 // AgentsHooksFileName is the hooks file used by Antigravity.
 const AgentsHooksFileName = "hooks.json"
@@ -36,7 +42,7 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 		if err := json.Unmarshal(existingData, &rawFile); err != nil {
 			return 0, fmt.Errorf("failed to parse existing hooks.json: %w", err)
 		}
-	} else if !os.IsNotExist(readErr) {
+	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return 0, readErr //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 
@@ -102,10 +108,11 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 func (a *AntigravityAgent) hookConfig(ctx context.Context) (*agent.HookConfigFile, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		repoRoot, err = os.Getwd() //nolint:forbidigo // Intentional fallback when WorktreeRoot() fails (tests run outside git repos)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current directory: %w", err)
-		}
+		// Not a repository (tests, and `enable` before `git init`): the process
+		// directory is the only candidate, and it is a directory the caller
+		// chose rather than one derived from anything read off disk. The same
+		// fallback every other agent's hook config uses.
+		repoRoot = "."
 	}
 	return agent.OpenHookConfig(repoRoot, a.HookConfigRelPath()) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 }
@@ -118,7 +125,7 @@ func (a *AntigravityAgent) UninstallHooks(ctx context.Context) error {
 	}
 	data, err := cfg.Read()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil // No hooks file means nothing to uninstall
 		}
 		return err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error

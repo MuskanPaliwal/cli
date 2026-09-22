@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
+	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
 // agy reads its window-title command from the GLOBAL config
@@ -40,8 +41,10 @@ const agySettingsFileName = "settings.json"
 // agyConfigDir returns the agy config directory, honouring the override env var.
 func agyConfigDir() (string, error) {
 	if dir := os.Getenv(configDirEnv); dir != "" {
-		if !filepath.IsAbs(dir) {
-			return "", fmt.Errorf("%s must be an absolute path, got %q", configDirEnv, dir)
+		// The same absolute-path rule the statusline override and userdirs'
+		// own overrides are held to, from the one helper that states it.
+		if err := userdirs.RequireAbsoluteOverride(configDirEnv, dir); err != nil {
+			return "", err //nolint:wrapcheck // the helper already names the variable
 		}
 		return dir, nil
 	}
@@ -173,15 +176,9 @@ func TitleTeeInstalled() bool {
 //   - any other (foreign) cmd   → leave untouched
 //   - missing settings file     → no-op
 func UninstallTitleTee() error {
-	// Missing file → nothing to uninstall.
-	exists, err := agySettingsExist()
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-
+	// A missing config directory or settings file reads as an empty map, and an
+	// empty map has no title key, so there is nothing to uninstall; a symlinked
+	// settings.json is refused by the read, exactly as install refuses it.
 	rawFile, err := readAgySettings()
 	if err != nil {
 		return err
@@ -262,26 +259,6 @@ func extractWrappedCommand(command string) (string, bool) {
 	// Strip outer single quotes and reverse the '\'' escaping.
 	inner := rest[1 : len(rest)-1]
 	return strings.ReplaceAll(inner, `'\''`, "'"), true
-}
-
-// agySettingsExist reports whether settings.json is present in agy's config
-// dir. Lstat, not Stat: a dangling symlink still occupies the slot.
-func agySettingsExist() (bool, error) {
-	root, err := openAgyConfigRoot(false)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to open agy config dir: %w", err)
-	}
-	defer root.Close()
-	if _, err := osroot.LstatNoSymlinks(root, agySettingsFileName); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to stat agy settings: %w", err)
-	}
-	return true, nil
 }
 
 // readAgySettings reads and parses settings.json into a raw map.

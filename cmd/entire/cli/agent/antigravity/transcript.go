@@ -284,11 +284,12 @@ func (a *AntigravityAgent) PrepareTranscript(ctx context.Context, transcriptRef 
 		deadline = ctxDeadline
 	}
 
-	// Poll until the transcript has content, the deadline passes, or ctx ends.
-	// A cancelled ctx stops the WAIT, not the fallback: the lifecycle only logs
-	// this function's error and then requires the file to exist, so returning
-	// early here would fail the Stop hook — the exact outcome the placeholder
-	// exists to prevent. Both exits fall through to the exclusive create.
+	// Poll until the transcript has content, the deadline passes, or ctx ends
+	// (the select below wakes at once on an already-cancelled ctx). A cancelled
+	// ctx stops the WAIT, not the fallback: the lifecycle only logs this
+	// function's error and then requires the file to exist, so returning early
+	// here would fail the Stop hook — the exact outcome the placeholder exists
+	// to prevent. Both exits fall through to the exclusive create.
 poll:
 	for {
 		info, err := store.Lstat(name)
@@ -306,7 +307,7 @@ poll:
 			return fmt.Errorf("antigravity: stat transcript: %w", err)
 		}
 
-		if ctx.Err() != nil || !time.Now().Before(deadline) {
+		if !time.Now().Before(deadline) {
 			break
 		}
 
