@@ -460,3 +460,32 @@ func TestReadTranscript_InsideBrainDirRefusesSymlink(t *testing.T) {
 		t.Fatal("GetTranscriptPosition() error = nil, want refusal")
 	}
 }
+
+// The bytes extractor is what condensation uses; it must agree with the
+// path-based one line for line, including the offset metric (non-blank lines).
+func TestExtractPromptsFromTranscript_MatchesPathBasedExtractor(t *testing.T) {
+	t.Parallel()
+	content := []byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfirst ask\n</USER_REQUEST>"}
+
+{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE"}
+{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd another\n</USER_REQUEST>"}
+`)
+	a := &AntigravityAgent{}
+	all, err := a.ExtractPromptsFromTranscript(content, 0)
+	if err != nil || len(all) != 2 || all[0] != "first ask" || all[1] != "add another" {
+		t.Fatalf("offset 0: got %v, %v", all, err)
+	}
+	later, err := a.ExtractPromptsFromTranscript(content, 2)
+	if err != nil || len(later) != 1 || later[0] != "add another" {
+		t.Fatalf("offset 2 (after two non-blank lines): got %v, %v", later, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fromPath, err := a.ExtractPrompts(path, 2)
+	if err != nil || len(fromPath) != 1 || fromPath[0] != later[0] {
+		t.Fatalf("path-based extractor disagrees: %v, %v", fromPath, err)
+	}
+}

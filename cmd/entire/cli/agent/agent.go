@@ -231,6 +231,21 @@ type PromptExtractor interface {
 	ExtractPrompts(sessionRef string, fromOffset int) ([]string, error)
 }
 
+// TranscriptPromptExtractor extracts user prompts from transcript CONTENT the
+// caller already holds. Condensation reads the transcript once — from the live
+// path, or from the shadow-branch copy when the live path cannot be read — and
+// stores those bytes in the checkpoint; the prompts it records must come from
+// the same bytes, not from a second read of the path that can see a different
+// (missing, shorter, or later) file. Optional: agents that only implement
+// PromptExtractor keep the path-based fallback.
+type TranscriptPromptExtractor interface {
+	Agent
+
+	// ExtractPromptsFromTranscript returns user prompts from content starting
+	// at the given offset, using the same offset metric as ExtractPrompts.
+	ExtractPromptsFromTranscript(content []byte, fromOffset int) ([]string, error)
+}
+
 // TranscriptPreparer is called before ReadTranscript to handle agent-specific
 // flush/sync requirements (e.g., Claude Code's async transcript writing).
 // The framework calls PrepareTranscript before ReadTranscript if implemented.

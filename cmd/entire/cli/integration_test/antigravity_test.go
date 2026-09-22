@@ -650,3 +650,80 @@ func mergeMaps(base, overrides map[string]any) map[string]any {
 	}
 	return out
 }
+
+// TestAntigravity_PromptInCheckpointMetadata_LaterTurnManualCommit covers the
+// case the first-turn test cannot: a LATER turn of the same conversation,
+// where CheckpointTranscriptStart is past the first turn's lines, committed by
+// the user rather than by agy. It follows agy's real order — the USER_INPUT
+// step is already in the transcript when PreInvocation fires, the model's step
+// lands only after Stop — and asserts the second checkpoint records the second
+// prompt and not the first (trail 444: three user-reported checkpoints with a
+// full transcript and an empty prompt, all on later turns).
+func TestAntigravity_PromptInCheckpointMetadata_LaterTurnManualCommit(t *testing.T) {
+	t.Parallel()
+	env := newAntigravityEnv(t)
+	env.InitEntire()
+
+	conversationID := "antigravity-it-prompt-later-turn"
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
+	common := map[string]any{
+		"conversationId":        conversationID,
+		"workspacePaths":        []string{env.RepoDir},
+		"transcriptPath":        transcriptPath,
+		"artifactDirectoryPath": filepath.Join(env.RepoDir, ".gemini", "antigravity-cli", "artifacts"),
+	}
+	userStep := func(text string) string {
+		step := map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+			"content": "<USER_REQUEST>\n" + text + "\n</USER_REQUEST>"}
+		raw, err := json.Marshal(step)
+		require.NoError(t, err)
+		return string(raw) + "\n"
+	}
+	modelStep := `{"type":"PLANNER_RESPONSE","status":"DONE"}` + "\n"
+	appendTranscript := func(chunk string) {
+		f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		require.NoError(t, err)
+		_, err = f.WriteString(chunk)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+	}
+	runTurn := func(request, file string, step int) {
+		// agy writes the USER_INPUT step BEFORE it fires PreInvocation.
+		appendTranscript(userStep(request))
+		require.NoError(t, runAntigravityHook(t, env.RepoDir, "pre-invocation", mergeMaps(common, map[string]any{
+			"invocationNum": 0, "initialNumSteps": step,
+		})))
+		require.NoError(t, runAntigravityHook(t, env.RepoDir, "pre-tool-use", mergeMaps(common, map[string]any{
+			"toolCall": map[string]any{"name": "write_to_file", "args": map[string]any{"TargetFile": file, "Overwrite": false}},
+			"stepIdx":  step,
+		})))
+		env.WriteFile(file, request+"\n")
+		require.NoError(t, runAntigravityHook(t, env.RepoDir, "stop", mergeMaps(common, map[string]any{
+			"executionNum": 1, "terminationReason": "model_stop", "error": "", "fullyIdle": true,
+		})))
+		// The model's step is flushed after Stop, before the user commits.
+		appendTranscript(modelStep)
+	}
+	promptOf := func(commitMsg string) string {
+		headHash := env.GetHeadHash()
+		repo, err := git.PlainOpen(env.RepoDir)
+		require.NoError(t, err)
+		commitObj, err := repo.CommitObject(plumbing.NewHash(headHash))
+		require.NoError(t, err)
+		checkpointID, found := trailers.ParseCheckpoint(commitObj.Message)
+		require.True(t, found, "%s should carry an Entire-Checkpoint trailer", commitMsg)
+		promptContent, found := env.ReadFileFromBranch(paths.MetadataBranchName, SessionFilePath(checkpointID.String(), paths.PromptFileName))
+		require.True(t, found, "prompt.txt should exist for %s", commitMsg)
+		return strings.TrimSpace(promptContent)
+	}
+
+	runTurn("make a red note", "red.md", 1)
+	env.GitCommitWithShadowHooks("Add red note", "red.md")
+	require.Equal(t, "make a red note", promptOf("first manual commit"))
+
+	runTurn("add another", "blue.md", 3)
+	env.GitCommitWithShadowHooks("Add blue note", "blue.md")
+	require.Equal(t, "add another", promptOf("second manual commit"),
+		"a later turn's checkpoint must carry that turn's prompt, not the first turn's or none")
+}

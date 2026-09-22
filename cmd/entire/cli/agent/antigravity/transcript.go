@@ -120,6 +120,20 @@ func (a *AntigravityAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]
 		}
 		return nil, fmt.Errorf("antigravity: read transcript for prompts: %w", err)
 	}
+	return extractPromptsFromContent(data, fromOffset), nil
+}
+
+// ExtractPromptsFromTranscript implements agent.TranscriptPromptExtractor over
+// transcript bytes the caller already holds — condensation's copy of the
+// transcript — with the same offset metric as ExtractPrompts. It never reads a
+// path, so the prompts it returns always describe the bytes being checkpointed.
+func (a *AntigravityAgent) ExtractPromptsFromTranscript(content []byte, fromOffset int) ([]string, error) { //nolint:unparam // the error return is the agent.TranscriptPromptExtractor contract
+	return extractPromptsFromContent(content, fromOffset), nil
+}
+
+// extractPromptsFromContent is the shared body of both prompt extractors: the
+// USER_REQUEST text of every USER_INPUT step after fromOffset non-blank lines.
+func extractPromptsFromContent(data []byte, fromOffset int) []string {
 	var prompts []string
 	forEachNonBlankLine(data, fromOffset, func(raw []byte) {
 		var step agyStep
@@ -133,7 +147,7 @@ func (a *AntigravityAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]
 			prompts = append(prompts, text)
 		}
 	})
-	return prompts, nil
+	return prompts
 }
 
 // GetTranscriptPosition implements agent.TranscriptAnalyzer. It returns the

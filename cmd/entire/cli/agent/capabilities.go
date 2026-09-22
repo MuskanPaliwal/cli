@@ -236,6 +236,13 @@ func AsPromptExtractor(ag Agent) (PromptExtractor, bool) {
 	return declaredCapability[PromptExtractor](ag, func(c DeclaredCaps) bool { return c.TranscriptAnalyzer })
 }
 
+// AsTranscriptPromptExtractor returns the agent as TranscriptPromptExtractor
+// under the same capability gate as AsPromptExtractor: it is transcript
+// analysis over bytes instead of a path.
+func AsTranscriptPromptExtractor(ag Agent) (TranscriptPromptExtractor, bool) {
+	return declaredCapability[TranscriptPromptExtractor](ag, func(c DeclaredCaps) bool { return c.TranscriptAnalyzer })
+}
+
 // AsSubagentAwareExtractor returns the agent as SubagentAwareExtractor if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
 func AsSubagentAwareExtractor(ag Agent) (SubagentAwareExtractor, bool) {

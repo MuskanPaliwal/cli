@@ -1468,6 +1468,7 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 		data.Transcript = []byte(fullTranscript)
 		data.FullTranscriptLines = countTranscriptItems(agentType, fullTranscript)
 		// Read prompts from shadow branch tree (source of truth after SaveStep)
+		promptSource := "shadow prompt.txt"
 		if file, fileErr := tree.File(metadataDir + "/" + paths.PromptFileName); fileErr == nil {
 			if content, contentErr := file.Contents(); contentErr == nil && content != "" {
 				data.Prompts = splitPromptContent(content)
@@ -1475,14 +1476,18 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 		}
 		// Filesystem fallback (written at turn start, covers mid-turn commits)
 		if len(data.Prompts) == 0 {
+			promptSource = "filesystem prompt.txt"
 			data.Prompts = readPromptsFromFilesystem(ctx, sessionID)
 		}
-		// Late-flush fallback: re-extract from the populated live transcript when
-		// prompt.txt is still empty (e.g. Antigravity writes the transcript after
-		// the Stop hook, so the TurnEnd prompt backfill saw an empty file).
+		// Late-flush fallback: re-extract from the transcript bytes being
+		// checkpointed when prompt.txt is still empty (e.g. Antigravity writes
+		// the transcript after the Stop hook, so the TurnEnd backfill saw an
+		// empty file).
 		if len(data.Prompts) == 0 {
-			data.Prompts = resolvePromptsFromLateFlushedTranscript(ctx, ag, liveTranscriptPath, checkpointTranscriptStart)
+			promptSource = "transcript"
+			data.Prompts = resolveCondensationPrompts(ctx, ag, data.Transcript, liveTranscriptPath, checkpointTranscriptStart)
 		}
+		logCondensationPrompts(ctx, sessionID, promptSource, len(data.Prompts), checkpointTranscriptStart)
 	}
 
 	// Use tracked files from session state (not all files in tree)
@@ -1549,12 +1554,16 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 	fullTranscript := string(liveData)
 	data.Transcript = liveData
 	data.FullTranscriptLines = countTranscriptItems(state.AgentType, fullTranscript)
+	promptSource := "filesystem prompt.txt"
 	data.Prompts = readPromptsFromFilesystem(ctx, state.SessionID)
-	// Late-flush fallback: re-extract from the live transcript when prompt.txt is
-	// still empty (e.g. Antigravity writes the transcript after the Stop hook).
+	// Late-flush fallback: re-extract from the transcript bytes being
+	// checkpointed when prompt.txt is still empty (e.g. Antigravity writes the
+	// transcript after the Stop hook).
 	if len(data.Prompts) == 0 {
-		data.Prompts = resolvePromptsFromLateFlushedTranscript(ctx, ag, transcriptPath, state.CheckpointTranscriptStart)
+		promptSource = "transcript"
+		data.Prompts = resolveCondensationPrompts(ctx, ag, data.Transcript, transcriptPath, state.CheckpointTranscriptStart)
 	}
+	logCondensationPrompts(ctx, state.SessionID, promptSource, len(data.Prompts), state.CheckpointTranscriptStart)
 
 	// Resolve files touched: prefers hook-populated state, falls back to transcript extraction
 	data.FilesTouched = s.resolveFilesTouched(ctx, state)
@@ -1619,6 +1628,45 @@ func resolvePendingTranscriptOffset(ctx context.Context, ag agent.Agent, state *
 		slog.Int("new_offset", pos),
 	)
 	state.CheckpointTranscriptStart = pos
+}
+
+// resolveCondensationPrompts is the last rung of the prompt ladder. It
+// extracts from the transcript BYTES condensation is about to store, through
+// agent.TranscriptPromptExtractor, so the recorded prompts always describe the
+// stored transcript — including when that transcript came from the
+// shadow-branch copy because the live path could not be read, which is exactly
+// when a re-read of the path would find nothing and record no prompt while the
+// checkpoint carried the full conversation. Agents without the bytes extractor
+// keep the path-based fallback.
+func resolveCondensationPrompts(ctx context.Context, ag agent.Agent, transcript []byte, transcriptPath string, offset int) []string {
+	if len(transcript) > 0 {
+		if extractor, ok := agent.AsTranscriptPromptExtractor(ag); ok {
+			prompts, err := extractor.ExtractPromptsFromTranscript(transcript, offset)
+			if err != nil {
+				logging.Warn(ctx, "condensation prompt extraction from transcript bytes failed",
+					slog.String("error", err.Error()))
+			} else {
+				return prompts
+			}
+		}
+	}
+	return resolvePromptsFromLateFlushedTranscript(ctx, ag, transcriptPath, offset)
+}
+
+// logCondensationPrompts records which rung of the prompt ladder supplied the
+// checkpoint's prompts. Every rung fails silently by design (a missing file is
+// "no prompts"), which made a checkpoint that carried a full transcript and no
+// prompt undiagnosable after the fact; this is the breadcrumb that was missing.
+func logCondensationPrompts(ctx context.Context, sessionID, source string, count, offset int) {
+	if count == 0 {
+		source = "none"
+	}
+	logging.Debug(logging.WithComponent(ctx, "checkpoint"), "condensation prompts resolved",
+		slog.String("session_id", sessionID),
+		slog.String("source", source),
+		slog.Int("count", count),
+		slog.Int("transcript_offset", offset),
+	)
 }
 
 // resolvePromptsFromLateFlushedTranscript re-extracts user prompts directly
