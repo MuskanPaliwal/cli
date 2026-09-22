@@ -226,10 +226,11 @@ func TestAppendStatusSnapshot_PrunesStaleFilesOnCreate(t *testing.T) {
 
 // TestAppendStatusSnapshot_PruneKeepsLiveLockFiles: a lock file is as old as
 // its conversation's first snapshot (flock never touches mtime), so pruning it
-// by age would unlink it from under a tee that holds it and let the next tee
-// lock a different inode — the dedup race the lock exists to close, reopened
-// only for conversations that outlive the retention window. A lock file is
-// pruned only once its snapshot file is gone.
+// by age alone would unlink it from under a tee that holds it and let the next
+// tee lock a different inode — the dedup race the lock exists to close. A lock
+// file is pruned only once its snapshot file is gone AND it is older than the
+// retention cutoff: the first rule keeps long-lived conversations' locks, the
+// second keeps a lock another tee has just taken but not yet written beside.
 func TestAppendStatusSnapshot_PruneKeepsLiveLockFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(statusDirEnv, dir)
@@ -264,9 +265,20 @@ func TestAppendStatusSnapshot_PruneKeepsLiveLockFiles(t *testing.T) {
 		}
 	}
 
-	// An orphaned lock file from an earlier prune run.
+	// An orphaned lock file left by an earlier prune run, long ago.
 	orphanLock := filepath.Join(dir, "orphan-conv.jsonl"+statusLockSuffix)
 	if err := os.WriteFile(orphanLock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(orphanLock, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another conversation's first tee, caught between taking its lock and
+	// creating its snapshot file: a fresh lock with no .jsonl beside it yet.
+	// Unlinking it here would leave that tee holding a lock on a dead inode.
+	inFlightLock := filepath.Join(dir, "inflight-conv.jsonl"+statusLockSuffix)
+	if err := os.WriteFile(inFlightLock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,8 +287,10 @@ func TestAppendStatusSnapshot_PruneKeepsLiveLockFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(liveLock); err != nil {
-		t.Errorf("the lock file of a conversation whose snapshot file still exists must survive: %v", err)
+	for _, p := range []string{liveLock, inFlightLock} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s must survive the prune: %v", filepath.Base(p), err)
+		}
 	}
 	for _, p := range []string{gone, goneLock, orphanLock} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {

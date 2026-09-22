@@ -397,16 +397,22 @@ func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
 }
 
 // pruneStaleStatusFiles removes other conversations' snapshot files that have
-// not been written to within statusRetention, and the lock files of
-// conversations whose snapshot file is gone.
+// not been written to within statusRetention, and lock files that are both
+// orphaned (no snapshot file beside them) and older than the same cutoff.
 //
-// Lock files are pruned only by that second rule, never by their own mtime:
-// flock does not touch mtime, so a lock file is as old as the conversation's
-// first snapshot, and a conversation still running past the retention window
-// would otherwise have its lock file unlinked from under the tee holding it.
-// The next tee would then create a fresh lock file and lock a different inode,
-// and the dedup read/append that AppendStatusSnapshot serialises with that lock
-// would be racing again — silently, and only for long-lived conversations.
+// A lock file is never pruned while its snapshot file exists: flock does not
+// touch mtime, so a lock file is as old as the conversation's first snapshot,
+// and a conversation still running past the retention window would otherwise
+// have its lock unlinked from under the tee holding it. The next tee would
+// create a fresh lock file, lock a different inode, and the dedup read/append
+// AppendStatusSnapshot serialises with that lock would race again.
+//
+// Nor is an orphan pruned on sight: AppendStatusSnapshot takes the lock BEFORE
+// it creates the snapshot file, so a prune running from another conversation's
+// first append can observe a lock file whose .jsonl does not exist yet. That
+// lock is milliseconds old; requiring it to be older than the cutoff leaves it
+// alone, while a lock left behind by an earlier prune of its snapshot file is
+// at least as old as that file's last write and goes in the same pass.
 func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 	activePrefix := filepath.Base(activeConversationID) + ".jsonl"
 	entries, err := osroot.ReadDirNoSymlinks(st.root, st.dirName())
@@ -436,14 +442,20 @@ func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 		}
 	}
 	// A lock file whose snapshot file is gone (pruned above, or by an earlier
-	// run) guards nothing any more.
+	// run) guards nothing any more — once it is old enough that it cannot be a
+	// lock another tee is holding while it creates its snapshot file.
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, statusLockSuffix) || strings.HasPrefix(name, activePrefix) {
 			continue
 		}
-		if !present[strings.TrimSuffix(name, statusLockSuffix)] {
-			_ = osroot.RemoveNoSymlinks(st.root, filepath.Join(st.dir, name)) //nolint:errcheck // best-effort prune
+		if present[strings.TrimSuffix(name, statusLockSuffix)] {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		_ = osroot.RemoveNoSymlinks(st.root, filepath.Join(st.dir, name)) //nolint:errcheck // best-effort prune
 	}
 }
