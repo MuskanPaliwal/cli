@@ -184,6 +184,11 @@ func resolveAgySymlinks(p string) string {
 	}
 	suffix := filepath.Base(p)
 	dir := filepath.Dir(p)
+	// Terminates without a depth cap: filepath.Dir is lexical and strictly
+	// shortens dir on every step until it reaches the root, where Dir(dir) ==
+	// dir. Symlink cycles cannot affect that; EvalSymlinks handles them
+	// internally (it returns an error past its own hop limit), and the walk
+	// never follows what it resolved.
 	for {
 		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 			return filepath.Join(resolved, suffix)

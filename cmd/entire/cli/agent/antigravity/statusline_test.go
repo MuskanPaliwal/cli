@@ -224,6 +224,67 @@ func TestAppendStatusSnapshot_PrunesStaleFilesOnCreate(t *testing.T) {
 	}
 }
 
+// TestAppendStatusSnapshot_PruneKeepsLiveLockFiles: a lock file is as old as
+// its conversation's first snapshot (flock never touches mtime), so pruning it
+// by age would unlink it from under a tee that holds it and let the next tee
+// lock a different inode — the dedup race the lock exists to close, reopened
+// only for conversations that outlive the retention window. A lock file is
+// pruned only once its snapshot file is gone.
+func TestAppendStatusSnapshot_PruneKeepsLiveLockFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+	old := time.Now().Add(-statusRetention - time.Hour)
+
+	// A long-lived conversation: snapshot file written recently, lock file
+	// created long ago.
+	live := filepath.Join(dir, "live-conv.jsonl")
+	if err := os.WriteFile(live, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	liveLock := live + statusLockSuffix
+	if err := os.WriteFile(liveLock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(liveLock, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// A finished conversation: both files stale.
+	gone := filepath.Join(dir, "gone-conv.jsonl")
+	if err := os.WriteFile(gone, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	goneLock := gone + statusLockSuffix
+	if err := os.WriteFile(goneLock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{gone, goneLock} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// An orphaned lock file from an earlier prune run.
+	orphanLock := filepath.Join(dir, "orphan-conv.jsonl"+statusLockSuffix)
+	if err := os.WriteFile(orphanLock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte(`{"conversation_id":"conv-new","context_window":{"total_input_tokens":1}}`)
+	if err := AppendStatusSnapshot(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(liveLock); err != nil {
+		t.Errorf("the lock file of a conversation whose snapshot file still exists must survive: %v", err)
+	}
+	for _, p := range []string{gone, goneLock, orphanLock} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s should be pruned, stat err = %v", filepath.Base(p), err)
+		}
+	}
+}
+
 // writeSnapshotFixture writes the given snapshots as JSONL to the snapshot file
 // for conversationID, using the statusDirEnv override already set by the test.
 func writeSnapshotFixture(t *testing.T, conversationID string, snaps []statusSnapshot) {

@@ -33,11 +33,10 @@ import (
 // are deliberately not installed — no lifecycle mapping.)
 func TestAntigravity_FullEventFlow(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 
 	conversationID := "antigravity-it-conv-id"
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 	require.NoError(t, os.WriteFile(transcriptPath,
 		[]byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"create foo.txt"}`+"\n"),
@@ -130,13 +129,12 @@ func TestAntigravity_FullEventFlow(t *testing.T) {
 // written to entire/checkpoints/v1.
 func TestAntigravity_MidTurnCommitWithUnwrittenTranscriptStillCondenses(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 
 	conversationID := "antigravity-it-unwritten-transcript"
 	// Deliberately do NOT create the transcript file: real agy has not written
 	// it yet when a mid-turn commit fires.
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript_full.jsonl")
 
 	common := map[string]any{
 		"conversationId":        conversationID,
@@ -189,11 +187,10 @@ func TestAntigravity_MidTurnCommitWithUnwrittenTranscriptStillCondenses(t *testi
 // filters drop only the already-condensed changes, not the late ones.
 func TestAntigravity_StopAfterMidTurnCommitCheckpointsLateShellFiles(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 
 	conversationID := "antigravity-it-late-shell-file"
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript_full.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 	require.NoError(t, os.WriteFile(transcriptPath,
 		[]byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"create docs/blue.md, commit it, then create docs/late.md"}`+"\n"),
@@ -246,11 +243,10 @@ func TestAntigravity_StopAfterMidTurnCommitCheckpointsLateShellFiles(t *testing.
 
 func TestAntigravity_StopAfterAgentCommitDoesNotCreateNewShadowBranch(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 
 	conversationID := "antigravity-it-agent-commit"
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript_full.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript_full.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 	require.NoError(t, os.WriteFile(transcriptPath,
 		[]byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"create docs/blue.md and commit it"}`+"\n"),
@@ -342,7 +338,7 @@ func gitCLICommitWithEntireHooks(t *testing.T, env *TestEnv, message string, fil
 // TurnStart; the latest before Stop is 4500/400 → expected delta 3500/300.
 func TestAntigravity_TokenUsageInCheckpointMetadata(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 
 	statusDir := t.TempDir()
 	configDir := t.TempDir()
@@ -361,8 +357,7 @@ func TestAntigravity_TokenUsageInCheckpointMetadata(t *testing.T) {
 		require.NoError(t, werr)
 	}
 
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 	require.NoError(t, os.WriteFile(transcriptPath,
 		[]byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"create tok.txt"}`+"\n"),
@@ -479,14 +474,13 @@ func TestAntigravity_TokenUsageInCheckpointMetadata(t *testing.T) {
 //     prompt is recovered from the now-populated transcript.
 func TestAntigravity_PromptInCheckpointMetadata(t *testing.T) {
 	t.Parallel()
-	env := NewFeatureBranchEnv(t)
+	env := newAntigravityEnv(t)
 	env.InitEntire()
 
 	const requestText = "add a foo.txt file with the word bar in it"
 
 	conversationID := "antigravity-it-prompt-conv-id"
-	transcriptPath := filepath.Join(env.RepoDir, ".gemini", "antigravity-cli",
-		"brain", conversationID, ".system_generated", "logs", "transcript.jsonl")
+	transcriptPath := filepath.Join(antigravityBrainDir(env.RepoDir), conversationID, ".system_generated", "logs", "transcript.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o750))
 
 	// CRUX: transcript is EMPTY at TurnStart and TurnEnd. agy writes it after Stop.
@@ -595,6 +589,32 @@ func TestAntigravity_PromptInCheckpointMetadata(t *testing.T) {
 		"committed prompt should equal the <USER_REQUEST> text from the late-flushed transcript")
 }
 
+// antigravityBrainDir is where these tests place agy's per-user brain
+// directory: inside the test repo, so nothing touches the developer's real
+// ~/.gemini. Every transcript path a test hands to a hook lives under it, and
+// every subprocess that resolves the agent's session store is told about it
+// (ENTIRE_TEST_ANTIGRAVITY_BRAIN_DIR), because PrepareTranscript refuses to
+// materialise a placeholder outside that store.
+func antigravityBrainDir(repoDir string) string {
+	return filepath.Join(repoDir, ".gemini", "antigravity-cli", "brain")
+}
+
+// antigravityBrainDirEnv is the env entry that points a spawned `entire` at
+// antigravityBrainDir(repoDir).
+func antigravityBrainDirEnv(repoDir string) string {
+	return "ENTIRE_TEST_ANTIGRAVITY_BRAIN_DIR=" + antigravityBrainDir(repoDir)
+}
+
+// newAntigravityEnv is NewFeatureBranchEnv with the brain-directory override on
+// ExtraEnv, so the git hooks a commit spawns (prepare-commit-msg, post-commit)
+// resolve the same session store as the antigravity hooks do.
+func newAntigravityEnv(t *testing.T) *TestEnv {
+	t.Helper()
+	env := NewFeatureBranchEnv(t)
+	env.ExtraEnv = append(env.ExtraEnv, antigravityBrainDirEnv(env.RepoDir))
+	return env
+}
+
 func runAntigravityHook(t *testing.T, repoDir, hookName string, input map[string]any) error {
 	t.Helper()
 	return runAntigravityHookWithEnv(t, repoDir, hookName, input, nil)
@@ -613,7 +633,8 @@ func runAntigravityHookWithEnv(t *testing.T, repoDir, hookName string, input map
 	cmd := execx.NonInteractive(context.Background(), getTestBinary(), "hooks", "antigravity", hookName)
 	cmd.Dir = repoDir
 	cmd.Stdin = bytes.NewReader(inputJSON)
-	cmd.Env = append(testutil.GitIsolatedEnv(), extraEnv...)
+	cmd.Env = append(testutil.GitIsolatedEnv(), antigravityBrainDirEnv(repoDir))
+	cmd.Env = append(cmd.Env, extraEnv...)
 	output, runErr := cmd.CombinedOutput()
 	t.Logf("antigravity hook %s output: %s", hookName, output)
 	return runErr

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
 func TestChunkAndReassemble_RoundTrip(t *testing.T) {
@@ -28,16 +31,27 @@ func TestChunkAndReassemble_RoundTrip(t *testing.T) {
 	}
 }
 
+// brainTranscriptPath points the agent's session store (GetSessionDir) at a
+// fresh brain directory and returns a transcript path inside it, in agy's
+// layout. PrepareTranscript materialises a placeholder only inside that store
+// (a write on a hook-supplied path), so every test that expects one has to
+// place the path where agy would. Uses t.Setenv, so callers cannot t.Parallel.
+func brainTranscriptPath(t *testing.T) string {
+	t.Helper()
+	brain := filepath.Join(t.TempDir(), ".gemini", "antigravity-cli", "brain")
+	t.Setenv(antigravityTestBrainDirEnv, brain)
+	return (&AntigravityAgent{}).ResolveSessionFile(brain, "conv")
+}
+
 // TestPrepareTranscript_AbsentFileCreatesPlaceholder verifies the
 // TranscriptPreparer creates an empty file when agy hasn't flushed its
 // transcript yet (the common case at Stop hook time). Without this, the
 // framework's fileExists check in handleLifecycleTurnEnd would fail and our
 // hook would exit non-zero, aborting agy's turn.
 func TestPrepareTranscript_AbsentFileCreatesPlaceholder(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	// Path with non-existent parent dirs to also exercise MkdirAll
-	path := filepath.Join(dir, ".gemini", "antigravity-cli", "brain", "conv", "logs", "t.jsonl")
+	// Non-existent parent dirs (the brain directory itself included) also
+	// exercise directory creation through the store.
+	path := brainTranscriptPath(t)
 	a := &AntigravityAgent{}
 	if err := a.PrepareTranscript(context.Background(), path); err != nil {
 		t.Fatalf("PrepareTranscript: %v", err)
@@ -55,10 +69,11 @@ func TestPrepareTranscript_AbsentFileCreatesPlaceholder(t *testing.T) {
 // an already-written transcript untouched. This is the case when agy's writer
 // races ahead of the Stop hook.
 func TestPrepareTranscript_PresentFilePreserved(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "t.jsonl")
+	path := brainTranscriptPath(t)
 	original := []byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE"}` + "\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -76,9 +91,7 @@ func TestPrepareTranscript_PresentFilePreserved(t *testing.T) {
 }
 
 func TestPrepareTranscript_WaitsForDelayedTranscript(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".gemini", "antigravity-cli", "brain", "conv", "logs", "t.jsonl")
+	path := brainTranscriptPath(t)
 	original := []byte(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE"}` + "\n")
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -103,6 +116,23 @@ func TestPrepareTranscript_WaitsForDelayedTranscript(t *testing.T) {
 	}
 	if !bytes.Equal(got, original) {
 		t.Fatalf("PrepareTranscript() should wait for delayed transcript, got %q want %q", got, original)
+	}
+}
+
+// TestPrepareTranscript_RefusesPathOutsideBrainDir: the placeholder is a write
+// on a hook-supplied path, so it lands inside agy's brain directory or nowhere.
+// Anchoring on the path's own parent instead would contain nothing.
+func TestPrepareTranscript_RefusesPathOutsideBrainDir(t *testing.T) {
+	brainTranscriptPath(t) // pins the store somewhere else
+	outside := filepath.Join(t.TempDir(), "elsewhere", "transcript_full.jsonl")
+
+	a := &AntigravityAgent{}
+	err := a.PrepareTranscript(context.Background(), outside)
+	if !errors.Is(err, agent.ErrOutsideSessionStore) {
+		t.Fatalf("PrepareTranscript() error = %v, want agent.ErrOutsideSessionStore", err)
+	}
+	if _, statErr := os.Lstat(outside); !os.IsNotExist(statErr) {
+		t.Fatalf("a placeholder must not be created outside the store; Lstat err = %v", statErr)
 	}
 }
 
@@ -359,9 +389,7 @@ func TestAgyStepTruncated(t *testing.T) {
 // only logs PrepareTranscript's error and then requires the file to exist, so
 // an early return here would fail the Stop hook the placeholder exists to save.
 func TestPrepareTranscript_CancelledContextStillCreatesPlaceholder(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "brain", "conv", ".system_generated", "logs", "transcript_full.jsonl")
+	path := brainTranscriptPath(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -385,9 +413,7 @@ func TestPrepareTranscript_CancelledContextStillCreatesPlaceholder(t *testing.T)
 // end of it; the store's Lstat reports the link itself and PrepareTranscript
 // stops there, leaving the link's target untouched.
 func TestPrepareTranscript_RefusesSymlinkedTranscript(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "brain", "conv", ".system_generated", "logs", "transcript_full.jsonl")
+	path := brainTranscriptPath(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -402,5 +428,35 @@ func TestPrepareTranscript_RefusesSymlinkedTranscript(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
 		t.Fatalf("nothing may be created at the link's target; Lstat err = %v", statErr)
+	}
+}
+
+// TestReadTranscript_InsideBrainDirRefusesSymlink: a transcript inside agy's
+// brain directory is read through the session store, so a symlink there is
+// refused instead of followed to wherever it points. Outside the store the
+// read is the ratcheted unconfined one (agent/transcript_read_guard_test.go).
+func TestReadTranscript_InsideBrainDirRefusesSymlink(t *testing.T) {
+	path := brainTranscriptPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "secret.jsonl")
+	if err := os.WriteFile(target, []byte(`{"step_index":0,"type":"USER_INPUT","content":"leak"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	a := &AntigravityAgent{}
+	if _, err := a.ReadTranscript(path); err == nil {
+		t.Fatal("ReadTranscript() error = nil, want refusal for a symlinked transcript inside the store")
+	}
+	prompts, err := a.ExtractPrompts(path, 0)
+	if err == nil || len(prompts) != 0 {
+		t.Fatalf("ExtractPrompts() = %v, %v; want refusal and no prompts", prompts, err)
+	}
+	if _, posErr := a.GetTranscriptPosition(path); posErr == nil {
+		t.Fatal("GetTranscriptPosition() error = nil, want refusal")
 	}
 }

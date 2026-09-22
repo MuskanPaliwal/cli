@@ -110,8 +110,9 @@ func forEachNonBlankLine(data []byte, fromOffset int, fn func(raw []byte)) int {
 // carries no prompt, so the user prompt is recovered from the transcript's
 // USER_INPUT steps. fromOffset is a count of non-blank lines already consumed.
 func (a *AntigravityAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]string, error) {
-	// Route through ReadTranscript so the package has a single unconfined
-	// transcript read (see agent/transcript_read_guard_test.go).
+	// Every analyzer reads through ReadTranscript: one contained read when the
+	// path is inside agy's brain directory, and the package's single ratcheted
+	// unconfined read otherwise (see agent/transcript_read_guard_test.go).
 	data, err := a.ReadTranscript(sessionRef)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -144,9 +145,9 @@ func (a *AntigravityAgent) GetTranscriptPosition(path string) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path supplied by agent hook stdin
+	data, err := a.ReadTranscript(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("antigravity: transcript position: %w", err)
@@ -181,9 +182,9 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 	if path == "" {
 		return nil, 0, nil
 	}
-	data, readErr := os.ReadFile(path) //nolint:gosec // path supplied by agent hook stdin
+	data, readErr := a.ReadTranscript(path)
 	if readErr != nil {
-		if os.IsNotExist(readErr) {
+		if errors.Is(readErr, fs.ErrNotExist) {
 			return nil, 0, nil
 		}
 		return nil, 0, fmt.Errorf("antigravity: extract modified files: %w", readErr)
@@ -232,8 +233,23 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 	return files, lineNum, nil
 }
 
+// ReadTranscript reads a transcript agy's hook payload named. When the path is
+// inside agy's brain directory — where every real payload points — the read
+// goes through the agent's SessionStore: a name inside a trusted root, no
+// symlink followed at any component. A path outside it is the read-side gap
+// docs/development/filesystem-safety.md describes (closing it needs RepoPath on
+// HookInput), and it stays the one unconfined read the ratchet in
+// agent/transcript_read_guard_test.go allows this file; it is never anchored on
+// the path's own parent, which would contain nothing while looking like it did.
 func (a *AntigravityAgent) ReadTranscript(sessionRef string) ([]byte, error) {
-	data, err := os.ReadFile(sessionRef) //nolint:gosec // path supplied by agent hook stdin
+	if store, name, err := a.transcriptStore(sessionRef); err == nil {
+		data, readErr := store.ReadFile(name)
+		if readErr != nil {
+			return nil, fmt.Errorf("antigravity: read transcript: %w", readErr)
+		}
+		return data, nil
+	}
+	data, err := os.ReadFile(sessionRef) //nolint:gosec // the ratcheted unconfined transcript read; see doc comment
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: read transcript: %w", err)
 	}
@@ -270,13 +286,20 @@ func (a *AntigravityAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error)
 // we materialise an empty placeholder. files_touched is already captured via
 // the PreToolUse hook (independent of transcript content), so condensation can
 // still produce a meaningful checkpoint from an empty transcript.
+//
+// The placeholder is a WRITE on a hook-supplied path, so it is created only
+// inside agy's brain directory (the agent's SessionStore): parents with
+// MkdirAllNoSymlink, the file with O_EXCL through the root, and a path outside
+// that directory refused rather than anchored on its own parent
+// (docs/development/filesystem-safety.md, "The Root Anchors"). Tests place
+// transcripts under ENTIRE_TEST_ANTIGRAVITY_BRAIN_DIR for the same reason.
 func (a *AntigravityAgent) PrepareTranscript(ctx context.Context, transcriptRef string) error {
 	if transcriptRef == "" {
 		return nil
 	}
 	store, name, err := a.transcriptStore(transcriptRef)
 	if err != nil {
-		return err
+		return fmt.Errorf("antigravity: prepare transcript: %w", err)
 	}
 
 	deadline := time.Now().Add(1 * time.Second)
@@ -337,28 +360,27 @@ poll:
 	return nil
 }
 
-// transcriptStore resolves transcriptRef to a session store and a name inside
-// it. The store is agy's brain directory (GetSessionDir) when the path is
-// inside it — the normal case, since agy's hook payload names
-// <brain>/<conversation>/.system_generated/logs/transcript_full.jsonl. A path
-// outside it (tests, a relocated brain) falls back to the file's own directory,
-// the same fallback agent.WriteSessionFile documents: that base contains
-// nothing by itself, but every access stays on the rooted, no-follow code path.
+// transcriptStore resolves transcriptRef to agy's brain-directory session store
+// (GetSessionDir, which ignores the repo path: agy keeps one brain per user)
+// and a name inside it. A path outside the store is reported through
+// agent.ErrOutsideSessionStore; it is never re-anchored on the path's own
+// parent, the derived base the filesystem-safety rules refuse because it
+// contains nothing while looking like it does.
 func (a *AntigravityAgent) transcriptStore(transcriptRef string) (*agent.SessionStore, string, error) {
-	if brainDir, err := a.GetSessionDir(""); err == nil {
-		if store, err := agent.OpenSessionStoreAt(a, brainDir); err == nil {
-			if name, err := store.Name(transcriptRef); err == nil {
-				return store, name, nil
-			}
-		}
+	// agy's payload always carries an absolute path. SessionStore.Name would
+	// accept a relative one as a name inside the store, which is not what a
+	// relative path means to the callers that pass one (fixtures resolved
+	// against the working directory), so it is classified as outside instead.
+	if !filepath.IsAbs(transcriptRef) {
+		return nil, "", fmt.Errorf("%w: %s is not absolute", agent.ErrOutsideSessionStore, transcriptRef)
 	}
-	store, err := agent.OpenSessionStoreAt(a, filepath.Dir(transcriptRef))
+	store, err := agent.OpenSessionStore(a, "")
 	if err != nil {
-		return nil, "", fmt.Errorf("antigravity: open transcript directory: %w", err)
+		return nil, "", err //nolint:wrapcheck // the store already names the agent and directory
 	}
 	name, err := store.Name(transcriptRef)
 	if err != nil {
-		return nil, "", fmt.Errorf("antigravity: resolve transcript path: %w", err)
+		return nil, "", err //nolint:wrapcheck // preserved for errors.Is(err, agent.ErrOutsideSessionStore)
 	}
 	return store, name, nil
 }
