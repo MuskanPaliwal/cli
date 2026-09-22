@@ -113,7 +113,13 @@ jobs:
             antigravity)
               mkdir -p "$HOME/.local/bin"
               tmp="$(mktemp -d)"
-              curl -fsSL https://github.com/google-antigravity/antigravity-cli/releases/latest/download/agy_cli_linux_x64.tar.gz -o "$tmp/agy.tar.gz"
+              # Pinned, not `latest`: this job gates merges on every PR, and a
+              # third-party release regressing hook execution (see #893) would
+              # redden PRs that never touched Antigravity. nightly-e2e.yml keeps
+              # `latest` so an agy change under us still surfaces, in the job
+              # built to report it. Bump deliberately after a green dispatch.
+              agy_version=1.2.7
+              curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${agy_version}/agy_cli_linux_x64.tar.gz" -o "$tmp/agy.tar.gz"
               tar -xzf "$tmp/agy.tar.gz" -C "$tmp"
               # The release tarball ships the binary as `antigravity` (every 1.x
               # release so far); `agy` is the name it is installed under.
