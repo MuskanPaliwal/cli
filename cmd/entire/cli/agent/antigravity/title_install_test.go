@@ -388,3 +388,60 @@ func TestUninstallTitleTee_UserWrapperLeftAlone(t *testing.T) {
 		t.Error("user-authored wrapper containing the tee marker must be left untouched")
 	}
 }
+
+// TestInstallTitle_RefusesSymlinkedSettingsFile: settings.json is a name inside
+// agy's config directory, and a symlink at it is refused rather than followed
+// or replaced. Following it would merge the target's contents into what Entire
+// writes; the atomic rename would then silently swap the user's link for a
+// regular file. Both happen without a word, so the legible answer is to stop.
+func TestInstallTitle_RefusesSymlinkedSettingsFile(t *testing.T) {
+	// No t.Parallel — uses t.Setenv
+	cfgDir := t.TempDir()
+	t.Setenv(configDirEnv, cfgDir)
+
+	target := filepath.Join(t.TempDir(), "real-settings.json")
+	if err := os.WriteFile(target, []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(cfgDir, "settings.json")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	if err := InstallTitleTee(); err == nil {
+		t.Fatal("InstallTitleTee() error = nil, want refusal for a symlinked settings.json")
+	}
+
+	// The link is intact and its target untouched.
+	info, err := os.Lstat(filepath.Join(cfgDir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the user's symlink was replaced by a regular file")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"theme":"dark"}` {
+		t.Fatalf("link target was modified: %s", got)
+	}
+	if TitleTeeInstalled() {
+		t.Fatal("TitleTeeInstalled() = true through a symlink it must not read")
+	}
+}
+
+// TestUninstallTitle_MissingConfigDirIsNoOp: a machine that never ran agy has
+// no config directory at all, and uninstall must read that as nothing to do
+// rather than as an error.
+func TestUninstallTitle_MissingConfigDirIsNoOp(t *testing.T) {
+	// No t.Parallel — uses t.Setenv
+	t.Setenv(configDirEnv, filepath.Join(t.TempDir(), "never-created"))
+
+	if err := UninstallTitleTee(); err != nil {
+		t.Fatalf("UninstallTitleTee() with no config dir: %v", err)
+	}
+	if TitleTeeInstalled() {
+		t.Fatal("TitleTeeInstalled() = true with no config dir")
+	}
+}

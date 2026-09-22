@@ -94,6 +94,16 @@ func titleTeeCommand(original string) string {
 // rewritten with the standard close-escape-reopen technique (see the
 // strings.ReplaceAll below) so the result is safe inside a single-quoted shell
 // argument.
+//
+// Trust boundary: s is only ever the title command the user already configured
+// in agy's own global settings.json — a command agy runs verbatim, as the
+// user, on every state change. Quoting it here changes nothing about what it
+// may do; it only guarantees that agy hands it to `entire ... --wrap` as ONE
+// argument, so that title-tee later re-executes exactly the command that was
+// there (via `sh -c`, the same shell agy would have used) and uninstall can
+// restore it byte for byte. No content from a repository, a hook payload, or
+// any other party reaches this function, and `entire` never composes a shell
+// command from anything but that user-authored string.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

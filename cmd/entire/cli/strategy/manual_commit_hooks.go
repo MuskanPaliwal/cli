@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -2401,8 +2400,13 @@ func sessionLacksCondensableContent(state *SessionState) bool {
 			// path yet (see agent/transcript_read_guard_test.go), so a symlink
 			// here is refused rather than followed — it counts as "no content"
 			// (filesystem-safety.md). agy never symlinks its transcript.
+			//
+			// IsRegular, not merely "not a symlink": a directory or any other
+			// non-file at the path has a Size() too (a directory's is its
+			// entry-table size), and the readers downstream cannot condense
+			// it, so anything that is not a regular file counts as no content.
 			info, statErr := os.Lstat(state.TranscriptPath)
-			return statErr != nil || info.Mode()&fs.ModeSymlink != 0 || info.Size() == 0
+			return statErr != nil || !info.Mode().IsRegular() || info.Size() == 0
 		}
 	}
 	return false

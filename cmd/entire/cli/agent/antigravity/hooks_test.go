@@ -3,9 +3,12 @@ package antigravity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 func TestInstallHooks_FreshRepo(t *testing.T) {
@@ -362,5 +365,96 @@ func TestInstallHooks_IdempotentStillRepairsTitleTee(t *testing.T) {
 	}
 	if !TitleTeeInstalled() {
 		t.Error("idempotent InstallHooks must repair the missing title tee")
+	}
+}
+
+// TestHooks_RefuseSymlinkedAgentsDir pins the three operations that used to
+// resolve .agents through a checked-in symlink with bare os.ReadFile /
+// os.MkdirAll / a joined-path write. A repository shipping
+// `.agents -> /somewhere/else` got hooks.json created and rewritten outside the
+// worktree from InstallHooks, deleted-from outside it from UninstallHooks, and
+// AreHooksInstalled read the far end as its own answer. It is reachable
+// without the user naming antigravity: DetectPresence is AreHooksInstalled.
+func TestHooks_RefuseSymlinkedAgentsDir(t *testing.T) {
+	outside := t.TempDir()
+	worktree := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(worktree, ".agents")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// The link's far end already holds an entire entry, so a followed read has
+	// something to report and a followed write has something to destroy.
+	planted := filepath.Join(outside, AgentsHooksFileName)
+	plantedBody := `{"entire":{"stop":[{"type":"command","command":"entire hooks antigravity stop"}]}}`
+	if err := os.WriteFile(planted, []byte(plantedBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(worktree)
+	t.Setenv(configDirEnv, t.TempDir())
+
+	a := &AntigravityAgent{}
+
+	if _, err := a.InstallHooks(context.Background(), false); !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Errorf("InstallHooks err = %v, want osroot.ErrSymlinkedPath", err)
+	}
+
+	// An unreadable answer is not "no hooks": a caller deciding whether hooks
+	// can be left alone must not be told the far end's content is ours.
+	installed, err := a.AreHooksInstalled(context.Background())
+	if !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Errorf("AreHooksInstalled err = %v, want osroot.ErrSymlinkedPath", err)
+	}
+	if installed {
+		t.Error("AreHooksInstalled followed the link and claimed the planted entry")
+	}
+
+	if err := a.UninstallHooks(context.Background()); !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Errorf("UninstallHooks err = %v, want osroot.ErrSymlinkedPath", err)
+	}
+
+	got, err := os.ReadFile(planted)
+	if err != nil {
+		t.Fatalf("the file at the link's far end must survive untouched: %v", err)
+	}
+	if string(got) != plantedBody {
+		t.Errorf("hooks.json outside the worktree was rewritten:\n%s", got)
+	}
+}
+
+// TestHooks_RefuseSymlinkedHooksFile: the leaf is refused too. os.Root blocks a
+// link that escapes the worktree but follows one pointing elsewhere inside it,
+// and accepting the leaf would let `.agents/hooks.json -> ../victim.json`
+// redirect both the merge read and the subsequent write.
+func TestHooks_RefuseSymlinkedHooksFile(t *testing.T) {
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, ".agents"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(worktree, "victim.json")
+	if err := os.WriteFile(victim, []byte(`{"mine":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "victim.json"), filepath.Join(worktree, ".agents", AgentsHooksFileName)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(worktree)
+	t.Setenv(configDirEnv, t.TempDir())
+
+	a := &AntigravityAgent{}
+	if _, err := a.InstallHooks(context.Background(), false); !errors.Is(err, osroot.ErrSymlinkedPath) {
+		t.Errorf("InstallHooks err = %v, want osroot.ErrSymlinkedPath", err)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"mine":true}` {
+		t.Errorf("the link's target was rewritten:\n%s", got)
+	}
+	info, err := os.Lstat(filepath.Join(worktree, ".agents", AgentsHooksFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the user's symlink was replaced by a regular file")
 	}
 }

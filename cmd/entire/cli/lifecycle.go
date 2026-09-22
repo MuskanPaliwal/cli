@@ -1016,8 +1016,22 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 		// baseline and the turn's tokens are lost permanently.
 		if oobUsage := computeOutOfBandTokenUsage(ctx, ag, sessionID, preState); oobUsage != nil {
 			if accErr := strategy.AccumulateSessionTokenUsage(ctx, sessionID, oobUsage); accErr != nil {
-				logging.Warn(logCtx, "failed to record out-of-band token usage for checkpoint-less turn",
-					slog.String("error", accErr.Error()))
+				// This is the only path that records a checkpoint-less turn's
+				// tokens, so a swallowed failure here is a permanent loss. Name
+				// the two causes apart: a session whose state was removed
+				// between the turn-end transition and this accumulate (nothing
+				// left to attribute to) versus an I/O or lock failure on state
+				// that still exists.
+				if errors.Is(accErr, strategy.ErrStateNotFound) {
+					logging.Warn(logCtx, "session state already removed; out-of-band token usage for checkpoint-less turn not recorded",
+						slog.String("session_id", sessionID),
+						slog.Int("input_tokens", oobUsage.InputTokens),
+						slog.Int("output_tokens", oobUsage.OutputTokens))
+				} else {
+					logging.Warn(logCtx, "failed to record out-of-band token usage for checkpoint-less turn",
+						slog.String("session_id", sessionID),
+						slog.String("error", accErr.Error()))
+				}
 			}
 		}
 		transitionSessionTurnEnd(ctx, sessionID, event)

@@ -378,3 +378,29 @@ func TestPrepareTranscript_CancelledContextStillCreatesPlaceholder(t *testing.T)
 		t.Fatalf("placeholder size = %d, want 0", info.Size())
 	}
 }
+
+// TestPrepareTranscript_RefusesSymlinkedTranscript: a symlink at the transcript
+// path is refused rather than followed (filesystem-safety.md). A Stat would have
+// reported the target's size and, for a dangling link, created a file at the far
+// end of it; the store's Lstat reports the link itself and PrepareTranscript
+// stops there, leaving the link's target untouched.
+func TestPrepareTranscript_RefusesSymlinkedTranscript(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "brain", "conv", ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "victim.jsonl")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	a := &AntigravityAgent{}
+	if err := a.PrepareTranscript(context.Background(), path); err == nil {
+		t.Fatal("PrepareTranscript() error = nil, want refusal for a symlinked transcript")
+	}
+	if _, statErr := os.Lstat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("nothing may be created at the link's target; Lstat err = %v", statErr)
+	}
+}
