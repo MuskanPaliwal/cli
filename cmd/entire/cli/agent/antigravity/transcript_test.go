@@ -354,3 +354,27 @@ func TestAgyStepTruncated(t *testing.T) {
 		}
 	}
 }
+
+// A cancelled context must still leave the placeholder behind: the lifecycle
+// only logs PrepareTranscript's error and then requires the file to exist, so
+// an early return here would fail the Stop hook the placeholder exists to save.
+func TestPrepareTranscript_CancelledContextStillCreatesPlaceholder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "brain", "conv", ".system_generated", "logs", "transcript_full.jsonl")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	a := &AntigravityAgent{}
+	if err := a.PrepareTranscript(ctx, path); err != nil {
+		t.Fatalf("PrepareTranscript with cancelled ctx: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("placeholder missing after cancelled ctx: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("placeholder size = %d, want 0", info.Size())
+	}
+}
