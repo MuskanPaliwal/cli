@@ -2395,21 +2395,31 @@ func sessionLacksCondensableContent(state *SessionState) bool {
 	}
 	if ag, err := agent.GetByAgentType(state.AgentType); err == nil {
 		if _, lateOK := agent.AsLateTranscriptWriter(ag); lateOK {
-			// Lstat, not Stat: the path comes from session state the hook
-			// recorded, and there is no containment boundary for a transcript
-			// path yet (see agent/transcript_read_guard_test.go), so a symlink
-			// here is refused rather than followed — it counts as "no content"
-			// (filesystem-safety.md). agy never symlinks its transcript.
-			//
 			// IsRegular, not merely "not a symlink": a directory or any other
 			// non-file at the path has a Size() too (a directory's is its
 			// entry-table size), and the readers downstream cannot condense
 			// it, so anything that is not a regular file counts as no content.
-			info, statErr := os.Lstat(state.TranscriptPath)
+			info, statErr := lstatLateTranscript(ag, state)
 			return statErr != nil || !info.Mode().IsRegular() || info.Size() == 0
 		}
 	}
 	return false
+}
+
+// lstatLateTranscript stats a late-transcript agent's transcript path the way
+// its own reads are contained: as a name inside the agent's SessionStore when
+// the path lies in the agent's session directory (a symlink at any component
+// is refused there, not followed), and otherwise with a plain Lstat — never a
+// Stat — so a linked leaf is still reported as a link and counts as no content
+// (filesystem-safety.md). The path is one the hook recorded into session state,
+// and the fallback is the documented read-side gap, not a parent-derived root.
+func lstatLateTranscript(ag agent.Agent, state *SessionState) (os.FileInfo, error) {
+	if store, err := agent.OpenSessionStore(ag, state.WorktreePath); err == nil {
+		if name, nameErr := store.Name(state.TranscriptPath); nameErr == nil {
+			return store.Lstat(name) //nolint:wrapcheck // preserved for the caller's "no content" classification
+		}
+	}
+	return os.Lstat(state.TranscriptPath) //nolint:wrapcheck // same classification; see doc comment
 }
 
 // addTrailerForAgentCommit handles the fast path for an eligible agent session.

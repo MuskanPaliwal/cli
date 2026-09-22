@@ -207,10 +207,13 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 					// trimmed away); say so instead of silently skipping, because
 					// this analyzer feeds the fallbacks (late-flush, first-turn
 					// mid-turn commit) where git status may not cover the file.
+					// The file is not necessarily lost: the live PreToolUse hook
+					// saw the untruncated call, and a later call on the same
+					// file names it — this list alone is what is incomplete.
 					if step.truncated() {
 						dropped++
 						logging.Warn(logging.WithComponent(context.Background(), "antigravity"),
-							"transcript step truncated by agy; modified file cannot be named and is missing from the file list",
+							"transcript step truncated by agy; a modified file cannot be named from this step (it may still be captured by the PreToolUse hook or a later call)",
 							slog.String("transcript", path),
 							slog.Int("step_index", step.StepIndex),
 							slog.String("tool", tc.Name))
@@ -226,7 +229,7 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 	})
 	if dropped > 0 {
 		logging.Warn(logging.WithComponent(context.Background(), "antigravity"),
-			"antigravity transcript-derived file list is incomplete",
+			"antigravity transcript-derived file list is incomplete (truncated steps); hook-captured files are unaffected",
 			slog.String("transcript", path),
 			slog.Int("dropped_truncated_calls", dropped))
 	}

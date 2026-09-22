@@ -122,3 +122,39 @@ func TestFinalizeAllTurnCheckpoints_EmptyTranscriptClearsForOtherAgents(t *testi
 	require.Equal(t, 1, errCount)
 	require.Empty(t, state.TurnCheckpointIDs)
 }
+
+// TestSessionLacksCondensableContent_StatsThroughTheSessionStore: when the
+// recorded transcript path lies inside the agent's session directory, the
+// fast-path stat goes through the agent's SessionStore, so a symlink at any
+// component is refused there rather than followed, and the answer is "no
+// content". Uses t.Setenv to pin agy's brain directory, so it is not parallel.
+func TestSessionLacksCondensableContent_StatsThroughTheSessionStore(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "brain")
+	t.Setenv("ENTIRE_TEST_ANTIGRAVITY_BRAIN_DIR", brain)
+
+	elsewhere := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(elsewhere, "transcript_full.jsonl"), []byte(`{"step_index":0}`+"\n"), 0o600))
+	// The conversation directory itself is a link out of the brain: a store
+	// stat refuses the parent component, a plain Lstat of the leaf would not.
+	require.NoError(t, os.MkdirAll(brain, 0o750))
+	if err := os.Symlink(elsewhere, filepath.Join(brain, "conv")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	linked := filepath.Join(brain, "conv", "transcript_full.jsonl")
+
+	state := &SessionState{
+		SessionID:      "agy-conv",
+		AgentType:      agent.AgentTypeAntigravity,
+		Phase:          session.PhaseActive,
+		TranscriptPath: linked,
+	}
+	require.True(t, sessionLacksCondensableContent(state),
+		"a transcript reached through a symlinked component inside the session directory must read as no content")
+
+	// The same content on a real path inside the brain is content.
+	real := filepath.Join(brain, "conv2", "transcript_full.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(real), 0o750))
+	require.NoError(t, os.WriteFile(real, []byte(`{"step_index":0}`+"\n"), 0o600))
+	state.TranscriptPath = real
+	require.False(t, sessionLacksCondensableContent(state))
+}
