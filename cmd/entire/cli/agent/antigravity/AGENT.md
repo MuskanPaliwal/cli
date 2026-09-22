@@ -5,8 +5,8 @@
 The `agy` binary (Antigravity 2.0, Google's Gemini CLI successor) supports
 workspace-scoped hooks via `.agents/hooks.json` and writes JSONL transcripts to
 a predictable per-conversation location. The integration is marked
-**Preview** (`IsPreview() == true`) — the label shows in the agent selector,
-`entire agent list`, and the hook-install message. Wire format captured on
+**Preview** (`IsPreview() == true`) — the label shows in the hook-install
+message, as it does for every preview agent. Wire format captured on
 agy **1.0.14/1.0.15** (real captured stdin, not docs) and re-verified
 unchanged against agy **1.1.1** (2026-07-13); agy is fast-moving.
 
@@ -18,8 +18,12 @@ hook payloads); tool args can arrive double-encoded.
 ## Binary
 
 - Install: `curl`-based installer / GitHub releases (`google-antigravity/antigravity-cli`).
-- Headless: `agy -p "<prompt>" --add-dir <workspace>` (without `--add-dir`, agy
-  runs in `~/.gemini/antigravity-cli/scratch/`, not the cwd).
+- Headless: `agy -p "<prompt>" --add-dir <absolute workspace path>` (without
+  `--add-dir`, agy runs in `~/.gemini/antigravity-cli/scratch/`, not the cwd).
+  The path MUST be absolute: a relative one (`.`) is rejected but does not fail
+  the run — agy logs `failed to resolve --add-dir path` and `loaded 0 named
+  hooks`, then runs the turn with no hooks and exit 0, which looks exactly like
+  a hook-loading bug.
 - Resume: `agy --conversation <id>` (used by `FormatResumeCommand`).
 - Auth: consumer OAuth, ADC + `--project`, or (agy ≥ 1.1.13) **Gemini API-key
   mode**: `{"modelProvider":"gemini"}` in `~/.gemini/antigravity-cli/settings.json`
@@ -183,9 +187,9 @@ worktree than the install still cleans up, including the legacy local-dev
   0. Workspace hooks (`.agents/hooks.json`) only load for a **trusted**
   workspace (`trustedWorkspaces` array of absolute paths in agy's global
   `settings.json`; interactive prompt "Do you trust the contents of this
-  project?"). Always pass `--add-dir <workspace>` and, in a fresh HOME,
-  pre-seed `trustedWorkspaces` (the e2e harness does both); `entire doctor`
-  reports when the workspace hooks are not loaded.
+  project?"). Always pass `--add-dir <absolute workspace path>` (a relative
+  path is silently dropped, see Binary above) and, in a fresh HOME, pre-seed
+  `trustedWorkspaces` (the e2e harness does both).
 - **Review**: agy is eligible in the `entire review` skill picker (skill
   discovery across `~/.gemini/config/skills` (agy 1.1+ global),
   `~/.gemini/antigravity-cli/skills`, `~/.gemini/skills`,

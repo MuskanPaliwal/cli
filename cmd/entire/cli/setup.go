@@ -37,8 +37,10 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// previewLabel marks agent integrations whose IsPreview() is true wherever an
-// agent is presented to the user (selector options, install messages).
+// previewLabel marks agent integrations whose IsPreview() is true in the
+// hook-install message. Deliberately NOT in the selector or `entire agent
+// list`: with most integrations flagged preview, a label on nearly every row
+// reads as "all of this is beta" and says nothing about the one that is new.
 const previewLabel = " (Preview)"
 
 // Config path display strings
@@ -540,11 +542,7 @@ func hookAgentOptions(selected map[types.AgentName]struct{}) []huh.Option[string
 		if to, ok := ag.(agent.TestOnly); ok && to.IsTestOnly() {
 			continue
 		}
-		label := string(ag.Type())
-		if ag.IsPreview() {
-			label += previewLabel
-		}
-		opt := huh.NewOption(label, string(name))
+		opt := huh.NewOption(string(ag.Type()), string(name))
 		if _, ok := selected[name]; ok {
 			opt = opt.Selected(true)
 		}

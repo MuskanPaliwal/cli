@@ -1030,8 +1030,8 @@ Captured from real agy stdin (1.0.x); all enforced by tests in `agent/antigravit
 #### Antigravity status: Preview
 
 The integration is marked `IsPreview() == true` — the "(Preview)" label shows in
-the agent selector, `entire agent list`, and the hook-install message. Known
-limitations while in preview:
+the hook-install message, as for every preview agent. Known limitations while
+in preview:
 
 - **No in-agy banner**: tracking is silent inside the agy UI (no SessionStart
   hook surface). `entire status` is the visibility surface.
