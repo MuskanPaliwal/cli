@@ -24,13 +24,13 @@ concurrency:
 jobs:
   smoke:
     runs-on: ${{ matrix.os }}
-    # Above the sum of the agents' own retry ceilings (~85m: 9 + 18 + 13.5 +
-    # 13.5 + 18 + 13.5, see the step caps below) plus setup, so the per-step cap
-    # is always the one that binds — a step timeout leaves an attributable row
-    # in the table, a job timeout kills Summarize and the artifact upload with
-    # it. Legs measure 6m30s-8m40s; this only binds on a hang in one of the
-    # uncapped setup steps.
-    timeout-minutes: 90
+    # Above the sum of the agents' own retry ceilings (~108m: 9 + 18 + 13.5 +
+    # 13.5 + 18 + 13.5 + 22.5, see the step caps below) plus setup, so the
+    # per-step cap is always the one that binds — a step timeout leaves an
+    # attributable row in the table, a job timeout kills Summarize and the
+    # artifact upload with it. Legs measure 6m30s-8m40s; this only binds on a
+    # hang in one of the uncapped setup steps.
+    timeout-minutes: 115
     permissions:
       contents: read
       actions: read
@@ -155,12 +155,30 @@ jobs:
           # unauthenticated api.github.com call it gives no way to authenticate,
           # so it is rate-limited at random.
           npm install -g @openai/codex @github/copilot opencode-ai
+          # Antigravity (agy) ships as a release tarball, one per OS/arch, with
+          # the binary inside named `antigravity`; `agy` is the name it is
+          # installed under. Same source as e2e.yml.
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  agy_asset=agy_cli_linux_x64 ;;
+            Linux-aarch64) agy_asset=agy_cli_linux_arm64 ;;
+            Darwin-arm64)  agy_asset=agy_cli_mac_arm64 ;;
+            Darwin-x86_64) agy_asset=agy_cli_mac_x64 ;;
+            *) echo "no agy release asset for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          tmp="$(mktemp -d)"
+          curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/latest/download/${agy_asset}.tar.gz" -o "$tmp/agy.tar.gz"
+          tar -xzf "$tmp/agy.tar.gz" -C "$tmp"
+          agy_bin="$(find "$tmp" -type f \( -name antigravity -o -name agy \) | head -n 1)"
+          test -n "$agy_bin"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$agy_bin" "$HOME/.local/bin/agy"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli" >> "$GITHUB_ENV"
+          echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli antigravity" >> "$GITHUB_ENV"
 
       # cursor-cli is absent: its E2E driver sends every prompt through tmux
       # (e2e/agents/cursor_cli.go), because Cursor's headless -p mode fires no
-      # hooks — and there is no tmux on Windows.
+      # hooks — and there is no tmux on Windows. antigravity is absent too: the
+      # harness has not been exercised on Windows (e2e.yml runs it on Linux).
       - name: Install agent CLIs (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -207,7 +225,8 @@ jobs:
       # E2E_ENTIRE_BIN (job env, set above) is what makes this the *installed*
       # nightly: the mise task skips its build when it is set.
       #
-      # The six bodies are byte-identical; only AGENT and the key differ.
+      # The seven bodies are byte-identical; only AGENT, the key and (for
+      # antigravity, whose TimeoutMultiplier is 2.5x) the step cap differ.
       - name: Smoke test claude-code
         if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' claude-code ') }}
         timeout-minutes: 20
@@ -313,6 +332,28 @@ jobs:
         env:
           AGENT: copilot-cli
           COPILOT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          set -uo pipefail
+          mkdir -p e2e/artifacts
+          go run ./e2e/bootstrap "$AGENT" &&
+            E2E_ARTIFACT_DIR="$ARTIFACT_ROOT/$AGENT" \
+              mise run test:e2e --agent "$AGENT" "$TEST_FILTER"
+          rc=$?
+          grep -q '^Total: 0 ' "$ARTIFACT_ROOT/$AGENT/report.txt" 2>/dev/null && rc=1
+          echo "$AGENT $rc" >> e2e/artifacts/results.txt
+          exit "$rc"
+
+      # 25 minutes: 3 attempts x 3 min x the 2.5x multiplier is 22.5 min.
+      # GEMINI_API_KEY selects agy's API-key mode (no account session); the
+      # harness writes modelProvider=gemini into an isolated HOME itself.
+      - name: Smoke test antigravity
+        if: ${{ !cancelled() && contains(format(' {0} ', env.AGENTS), ' antigravity ') }}
+        timeout-minutes: 25
+        shell: bash
+        env:
+          AGENT: antigravity
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set +e
           set -uo pipefail
