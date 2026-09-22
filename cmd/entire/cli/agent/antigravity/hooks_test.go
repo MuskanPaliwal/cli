@@ -496,3 +496,32 @@ func TestBuildEntireHookConfig_WindowsHostUsesDirectCmdWrapper(t *testing.T) {
 		t.Errorf("POSIX host must keep the sh wrapper, got %s", posix.Stop[0].Command)
 	}
 }
+
+// A hooks.json that never carried an Entire entry is the user's file: uninstall
+// must not rewrite it (re-indented, keys reordered) for no change of ours.
+func TestUninstallHooks_LeavesAForeignOnlyFileUntouched(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv(configDirEnv, t.TempDir())
+
+	hooksPath := filepath.Join(dir, ".agents", AgentsHooksFileName)
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately odd formatting: four-space indent, keys out of sorted order.
+	original := "{\n    \"zeta\": {\"Stop\": [{\"type\": \"command\", \"command\": \"echo z\"}]},\n    \"alpha\": {\"PreInvocation\": [{\"type\": \"command\", \"command\": \"echo a\"}]}\n}\n"
+	if err := os.WriteFile(hooksPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&AntigravityAgent{}).UninstallHooks(context.Background()); err != nil {
+		t.Fatalf("UninstallHooks: %v", err)
+	}
+	got, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("foreign-only hooks.json was rewritten:\n%s", got)
+	}
+}

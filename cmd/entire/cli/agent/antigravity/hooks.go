@@ -136,6 +136,13 @@ func (a *AntigravityAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to parse hooks.json: %w", err)
 	}
 
+	// Nothing of ours in the file: leave it byte-for-byte alone. Rewriting it
+	// would re-indent and reorder a file that holds only the user's own
+	// entries, for no change of Entire's (the title-tee uninstall is careful
+	// about exactly this).
+	if _, ok := rawFile["entire"]; !ok {
+		return nil
+	}
 	delete(rawFile, "entire")
 
 	return writeHooksFile(rawFile, cfg)
