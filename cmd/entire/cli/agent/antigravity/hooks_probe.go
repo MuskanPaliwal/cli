@@ -61,6 +61,12 @@ var ErrHooksProbeUnsupported = errors.New("agy too old to answer /hooks in print
 // "authentication required", which surfaces here as an error).
 func ProbeLoadedHooks(ctx context.Context, repoRoot string) (HooksProbe, error) {
 	probe := HooksProbe{}
+	// agy rejects a relative --add-dir but does not fail the run: it logs the
+	// rejection, loads zero hooks and answers for its scratch workspace, which
+	// would read here as "hooks not loaded". Refuse to ask the question wrong.
+	if !filepath.IsAbs(repoRoot) {
+		return probe, fmt.Errorf("agy --add-dir needs an absolute path, got %q", repoRoot)
+	}
 	agyPath, err := exec.LookPath(antigravityBinaryName)
 	if err != nil {
 		return probe, fmt.Errorf("agy not on PATH: %w", err)
