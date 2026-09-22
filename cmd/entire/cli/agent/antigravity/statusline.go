@@ -8,11 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
@@ -59,39 +63,82 @@ type statuslinePayload struct {
 	ContextWindow  *statusContextWindow `json:"context_window"`
 }
 
-// statusDir returns the directory used to store snapshot files.
-// It honours the ENTIRE_ANTIGRAVITY_STATUS_DIR env override (tests, ops),
-// otherwise uses <cache dir>/antigravity/status. userdirs is the mandated
-// resolver: it honours $XDG_CACHE_HOME on every platform (os.UserCacheDir
-// ignores it on darwin, defeating harness isolation) and falls back to a
-// throwaway per-process dir under `go test`. The checked form is used because
-// this package creates the directory and writes into it: a rejected cache-dir
-// override must surface here, before anything is created (see
-// userdirs_consumers_guard_test.go).
-func statusDir() (string, error) {
-	if override := os.Getenv(statusDirEnv); override != "" {
-		return override, nil
-	}
-	cacheDir, err := userdirs.CacheDirChecked()
-	if err != nil {
-		return "", fmt.Errorf("antigravity: resolve status dir: %w", err)
-	}
-	return filepath.Join(cacheDir, "antigravity", "status"), nil
+// statusStore is where snapshot files live: a shared *os.Root anchor plus the
+// directory name inside it (docs/development/filesystem-safety.md, "The Root
+// Anchors"). Every read, append, lock and prune below is a NAME inside this
+// root, so a symlink planted at any component is refused instead of followed.
+type statusStore struct {
+	root *os.Root
+	// dir is the directory inside root holding the JSONL files. "" means the
+	// root itself is the directory (the override case).
+	dir string
 }
 
-// statusFilePath returns the path for the JSONL snapshot file of a conversation.
+// statusDefaultDir is the store's location inside the per-user cache root.
+var statusDefaultDir = filepath.Join("antigravity", "status")
+
+// openStatusStore resolves the store. It honours the ENTIRE_ANTIGRAVITY_STATUS_DIR
+// env override (tests, ops), otherwise anchors on userdirs.CacheRoot. userdirs is
+// the mandated resolver: it honours $XDG_CACHE_HOME on every platform
+// (os.UserCacheDir ignores it on darwin, defeating harness isolation), falls back
+// to a throwaway per-process dir under `go test`, and refuses a relative
+// override before anything is created. The override is held to the same rule
+// (RequireAbsoluteOverride) and opened through the shared registry like every
+// other anchor, never as filepath.Dir of the file about to be written.
+func openStatusStore() (statusStore, error) {
+	if override := os.Getenv(statusDirEnv); override != "" {
+		if err := userdirs.RequireAbsoluteOverride(statusDirEnv, override); err != nil {
+			return statusStore{}, fmt.Errorf("antigravity status: %w", err)
+		}
+		if err := userdirs.EnsurePrivateDir(override); err != nil {
+			return statusStore{}, fmt.Errorf("antigravity status: %w", err)
+		}
+		root, err := osroot.Shared(override)
+		if err != nil {
+			return statusStore{}, fmt.Errorf("antigravity status: open %s: %w", statusDirEnv, err)
+		}
+		return statusStore{root: root}, nil
+	}
+	root, err := userdirs.CacheRoot()
+	if err != nil {
+		return statusStore{}, fmt.Errorf("antigravity status: resolve cache dir: %w", err)
+	}
+	return statusStore{root: root, dir: statusDefaultDir}, nil
+}
+
+// dirName is the store directory as a name inside the root ("." for the root).
+func (st statusStore) dirName() string {
+	if st.dir == "" {
+		return "."
+	}
+	return st.dir
+}
+
+// fileName returns the name inside the root of a conversation's JSONL file.
 // filepath.Base guards against path traversal in the conversation ID.
+func (st statusStore) fileName(conversationID string) string {
+	return filepath.Join(st.dir, filepath.Base(conversationID)+".jsonl")
+}
+
+// statusFilePath returns the absolute path of a conversation's snapshot file.
+// Diagnostics and tests only: production I/O goes through the root by name.
 func statusFilePath(conversationID string) (string, error) {
-	dir, err := statusDir()
+	st, err := openStatusStore()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, filepath.Base(conversationID)+".jsonl"), nil
+	return filepath.Join(st.root.Name(), st.fileName(conversationID)), nil
 }
 
 // AppendStatusSnapshot parses an agy state-JSON payload and appends a snapshot
 // to the per-conversation JSONL file. The hot path never returns an error for
-// malformed input — only for genuine I/O failures after the file has been opened.
+// malformed input — only for genuine I/O failures.
+//
+// agy fires the title command on every agent state change and does not
+// serialize the invocations, so two tees can run at once. The dedup read and
+// the append therefore happen under one advisory lock per conversation
+// (<id>.jsonl.lock, next to the file); without it a concurrent tee could append
+// between the read and the write and the dedup would miss.
 func AppendStatusSnapshot(payload []byte) error {
 	var p statuslinePayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -101,34 +148,43 @@ func AppendStatusSnapshot(payload []byte) error {
 		return nil // missing required fields — silently skip
 	}
 
-	filePath, err := statusFilePath(p.ConversationID)
-	if err != nil {
-		return err
-	}
-	isNew := false
-	if _, statErr := os.Stat(filePath); os.IsNotExist(statErr) {
-		isNew = true
-	}
-
-	// The directory necessarily exists once the snapshot file does, so only
-	// pay the MkdirAll syscall on the first append of a conversation.
-	if isNew {
-		if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
-			return fmt.Errorf("antigravity status: mkdir: %w", err)
-		}
-	}
-
 	// Dedup: compare compact JSON of the new context_window against the last
-	// persisted line's context_window. readLastStatusSnapshot streams the file
-	// keeping only the final line (O(1) memory); the file stays small because
-	// this very dedup suppresses unchanged snapshots.
+	// persisted line's context_window.
 	newCWBytes, err := json.Marshal(p.ContextWindow)
 	if err != nil {
 		return nil
 	}
 
+	st, err := openStatusStore()
+	if err != nil {
+		return err
+	}
+	if st.dir != "" {
+		if err := osroot.MkdirAllNoSymlink(st.root, st.dir, 0o750); err != nil {
+			return fmt.Errorf("antigravity status: mkdir: %w", err)
+		}
+	}
+	name := st.fileName(p.ConversationID)
+
+	release, err := flock.AcquireIn(st.root, name+".lock")
+	if err != nil {
+		return fmt.Errorf("antigravity status: lock: %w", err)
+	}
+	defer release()
+
+	f, err := osroot.OpenFileNoFollow(st.root, name, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("antigravity status: open: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("antigravity status: stat: %w", err)
+	}
+	isNew := info.Size() == 0
 	if !isNew {
-		lastSnap, readErr := readLastStatusSnapshot(filePath)
+		lastSnap, readErr := readLastSnapshotFrom(f)
 		if readErr == nil && lastSnap != nil {
 			lastCWBytes, marshalErr := json.Marshal(lastSnap.ContextWindow)
 			if marshalErr == nil && bytes.Equal(newCWBytes, lastCWBytes) {
@@ -146,14 +202,6 @@ func AppendStatusSnapshot(payload []byte) error {
 	if err != nil {
 		return nil
 	}
-
-	//nolint:gosec // filePath is derived from filepath.Base(conversationID)
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("antigravity status: open: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
 	line = append(line, '\n')
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("antigravity status: write: %w", err)
@@ -162,7 +210,7 @@ func AppendStatusSnapshot(payload []byte) error {
 	// Best-effort prune of stale files for other conversations when we first
 	// create the active file (avoids per-append overhead).
 	if isNew {
-		pruneStaleStatusFiles(filepath.Dir(filePath), p.ConversationID)
+		pruneStaleStatusFiles(st, p.ConversationID)
 	}
 
 	return nil
@@ -174,11 +222,11 @@ func AppendStatusSnapshot(payload []byte) error {
 // hasn't written a snapshot before the first TurnStart will over-count the
 // prior cumulative total on that first tracked turn.
 func (a *AntigravityAgent) SnapshotTokenBaseline(_ context.Context, sessionID string) (json.RawMessage, error) {
-	filePath, err := statusFilePath(sessionID)
+	st, err := openStatusStore()
 	if err != nil {
 		return nil, nil //nolint:nilerr // ditto: an unusable status dir means no baseline
 	}
-	snap, err := readLastStatusSnapshot(filePath)
+	snap, err := readLastStatusSnapshot(st, st.fileName(sessionID))
 	if err != nil || snap == nil {
 		return nil, nil //nolint:nilerr // ditto (missing file, no lines, malformed)
 	}
@@ -239,25 +287,33 @@ func (a *AntigravityAgent) CalculateTokenUsageSince(_ context.Context, sessionID
 	return usage, nil
 }
 
-// statusTailWindow bounds how many bytes readLastStatusSnapshot reads from the
+// statusTailWindow bounds how many bytes readLastSnapshotFrom reads from the
 // end of the file. Snapshot lines are well under 1 KB, so 64 KB always covers
 // the final line with huge margin.
 const statusTailWindow = 64 * 1024
 
-// readLastStatusSnapshot returns the snapshot on the final non-empty line, or
-// nil if the file has no usable line. It reads a bounded tail window instead
-// of streaming the whole file: it is shared by the per-fire dedup comparison
-// in AppendStatusSnapshot and by every-TurnStart SnapshotTokenBaseline, and
-// agy fires the title command on each agent state change — a front-to-back
-// scan would cost O(file) per fire, O(n^2) over a conversation.
-func readLastStatusSnapshot(filePath string) (*statusSnapshot, error) {
-	//nolint:gosec // filePath is derived from filepath.Base(conversationID)
-	f, err := os.Open(filePath)
+// readLastStatusSnapshot opens name inside the store and returns its final
+// snapshot; a missing file is nil, nil.
+func readLastStatusSnapshot(st statusStore, name string) (*statusSnapshot, error) {
+	f, err := osroot.OpenNoFollow(st.root, name)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil //nolint:nilnil // a missing file is "no snapshots yet", not an error
+		}
 		return nil, fmt.Errorf("antigravity status: open: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	return readLastSnapshotFrom(f)
+}
 
+// readLastSnapshotFrom returns the snapshot on the final non-empty line of f,
+// or nil if the file has no usable line. It reads a bounded tail window instead
+// of streaming the whole file: it is shared by the per-fire dedup comparison
+// in AppendStatusSnapshot (on the already-open, locked descriptor) and by
+// every-TurnStart SnapshotTokenBaseline, and agy fires the title command on
+// each agent state change — a front-to-back scan would cost O(file) per fire,
+// O(n^2) over a conversation.
+func readLastSnapshotFrom(f *os.File) (*statusSnapshot, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("antigravity status: stat: %w", err)
@@ -294,7 +350,7 @@ func readLastStatusSnapshot(filePath string) (*statusSnapshot, error) {
 
 	var snap statusSnapshot
 	if err := json.Unmarshal(lastLine, &snap); err != nil {
-		return nil, nil //nolint:nilnil // malformed last line — treat as no prior snapshot
+		return nil, nil //nolint:nilerr,nilnil // malformed last line — treat as no prior snapshot
 	}
 	return &snap, nil
 }
@@ -302,17 +358,15 @@ func readLastStatusSnapshot(filePath string) (*statusSnapshot, error) {
 // readStatusSnapshots reads all valid snapshot lines from the JSONL file for
 // the given conversationID. A missing file returns nil, nil (not an error).
 func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
-	filePath, err := statusFilePath(conversationID)
+	st, err := openStatusStore()
 	if err != nil {
 		return nil, err
 	}
-
-	//nolint:gosec // filePath is derived from filepath.Base(conversationID)
-	f, err := os.Open(filePath)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+	f, err := osroot.OpenNoFollow(st.root, st.fileName(conversationID))
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("antigravity status: open for read: %w", err)
 	}
 	defer func() { _ = f.Close() }()
@@ -338,18 +392,20 @@ func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
 	return snaps, nil
 }
 
-// pruneStaleStatusFiles removes JSONL files in dir that are not the active
-// conversation and whose mtime is older than statusRetention. Best-effort:
-// errors are silently ignored.
-func pruneStaleStatusFiles(dir, activeConversationID string) {
-	activeFile := filepath.Base(activeConversationID) + ".jsonl"
-	entries, err := os.ReadDir(dir)
+// pruneStaleStatusFiles removes files in the store that do not belong to the
+// active conversation and whose mtime is older than statusRetention — the
+// JSONL files and their lock files alike. Best-effort: errors are silently
+// ignored. Entries are lstat'ed and unlinked by name inside the root, so a
+// symlink planted in the store costs the link, never its target.
+func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
+	activePrefix := filepath.Base(activeConversationID) + ".jsonl"
+	entries, err := osroot.ReadDirNoSymlinks(st.root, st.dirName())
 	if err != nil {
 		return
 	}
 	cutoff := time.Now().Add(-statusRetention)
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == activeFile {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), activePrefix) {
 			continue
 		}
 		info, err := entry.Info()
@@ -357,7 +413,7 @@ func pruneStaleStatusFiles(dir, activeConversationID string) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+			_ = osroot.RemoveNoSymlinks(st.root, filepath.Join(st.dir, entry.Name())) //nolint:errcheck // best-effort prune
 		}
 	}
 }

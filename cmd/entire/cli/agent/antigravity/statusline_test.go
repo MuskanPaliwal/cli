@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -588,5 +590,71 @@ func TestCalculateTokenUsageSince_NoDoubleCountWhenBaselineIsLatest(t *testing.T
 	}
 	if usage != nil {
 		t.Errorf("usage = %+v, want nil (no snapshot strictly after baseline; zero delta)", usage)
+	}
+}
+
+// Concurrent tees are the norm (agy fires the title command on every state
+// change without serializing), and the dedup read and the append must be one
+// critical section: without the lock a second invocation could append between
+// them and the duplicate would land.
+func TestAppendStatusSnapshot_ConcurrentDuplicatesCollapseToOneLine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+
+	payload := []byte(`{"conversation_id":"conv-race","context_window":{"total_input_tokens":4242,"total_output_tokens":17}}`)
+	const writers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- AppendStatusSnapshot(payload)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendStatusSnapshot: %v", err)
+		}
+	}
+
+	snaps, err := readStatusSnapshots("conv-race")
+	if err != nil {
+		t.Fatalf("readStatusSnapshots: %v", err)
+	}
+	if len(snaps) != 1 {
+		t.Fatalf("got %d snapshot lines for identical concurrent payloads, want exactly 1", len(snaps))
+	}
+}
+
+// The store is a root anchor: a symlink planted where a snapshot file belongs is
+// refused by every reader and writer, never followed.
+func TestStatusStore_RefusesSymlinkedSnapshotFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+
+	target := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	if err := os.WriteFile(target, []byte(`{"ts":"2026-01-01T00:00:00Z","conversation_id":"conv-link","context_window":{"total_input_tokens":1}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "conv-link.jsonl")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	if snaps, err := readStatusSnapshots("conv-link"); err == nil {
+		t.Fatalf("readStatusSnapshots followed a symlink: got %d snapshots, want an error", len(snaps))
+	}
+	payload := []byte(`{"conversation_id":"conv-link","context_window":{"total_input_tokens":2}}`)
+	if err := AppendStatusSnapshot(payload); err == nil {
+		t.Fatal("AppendStatusSnapshot wrote through a symlink, want an error")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "\n") != 1 {
+		t.Fatalf("symlink target was modified:\n%s", data)
 	}
 }

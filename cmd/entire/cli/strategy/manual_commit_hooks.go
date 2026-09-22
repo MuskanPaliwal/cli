@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -2395,8 +2396,13 @@ func sessionLacksCondensableContent(state *SessionState) bool {
 	}
 	if ag, err := agent.GetByAgentType(state.AgentType); err == nil {
 		if _, lateOK := agent.AsLateTranscriptWriter(ag); lateOK {
-			info, statErr := os.Stat(state.TranscriptPath)
-			return statErr != nil || info.Size() == 0
+			// Lstat, not Stat: the path comes from session state the hook
+			// recorded, and there is no containment boundary for a transcript
+			// path yet (see agent/transcript_read_guard_test.go), so a symlink
+			// here is refused rather than followed — it counts as "no content"
+			// (filesystem-safety.md). agy never symlinks its transcript.
+			info, statErr := os.Lstat(state.TranscriptPath)
+			return statErr != nil || info.Mode()&fs.ModeSymlink != 0 || info.Size() == 0
 		}
 	}
 	return false
