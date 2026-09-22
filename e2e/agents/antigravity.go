@@ -376,10 +376,22 @@ func (a *Antigravity) StartSession(_ context.Context, dir string) (Session, erro
 	}
 
 	for range 10 {
-		content, err := s.WaitFor(`(>|trust|Enter to select|Enter to confirm|Acknowledge)`, 30*time.Second)
+		content, err := s.WaitFor(`(>|trust|Enter to select|Enter to confirm|Acknowledge|Terms of Service|color scheme)`, 30*time.Second)
 		if err != nil {
 			_ = s.Close()
 			return nil, fmt.Errorf("waiting for startup prompt: %w", err)
+		}
+		// First-run onboarding, in case the seeded cache/onboarding.json stops
+		// being honoured: the Terms screen's Enter only toggles its checkbox,
+		// so move to [Done] (Down to the button row, Right to Done) first.
+		if antigravityOnTermsScreen(content) {
+			_ = s.SendKeys("Down")
+			time.Sleep(200 * time.Millisecond)
+			_ = s.SendKeys("Right")
+			time.Sleep(200 * time.Millisecond)
+			_ = s.SendKeys("Enter")
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 		if antigravityNeedsStartupConfirmation(content) {
 			_ = s.SendKeys("Enter")
@@ -770,6 +782,9 @@ func antigravityEnsureIsolatedHome(repoDir string, apiKey bool) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("antigravity E2E: create isolated agy home: %w", err)
 	}
+	if err := antigravitySeedOnboarding(dir); err != nil {
+		return err
+	}
 	settingsPath := filepath.Join(dir, "settings.json")
 	settings := map[string]json.RawMessage{}
 	if data, err := os.ReadFile(settingsPath); err == nil {
@@ -817,6 +832,44 @@ func antigravityEnsureIsolatedHome(repoDir string, apiKey bool) error {
 	return nil
 }
 
+// antigravityOnboardingCache is the file agy 1.2.x reads to decide whether to
+// run its first-run onboarding (relative to the agy config dir), and the
+// content it writes once a user has clicked through.
+const antigravityOnboardingCache = "cache/onboarding.json"
+
+const antigravityOnboardingComplete = `{
+  "consumerOnboardingComplete": true,
+  "enterpriseOnboardingComplete": false,
+  "onboardingComplete": true
+}
+`
+
+// antigravitySeedOnboarding marks a fresh isolated HOME as already onboarded.
+// Interactive agy in a HOME that has never run shows two screens before the
+// prompt — "Choose your color scheme" and a Terms of Service & Data Use
+// consent — and neither is answered by Enter alone (the consent's Enter only
+// toggles its checkbox). Headless `-p` runs skip them, so this only ever bit
+// the tmux-driven tests, and only in the isolated-HOME modes: every
+// TestInteractive* leg failed in CI with agy sat on the Terms screen. The
+// state lives in cache/onboarding.json (established by completing onboarding
+// in a scratch HOME and diffing), not in settings.json or jetski_state.pbtxt.
+// Idempotent; an existing file is left alone.
+func antigravitySeedOnboarding(agyDir string) error {
+	path := filepath.Join(agyDir, filepath.FromSlash(antigravityOnboardingCache))
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("antigravity E2E: stat %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("antigravity E2E: create %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(antigravityOnboardingComplete), 0o600); err != nil {
+		return fmt.Errorf("antigravity E2E: write %s: %w", path, err)
+	}
+	return nil
+}
+
 // antigravityTrustPaths returns the workspace paths to trust for repoDir: as
 // given and symlink-resolved (deduplicated).
 func antigravityTrustPaths(repoDir string) []string {
@@ -850,6 +903,16 @@ func antigravitySessionEnv(base []string, repoDir string) ([]string, []string) {
 	return envArgs, unsetEnv
 }
 
+// antigravityOnTermsScreen reports agy's first-run Terms of Service & Data
+// Use consent, whose Enter toggles the checkbox rather than continuing.
+func antigravityOnTermsScreen(content string) bool {
+	return strings.Contains(content, "Terms of Service")
+}
+
+// antigravityNeedsStartupConfirmation reports a startup screen that Enter
+// dismisses. The color-scheme chooser is one (Enter takes the highlighted
+// default); it also contains a `>` selection marker, which is why it must be
+// listed here rather than read as the prompt.
 func antigravityNeedsStartupConfirmation(content string) bool {
 	confirmationMarkers := []string{
 		"Do you trust the contents of this project?",
@@ -857,6 +920,8 @@ func antigravityNeedsStartupConfirmation(content string) bool {
 		"Enter to select",
 		"Enter to confirm",
 		"Acknowledge",
+		"Choose your color scheme",
+		"Welcome to Antigravity CLI!",
 	}
 	for _, marker := range confirmationMarkers {
 		if strings.Contains(content, marker) {
@@ -867,7 +932,7 @@ func antigravityNeedsStartupConfirmation(content string) bool {
 }
 
 func antigravityReadyForPrompt(content string) bool {
-	return strings.Contains(content, ">") && !antigravityNeedsStartupConfirmation(content)
+	return strings.Contains(content, ">") && !antigravityNeedsStartupConfirmation(content) && !antigravityOnTermsScreen(content)
 }
 
 func antigravityAuthenticationRequired(content string) bool {

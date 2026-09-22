@@ -186,6 +186,13 @@ worktree than the install still cleans up, including the legacy local-dev
   `ExtractModifiedFilesFromOffset` logs a WARN per dropped call instead of
   silently skipping; live PreToolUse stdin is never truncated, so normal turns
   are unaffected — only the late-flush / first-turn mid-turn fallbacks are.
+- **First-run onboarding in a fresh HOME**: interactive `agy` shows a
+  color-scheme chooser and a Terms of Service & Data Use consent before the
+  prompt (Enter on the consent only toggles its checkbox; Down, Right, Enter
+  reaches [Done]). Headless `-p` runs skip both. State lives in
+  `~/.gemini/antigravity-cli/cache/onboarding.json`
+  (`{"onboardingComplete":true,"consumerOnboardingComplete":true,...}`), which
+  the e2e harness seeds into its isolated HOMEs.
 - **Untrusted-workspace trap**: `agy -p` in a folder agy doesn't trust resolves
   cwd to `~/.gemini/antigravity-cli/scratch/` — no hooks fire, no session, exit
   0. Workspace hooks (`.agents/hooks.json`) only load for a **trusted**

@@ -109,6 +109,11 @@ Both isolated modes also pre-trust the test repo (`trustedWorkspaces` in that
 `settings.json`, agy's equivalent of `GEMINI_CLI_TRUST_WORKSPACE=true`): agy only
 loads a workspace's `.agents/hooks.json` for a trusted workspace, so in a fresh
 `HOME` a headless run would otherwise do the work with no Entire hooks firing.
+They also seed `cache/onboarding.json` as already complete: interactive agy in a
+never-run `HOME` shows a color-scheme chooser and a Terms of Service consent
+before the prompt (headless `-p` skips both), and the tmux-driven
+`TestInteractive*` tests otherwise time out with agy sat on the Terms screen.
+The runner can also click through both screens if the seed stops being honoured.
 3. **OAuth** — neither set: the developer's real `HOME` (existing `agy` login) is
    used for local runs.
 

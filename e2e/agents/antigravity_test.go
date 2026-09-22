@@ -1005,3 +1005,57 @@ func TestAntigravityExtraArtifactsOnlyForIsolatedHome(t *testing.T) {
 		t.Fatalf("agy-home-settings.json = %q", got["agy-home-settings.json"])
 	}
 }
+
+// A fresh isolated HOME must arrive already onboarded, or interactive agy sits
+// on its color-scheme and Terms screens and every tmux-driven test times out
+// waiting for files (the CI leg on 165b0ada53: 5 TestInteractive* failures).
+func TestAntigravityEnsureIsolatedHomeSeedsOnboardingComplete(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := antigravityEnsureIsolatedHome(repoDir, true); err != nil {
+		t.Fatalf("antigravityEnsureIsolatedHome() error = %v", err)
+	}
+	path := filepath.Join(antigravityTestHomeDir(repoDir), ".gemini", "antigravity-cli", "cache", "onboarding.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("onboarding cache not seeded: %v", err)
+	}
+	var got map[string]bool
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("onboarding cache is not JSON: %v\n%s", err, data)
+	}
+	if !got["onboardingComplete"] || !got["consumerOnboardingComplete"] {
+		t.Fatalf("onboarding cache must mark onboarding complete, got %s", data)
+	}
+	// A user's own file (here: a different value) is left alone.
+	if err := os.WriteFile(path, []byte(`{"onboardingComplete":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := antigravityEnsureIsolatedHome(repoDir, true); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(path); string(again) != `{"onboardingComplete":false}` {
+		t.Fatalf("existing onboarding cache was overwritten: %s", again)
+	}
+}
+
+// The two first-run screens must never be mistaken for the prompt: both carry
+// a `>` (the chooser's selection marker, the consent's checkbox cursor).
+func TestAntigravityStartupScreensAreNotThePrompt(t *testing.T) {
+	t.Parallel()
+	chooser := "Welcome to Antigravity CLI!\n\nChoose your color scheme:\n\n  > terminal\n    light\n"
+	terms := "Terms of Service & Data Use\n\n  > [x] Yes, I agree to help improve Antigravity CLI\n    [Previous]      [Done]\n  ↑/↓ Navigate · enter Toggle\n"
+	prompt := "────────\n>\n────────\n? for shortcuts                Gemini 3.8 Flash · low\n"
+
+	if antigravityReadyForPrompt(chooser) || !antigravityNeedsStartupConfirmation(chooser) {
+		t.Error("color-scheme chooser must read as a confirmation screen, not the prompt")
+	}
+	if antigravityReadyForPrompt(terms) || !antigravityOnTermsScreen(terms) {
+		t.Error("Terms screen must read as the Terms screen, not the prompt")
+	}
+	if antigravityNeedsStartupConfirmation(terms) {
+		t.Error("Terms screen must not be answered with a bare Enter (it only toggles the checkbox)")
+	}
+	if !antigravityReadyForPrompt(prompt) {
+		t.Error("the real prompt must read as ready")
+	}
+}
