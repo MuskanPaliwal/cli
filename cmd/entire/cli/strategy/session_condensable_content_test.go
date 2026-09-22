@@ -152,9 +152,9 @@ func TestSessionLacksCondensableContent_StatsThroughTheSessionStore(t *testing.T
 		"a transcript reached through a symlinked component inside the session directory must read as no content")
 
 	// The same content on a real path inside the brain is content.
-	real := filepath.Join(brain, "conv2", "transcript_full.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(real), 0o750))
-	require.NoError(t, os.WriteFile(real, []byte(`{"step_index":0}`+"\n"), 0o600))
-	state.TranscriptPath = real
+	regular := filepath.Join(brain, "conv2", "transcript_full.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(regular), 0o750))
+	require.NoError(t, os.WriteFile(regular, []byte(`{"step_index":0}`+"\n"), 0o600))
+	state.TranscriptPath = regular
 	require.False(t, sessionLacksCondensableContent(state))
 }
