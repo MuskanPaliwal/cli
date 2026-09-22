@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,4 +72,53 @@ func TestSessionLacksCondensableContent_LateTranscriptWriterPathShapes(t *testin
 		require.True(t, sessionLacksCondensableContent(newState(link)),
 			"a symlink is refused, not followed to its target's size")
 	})
+}
+
+// TestFinalizeAllTurnCheckpoints_LateTranscriptNotFlushedDefers pins the
+// late-transcript deferral: agy writes its transcript AFTER the Stop hook, so
+// the file HandleTurnEnd finds is often still the empty placeholder
+// PrepareTranscript materialised. That is a transient state, not a lost
+// transcript, and the mid-turn checkpoints' IDs must survive it so a later
+// HandleTurnEnd finalizes them with the flushed content — the same deferral
+// the degraded-scanner path uses. Nilling them abandoned the backfill for the
+// whole turn on the first Stop that beat the flush.
+func TestFinalizeAllTurnCheckpoints_LateTranscriptNotFlushedDefers(t *testing.T) {
+	t.Parallel()
+
+	placeholder := filepath.Join(t.TempDir(), "transcript_full.jsonl")
+	require.NoError(t, os.WriteFile(placeholder, nil, 0o600))
+
+	state := &SessionState{
+		SessionID:         "agy-mid-turn",
+		AgentType:         agent.AgentTypeAntigravity,
+		Phase:             session.PhaseActive,
+		TranscriptPath:    placeholder,
+		TurnCheckpointIDs: []string{"01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+	}
+
+	errCount := NewManualCommitStrategy().finalizeAllTurnCheckpoints(context.Background(), state)
+	require.Equal(t, 1, errCount, "a deferred finalize is still reported to the best-effort caller")
+	require.Equal(t, []string{"01ARZ3NDEKTSV4RRFFQ69G5FAV"}, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs must survive an unflushed late transcript so a later turn end retries")
+}
+
+// A non-late agent's empty transcript is still the terminal condition it was:
+// there is no later flush to wait for, so the IDs are cleared as before.
+func TestFinalizeAllTurnCheckpoints_EmptyTranscriptClearsForOtherAgents(t *testing.T) {
+	t.Parallel()
+
+	empty := filepath.Join(t.TempDir(), "transcript.jsonl")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+
+	state := &SessionState{
+		SessionID:         "claude-mid-turn",
+		AgentType:         agent.AgentTypeClaudeCode,
+		Phase:             session.PhaseActive,
+		TranscriptPath:    empty,
+		TurnCheckpointIDs: []string{"01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+	}
+
+	errCount := NewManualCommitStrategy().finalizeAllTurnCheckpoints(context.Background(), state)
+	require.Equal(t, 1, errCount)
+	require.Empty(t, state.TurnCheckpointIDs)
 }

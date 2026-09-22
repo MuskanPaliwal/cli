@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeAgySettingsFile writes content to <dir>/settings.json.
@@ -443,5 +444,41 @@ func TestUninstallTitle_MissingConfigDirIsNoOp(t *testing.T) {
 	}
 	if TitleTeeInstalled() {
 		t.Fatal("TitleTeeInstalled() = true with no config dir")
+	}
+}
+
+// TestInstallTitle_SerialisesOnTheSettingsLock: install and uninstall are a
+// read-modify-write of agy's machine-global settings.json, so two entire
+// processes (an add in one repo racing an add or remove in another) must take
+// turns. Pinned by holding the lock externally and watching install wait.
+func TestInstallTitle_SerialisesOnTheSettingsLock(t *testing.T) {
+	// No t.Parallel — uses t.Setenv
+	cfgDir := t.TempDir()
+	t.Setenv(configDirEnv, cfgDir)
+
+	release, err := lockAgySettings(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- InstallTitleTee() }()
+
+	select {
+	case <-done:
+		t.Fatal("InstallTitleTee completed while another process held the settings lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("InstallTitleTee after the lock was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("InstallTitleTee did not proceed after the lock was released")
+	}
+	if got, want := readTitleCommand(t, cfgDir), "entire hooks antigravity title-tee"; got != want {
+		t.Fatalf("title.command = %q, want %q", got, want)
 	}
 }

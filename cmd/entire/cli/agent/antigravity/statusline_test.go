@@ -3,6 +3,7 @@ package antigravity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -731,5 +732,60 @@ func TestStatusStore_RefusesSymlinkedSnapshotFile(t *testing.T) {
 	}
 	if strings.Count(string(data), "\n") != 1 {
 		t.Fatalf("symlink target was modified:\n%s", data)
+	}
+}
+
+// TestReaders_TakeTheConversationLock: SnapshotTokenBaseline and
+// CalculateTokenUsageSince read under the same per-conversation lock the tee
+// appends under, so a baseline or delta read cannot observe a torn last line
+// from a concurrent append and treat it as "no snapshot". Pinned by holding the
+// lock externally and watching the reader wait for it.
+func TestReaders_TakeTheConversationLock(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+	writeSnapshotFixture(t, "c-lock", []statusSnapshot{{
+		Timestamp:      "2026-06-03T10:00:00.000000000Z",
+		ConversationID: "c-lock",
+		ContextWindow:  statusContextWindow{TotalInputTokens: 1},
+	}})
+
+	st, err := openStatusStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockStatusFile(st, st.fileName("c-lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		a := &AntigravityAgent{}
+		baseline, err := a.SnapshotTokenBaseline(context.Background(), "c-lock")
+		if err != nil {
+			done <- err
+			return
+		}
+		if len(baseline) == 0 {
+			done <- errors.New("SnapshotTokenBaseline returned no baseline for a conversation with a snapshot")
+			return
+		}
+		_, err = a.CalculateTokenUsageSince(context.Background(), "c-lock", nil)
+		done <- err
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("readers completed while another process held the conversation lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("readers after the lock was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("readers did not proceed after the lock was released")
 	}
 }

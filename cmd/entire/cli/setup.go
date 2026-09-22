@@ -1828,11 +1828,15 @@ func runRemoveAgent(ctx context.Context, w io.Writer, name string) error {
 	warnCodexHooksAfterRemoval(ctx, w, ag)
 
 	// Antigravity's title tee lives in agy's GLOBAL settings.json, not in
-	// this repo — only remove it when the user removes the agent itself,
-	// never on per-repo disable. Because the slot is global, removing it here
-	// silently breaks token capture for every OTHER repo still using
-	// Antigravity, so tell the user (doctor / `entire agent add antigravity`
-	// in the affected repo repairs it).
+	// this repo. `entire agent remove` is itself a per-repo command (it edits
+	// only this repo's .agents/hooks.json), and there is no machine-wide
+	// "remove Antigravity everywhere" command, so this is the one place the
+	// global slot is released: `entire disable` deliberately leaves it alone.
+	// The cost is real and stated to the user below — removing the tee here
+	// disables token capture for every OTHER repo still using Antigravity
+	// until `entire agent add antigravity` (or doctor) repairs it there.
+	// Counting the repos that still depend on the slot before releasing it
+	// is a deferred product decision, tracked on trail 444.
 	teeRemoved := false
 	if ag.Name() == agent.AgentNameAntigravity && antigravity.TitleTeeInstalled() {
 		if err := antigravity.UninstallTitleTee(); err != nil {

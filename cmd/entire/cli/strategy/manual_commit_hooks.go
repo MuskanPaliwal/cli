@@ -3248,8 +3248,26 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		return 1 // Count as error - all checkpoints will be skipped
 	}
 
+	ag, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; ExtractSkillEvents handles nil
+
 	fullTranscript, err := agent.ReadTranscriptFile(transcriptPath)
 	if err != nil || len(fullTranscript) == 0 {
+		// A late-transcript agent (agy) writes its transcript AFTER the Stop
+		// hook, so an empty file here is the placeholder PrepareTranscript
+		// materialised when the flush lost the race — a normal, transient
+		// state, not a lost transcript. Keep TurnCheckpointIDs so a later
+		// HandleTurnEnd in this turn finalizes with the flushed content, the
+		// same deferral the degraded-scanner path below uses; nilling them
+		// would abandon the backfill for every mid-turn checkpoint of the turn
+		// on the first Stop that beat the flush.
+		if _, late := agent.AsLateTranscriptWriter(ag); late && err == nil {
+			logging.Info(logCtx, "finalize: late-transcript agent has not flushed yet, deferring",
+				slog.String("session_id", state.SessionID),
+				slog.String("transcript_path", state.TranscriptPath),
+				slog.Int("checkpoint_count", len(state.TurnCheckpointIDs)),
+			)
+			return 1 // Reported, not abandoned: TurnCheckpointIDs survive for the retry
+		}
 		msg := "finalize: empty transcript, skipping"
 		if err != nil {
 			msg = "finalize: failed to read transcript, skipping"
@@ -3279,7 +3297,6 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		prompts = readPromptsFromFilesystem(ctx, state.SessionID)
 	}
 
-	ag, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; ExtractSkillEvents handles nil
 	// Persist newly extracted events into state (the caller's MutateSessionState
 	// saves them); telemetry for them is emitted by the lifecycle turn-end
 	// handler, which snapshots state.SkillEvents growth around HandleTurnEnd.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
@@ -111,10 +112,38 @@ func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// lockAgySettings serialises the read-modify-write of agy's global
+// settings.json across entire processes: two `entire agent add antigravity`
+// runs from different repos on one machine (or an add racing a remove) would
+// otherwise both read the same slot, and the second atomic write would replace
+// the first's, leaving the title slot wrapped twice, unwrapped, or restored to
+// the wrong original with no error anywhere. The lock file sits beside
+// settings.json, like the status store's beside its snapshot file. With create
+// the config directory is made first; without it a missing directory is
+// reported through os.IsNotExist for callers that then have nothing to do.
+func lockAgySettings(create bool) (release func(), err error) {
+	root, err := openAgyConfigRoot(create)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	release, err = flock.AcquireIn(root, agySettingsFileName+statusLockSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lock agy settings: %w", err)
+	}
+	return release, nil
+}
+
 // InstallTitleTee installs the title-tee shim into agy's global settings.json.
 // If a user's own title command is already present, it is preserved via --wrap.
 // The call is idempotent: if our marker is already in the command, it returns nil.
 func InstallTitleTee() error {
+	release, err := lockAgySettings(true)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	rawFile, err := readAgySettings()
 	if err != nil {
 		return err
@@ -176,9 +205,20 @@ func TitleTeeInstalled() bool {
 //   - any other (foreign) cmd   → leave untouched
 //   - missing settings file     → no-op
 func UninstallTitleTee() error {
-	// A missing config directory or settings file reads as an empty map, and an
-	// empty map has no title key, so there is nothing to uninstall; a symlinked
-	// settings.json is refused by the read, exactly as install refuses it.
+	// A missing config directory means agy never ran here: nothing to
+	// uninstall, and no reason to create the directory just to lock in it.
+	release, err := lockAgySettings(false)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer release()
+
+	// A missing settings file reads as an empty map, and an empty map has no
+	// title key, so there is nothing to uninstall; a symlinked settings.json is
+	// refused by the read, exactly as install refuses it.
 	rawFile, err := readAgySettings()
 	if err != nil {
 		return err
@@ -191,7 +231,7 @@ func UninstallTitleTee() error {
 
 	var existing titleConfig
 	if err := json.Unmarshal(raw, &existing); err != nil {
-		return nil //nolint:nilerr // unparseable title entry — leave it alone rather than destroying user data
+		return nil // unparseable title entry — leave it alone rather than destroying user data
 	}
 
 	// Not our command → leave untouched.

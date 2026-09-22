@@ -170,9 +170,9 @@ func AppendStatusSnapshot(payload []byte) error {
 	}
 	name := st.fileName(p.ConversationID)
 
-	release, err := flock.AcquireIn(st.root, name+statusLockSuffix)
+	release, err := lockStatusFile(st, name)
 	if err != nil {
-		return fmt.Errorf("antigravity status: lock: %w", err)
+		return err
 	}
 	defer release()
 
@@ -299,6 +299,14 @@ const statusTailWindow = 64 * 1024
 // readLastStatusSnapshot opens name inside the store and returns its final
 // snapshot; a missing file is nil, nil.
 func readLastStatusSnapshot(st statusStore, name string) (*statusSnapshot, error) {
+	release, err := lockStatusFile(st, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil //nolint:nilnil // no status directory yet means no snapshots yet
+		}
+		return nil, err
+	}
+	defer release()
 	f, err := osroot.OpenNoFollow(st.root, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -308,6 +316,24 @@ func readLastStatusSnapshot(st statusStore, name string) (*statusSnapshot, error
 	}
 	defer func() { _ = f.Close() }()
 	return readLastSnapshotFrom(f)
+}
+
+// lockStatusFile takes the per-conversation advisory lock that
+// AppendStatusSnapshot writes under. The readers take it too: agy does not
+// serialise its title-command invocations, so a baseline or delta read that
+// ran unlocked could observe the last line half-written by a concurrent tee
+// and treat the torn JSON as "no snapshot" — a silently dropped token
+// baseline for that turn. The lock file is created on first use; a status
+// directory that does not exist yet is reported through fs.ErrNotExist.
+func lockStatusFile(st statusStore, name string) (release func(), err error) {
+	release, err = flock.AcquireIn(st.root, name+statusLockSuffix)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, err //nolint:wrapcheck // preserved so callers can read it as "no snapshots yet"
+		}
+		return nil, fmt.Errorf("antigravity status: lock: %w", err)
+	}
+	return release, nil
 }
 
 // readLastSnapshotFrom returns the snapshot on the final non-empty line of f,
@@ -366,7 +392,16 @@ func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := osroot.OpenNoFollow(st.root, st.fileName(conversationID))
+	name := st.fileName(conversationID)
+	release, err := lockStatusFile(st, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer release()
+	f, err := osroot.OpenNoFollow(st.root, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
