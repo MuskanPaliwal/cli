@@ -16,6 +16,11 @@ import (
 const (
 	ProtocolSSH   = "ssh"
 	ProtocolHTTPS = "https"
+	// ProtocolHTTP and ProtocolGit are the remaining schemes whose host is the
+	// git host itself. ParseURL returns them for http:// and git:// remotes;
+	// nothing derives such a URL, so they exist to be recognized.
+	ProtocolHTTP = "http"
+	ProtocolGit  = "git"
 	// ProtocolEntire is the scheme of Entire's git remote helper (entire://).
 	// These URLs carry a forge/namespace prefix before owner/repo.
 	ProtocolEntire = "entire"

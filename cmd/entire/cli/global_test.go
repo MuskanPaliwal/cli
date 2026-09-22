@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
+	"github.com/entireio/cli/cmd/entire/cli/testutil/gitenv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,6 +47,18 @@ func TestMain(m *testing.M) {
 	// that call it restore it with t.Setenv, and this keeps a future one that
 	// forgets from poisoning the rest of the run.
 	os.Unsetenv(contexts.EnvContextVar)
+
+	// The ConfigLoader plugin below only isolates go-git's IN-PROCESS config
+	// reads. Production code under test also shells out to git (checkpoint
+	// remote fetches, hooks), and those children read the developer's
+	// ~/.gitconfig unless the whole process is isolated. That is not cosmetic:
+	// a host with transfer.fsckObjects set makes `git fetch` hand the objects
+	// to index-pack instead of unpack-objects, so the fetched commit lands in
+	// a new packfile that the already-open go-git repository never indexes —
+	// the checkpoint-remote heal then reports "object not found" and silently
+	// keeps the empty orphan (ENCLI-378). Set process-wide (not per-test) so
+	// it covers spawned binaries and git hooks. Mirrors the e2e TestMains.
+	gitenv.IsolateMain()
 
 	// ENTIRE_TOKEN is isolated by ABSENCE, not by a redirected path, so it is
 	// not in the block above. Left set, it outranks every stored context in

@@ -3,6 +3,7 @@ package strategy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -313,3 +314,82 @@ func (f *fakeExternalAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession
 }
 func (f *fakeExternalAgent) WriteSession(_ context.Context, _ *agent.AgentSession) error { return nil }
 func (f *fakeExternalAgent) FormatResumeCommand(_ string) string                         { return "" }
+
+// restoredPathResolverAgent is restoreLogsOnlyAgent plus a scriptable
+// ResolveRestoredSessionFile, so the containment re-check can be exercised
+// without a real agent. Codex, the only built-in implementer, validates its own
+// answer and so cannot produce the rejected case.
+type restoredPathResolverAgent struct {
+	restoreLogsOnlyAgent
+
+	resolved string
+	err      error
+}
+
+var _ agent.RestoredSessionPathResolver = (*restoredPathResolverAgent)(nil)
+
+func (a *restoredPathResolverAgent) ResolveRestoredSessionFile(string, string, []byte) (string, error) {
+	return a.resolved, a.err
+}
+
+// The restored path replaces one SessionFile already validated, so it gets the
+// same containment check. On rejection the caller keeps the validated path.
+func TestRestoredSessionFileRechecksContainment(t *testing.T) {
+	t.Parallel()
+
+	storeDir := t.TempDir()
+	outside := t.TempDir()
+
+	tests := []struct {
+		name     string
+		resolved string
+		err      error
+		wantOK   bool
+		wantWarn string
+	}{
+		{
+			name:     "inside the store is accepted",
+			resolved: filepath.Join(storeDir, "restored.jsonl"),
+			wantOK:   true,
+		},
+		{
+			name:     "outside the store falls back",
+			resolved: filepath.Join(outside, "restored.jsonl"),
+			wantWarn: "resolves outside its session directory",
+		},
+		{
+			name:     "a resolver error falls back",
+			err:      errors.New("boom"),
+			wantWarn: "failed to resolve restored session path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ag := &restoredPathResolverAgent{
+				restoreLogsOnlyAgent: restoreLogsOnlyAgent{
+					name:       types.AgentName("restored-path-agent"),
+					agentType:  types.AgentType("Restored Path Agent"),
+					sessionDir: storeDir,
+				},
+				resolved: tt.resolved,
+				err:      tt.err,
+			}
+			store, err := agent.OpenSessionStoreAt(ag, storeDir)
+			require.NoError(t, err)
+
+			var stderr bytes.Buffer
+			got, ok := restoredSessionFile(&stderr, ag, store, storeDir, "session-1", nil, 0)
+			require.Equal(t, tt.wantOK, ok, "stderr: %s", stderr.String())
+			if tt.wantOK {
+				require.Equal(t, tt.resolved, got)
+				require.Empty(t, stderr.String())
+				return
+			}
+			require.Empty(t, got)
+			require.Contains(t, stderr.String(), tt.wantWarn)
+		})
+	}
+}
