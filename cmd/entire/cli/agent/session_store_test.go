@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,4 +171,53 @@ func TestSessionStore_ProbingManyDirectoriesRetainsNoDescriptors(t *testing.T) {
 	// this guards produced exactly `candidates` extra descriptors.
 	require.Less(t, countFDs()-before, 16,
 		"probing %d candidate directories must not retain a descriptor per directory", candidates)
+}
+
+func TestSessionStore_LstatRefusesSymlinkedParentAndReportsLeaf(t *testing.T) {
+	t.Parallel()
+	store, dir := newStore(t, joinResolve)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.jsonl"), []byte("x"), 0o600))
+	info, err := store.Lstat("real.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.Size())
+
+	_, err = store.Lstat("missing.jsonl")
+	assert.True(t, os.IsNotExist(err), "a missing name must classify as not-exist, got %v", err)
+
+	if err := os.Symlink(filepath.Join(dir, "real.jsonl"), filepath.Join(dir, "link.jsonl")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	info, err = store.Lstat("link.jsonl")
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "the leaf is returned as-is so the caller can refuse it")
+
+	elsewhere := t.TempDir()
+	require.NoError(t, os.Symlink(elsewhere, filepath.Join(dir, "sub")))
+	_, err = store.Lstat("sub/anything.jsonl")
+	require.Error(t, err, "a symlinked parent component must be refused")
+}
+
+func TestSessionStore_CreateExclusiveCreatesOnceAndNeverReplaces(t *testing.T) {
+	t.Parallel()
+	store, dir := newStore(t, joinResolve)
+
+	require.NoError(t, store.CreateExclusive("conv/logs/transcript.jsonl", 0o600))
+	info, err := os.Stat(filepath.Join(dir, "conv", "logs", "transcript.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), info.Size())
+
+	// The agent wrote the real file in between: a second create must fail with
+	// fs.ErrExist and leave the content alone.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conv", "logs", "transcript.jsonl"), []byte("real"), 0o600))
+	err = store.CreateExclusive("conv/logs/transcript.jsonl", 0o600)
+	require.ErrorIs(t, err, fs.ErrExist)
+	data, err := os.ReadFile(filepath.Join(dir, "conv", "logs", "transcript.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, "real", string(data))
+
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "linked")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	require.Error(t, store.CreateExclusive("linked/transcript.jsonl", 0o600), "a symlinked parent must be refused")
 }

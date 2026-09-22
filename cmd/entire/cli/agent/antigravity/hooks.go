@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -25,23 +24,20 @@ const AgentsHooksFileName = "hooks.json"
 // If force is true, removes existing Entire hooks before installing.
 // Returns the number of hooks installed.
 func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, error) {
-	repoRoot, err := paths.WorktreeRoot(ctx)
+	cfg, err := a.hookConfig(ctx)
 	if err != nil {
-		repoRoot, err = os.Getwd() //nolint:forbidigo // Intentional fallback when WorktreeRoot() fails (tests run outside git repos)
-		if err != nil {
-			return 0, fmt.Errorf("failed to get current directory: %w", err)
-		}
+		return 0, err
 	}
-
-	hooksPath := filepath.Join(repoRoot, ".agents", AgentsHooksFileName)
 
 	// Read and parse existing hooks file, preserving unknown keys
 	rawFile := make(map[string]json.RawMessage)
-	existingData, readErr := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+	existingData, readErr := cfg.Read()
 	if readErr == nil {
 		if err := json.Unmarshal(existingData, &rawFile); err != nil {
 			return 0, fmt.Errorf("failed to parse existing hooks.json: %w", err)
 		}
+	} else if !os.IsNotExist(readErr) {
+		return 0, readErr //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 
 	// Build the candidate Entire hook config. The whole "entire" entry is
@@ -92,7 +88,7 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 	}
 	rawFile["entire"] = candidateBytes
 
-	if err := writeHooksFile(rawFile, hooksPath); err != nil {
+	if err := writeHooksFile(rawFile, cfg); err != nil {
 		return 0, err
 	}
 
@@ -100,17 +96,32 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 	return 3, nil
 }
 
-// UninstallHooks removes the Entire hook entry from .agents/hooks.json.
-func (a *AntigravityAgent) UninstallHooks(ctx context.Context) error {
+// hookConfig opens the repo's .agents/hooks.json through agent.HookConfigFile,
+// which anchors on the worktree root and refuses a symlink at any component
+// it creates directories under or writes through.
+func (a *AntigravityAgent) hookConfig(ctx context.Context) (*agent.HookConfigFile, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		repoRoot = "." // Fallback to CWD if not in a git repo
+		repoRoot, err = os.Getwd() //nolint:forbidigo // Intentional fallback when WorktreeRoot() fails (tests run outside git repos)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current directory: %w", err)
+		}
 	}
+	return agent.OpenHookConfig(repoRoot, a.HookConfigRelPath()) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+}
 
-	hooksPath := filepath.Join(repoRoot, ".agents", AgentsHooksFileName)
-	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+// UninstallHooks removes the Entire hook entry from .agents/hooks.json.
+func (a *AntigravityAgent) UninstallHooks(ctx context.Context) error {
+	cfg, err := a.hookConfig(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // No hooks file means nothing to uninstall
+		return err
+	}
+	data, err := cfg.Read()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No hooks file means nothing to uninstall
+		}
+		return err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 
 	var rawFile map[string]json.RawMessage
@@ -120,23 +131,21 @@ func (a *AntigravityAgent) UninstallHooks(ctx context.Context) error {
 
 	delete(rawFile, "entire")
 
-	return writeHooksFile(rawFile, hooksPath)
+	return writeHooksFile(rawFile, cfg)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.
 func (a *AntigravityAgent) AreHooksInstalled(ctx context.Context) (bool, error) {
-	repoRoot, err := paths.WorktreeRoot(ctx)
+	hookCfg, err := a.hookConfig(ctx)
 	if err != nil {
-		repoRoot = "." // Fallback to CWD if not in a git repo
+		return false, err
 	}
-
-	hooksPath := filepath.Join(repoRoot, ".agents", AgentsHooksFileName)
-	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+	data, err := hookCfg.Read()
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", hooksPath, err)
+		return false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 
 	// Parse per-entry: foreign hook entries are free-form user content and
@@ -194,31 +203,14 @@ func buildEntireHookConfig() HookConfig {
 	}
 }
 
-// writeHooksFile marshals rawFile and writes it to hooksPath, creating
-// parent directories as needed.
-func writeHooksFile(rawFile map[string]json.RawMessage, hooksPath string) error {
-	return writeJSONMapFile(rawFile, hooksPath, "hooks.json")
-}
-
-// writeJSONMapFile marshals a raw JSON map with indentation and writes it to
-// path, creating parent directories as needed. Shared by the repo-level
-// hooks.json writer and the global agy settings.json writer.
-func writeJSONMapFile(rawFile map[string]json.RawMessage, path, what string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("failed to create directory for %s: %w", what, err)
-	}
-
+// writeHooksFile marshals rawFile and writes it through cfg, which creates the
+// parent directories inside the worktree root and refuses symlinks.
+func writeHooksFile(rawFile map[string]json.RawMessage, cfg *agent.HookConfigFile) error {
 	output, err := jsonutil.MarshalIndentWithNewline(rawFile, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s: %w", what, err)
+		return fmt.Errorf("failed to marshal hooks.json: %w", err)
 	}
-
-	// Atomic write: settings.json is machine-global (its title slot is shared
-	// by every repo on the machine), so a crash mid-write must not truncate it.
-	if err := jsonutil.WriteFileAtomic(path, output, 0o600); err != nil {
-		return fmt.Errorf("failed to write %s: %w", what, err)
-	}
-	return nil
+	return cfg.Write(output, 0o600) //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 }
 
 // hasEntireHookInToolHandlers checks if any ToolHandler entry is an Entire hook.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // Compile-time interface assertions.
@@ -273,6 +274,10 @@ func (a *AntigravityAgent) PrepareTranscript(ctx context.Context, transcriptRef 
 	if transcriptRef == "" {
 		return nil
 	}
+	store, name, err := a.transcriptStore(transcriptRef)
+	if err != nil {
+		return err
+	}
 
 	deadline := time.Now().Add(1 * time.Second)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
@@ -280,12 +285,18 @@ func (a *AntigravityAgent) PrepareTranscript(ctx context.Context, transcriptRef 
 	}
 
 	for {
-		info, err := os.Stat(transcriptRef)
+		info, err := store.Lstat(name)
 		if err == nil {
+			// Refuse a symlink rather than read through it: the path came from
+			// agy's hook payload, and a link here would send the condensation
+			// read wherever it points (docs/development/filesystem-safety.md).
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("antigravity: transcript %s: %w", transcriptRef, osroot.ErrSymlinkedPath)
+			}
 			if info.Size() > 0 {
 				return nil
 			}
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("antigravity: stat transcript: %w", err)
 		}
 
@@ -308,23 +319,39 @@ func (a *AntigravityAgent) PrepareTranscript(ctx context.Context, transcriptRef 
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(transcriptRef), 0o750); err != nil {
-		return fmt.Errorf("antigravity: prepare transcript dir: %w", err)
-	}
-	if _, err := os.Stat(transcriptRef); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("antigravity: stat transcript before placeholder: %w", err)
-	}
-	file, err := os.OpenFile(transcriptRef, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // path supplied by agent hook stdin
-	if err != nil {
-		if os.IsExist(err) {
+	// Exclusive create: if agy wrote the real transcript between the last poll
+	// and here, it wins and the placeholder is skipped — never replaced.
+	if err := store.CreateExclusive(name, 0o600); err != nil {
+		if errors.Is(err, fs.ErrExist) {
 			return nil
 		}
 		return fmt.Errorf("antigravity: create empty transcript placeholder: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("antigravity: close empty transcript placeholder: %w", err)
-	}
 	return nil
+}
+
+// transcriptStore resolves transcriptRef to a session store and a name inside
+// it. The store is agy's brain directory (GetSessionDir) when the path is
+// inside it — the normal case, since agy's hook payload names
+// <brain>/<conversation>/.system_generated/logs/transcript_full.jsonl. A path
+// outside it (tests, a relocated brain) falls back to the file's own directory,
+// the same fallback agent.WriteSessionFile documents: that base contains
+// nothing by itself, but every access stays on the rooted, no-follow code path.
+func (a *AntigravityAgent) transcriptStore(transcriptRef string) (*agent.SessionStore, string, error) {
+	if brainDir, err := a.GetSessionDir(""); err == nil {
+		if store, err := agent.OpenSessionStoreAt(a, brainDir); err == nil {
+			if name, err := store.Name(transcriptRef); err == nil {
+				return store, name, nil
+			}
+		}
+	}
+	store, err := agent.OpenSessionStoreAt(a, filepath.Dir(transcriptRef))
+	if err != nil {
+		return nil, "", fmt.Errorf("antigravity: open transcript directory: %w", err)
+	}
+	name, err := store.Name(transcriptRef)
+	if err != nil {
+		return nil, "", fmt.Errorf("antigravity: resolve transcript path: %w", err)
+	}
+	return store, name, nil
 }

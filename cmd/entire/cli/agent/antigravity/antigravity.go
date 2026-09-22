@@ -86,13 +86,18 @@ func (a *AntigravityAgent) WriteSession(_ context.Context, session *agent.AgentS
 	if len(session.NativeData) == 0 {
 		return errors.New("antigravity: session has no native data to write")
 	}
-	if err := os.MkdirAll(filepath.Dir(session.SessionRef), 0o750); err != nil {
-		return fmt.Errorf("antigravity: create transcript dir: %w", err)
-	}
-	if err := os.WriteFile(session.SessionRef, session.NativeData, 0o600); err != nil {
+	// Through the agent's session store, like every other agent: the write is
+	// contained to agy's brain directory and never follows a symlink.
+	if err := agent.WriteSessionFile(a, session, session.NativeData, 0o600); err != nil {
 		return fmt.Errorf("antigravity: write transcript: %w", err)
 	}
 	return nil
+}
+
+// HookConfigRelPath implements agent.HookConfigLocator: agy loads workspace
+// hooks from .agents/hooks.json at the worktree root.
+func (a *AntigravityAgent) HookConfigRelPath() string {
+	return ".agents/" + AgentsHooksFileName
 }
 
 func (a *AntigravityAgent) FormatResumeCommand(sessionID string) string {

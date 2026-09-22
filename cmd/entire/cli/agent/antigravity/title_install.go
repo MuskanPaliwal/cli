@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // agy reads its window-title command from the GLOBAL config
@@ -33,9 +34,15 @@ type titleConfig struct {
 	Command string `json:"command"`
 }
 
+// agySettingsFileName is agy's global settings file inside its config dir.
+const agySettingsFileName = "settings.json"
+
 // agyConfigDir returns the agy config directory, honouring the override env var.
 func agyConfigDir() (string, error) {
 	if dir := os.Getenv(configDirEnv); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", fmt.Errorf("%s must be an absolute path, got %q", configDirEnv, dir)
+		}
 		return dir, nil
 	}
 	home, err := os.UserHomeDir()
@@ -43,6 +50,30 @@ func agyConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".gemini", "antigravity-cli"), nil
+}
+
+// openAgyConfigRoot opens an *os.Root over agy's config directory so
+// settings.json is read and written as a NAME inside it, never through a
+// symlink (docs/development/filesystem-safety.md). The directory is agy's own,
+// resolved from HOME (or the operator override), so it is the trusted base;
+// with create it is made first — the root is the directory itself, so it
+// cannot be created through it. The caller closes the root: this is not one of
+// the process-wide anchors, and the override changes between tests.
+func openAgyConfigRoot(create bool) (*os.Root, error) {
+	dir, err := agyConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	if create {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, fmt.Errorf("failed to create agy config dir: %w", err)
+		}
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // preserved for os.IsNotExist at call sites
+	}
+	return root, nil
 }
 
 // titleTeeCommand returns the full shell command string for the title-tee shim.
@@ -71,13 +102,7 @@ func shellSingleQuote(s string) string {
 // If a user's own title command is already present, it is preserved via --wrap.
 // The call is idempotent: if our marker is already in the command, it returns nil.
 func InstallTitleTee() error {
-	cfgDir, err := agyConfigDir()
-	if err != nil {
-		return err
-	}
-	settingsPath := filepath.Join(cfgDir, "settings.json")
-
-	rawFile, err := readAgySettings(settingsPath)
+	rawFile, err := readAgySettings()
 	if err != nil {
 		return err
 	}
@@ -105,7 +130,7 @@ func InstallTitleTee() error {
 	}
 	rawFile["title"] = cfgBytes
 
-	return writeAgySettings(rawFile, settingsPath)
+	return writeAgySettings(rawFile)
 }
 
 // TitleTeeInstalled reports whether agy's global settings.json declares a
@@ -115,13 +140,7 @@ func InstallTitleTee() error {
 // leave token counts missing from checkpoints. A missing or unparseable
 // settings file reports false.
 func TitleTeeInstalled() bool {
-	cfgDir, err := agyConfigDir()
-	if err != nil {
-		return false
-	}
-	settingsPath := filepath.Join(cfgDir, "settings.json")
-
-	rawFile, err := readAgySettings(settingsPath)
+	rawFile, err := readAgySettings()
 	if err != nil {
 		return false
 	}
@@ -144,18 +163,16 @@ func TitleTeeInstalled() bool {
 //   - any other (foreign) cmd   → leave untouched
 //   - missing settings file     → no-op
 func UninstallTitleTee() error {
-	cfgDir, err := agyConfigDir()
+	// Missing file → nothing to uninstall.
+	exists, err := agySettingsExist()
 	if err != nil {
 		return err
 	}
-	settingsPath := filepath.Join(cfgDir, "settings.json")
-
-	// Missing file → nothing to uninstall.
-	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+	if !exists {
 		return nil
 	}
 
-	rawFile, err := readAgySettings(settingsPath)
+	rawFile, err := readAgySettings()
 	if err != nil {
 		return err
 	}
@@ -199,7 +216,7 @@ func UninstallTitleTee() error {
 		delete(rawFile, "title")
 	}
 
-	return writeAgySettings(rawFile, settingsPath)
+	return writeAgySettings(rawFile)
 }
 
 // isBareTitleTeeCommand reports whether command is one of the bare (no --wrap)
@@ -237,11 +254,40 @@ func extractWrappedCommand(command string) (string, bool) {
 	return strings.ReplaceAll(inner, `'\''`, "'"), true
 }
 
+// agySettingsExist reports whether settings.json is present in agy's config
+// dir. Lstat, not Stat: a dangling symlink still occupies the slot.
+func agySettingsExist() (bool, error) {
+	root, err := openAgyConfigRoot(false)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to open agy config dir: %w", err)
+	}
+	defer root.Close()
+	if _, err := osroot.LstatNoSymlinks(root, agySettingsFileName); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to stat agy settings: %w", err)
+	}
+	return true, nil
+}
+
 // readAgySettings reads and parses settings.json into a raw map.
-// A missing file returns an empty map (not an error).
-func readAgySettings(settingsPath string) (map[string]json.RawMessage, error) {
+// A missing directory or file returns an empty map (not an error); a
+// symlinked settings.json is refused rather than read through.
+func readAgySettings() (map[string]json.RawMessage, error) {
 	rawFile := make(map[string]json.RawMessage)
-	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from config dir + fixed filename
+	root, err := openAgyConfigRoot(false)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return rawFile, nil
+		}
+		return nil, fmt.Errorf("failed to open agy config dir: %w", err)
+	}
+	defer root.Close()
+	data, err := osroot.ReadFileNoFollow(root, agySettingsFileName)
 	if os.IsNotExist(err) {
 		return rawFile, nil
 	}
@@ -254,8 +300,28 @@ func readAgySettings(settingsPath string) (map[string]json.RawMessage, error) {
 	return rawFile, nil
 }
 
-// writeAgySettings marshals rawFile and writes it to settingsPath, creating
-// parent directories as needed.
-func writeAgySettings(rawFile map[string]json.RawMessage, settingsPath string) error {
-	return writeJSONMapFile(rawFile, settingsPath, "agy settings")
+// writeAgySettings marshals rawFile and writes settings.json atomically inside
+// agy's config dir, creating the dir as needed. settings.json is
+// machine-global (its title slot is shared by every repo on the machine), so a
+// crash mid-write must not truncate it, and a symlink at the file is refused
+// rather than replaced.
+func writeAgySettings(rawFile map[string]json.RawMessage) error {
+	output, err := jsonutil.MarshalIndentWithNewline(rawFile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal agy settings: %w", err)
+	}
+	root, err := openAgyConfigRoot(true)
+	if err != nil {
+		return fmt.Errorf("failed to open agy config dir: %w", err)
+	}
+	defer root.Close()
+	if info, err := osroot.LstatNoSymlinks(root, agySettingsFileName); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("failed to write agy settings: %w", osroot.ErrSymlinkedPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect agy settings: %w", err)
+	}
+	if err := jsonutil.WriteFileAtomicIn(root, agySettingsFileName, output, 0o600); err != nil {
+		return fmt.Errorf("failed to write agy settings: %w", err)
+	}
+	return nil
 }
