@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
@@ -225,12 +227,12 @@ func AppendStatusSnapshot(payload []byte) error {
 // genuinely fresh conversation; a resumed conversation whose title-tee shim
 // hasn't written a snapshot before the first TurnStart will over-count the
 // prior cumulative total on that first tracked turn.
-func (a *AntigravityAgent) SnapshotTokenBaseline(_ context.Context, sessionID string) (json.RawMessage, error) {
+func (a *AntigravityAgent) SnapshotTokenBaseline(ctx context.Context, sessionID string) (json.RawMessage, error) {
 	st, err := openStatusStore()
 	if err != nil {
 		return nil, nil //nolint:nilerr // ditto: an unusable status dir means no baseline
 	}
-	snap, err := readLastStatusSnapshot(st, st.fileName(sessionID))
+	snap, err := readLastStatusSnapshot(ctx, st, st.fileName(sessionID))
 	if err != nil || snap == nil {
 		return nil, nil //nolint:nilerr // ditto (missing file, no lines, malformed)
 	}
@@ -248,8 +250,8 @@ func (a *AntigravityAgent) SnapshotTokenBaseline(_ context.Context, sessionID st
 // Best-effort: cache fields and APICallCount, derived from the snapshot lines
 // appended after the baseline timestamp (the dedup writer appends ~one line
 // per API response, but lines can be missed between agent state changes).
-func (a *AntigravityAgent) CalculateTokenUsageSince(_ context.Context, sessionID string, baseline json.RawMessage) (*agent.TokenUsage, error) {
-	snaps, err := readStatusSnapshots(sessionID)
+func (a *AntigravityAgent) CalculateTokenUsageSince(ctx context.Context, sessionID string, baseline json.RawMessage) (*agent.TokenUsage, error) {
+	snaps, err := readStatusSnapshots(ctx, sessionID)
 	if err != nil || len(snaps) == 0 {
 		return nil, nil //nolint:nilerr,nilnil // no data -> no token counts, never an error
 	}
@@ -298,8 +300,8 @@ const statusTailWindow = 64 * 1024
 
 // readLastStatusSnapshot opens name inside the store and returns its final
 // snapshot; a missing file is nil, nil.
-func readLastStatusSnapshot(st statusStore, name string) (*statusSnapshot, error) {
-	release, err := lockStatusFile(st, name)
+func readLastStatusSnapshot(ctx context.Context, st statusStore, name string) (*statusSnapshot, error) {
+	release, err := lockStatusFileForRead(ctx, st, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil //nolint:nilnil // no status directory yet means no snapshots yet
@@ -325,6 +327,9 @@ func readLastStatusSnapshot(st statusStore, name string) (*statusSnapshot, error
 // and treat the torn JSON as "no snapshot" — a silently dropped token
 // baseline for that turn. The lock file is created on first use; a status
 // directory that does not exist yet is reported through fs.ErrNotExist.
+//
+// The writer waits without bound: it IS the tee, its critical section is one
+// read and one append, and serialising the appends is the whole point.
 func lockStatusFile(st statusStore, name string) (release func(), err error) {
 	release, err = flock.AcquireIn(st.root, name+statusLockSuffix)
 	if err != nil {
@@ -334,6 +339,37 @@ func lockStatusFile(st statusStore, name string) (release func(), err error) {
 		return nil, fmt.Errorf("antigravity status: lock: %w", err)
 	}
 	return release, nil
+}
+
+// statusReadLockTimeout bounds how long a reader waits for the conversation
+// lock. A variable so tests can shorten it.
+var statusReadLockTimeout = 2 * time.Second
+
+// lockStatusFileForRead is lockStatusFile for the readers, which run inside
+// agy's hooks (SnapshotTokenBaseline at PreInvocation, CalculateTokenUsageSince
+// at Stop). A hook must not stall behind a tee that hangs while holding the
+// lock — the same rule the turn-start session-state lock follows — so the wait
+// is bounded, and on timeout the read proceeds unlocked, which is exactly the
+// pre-lock behaviour: at worst a torn last line reads as "no snapshot" for one
+// turn, against a hook that never returns. The returned release is always
+// safe to call.
+func lockStatusFileForRead(ctx context.Context, st statusStore, name string) (release func(), err error) {
+	acqCtx, cancel := context.WithTimeout(ctx, statusReadLockTimeout)
+	defer cancel()
+	release, err = flock.AcquireContextIn(acqCtx, st.root, name+statusLockSuffix)
+	if err == nil {
+		return release, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, err //nolint:wrapcheck // preserved so callers can read it as "no snapshots yet"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		logging.Debug(logging.WithComponent(ctx, "antigravity"),
+			"status lock busy; reading token snapshots unlocked",
+			slog.String("file", name))
+		return func() {}, nil
+	}
+	return nil, fmt.Errorf("antigravity status: lock: %w", err)
 }
 
 // readLastSnapshotFrom returns the snapshot on the final non-empty line of f,
@@ -387,13 +423,13 @@ func readLastSnapshotFrom(f *os.File) (*statusSnapshot, error) {
 
 // readStatusSnapshots reads all valid snapshot lines from the JSONL file for
 // the given conversationID. A missing file returns nil, nil (not an error).
-func readStatusSnapshots(conversationID string) ([]statusSnapshot, error) {
+func readStatusSnapshots(ctx context.Context, conversationID string) ([]statusSnapshot, error) {
 	st, err := openStatusStore()
 	if err != nil {
 		return nil, err
 	}
 	name := st.fileName(conversationID)
-	release, err := lockStatusFile(st, name)
+	release, err := lockStatusFileForRead(ctx, st, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil

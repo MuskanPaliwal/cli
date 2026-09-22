@@ -24,7 +24,7 @@ func TestAppendStatusSnapshot_WritesLineKeyedByConversation(t *testing.T) {
 		t.Fatalf("AppendStatusSnapshot: %v", err)
 	}
 
-	snaps, err := readStatusSnapshots("conv-1")
+	snaps, err := readStatusSnapshots(context.Background(), "conv-1")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAppendStatusSnapshot_DedupsUnchangedContextWindow(t *testing.T) {
 		}
 	}
 
-	snaps, err := readStatusSnapshots("conv-2")
+	snaps, err := readStatusSnapshots(context.Background(), "conv-2")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestReadStatusSnapshots_SkipsMalformedLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snaps, err := readStatusSnapshots("conv-4")
+	snaps, err := readStatusSnapshots(context.Background(), "conv-4")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestReadStatusSnapshots_MissingFileReturnsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(statusDirEnv, dir)
 
-	snaps, err := readStatusSnapshots("no-such-conv")
+	snaps, err := readStatusSnapshots(context.Background(), "no-such-conv")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -598,7 +598,7 @@ func TestAppendStatusSnapshot_CurrentUsageChangeIsNotDeduped(t *testing.T) {
 		}
 	}
 
-	snaps, err := readStatusSnapshots("conv-cu")
+	snaps, err := readStatusSnapshots(context.Background(), "conv-cu")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestAppendStatusSnapshot_ConcurrentDuplicatesCollapseToOneLine(t *testing.T
 		}
 	}
 
-	snaps, err := readStatusSnapshots("conv-race")
+	snaps, err := readStatusSnapshots(context.Background(), "conv-race")
 	if err != nil {
 		t.Fatalf("readStatusSnapshots: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestStatusStore_RefusesSymlinkedSnapshotFile(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	if snaps, err := readStatusSnapshots("conv-link"); err == nil {
+	if snaps, err := readStatusSnapshots(context.Background(), "conv-link"); err == nil {
 		t.Fatalf("readStatusSnapshots followed a symlink: got %d snapshots, want an error", len(snaps))
 	}
 	payload := []byte(`{"conversation_id":"conv-link","context_window":{"total_input_tokens":2}}`)
@@ -787,5 +787,55 @@ func TestReaders_TakeTheConversationLock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("readers did not proceed after the lock was released")
+	}
+}
+
+// TestReaders_DegradeWhenTheLockIsStuck: the readers run inside agy's hooks,
+// so a tee that hangs while holding the conversation lock must not hang the
+// hook. The wait is bounded; on timeout the read proceeds unlocked (the
+// pre-lock behaviour) instead of blocking the turn.
+func TestReaders_DegradeWhenTheLockIsStuck(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+	writeSnapshotFixture(t, "c-stuck", []statusSnapshot{{
+		Timestamp:      "2026-06-03T10:00:00.000000000Z",
+		ConversationID: "c-stuck",
+		ContextWindow:  statusContextWindow{TotalInputTokens: 7},
+	}})
+
+	prev := statusReadLockTimeout
+	statusReadLockTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { statusReadLockTimeout = prev })
+
+	st, err := openStatusStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockStatusFile(st, st.fileName("c-stuck"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release() // held for the whole test: the "stuck tee"
+
+	done := make(chan error, 1)
+	go func() {
+		baseline, err := (&AntigravityAgent{}).SnapshotTokenBaseline(context.Background(), "c-stuck")
+		if err != nil {
+			done <- err
+			return
+		}
+		if len(baseline) == 0 {
+			done <- errors.New("SnapshotTokenBaseline degraded to no baseline instead of reading unlocked")
+			return
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reader hung behind a stuck lock holder; the wait must be bounded")
 	}
 }
