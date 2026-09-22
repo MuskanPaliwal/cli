@@ -862,3 +862,32 @@ func TestStatusStore_DefaultDirIsCreatedUnderTheCacheRoot(t *testing.T) {
 		t.Fatalf("readStatusSnapshots = %d snapshots, %v; want 1", len(snaps), err)
 	}
 }
+
+// A read of a conversation that has no snapshot must not leave a lock file
+// behind: flock.AcquireIn creates the lock it opens, and every TurnStart takes
+// a baseline, so conversations that never produce a snapshot would otherwise
+// litter the store with orphans for the whole retention window.
+func TestStatusReaders_LeaveNoLockFileForAnUnknownConversation(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+	a := &AntigravityAgent{}
+
+	raw, err := a.SnapshotTokenBaseline(context.Background(), "conv-never")
+	if err != nil || raw != nil {
+		t.Fatalf("SnapshotTokenBaseline = %q, %v; want nil, nil", raw, err)
+	}
+	usage, err := a.CalculateTokenUsageSince(context.Background(), "conv-never", nil)
+	if err != nil || usage != nil {
+		t.Fatalf("CalculateTokenUsageSince = %v, %v; want nil, nil", usage, err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), statusLockSuffix) {
+			t.Fatalf("reader left an orphan lock file %s behind", e.Name())
+		}
+	}
+}

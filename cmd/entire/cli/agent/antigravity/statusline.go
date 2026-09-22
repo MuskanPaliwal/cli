@@ -304,9 +304,34 @@ func (a *AntigravityAgent) CalculateTokenUsageSince(ctx context.Context, session
 // the final line with huge margin.
 const statusTailWindow = 64 * 1024
 
+// snapshotFileExists reports whether a conversation's snapshot file is present
+// in the store, without following a symlink at any component. It is checked
+// BEFORE a reader takes the conversation lock: flock.AcquireIn creates the lock
+// file it opens, so a baseline read at every TurnStart on a conversation that
+// never produces a snapshot — or whose snapshot was already pruned — would
+// otherwise leave an orphan <id>.jsonl.lock behind for the whole retention
+// window (the prune cannot tell such an orphan from a lock a tee has just taken
+// while creating its file). The check-then-lock gap is deliberate and cheap: a
+// tee creating the file in between costs one turn's baseline, which lands in
+// the same "no snapshot yet" degradation these readers already document.
+func snapshotFileExists(st statusStore, name string) (bool, error) {
+	if _, err := osroot.LstatNoSymlinks(st.root, name); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("antigravity status: stat: %w", err)
+	}
+	return true, nil
+}
+
 // readLastStatusSnapshot opens name inside the store and returns its final
 // snapshot; a missing file is nil, nil.
 func readLastStatusSnapshot(ctx context.Context, st statusStore, name string) (*statusSnapshot, error) {
+	if exists, err := snapshotFileExists(st, name); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, nil //nolint:nilnil // no snapshot yet — and no lock file left behind for it
+	}
 	release, err := lockStatusFileForRead(ctx, st, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -435,6 +460,11 @@ func readStatusSnapshots(ctx context.Context, conversationID string) ([]statusSn
 		return nil, err
 	}
 	name := st.fileName(conversationID)
+	if exists, err := snapshotFileExists(st, name); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, nil // no snapshot yet — and no lock file left behind for it
+	}
 	release, err := lockStatusFileForRead(ctx, st, name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
