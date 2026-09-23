@@ -239,11 +239,40 @@ func TestShadowStrategy_ListAllSessionStates(t *testing.T) {
 	}
 }
 
+// A dead owner is finalized by finalizeExitedSessions. Keep its IDLE state in
+// the list and on disk so that finalizer retains the ownership evidence it
+// needs, even when the session has not created a shadow branch.
+func TestShadowStrategy_ListAllSessionStates_KeepsIdleSessionWithDeadOwner(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	ctx := context.Background()
+	s := &ManualCommitStrategy{}
+	state := &SessionState{
+		SessionID:  "idle-dead-owner",
+		BaseCommit: "bbb2223",
+		StartedAt:  time.Now(),
+		Phase:      session.PhaseIdle,
+		Owner:      &proclive.Identity{PID: os.Getpid(), Start: "not-this-process"},
+	}
+	require.NoError(t, s.saveSessionState(ctx, state))
+
+	states, err := s.listAllSessionStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, state.SessionID, states[0].SessionID)
+
+	persisted, err := LoadSessionState(ctx, state.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted, "idle state must remain for exited-owner finalization")
+	assert.Equal(t, state.Owner, persisted.Owner)
+}
+
 // TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions tests that
 // listAllSessionStates cleans up stale sessions whose shadow branch no longer exists.
-// Deleted: ENDED never-condensed sessions, and IDLE never-condensed sessions
-// whose owner is known dead. Kept: ACTIVE, condensed, record-bearing, and IDLE
-// sessions with a live or unknown owner (see isOrphanedSessionState).
+// Deleted: ENDED never-condensed sessions. Kept: ACTIVE, condensed,
+// record-bearing, and IDLE sessions (see isOrphanedSessionState).
 func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
@@ -272,7 +301,8 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 		Phase:      "idle",
 	}
 
-	// Session 2b: IDLE, no checkpoint ID, owner exited (wrong start fingerprint): cleaned up.
+	// Session 2b: IDLE, no checkpoint ID, owner exited (wrong start fingerprint):
+	// KEPT so finalizeExitedSessions can retain and finalize its ownership.
 	idleDeadOwner := &SessionState{
 		SessionID:  "idle-dead-owner",
 		BaseCommit: "bbb2223",
@@ -332,7 +362,7 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 	}
 
 	fixtures := []*SessionState{legacyEmpty, idleUnknownOwner, idleDeadOwner, staleEnded, activeNoShadow, condensedIdle, recordEnded}
-	wantKept := []string{"active-no-shadow", "condensed-idle", "record-ended", "idle-unknown-owner", "legacy-empty-phase"}
+	wantKept := []string{"active-no-shadow", "condensed-idle", "record-ended", "idle-dead-owner", "idle-unknown-owner", "legacy-empty-phase"}
 	if liveOwnerOK {
 		fixtures = append(fixtures, idleLiveOwner)
 		wantKept = append(wantKept, "idle-live-owner")
@@ -372,12 +402,15 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 	if !kept["idle-unknown-owner"] {
 		t.Error("idle session with no recorded owner must be kept until it goes stale")
 	}
+	if !kept["idle-dead-owner"] {
+		t.Error("idle session whose owner exited must be kept for exited-owner finalization")
+	}
 	if liveOwnerOK && !kept["idle-live-owner"] {
 		t.Error("idle session whose owner is alive must be kept — it is a live session between turns")
 	}
 
 	// Verify stale sessions were actually cleared from disk
-	for _, staleID := range []string{"idle-dead-owner", "stale-ended"} {
+	for _, staleID := range []string{"stale-ended"} {
 		loaded, err := LoadSessionState(context.Background(), staleID)
 		if err != nil {
 			t.Errorf("LoadSessionState(%s) error = %v", staleID, err)

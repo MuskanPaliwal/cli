@@ -148,10 +148,10 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		}
 
 		// Skip and cleanup orphaned sessions whose shadow branch no longer exists.
-		// Keep active sessions (shadow branch may not be created yet) and sessions
-		// with LastCheckpointID (needed for checkpoint ID reuse on subsequent commits).
-		// Clean up everything else: stale pre-state-machine sessions (empty phase),
-		// IDLE/ENDED sessions that were never condensed, etc.
+		// Keep non-ended sessions (including legacy empty phases normalized to IDLE)
+		// and sessions with LastCheckpointID (needed for checkpoint ID reuse on
+		// subsequent commits). Eligible ENDED states that were never condensed are
+		// cleared.
 		// Record-bearing sessions hold condensable content off the shadow branch — never orphaned.
 		shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		refName := plumbing.NewBranchReferenceName(shadowBranch)
@@ -173,16 +173,17 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 
 // isOrphanedSessionState reports whether a state with no shadow branch may be
 // deleted. ACTIVE sessions may not have created it yet; a LastCheckpointID and
-// task records are kept. An IDLE state with none of those is a live session
-// between turns, and every worktree's hooks list this store, so it counts as an
-// orphan only once its owner is known dead. ENDED and legacy states keep the
-// old rule; owner-less ones age out through the stale threshold.
+// task records are kept. An IDLE state with none of those still belongs to the
+// exited-owner finalizer when its owner is dead, so it is never an orphan here.
+// Eligible ENDED states keep the old cleanup rule; legacy empty phases normalize
+// to IDLE and are retained. Other non-ended states age out or are finalized
+// through their dedicated lifecycle paths.
 func isOrphanedSessionState(state *SessionState) bool {
 	if state.Phase.IsActive() || !state.LastCheckpointID.IsEmpty() || state.HasTaskContent() {
 		return false
 	}
 	if state.Phase == session.PhaseIdle {
-		return state.OwnerExited()
+		return false
 	}
 	return true
 }
