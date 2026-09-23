@@ -127,7 +127,10 @@ slots (`context_window`: `total_input_tokens`, `total_output_tokens`,
 - claims the lower-stakes **`title` slot** in agy's global
   `~/.gemini/antigravity-cli/settings.json` with
   `entire hooks antigravity title-tee` (wrapping and preserving any
-  pre-existing user title command via `--wrap`);
+  pre-existing user title command via `--wrap '<original>'` where agy runs
+  the slot through sh, or `--wrap-b64 <base64url>` on Windows, where agy
+  runs it through cmd.exe and POSIX quoting would be torn apart; the tee
+  re-runs the original through the same shell agy would have used);
 - the tee appends deduped snapshots to a per-conversation JSONL cache;
 - `OutOfBandTokenSource`: `SnapshotTokenBaseline` at TurnStart (streaming
   last-line read), `CalculateTokenUsageSince` at TurnEnd (cumulative totals

@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
-	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/antigravity"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -22,7 +22,7 @@ import (
 // rendered verbatim as the terminal window title. It also must work outside
 // git repos and without entire being enabled (the title config is global).
 func newAntigravityTitleTeeCmd() *cobra.Command {
-	var wrap string
+	var wrap, wrapB64 string
 	cmd := &cobra.Command{
 		Use:    "title-tee",
 		Short:  "Tee agy state JSON (title/statusline payload) into the token snapshot store",
@@ -41,17 +41,24 @@ func newAntigravityTitleTeeCmd() *cobra.Command {
 				logging.Debug(cmd.Context(), "antigravity title-tee: snapshot append failed", "error", err.Error())
 			}
 
-			if wrap == "" {
+			original := wrap
+			if wrapB64 != "" {
+				decoded, decodeErr := base64.RawURLEncoding.DecodeString(wrapB64)
+				if decodeErr != nil {
+					logging.Debug(cmd.Context(), "antigravity title-tee: --wrap-b64 is not base64url; original title command not run", "error", decodeErr.Error())
+					return nil
+				}
+				original = string(decoded)
+			}
+			if original == "" {
 				return nil
 			}
-			// wrap is the user's own original title command, preserved from
-			// settings.json and round-tripped via shellSingleQuote, so running
-			// it under `sh -c` is intentional — not an external-input injection
-			// surface. POSIX-only: a stock Windows PATH has no `sh`, so a
-			// wrapped user title command would fail there (shellSingleQuote's
-			// POSIX quoting wouldn't survive cmd.exe either); revisit shell
-			// selection if agy ships on Windows.
-			wrapped := exec.CommandContext(cmd.Context(), "sh", "-c", wrap)
+			// original is the user's own title command, preserved from agy's
+			// settings.json by InstallTitleTee (quoted for sh, or base64url
+			// for cmd.exe). Running it through the host's shell is
+			// intentional — it is exactly what agy did with that string before
+			// the tee took the slot — not an external-input injection surface.
+			wrapped := wrappedTitleCommand(cmd.Context(), original)
 			wrapped.Stdin = bytes.NewReader(payload)
 			wrapped.Stdout = cmd.OutOrStdout()
 			wrapped.Stderr = cmd.ErrOrStderr()
@@ -66,5 +73,7 @@ func newAntigravityTitleTeeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&wrap, "wrap", "", "original title command to chain after capturing")
+	cmd.Flags().StringVar(&wrapB64, "wrap-b64", "", "original title command, base64url-encoded, to chain after capturing (written on Windows hosts)")
+	cmd.MarkFlagsMutuallyExclusive("wrap", "wrap-b64")
 	return cmd
 }

@@ -1,7 +1,9 @@
 package antigravity
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +96,73 @@ func TestInstallTitle_WrapsExistingCommand(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"theme"`) {
 		t.Error(`settings.json lost "theme" key after install`)
+	}
+}
+
+// TestInstallTitle_WindowsHostWrapsExistingCommandBase64 pins the Windows
+// form: agy runs the title slot through cmd.exe there, so the preserved
+// original travels base64url-encoded rather than in POSIX single quotes, and
+// uninstall restores it byte for byte. The name carries "Windows" so the
+// windows-latest CI job selects it.
+func TestInstallTitle_WindowsHostWrapsExistingCommandBase64(t *testing.T) {
+	// No t.Parallel — uses t.Setenv and the process-global hook-host override.
+	restore := agent.SetWindowsHookProbeForTesting("windows", nil)
+	defer restore()
+	cfgDir := t.TempDir()
+	t.Setenv(configDirEnv, cfgDir)
+
+	// Quotes, an ampersand and a percent: everything cmd.exe would tear apart.
+	const original = `powershell -c "Write-Host 'x' & echo %CD%"`
+	writeAgySettingsFile(t, cfgDir, `{"title":{"type":"command","command":`+string(mustJSON(t, original))+`}}`)
+
+	if err := InstallTitleTee(); err != nil {
+		t.Fatalf("InstallTitleTee: %v", err)
+	}
+	got := readTitleCommand(t, cfgDir)
+	want := "entire hooks antigravity title-tee --wrap-b64 " + base64.RawURLEncoding.EncodeToString([]byte(original))
+	if got != want {
+		t.Errorf("title.command = %q, want %q", got, want)
+	}
+	if strings.ContainsAny(strings.TrimPrefix(got, "entire hooks antigravity title-tee --wrap-b64 "), `'"&%^|<>()=`) {
+		t.Errorf("encoded form carries a cmd.exe metacharacter: %q", got)
+	}
+
+	if err := UninstallTitleTee(); err != nil {
+		t.Fatalf("UninstallTitleTee: %v", err)
+	}
+	if got := readTitleCommand(t, cfgDir); got != original {
+		t.Errorf("after uninstall title.command = %q, want the original %q", got, original)
+	}
+}
+
+func TestExtractWrappedCommand_Forms(t *testing.T) {
+	t.Parallel()
+	b64 := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	cases := []struct {
+		name    string
+		command string
+		want    string
+		ok      bool
+	}{
+		{"quoted form", "entire hooks antigravity title-tee --wrap '~/bin/x.sh'", "~/bin/x.sh", true},
+		{"base64 form", "entire hooks antigravity title-tee --wrap-b64 " + b64(`echo "a" & b`), `echo "a" & b`, true},
+		// The quoted payload may itself mention the base64 flag; the quoted
+		// form wins because it is parsed first.
+		{"quoted payload naming the b64 flag", "entire hooks antigravity title-tee --wrap 'x --wrap-b64 abc'", "x --wrap-b64 abc", true},
+		{"base64 token with trailing junk", "entire hooks antigravity title-tee --wrap-b64 " + b64("x") + " extra", "", false},
+		{"base64 token not base64url", "entire hooks antigravity title-tee --wrap-b64 not*base64!", "", false},
+		{"empty base64 token", "entire hooks antigravity title-tee --wrap-b64 ", "", false},
+		{"bare tee", "entire hooks antigravity title-tee", "", false},
+		{"unquoted legacy", "entire hooks antigravity title-tee --wrap unquoted", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := extractWrappedCommand(tc.command)
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("extractWrappedCommand(%q) = (%q, %v), want (%q, %v)", tc.command, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 

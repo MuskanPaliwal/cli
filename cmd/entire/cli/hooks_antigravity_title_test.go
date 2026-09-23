@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,44 @@ func TestTitleTee_WrapStillCapturesSnapshot(t *testing.T) {
 	snapFile := filepath.Join(dir, "conv-11.jsonl")
 	if _, err := os.Stat(snapFile); err != nil {
 		t.Errorf("snapshot file not created under --wrap: %v", err)
+	}
+}
+
+// The base64url form is what InstallTitleTee writes on Windows hosts; the
+// tee must decode it and pipe the payload through exactly like --wrap.
+func TestTitleTee_WrapBase64StillCapturesSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENTIRE_ANTIGRAVITY_STATUS_DIR", dir)
+
+	payload := `{"conversation_id":"conv-b64","context_window":{"total_input_tokens":1,"total_output_tokens":1,"context_window_size":10}}`
+
+	cmd := newAntigravityTitleTeeCmd()
+	cmd.SetArgs([]string{"--wrap-b64", base64.RawURLEncoding.EncodeToString([]byte("cat"))})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader(payload))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out.String() != payload {
+		t.Errorf("wrapped cat did not receive the payload verbatim: got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conv-b64.jsonl")); err != nil {
+		t.Errorf("snapshot file not created under --wrap-b64: %v", err)
+	}
+
+	// A token that is not base64url is a config error, not a title error:
+	// the snapshot is still captured and nothing reaches stdout.
+	cmd = newAntigravityTitleTeeCmd()
+	cmd.SetArgs([]string{"--wrap-b64", "not*base64!"})
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader(payload))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute with a bad token: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout not empty for a bad token: %q", out.String())
 	}
 }
 

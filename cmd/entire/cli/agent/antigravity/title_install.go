@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/internal/flock"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
@@ -22,9 +24,10 @@ import (
 //
 // We occupy that slot with the title-tee shim (the title script receives the
 // same state JSON as the statusline script — agy's only token-usage surface).
-// A pre-existing user command is preserved INSIDE the shim invocation via
-// --wrap '<original>', making the config self-describing: uninstall restores
-// the original without any backup file. Because the slot is global, per-repo
+// A pre-existing user command is preserved INSIDE the shim invocation — via
+// --wrap '<original>' where agy runs the slot through sh, or --wrap-b64
+// <base64url> where it runs it through cmd.exe — making the config
+// self-describing: uninstall restores the original without any backup file. Because the slot is global, per-repo
 // `entire disable` does NOT uninstall it (other repos may rely on it); only
 // agent removal does.
 
@@ -93,8 +96,26 @@ func titleTeeCommand(original string) string {
 	if original == "" {
 		return base
 	}
+	if agent.HookHostIsWindows() {
+		// agy hands the slot to cmd.exe on Windows, where POSIX single quotes
+		// are literal characters and the tee has no sh to re-run the original
+		// with. The original travels base64url-encoded instead — an alphabet
+		// ([A-Za-z0-9_-], no padding) no shell touches — and the tee runs it
+		// through cmd.exe itself, exactly as agy would have.
+		return base + " " + strings.TrimSpace(wrapB64Flag) + " " + base64.RawURLEncoding.EncodeToString([]byte(original))
+	}
 	return base + " --wrap " + shellSingleQuote(original)
 }
+
+// wrapFlag and wrapB64Flag are the two spellings of a preserved original
+// command inside a tee command string, each surrounded by spaces so that an
+// original that merely CONTAINS the text (see
+// TestInstallTitle_WrapsCommandContainingWrapSubstring) cannot be mistaken
+// for the flag.
+const (
+	wrapFlag    = " --wrap "
+	wrapB64Flag = " --wrap-b64 "
+)
 
 // shellSingleQuote wraps s in POSIX single quotes. Embedded single quotes are
 // rewritten with the standard close-escape-reopen technique (see the
@@ -288,14 +309,15 @@ func isBareTitleTeeCommand(command string) bool {
 		strings.HasSuffix(command, " hooks antigravity title-tee")
 }
 
-// extractWrappedCommand parses the --wrap '<original>' portion of a title-tee
-// command string. It returns the original command and true if found and valid,
-// or ("", false) otherwise.
+// extractWrappedCommand parses the preserved original out of a title-tee
+// command string: the --wrap '<original>' form, or the --wrap-b64 <base64url>
+// form written on Windows hosts. It returns the original command and true if
+// found and valid, or ("", false) otherwise. The quoted form is tried first:
+// it is the only one whose payload can itself contain either flag's text.
 func extractWrappedCommand(command string) (string, bool) {
-	const wrapFlag = " --wrap "
 	idx := strings.Index(command, wrapFlag)
 	if idx < 0 {
-		return "", false
+		return extractBase64WrappedCommand(command)
 	}
 	rest := strings.TrimSpace(command[idx+len(wrapFlag):])
 	if len(rest) < 2 || rest[0] != '\'' || rest[len(rest)-1] != '\'' {
@@ -304,6 +326,26 @@ func extractWrappedCommand(command string) (string, bool) {
 	// Strip outer single quotes and reverse the '\'' escaping.
 	inner := rest[1 : len(rest)-1]
 	return strings.ReplaceAll(inner, `'\''`, "'"), true
+}
+
+// extractBase64WrappedCommand parses the --wrap-b64 <token> form. A token that
+// is anything but one base64url word, or that decodes to nothing, is treated
+// as malformed — uninstall then leaves the entry alone, as it does for a
+// malformed quoted form.
+func extractBase64WrappedCommand(command string) (string, bool) {
+	idx := strings.Index(command, wrapB64Flag)
+	if idx < 0 {
+		return "", false
+	}
+	token := strings.TrimSpace(command[idx+len(wrapB64Flag):])
+	if token == "" || strings.ContainsAny(token, " \t") {
+		return "", false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(decoded) == 0 {
+		return "", false
+	}
+	return string(decoded), true
 }
 
 // readAgySettings reads and parses settings.json into a raw map.
