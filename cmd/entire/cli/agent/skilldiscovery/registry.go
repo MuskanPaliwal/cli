@@ -90,7 +90,7 @@ var installHints = map[string][]InstallHint{
 	// it, which is the half a hint pointing there would silently get wrong.
 	"antigravity": {
 		{
-			Message:     "Add a review skill under `~/.gemini/config/skills/<name>/SKILL.md` (e.g. via `npx antigravity-awesome-skills --agy`)",
+			Message:     "Add a review skill under ~/.gemini/config/skills/<name>/SKILL.md, e.g.: npx antigravity-awesome-skills --agy",
 			ProvidesAny: nil,
 		},
 	},
