@@ -231,8 +231,12 @@ the commands are always runnable in every build.
   `--context`, since `mirror get` reads the affiliation-scoped directory and is
   narrower than the pull-gated lookup that just came back empty. There is no region flag either: every placement
   materializes the same upstream collaborators, so the caller has nothing to
-  choose — the removed `--cluster` was selecting an identity (through
-  `clusterdiscovery.selectLoginContext`), which `--context` says directly. `grant add` and
+  choose. What the removed `--cluster` named was the cell — `clusterHost` is a
+  required parameter of that endpoint — and the cell is now read from the
+  repo's own placements. The login was never the flag's to pick and still is
+  not: `runCoreForCluster` auto-selects whichever saved login the cluster
+  trusts, which is what `docs/architecture/upstream-host-resolution.md`
+  describes. `grant add` and
   `grant remove` keep the native path as their whole grammar: a mirror's access
   is the upstream GitHub repository's, so a `/gh/` ref is refused before any
   request — and before required flags are validated, through the target's
@@ -254,9 +258,11 @@ the commands are always runnable in every build.
   next line. A ref naming a forge the verb does not serve is refused **without
   being parsed**: declaring the forge is the whole answer, and quoting a name
   rule would send the reader to fix something that would be refused again.
-  The mirror subtree's own verbs (`mirror add`/`remove`) are the GitHub-only
-  ones left, and they refuse a native ref on that contract; `repo grant list`
-  serves both forges and needs no such pointer. `repo mirror get` takes a mirror ULID or an
+  No verb narrows those forges today: the mirror subtree's own verbs read both
+  and branch on what they get, and `repo grant list` serves both as well, so
+  `unsupportedForgeErr` is reached only by the tests that pin the refusal — the
+  parser keeps the narrowing because it is its contract, not because a caller
+  exercises it. `repo mirror get` takes a mirror ULID or an
   `entire://` clone URL besides, since those address a placement rather than
   name a repo.
   `clone`

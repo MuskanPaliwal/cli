@@ -172,9 +172,13 @@ func runCoreList[T any](cmd *cobra.Command, empty string, headers []string, row 
 // listView is how a list renders once its items are known, for the command
 // whose output depends on what came back. table is required and picks the
 // headers and row function; toJSON is optional and, when set, replaces the
-// raw wire model on --json — it must be additive-only, merging synthesized
-// fields into the marshalled objects (see mergeSynthesizedField) and never
-// dropping or overriding a server field.
+// raw wire model on --json — it merges synthesized fields into the marshalled
+// objects (see mergeSynthesizedField) and never overrides a server value. It
+// may drop a server key only by renaming it: where a synthesized key carries
+// the very string the server sent under another name, printing both says one
+// value twice (see mirrorCollaboratorJSON, which renames `accountId` to the
+// `granteeId` its sibling listing uses). Dropping a value outright is not the
+// same thing, and is not allowed.
 type listView[T any] struct {
 	table  func(items []T) (headers []string, row func(T) []string)
 	toJSON func(items []T) (any, error)
@@ -243,13 +247,6 @@ func renderCoreListShaped[T any](cmd *cobra.Command, empty string, view listView
 // is left untouched, so the server value always wins, and an empty synth
 // result adds nothing rather than a half-formed placeholder.
 func mergeSynthesizedField(v any, field string, synth func() string) (map[string]json.RawMessage, error) {
-	return mergeSynthesizedFields(v, map[string]func() string{field: synth})
-}
-
-// mergeSynthesizedFields is mergeSynthesizedField for more than one field —
-// same round-trip, same additive-only rules, one encode of v instead of one per
-// field. Keys are independent, so the map's iteration order cannot matter.
-func mergeSynthesizedFields(v any, fields map[string]func() string) (map[string]json.RawMessage, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("encode %T: %w", v, err)
@@ -258,20 +255,18 @@ func mergeSynthesizedFields(v any, fields map[string]func() string) (map[string]
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("decode %T: %w", v, err)
 	}
-	for field, synth := range fields {
-		if _, ok := obj[field]; ok {
-			continue
-		}
-		value := synth()
-		if value == "" {
-			continue
-		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("encode %s: %w", field, err)
-		}
-		obj[field] = encoded
+	if _, ok := obj[field]; ok {
+		return obj, nil
 	}
+	value := synth()
+	if value == "" {
+		return obj, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %w", field, err)
+	}
+	obj[field] = encoded
 	return obj, nil
 }
 

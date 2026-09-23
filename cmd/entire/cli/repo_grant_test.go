@@ -120,6 +120,9 @@ func TestRepoGrantWrite_RefusesAMirrorRef(t *testing.T) {
 		// grammar would send them to rewrite it as the one shape that
 		// repository can never have.
 		{"a GitHub URL", []string{"add", "https://github.com/acme/widget", "github:alice", "--role", "reader"}},
+		// The hint is a ref `grant list` accepts, so the spelling is
+		// normalized rather than echoed.
+		{"an unslashed mirror ref", []string{"add", "gh/acme/widget", "github:alice", "--role", "reader"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var paths []string
@@ -377,6 +380,25 @@ func TestRepoGrantList_ReadsAPlacementTheRepoHas(t *testing.T) {
 	_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "list", "/gh/acme/widget")
 	require.NoError(t, err)
 	require.Equal(t, []string{"eu.example"}, clusterHosts)
+}
+
+// TestRepoGrantWrite_MalformedMirrorRefGetsTheGrammar pins that the refusal
+// never hands back a ref that fails the same way: a mirror ref the grammar
+// cannot read is answered by the grammar, not by a hint naming it.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestRepoGrantWrite_MalformedMirrorRefGetsTheGrammar(t *testing.T) {
+	var paths []string
+	srv := grantActiveCoreServer(t, &paths)
+	for _, ref := range []string{"/gh/acme", "/gh/a/b/c", "/gh/"} {
+		t.Run(ref, func(t *testing.T) {
+			_, _, err := runCoreCmd(t, newRepoGrantCmd, srv.URL, "add", ref, "github:alice", "--role", "reader")
+			require.ErrorContains(t, err, "invalid <repo>")
+			require.NotContains(t, err.Error(), "entire repo grant list "+ref,
+				"a hint naming this ref would fail exactly as this call just did")
+		})
+	}
+	require.Empty(t, paths, "a ref that names no repo costs no round trip")
 }
 
 // TestRepoGrant_RefErrorsMatchTheAcceptedGrammar pins that each verb's ref

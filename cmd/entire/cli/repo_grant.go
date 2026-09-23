@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -80,18 +81,15 @@ func mirrorCollaboratorJSON(collaborators []coreapi.MirrorCollaborator) (any, er
 		// Merged rather than marshalled from a struct of our own: the generated
 		// types carry arbitrary additional properties, and a fixed shape would
 		// swallow whatever the server adds next.
-		obj, err := mergeSynthesizedFields(c, map[string]func() string{
-			"granteeId":   func() string { return c.AccountId },
-			"granteeName": func() string { return c.Handle.Or("") },
-			"source":      func() string { return repoProviderGitHub },
-		})
+		obj, err := mergeSynthesizedField(c, "source", func() string { return repoProviderGitHub })
 		if err != nil {
 			return nil, err
 		}
-		// The two strings the merged keys now carry, under the names the native
-		// rows use for them.
-		delete(obj, "accountId")
-		delete(obj, "handle")
+		// Renamed rather than merged-then-deleted: a delete that runs whether or
+		// not its merge did would drop a row's only identity when the value it
+		// was keyed by is missing.
+		renameJSONKey(obj, "accountId", "granteeId")
+		renameJSONKey(obj, "handle", "granteeName")
 		out = append(out, obj)
 	}
 	return out, nil
@@ -142,6 +140,22 @@ var mirrorGrantListing = &grantListBranch{
 		}
 		return listMirrorCollaborators(cmd, target.owner, target.repo)
 	},
+}
+
+// renameJSONKey moves old to new, which is how a synthesized key replaces the
+// server spelling it is derived from rather than sitting beside it. A key the
+// server already sent under the new name is left alone, and old with it: two
+// keys the server distinguishes are not ours to collapse into one.
+func renameJSONKey(obj map[string]json.RawMessage, old, name string) {
+	value, ok := obj[old]
+	if !ok {
+		return
+	}
+	if _, taken := obj[name]; taken {
+		return
+	}
+	obj[name] = value
+	delete(obj, old)
 }
 
 // listMirrorCollaborators prints who can pull owner/repo's mirror.
@@ -206,6 +220,12 @@ func listMirrorCollaborators(cmd *cobra.Command, owner, repo string) error {
 	return nil
 }
 
+// mirrorPlacementHintTimeout bounds the advisory placement lookup. It is
+// shorter than the cluster-discovery leg's budget because nothing waits on the
+// answer: the fallback cluster is already known, so a slow core costs the
+// caller a better guess rather than the read.
+const mirrorPlacementHintTimeout = 5 * time.Second
+
 // clusterGuess says why the default cluster is standing in for a placement, and
 // what the reader can do about it. The two travel together because the answer
 // to "what now" depends on the reason: only one of them leaves a `repo mirror
@@ -226,8 +246,18 @@ func mirrorReadTarget(cmd *cobra.Command, owner, repo string) (clusterHost strin
 		// The pull-gated placement lookup, the same authority `repo clone`,
 		// `remote use` and `remote url` resolve through, so a public mirror
 		// resolves too.
-		placements, err := resolvePullablePlacements(ctx, c, owner, repo)
+		// Bounded on its own: coreapi's client sets no timeout, so a core that
+		// hangs would make a hint the answer does not depend on outlast the
+		// read that does — a gate by latency, which is what this is not.
+		hintCtx, cancel := context.WithTimeout(ctx, mirrorPlacementHintTimeout)
+		defer cancel()
+		placements, err := resolvePullablePlacements(hintCtx, c, owner, repo)
 		if err != nil {
+			// The command's own cancellation is not this lookup's failure, and
+			// reporting it as one would blame cluster routing for a Ctrl-C.
+			if ctx.Err() != nil {
+				return err
+			}
 			logging.Debug(ctx, "mirror collaborators: placement hint lookup failed", "error", err)
 			guess = &clusterGuess{reason: "the placement lookup failed", next: unavailable.next}
 			return nil
@@ -316,16 +346,24 @@ func mirrorReadCluster(placements []coreapi.ResolvedPlacement) string {
 //
 // Every other ref passes, to be judged by the resolver that parses it.
 func mirrorGrantsAreUpstream(ref string) error {
-	owner, repo, urlErr := parseHostedGitHubURL(ref)
-	readable := ref
-	switch {
+	// The hint names a ref `grant list` accepts, which means reading the ref
+	// rather than echoing it: a malformed `/gh/acme` or `gh/a/b/c` gets the
+	// grammar's own answer instead of a suggestion that fails the same way one
+	// line later, and `gh/acme/widget` is pointed at `/gh/acme/widget` rather
+	// than at its own spelling. A URL is named back the same way, though the
+	// parser only recognises it — it is not a spelling these verbs take.
+	var target mirrorRepoRef
+	switch owner, repo, urlErr := parseHostedGitHubURL(ref); {
 	case declaresForge(ref, mirrorCloneForge):
+		parsed, err := parseMirrorRepoRef(ref, mirrorCloneForge)
+		if err != nil {
+			return err
+		}
+		target = parsed
 	case urlErr == nil:
-		// A URL is not a spelling these verbs take, so the hint names the ref
-		// `grant list` does.
-		readable = fmt.Sprintf("/%s/%s/%s", mirrorCloneForge, owner, repo)
+		target = mirrorRepoRef{forge: mirrorCloneForge, owner: owner, repo: repo}
 	default:
 		return nil // not a GitHub repository; its own resolver judges the ref
 	}
-	return fmt.Errorf("repo %q is a GitHub mirror: its access comes from the upstream GitHub repository, so it cannot be granted or revoked here — manage collaborators on GitHub; `entire repo grant list %s` shows who has access to the repo", ref, readable)
+	return fmt.Errorf("repo %q is a GitHub mirror: its access comes from the upstream GitHub repository, so it cannot be granted or revoked here — manage collaborators on GitHub; `entire repo grant list %s` shows who has access to the repo", ref, target.qualified())
 }
