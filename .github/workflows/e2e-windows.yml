@@ -71,22 +71,13 @@ jobs:
       - name: Install antigravity
         if: inputs.agent == 'antigravity'
         run: |
-          # Pinned to the same release as e2e.yml's Linux leg; nightly-e2e.yml
-          # is the one that tracks latest. The archive ships the binary as
-          # antigravity.exe (agy.exe in some builds); agy is the installed name.
-          $version = "1.2.7"
-          $tmp = Join-Path $env:RUNNER_TEMP "agy"
-          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/google-antigravity/antigravity-cli/releases/download/$version/agy_cli_windows_x64.zip" -OutFile "$tmp\agy.zip"
-          Expand-Archive -Path "$tmp\agy.zip" -DestinationPath "$tmp\unpacked" -Force
-          $exes = Get-ChildItem -Path "$tmp\unpacked" -Recurse -File -Filter *.exe
-          $bin = $exes | Where-Object { $_.Name -in @("antigravity.exe", "agy.exe") } | Select-Object -First 1
-          if (-not $bin) { $bin = $exes | Select-Object -First 1 }
-          if (-not $bin) { throw "no .exe found in agy_cli_windows_x64.zip" }
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\bin" | Out-Null
-          Copy-Item $bin.FullName "$env:USERPROFILE\bin\agy.exe"
-          "$env:USERPROFILE\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          & "$env:USERPROFILE\bin\agy.exe" --version
+          # agy's official installer: it resolves the architecture, verifies a
+          # SHA-512 from the release manifest, and installs into
+          # %LOCALAPPDATA%\agy\bin. It always takes latest and has no version
+          # flag — right for a dispatch-only workflow, which wants whatever agy
+          # users actually have. e2e.yml pins instead; see its own comment.
+          irm https://antigravity.google/cli/install.ps1 | iex
+          "$env:LOCALAPPDATA\agy\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Bootstrap agent
         shell: bash

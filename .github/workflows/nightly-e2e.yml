@@ -155,23 +155,10 @@ jobs:
           # unauthenticated api.github.com call it gives no way to authenticate,
           # so it is rate-limited at random.
           npm install -g @openai/codex @github/copilot opencode-ai
-          # Antigravity (agy) ships as a release tarball, one per OS/arch, with
-          # the binary inside named `antigravity`; `agy` is the name it is
-          # installed under. Same source as e2e.yml.
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64)  agy_asset=agy_cli_linux_x64 ;;
-            Linux-aarch64) agy_asset=agy_cli_linux_arm64 ;;
-            Darwin-arm64)  agy_asset=agy_cli_mac_arm64 ;;
-            Darwin-x86_64) agy_asset=agy_cli_mac_x64 ;;
-            *) echo "no agy release asset for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          tmp="$(mktemp -d)"
-          curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/latest/download/${agy_asset}.tar.gz" -o "$tmp/agy.tar.gz"
-          tar -xzf "$tmp/agy.tar.gz" -C "$tmp"
-          agy_bin="$(find "$tmp" -type f \( -name antigravity -o -name agy \) | head -n 1)"
-          test -n "$agy_bin"
-          mkdir -p "$HOME/.local/bin"
-          install -m 0755 "$agy_bin" "$HOME/.local/bin/agy"
+          # agy's official installer: it resolves OS and architecture itself,
+          # verifies a SHA-512 from the release manifest, and installs latest
+          # into ~/.local/bin, which the line below puts on PATH.
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli antigravity" >> "$GITHUB_ENV"
 
