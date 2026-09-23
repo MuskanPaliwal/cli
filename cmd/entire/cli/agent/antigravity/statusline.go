@@ -372,6 +372,21 @@ func lockStatusFile(st statusStore, name string) (release func(), err error) {
 	return release, nil
 }
 
+// tryLockStatusFile takes a conversation's lock only if it is free right now.
+// An already-expired deadline selects flock's non-blocking path: one LOCK_NB
+// attempt, then the context error rather than a wait. locked is false when
+// another process holds it, and for a lock file that cannot be created —
+// both mean "do not touch this conversation's snapshots".
+func tryLockStatusFile(st statusStore, name string) (release func(), locked bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	release, err := flock.AcquireContextIn(ctx, st.root, name+statusLockSuffix)
+	if err != nil {
+		return nil, false
+	}
+	return release, true
+}
+
 // statusReadLockTimeout bounds how long a reader waits for the conversation
 // lock. A variable so tests can shorten it.
 var statusReadLockTimeout = 2 * time.Second
@@ -543,9 +558,21 @@ func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
+			// Take the conversation's own lock before unlinking, the way the
+			// loop below is careful about its locks. A dormant conversation
+			// resumed between the stat above and this unlink is mid-append,
+			// and removing the file from under its open fd loses the
+			// per-line detail between the baseline and now. Non-blocking: a
+			// held lock means that conversation is alive right now, which is
+			// reason enough to leave its file for the next prune.
+			release, locked := tryLockStatusFile(st, path.Join(st.dir, name))
+			if !locked {
+				continue
+			}
 			if osroot.RemoveNoSymlinks(st.root, path.Join(st.dir, name)) == nil {
 				delete(present, name)
 			}
+			release()
 		}
 	}
 	// A lock file whose snapshot file is gone (pruned above, or by an earlier

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -889,5 +890,46 @@ func TestStatusReaders_LeaveNoLockFileForAnUnknownConversation(t *testing.T) {
 		if strings.HasSuffix(e.Name(), statusLockSuffix) {
 			t.Fatalf("reader left an orphan lock file %s behind", e.Name())
 		}
+	}
+}
+
+// A dormant conversation resumed between the prune's stat and its unlink is
+// mid-append, and removing the file from under its open fd loses the per-line
+// detail CalculateTokenUsageSince derives between the baseline and now. The
+// prune takes the conversation's own lock first, so a held lock defers the
+// delete to the next run — the same care the lock-file loop already takes.
+func TestAppendStatusSnapshot_PruneSkipsALockedStaleFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+
+	// Stale by mtime, so the prune would otherwise remove it.
+	stale := filepath.Join(dir, "resumed-conv.jsonl")
+	if err := os.WriteFile(stale, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-statusRetention - time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stand in for the tee that just resumed it and holds its lock.
+	st, err := openStatusStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockStatusFile(st, path.Join(st.dir, "resumed-conv.jsonl"))
+	if err != nil {
+		t.Fatalf("take the conversation lock: %v", err)
+	}
+	defer release()
+
+	// First write for a different conversation triggers the prune.
+	payload := []byte(`{"conversation_id":"conv-new","context_window":{"total_input_tokens":1}}`)
+	if err := AppendStatusSnapshot(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("a stale file whose conversation holds its lock must survive the prune: %v", err)
 	}
 }
