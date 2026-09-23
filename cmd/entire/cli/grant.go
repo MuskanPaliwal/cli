@@ -444,21 +444,9 @@ func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *cor
 	if partial {
 		reportPartialPool(cmd, len(holders), "grants on "+pt.describe())
 	}
-	refs, err := removePicker(cmd, pt, holders)
-	if err != nil {
-		return nil, err
-	}
-	// Back to whole rows, so the confirmation can name what was shown rather
-	// than the id it acts on. The picker already refused a ref it did not offer.
-	byRef := make(map[string]grantCandidate, len(holders))
-	for _, h := range holders {
-		byRef[h.ref] = h
-	}
-	picked := make([]grantCandidate, 0, len(refs))
-	for _, ref := range refs {
-		picked = append(picked, byRef[ref])
-	}
-	return picked, nil
+	// Whole rows, so the confirmation can name what was shown rather than the
+	// id it acts on.
+	return removePicker(cmd, pt, holders)
 }
 
 // revokeOne revokes a single grantee. It routes on g.byID — set by the pool

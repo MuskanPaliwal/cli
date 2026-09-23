@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
@@ -215,17 +217,17 @@ func capturePicker(t *testing.T, answer func(offered []grantCandidate, known []s
 }
 
 // captureRemovePicker puts the command on the interactive path and swaps the
-// remove form seam, recording what was offered and answering with the refs of
-// the rows to revoke.
+// remove form seam, recording what was offered and answering with the rows to
+// revoke.
 //
 // ENTIRE_TEST_TTY=1 puts the confirmation in play as well, so it stubs that too
 // and answers yes; a test that cares about declining says so itself.
-func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []string) *[]grantCandidate {
+func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []grantCandidate) *[]grantCandidate {
 	t.Helper()
 	t.Setenv("ENTIRE_TEST_TTY", "1")
 	var offered []grantCandidate
 	prev := removePicker
-	removePicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate) ([]string, error) {
+	removePicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate) ([]grantCandidate, error) {
 		offered = candidates
 		return answer(candidates), nil
 	}
@@ -755,7 +757,7 @@ func TestRemovePicker_OrgHasAPoolToo(t *testing.T) {
 		member("github:alice", "acct-a"), member("github:bob", "acct-b"),
 	}}, &grants, nil)
 	t.Cleanup(srv.Close)
-	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[1].ref} })
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []grantCandidate { return []grantCandidate{cs[1]} })
 
 	out, _, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
 	require.NoError(t, err)
@@ -774,7 +776,7 @@ func TestRemovePicker_ReportsTheNameItShowed(t *testing.T) {
 	var grants []string
 	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice}}, &grants, nil)
 	t.Cleanup(srv.Close)
-	captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+	captureRemovePicker(t, func(cs []grantCandidate) []grantCandidate { return []grantCandidate{cs[0]} })
 
 	out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
 	require.NoError(t, err)
@@ -790,7 +792,7 @@ func TestRemovePicker_EmptyPoolIsAnError(t *testing.T) {
 	var grants []string
 	srv := pickerServer(t, pickerFixture{withOwnerRow: true}, &grants, nil)
 	t.Cleanup(srv.Close)
-	captureRemovePicker(t, func([]grantCandidate) []string {
+	captureRemovePicker(t, func([]grantCandidate) []grantCandidate {
 		t.Error("the picker must not open with nothing to offer")
 		return nil
 	})
@@ -886,8 +888,8 @@ func TestGrantRemove_DecliningRevokesNothing(t *testing.T) {
 	var grants []string
 	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice, acctBob}}, &grants, nil)
 	t.Cleanup(srv.Close)
-	captureRemovePicker(t, func(cs []grantCandidate) []string {
-		return []string{cs[0].ref, cs[1].ref}
+	captureRemovePicker(t, func(cs []grantCandidate) []grantCandidate {
+		return []grantCandidate{cs[0], cs[1]}
 	})
 
 	var asked []grantCandidate
@@ -983,7 +985,7 @@ func TestRemovePicker_DropsMembersTheRoutesCannotAddress(t *testing.T) {
 		member("github:alice", "acct-a"),
 	}}, &grants, nil)
 	t.Cleanup(srv.Close)
-	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []grantCandidate { return []grantCandidate{cs[0]} })
 
 	out, _, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
 	require.NoError(t, err)
@@ -1001,7 +1003,7 @@ func TestRemovePicker_RowsCarryTheRole(t *testing.T) {
 	var grants []string
 	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice}}, &grants, nil)
 	t.Cleanup(srv.Close)
-	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []grantCandidate { return []grantCandidate{cs[0]} })
 
 	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
 	require.NoError(t, err)
@@ -1075,7 +1077,7 @@ func TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	offered := captureRemovePicker(t, func([]grantCandidate) []string { return nil })
+	offered := captureRemovePicker(t, func([]grantCandidate) []grantCandidate { return nil })
 
 	_, stderr, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
 	require.NoError(t, err, "choosing nobody is a clean stop")
@@ -1083,4 +1085,24 @@ func TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed(t *testing.T) {
 	require.Len(t, *offered, 2*perPage)
 	require.Contains(t, stderr, "Showing the first 1200 grants on org "+pickerOrgULID)
 	require.Contains(t, stderr, "pass the grantee explicitly")
+}
+
+// TestCancelledPicker_NamesWhatWasCancelled: the grantee multi-select is the
+// same screen for both flows, so backing out of `grant remove`'s picker once
+// read "Grant cancelled." The action is the caller's to name, and revoking says
+// the same word here as the confirmation one screen later does.
+func TestCancelledPicker_NamesWhatWasCancelled(t *testing.T) {
+	t.Parallel()
+	for action, want := range map[string]string{
+		grantAction:  "Grant cancelled.",
+		revokeAction: "Revocation cancelled.",
+	} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			var render bytes.Buffer
+			err := cancelledPicker(&render, action, huh.ErrUserAborted)
+			require.Error(t, err, "the command still stops")
+			require.Equal(t, want+"\n", render.String())
+		})
+	}
 }

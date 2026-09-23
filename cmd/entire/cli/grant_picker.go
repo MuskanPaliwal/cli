@@ -357,19 +357,11 @@ func runGrantPicker(cmd *cobra.Command, t grantPickerTarget, candidates []grantC
 		chosen = append(chosen, handleCandidate(h))
 	}
 	if len(chosen) == 0 {
-		refs, err := pickGrantees(cmd, "Select grantees for "+t.describe(), candidates)
+		picked, err := pickGrantees(cmd, grantAction, "Select grantees for "+t.describe(), candidates)
 		if err != nil {
 			return nil, err
 		}
-		// Back to whole rows, so the role screen can show what each grantee
-		// already holds and default their row to it.
-		byRef := make(map[string]grantCandidate, len(candidates))
-		for _, c := range candidates {
-			byRef[c.ref] = c
-		}
-		for _, ref := range refs {
-			chosen = append(chosen, byRef[ref])
-		}
+		chosen = picked
 		// Nobody chosen is a decision not to grant anything, so stop here.
 		// Falling through asked for a role per grantee over an empty list,
 		// which with --role is a note about nothing and without it hands huh a
@@ -408,27 +400,42 @@ func (t grantPickerTarget) describe() string { return t.noun + " " + t.ref }
 // enough (`grant add /et/acme/web 2>log`) that doing so renders an invisible
 // prompt on an apparently hung command. runPromptForm resolves both, and hands
 // back the writer it used so the cancellation lands where the user was looking.
-func runPickerScreen(cmd *cobra.Command, groups ...*huh.Group) error {
+func runPickerScreen(cmd *cobra.Command, action string, groups ...*huh.Group) error {
 	render, err := runPromptForm(cmd, NewAccessibleForm(groups...))
 	if err != nil {
-		return cancelledPicker(render, err)
+		return cancelledPicker(render, action, err)
 	}
 	return nil
 }
 
-// pickGrantees runs the multi-select over the offered candidates, returning the
-// refs of the chosen rows.
-func pickGrantees(cmd *cobra.Command, title string, candidates []grantCandidate) ([]string, error) {
-	offered := make(map[string]bool, len(candidates))
+// The two things a picker screen can be backed out of. The grantee multi-select
+// serves both flows, so what a cancelled one is called has to come from the
+// caller; revokeAction matches the wording revokeConfirmed prints one screen
+// later, so cancelling either half of a revoke reads the same.
+const (
+	grantAction  = "Grant"
+	revokeAction = "Revocation"
+)
+
+// pickGrantees runs the multi-select over the offered candidates and returns
+// the chosen rows.
+//
+// Rows rather than the refs huh binds to: every caller wants the whole
+// candidate back — to show what each grantee holds, or to name it in the
+// confirmation — so returning refs meant both callers rebuilding the same map
+// afterwards, and an unchecked lookup on each. Recovering the row here makes
+// that one lookup, and it is the same one that checks the answer was on offer.
+func pickGrantees(cmd *cobra.Command, action, title string, candidates []grantCandidate) ([]grantCandidate, error) {
+	offered := make(map[string]grantCandidate, len(candidates))
 	options := make([]huh.Option[string], len(candidates))
 	for i, c := range candidates {
-		offered[c.ref] = true
+		offered[c.ref] = c
 		options[i] = huh.NewOption(c.option(), c.ref)
 	}
 	var selected []string
 	// Filterable because the pool is a whole org's membership: at a few hundred
 	// people an unfiltered list is an arrow-key scroll with no way to search.
-	err := runPickerScreen(cmd,
+	err := runPickerScreen(cmd, action,
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title(title).
@@ -447,15 +454,20 @@ func pickGrantees(cmd *cobra.Command, title string, candidates []grantCandidate)
 	if len(selected) == 0 {
 		return nil, nil
 	}
-	for _, h := range selected {
+	picked := make([]grantCandidate, 0, len(selected))
+	for _, ref := range selected {
 		// The form returned a value that was not on offer. Nothing has been
 		// printed, so this must not be silent, or the command would exit
-		// non-zero with no message.
-		if !offered[h] {
-			return nil, fmt.Errorf("grantee %q was not among the %d offered", h, len(candidates))
+		// non-zero with no message — and taking the zero-valued row instead
+		// would revoke against an empty ref and report it against an empty
+		// label.
+		c, ok := offered[ref]
+		if !ok {
+			return nil, fmt.Errorf("grantee %q was not among the %d offered", ref, len(candidates))
 		}
+		picked = append(picked, c)
 	}
-	return selected, nil
+	return picked, nil
 }
 
 // pickRoles collects a role per grantee. With fixedRole set the rows are a note
@@ -467,7 +479,7 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, chosen []grantCandidate,
 		for _, g := range chosen {
 			fmt.Fprintf(&b, "%s%s  %s\n", uiform.SelectOptionIndent, g.label, fixedRole)
 		}
-		if err := runPickerScreen(cmd,
+		if err := runPickerScreen(cmd, grantAction,
 			huh.NewGroup(
 				huh.NewNote().
 					Title(fmt.Sprintf("Role for each grantee (set by --role %s)", fixedRole)).
@@ -498,7 +510,7 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, chosen []grantCandidate,
 			Inline(true).
 			Value(&roles[i])
 	}
-	if err := runPickerScreen(cmd, huh.NewGroup(fields...).Title("Role for each grantee")); err != nil {
+	if err := runPickerScreen(cmd, grantAction, huh.NewGroup(fields...).Title("Role for each grantee")); err != nil {
 		return nil, err
 	}
 	out := make([]grantSelection, len(chosen))
@@ -519,11 +531,11 @@ func pickRoles(cmd *cobra.Command, t grantPickerTarget, chosen []grantCandidate,
 // the prompt fell back to the controlling terminal, stderr is by definition not
 // visible, and explaining an outcome into a stream the user is not reading is
 // the same bug as prompting into one.
-func cancelledPicker(render io.Writer, err error) error {
-	if cerr := handleFormCancellation(render, "Grant", err); cerr != nil {
+func cancelledPicker(render io.Writer, action string, err error) error {
+	if cerr := handleFormCancellation(render, action, err); cerr != nil {
 		return cerr
 	}
-	return NewSilentError(errors.New("grant cancelled"))
+	return NewSilentError(errors.New(strings.ToLower(action) + " cancelled"))
 }
 
 // pickerUnavailable explains why no picker can run, always naming the explicit
@@ -633,6 +645,6 @@ func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]g
 
 // removePicker is the seam the remove flow's form sits behind, matching
 // grantPicker's role for add.
-var removePicker = func(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]string, error) {
-	return pickGrantees(cmd, "Select grants to revoke on "+t.describe(), candidates)
+var removePicker = func(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]grantCandidate, error) {
+	return pickGrantees(cmd, revokeAction, "Select grants to revoke on "+t.describe(), candidates)
 }

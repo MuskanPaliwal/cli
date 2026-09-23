@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -152,6 +153,33 @@ func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
 	require.Contains(t, prompts.String(), "github:alice", "the prompt goes to stderr")
 	require.Empty(t, string(leaked), "nothing may reach the process's stdout")
 	require.Empty(t, stdout.String(), "nor the command's stdout, which carries --json")
+}
+
+// TestRemovePicker_CancellingReadsAsARevoke drives the real remove screen
+// rather than the seam. The grantee multi-select is shared with `grant add`, so
+// whoever opens it has to say which action it belongs to; this fails if
+// removePicker hands it the grant wording.
+//
+// The failure it provokes is the terminal not opening, because that is the one
+// path into cancelledPicker reachable with no terminal at all — huh's
+// accessible mode neither aborts on a cancelled context nor errors at EOF.
+//
+// Not parallel: swaps the terminal opener.
+func TestRemovePicker_CancellingReadsAsARevoke(t *testing.T) {
+	prev := openPromptTerminal
+	openPromptTerminal = func() (promptTerminal, error) {
+		return promptTerminal{}, errors.New("no controlling terminal")
+	}
+	t.Cleanup(func() { openPromptTerminal = prev })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	cmd.SetErr(&bytes.Buffer{}) // not a terminal, so the fallback is attempted
+
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
+	_, err := removePicker(cmd, pt, []grantCandidate{{ref: "01HZX7Q", label: "github:alice", role: "admin", byID: true}})
+	require.ErrorContains(t, err, "Revocation prompt failed")
+	require.NotContains(t, err.Error(), "Grant", "a revoke never reports itself as a grant")
 }
 
 // stubPromptTerminal keeps a form on the command's own streams. A test's stderr
