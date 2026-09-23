@@ -17,9 +17,9 @@ func TestOrderHostsByLatency(t *testing.T) {
 		// The case the feature exists for: alphabetical puts the far cluster
 		// first purely because of the letter `a`.
 		hosts := []string{"aws-ap-southeast-2.entire.io", "aws-us-east-2.entire.io"}
-		got := orderHostsByLatency(hosts, map[string]time.Duration{
-			"aws-ap-southeast-2.entire.io": 240 * time.Millisecond,
-			"aws-us-east-2.entire.io":      18 * time.Millisecond,
+		got := orderHostsByLatency(hosts, map[string]probeResult{
+			"aws-ap-southeast-2.entire.io": {rtt: 240 * time.Millisecond},
+			"aws-us-east-2.entire.io":      {rtt: 18 * time.Millisecond},
 		})
 		require.Equal(t, []string{"aws-us-east-2.entire.io", "aws-ap-southeast-2.entire.io"}, got)
 	})
@@ -27,8 +27,34 @@ func TestOrderHostsByLatency(t *testing.T) {
 	t.Run("unmeasured hosts sort after measured ones in input order", func(t *testing.T) {
 		t.Parallel()
 		hosts := []string{"a.entire.io", "b.entire.io", "c.entire.io"}
-		got := orderHostsByLatency(hosts, map[string]time.Duration{"c.entire.io": 5 * time.Millisecond})
+		got := orderHostsByLatency(hosts, map[string]probeResult{"c.entire.io": {rtt: 5 * time.Millisecond}})
 		require.Equal(t, []string{"c.entire.io", "a.entire.io", "b.entire.io"}, got)
+	})
+
+	t.Run("a timed-out host sorts below every answer and above the unmeasurable", func(t *testing.T) {
+		t.Parallel()
+		// Three tiers in one assertion. The timed-out host is slower than any
+		// host that answered, but it produced evidence the refused one did not,
+		// so it outranks it.
+		hosts := []string{"refused.entire.io", "slow.entire.io", "far.entire.io", "near.entire.io"}
+		got := orderHostsByLatency(hosts, map[string]probeResult{
+			"slow.entire.io": {timedOut: true},
+			"far.entire.io":  {rtt: 240 * time.Millisecond},
+			"near.entire.io": {rtt: 18 * time.Millisecond},
+		})
+		require.Equal(t, []string{"near.entire.io", "far.entire.io", "slow.entire.io", "refused.entire.io"}, got)
+	})
+
+	t.Run("timed-out hosts keep the input order among themselves", func(t *testing.T) {
+		t.Parallel()
+		// They are equally unknown past the budget, so inventing an order
+		// between them would be a ranking the probe never measured.
+		hosts := []string{"b.entire.io", "a.entire.io"}
+		got := orderHostsByLatency(hosts, map[string]probeResult{
+			"a.entire.io": {timedOut: true},
+			"b.entire.io": {timedOut: true},
+		})
+		require.Equal(t, hosts, got)
 	})
 
 	t.Run("no measurements preserves the input order", func(t *testing.T) {
@@ -47,9 +73,9 @@ func TestNearestHost(t *testing.T) {
 
 	t.Run("picks the fastest measured host", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, map[string]time.Duration{
-			"near.entire.io": 12 * time.Millisecond,
-			"far.entire.io":  230 * time.Millisecond,
+		got, ok := nearestHost(hosts, map[string]probeResult{
+			"near.entire.io": {rtt: 12 * time.Millisecond},
+			"far.entire.io":  {rtt: 230 * time.Millisecond},
 		})
 		require.True(t, ok)
 		require.Equal(t, "near.entire.io", got)
@@ -59,9 +85,9 @@ func TestNearestHost(t *testing.T) {
 		t.Parallel()
 		// No margin: the caller asked for the nearest placement, so the nearest
 		// placement is the answer even when the lead is small.
-		got, ok := nearestHost(hosts, map[string]time.Duration{
-			"near.entire.io": 14 * time.Millisecond,
-			"far.entire.io":  20 * time.Millisecond,
+		got, ok := nearestHost(hosts, map[string]probeResult{
+			"near.entire.io": {rtt: 14 * time.Millisecond},
+			"far.entire.io":  {rtt: 20 * time.Millisecond},
 		})
 		require.True(t, ok)
 		require.Equal(t, "near.entire.io", got)
@@ -69,9 +95,31 @@ func TestNearestHost(t *testing.T) {
 
 	t.Run("ignores hosts that were not measured", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, map[string]time.Duration{"far.entire.io": 230 * time.Millisecond})
+		got, ok := nearestHost(hosts, map[string]probeResult{"far.entire.io": {rtt: 230 * time.Millisecond}})
 		require.True(t, ok)
 		require.Equal(t, "far.entire.io", got)
+	})
+
+	t.Run("a timed-out host never wins against one that answered", func(t *testing.T) {
+		t.Parallel()
+		got, ok := nearestHost(hosts, map[string]probeResult{
+			"near.entire.io": {timedOut: true},
+			"far.entire.io":  {rtt: 230 * time.Millisecond},
+		})
+		require.True(t, ok)
+		require.Equal(t, "far.entire.io", got)
+	})
+
+	t.Run("only timed-out hosts means no nearest", func(t *testing.T) {
+		t.Parallel()
+		// ">400ms" ranks a host for a person reading the picker, but two of them
+		// are indistinguishable, so an unattended run falls back to the primary
+		// rather than picking one of them.
+		_, ok := nearestHost(hosts, map[string]probeResult{
+			"near.entire.io": {timedOut: true},
+			"far.entire.io":  {timedOut: true},
+		})
+		require.False(t, ok)
 	})
 
 	t.Run("no measurement means no nearest", func(t *testing.T) {
@@ -85,9 +133,16 @@ func TestNearestHost(t *testing.T) {
 
 func TestFormatProbedRTT(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "18ms", formatProbedRTT(18*time.Millisecond, true))
-	require.Equal(t, "2ms", formatProbedRTT(1600*time.Microsecond, true))
-	require.Empty(t, formatProbedRTT(0, false))
+	require.Equal(t, "18ms", formatProbedRTT(probeResult{rtt: 18 * time.Millisecond}, true))
+	require.Equal(t, "2ms", formatProbedRTT(probeResult{rtt: 1600 * time.Microsecond}, true))
+	// A host still connecting at the budget prints the bound, not a blank: the
+	// reader needs to weigh it against the hosts that did answer. The figure
+	// comes from placementProbeBudget so the label cannot drift from the cap.
+	require.Equal(t, ">400ms", formatProbedRTT(probeResult{timedOut: true}, true))
+	require.Equal(t, ">"+formatMillis(placementProbeBudget), formatProbedRTT(probeResult{timedOut: true}, true))
+	// Unmeasurable stays blank: a refusal is immediate and says nothing about
+	// distance, so ">400ms" would report a latency never observed.
+	require.Empty(t, formatProbedRTT(probeResult{}, false))
 }
 
 func TestProbeAddress(t *testing.T) {
@@ -154,7 +209,8 @@ func TestDialLatencies(t *testing.T) {
 		require.Len(t, got, 2)
 		require.Contains(t, got, a)
 		require.Contains(t, got, b)
-		require.Positive(t, got[a])
+		require.Positive(t, got[a].rtt)
+		require.False(t, got[a].timedOut)
 	})
 
 	t.Run("omits a host that refuses the connection", func(t *testing.T) {
@@ -169,6 +225,22 @@ func TestDialLatencies(t *testing.T) {
 		got := dialLatencies(t.Context(), []string{live, dead})
 		require.Contains(t, got, live)
 		require.NotContains(t, got, dead, "an unreachable host must be absent, not present with a sentinel")
+	})
+
+	t.Run("an expired budget marks the host timed out", func(t *testing.T) {
+		t.Parallel()
+		// An already-passed deadline is the deterministic stand-in for the
+		// budget running out mid-dial: DialContext returns immediately with
+		// DeadlineExceeded, which is the classification under test. The host is
+		// present and flagged, not absent, so the picker can print ">400ms".
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		defer cancel()
+		host := listen(t)
+
+		got := dialLatencies(ctx, []string{host})
+		require.Contains(t, got, host)
+		require.True(t, got[host].timedOut)
+		require.Zero(t, got[host].rtt, "a timed-out host has no round trip to report")
 	})
 
 	t.Run("a cancelled context measures nothing", func(t *testing.T) {

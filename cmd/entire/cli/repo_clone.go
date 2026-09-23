@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 
 	"charm.land/huh/v2"
@@ -866,7 +865,7 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	// Probe only when there is a choice left to make — one host is not a
 	// choice, and an explicit --cluster is a choice already made, so neither
 	// earns a dial. p.probe is nil unless the caller opted in.
-	var rtt map[string]time.Duration
+	var rtt map[string]probeResult
 	if clusterSel == "" && len(hosts) > 1 && p.probe != nil {
 		rtt = p.probe(cmd.Context(), hosts)
 		hosts = orderHostsByLatency(hosts, rtt)

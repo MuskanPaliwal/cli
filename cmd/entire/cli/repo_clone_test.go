@@ -545,9 +545,9 @@ func TestResolveNativeCloneURL(t *testing.T) {
 			clusters: []coreapi.Cluster{usEast},
 		})
 		got, err := resolveNativeCloneURL(t.Context(), newCloneTestCmd(), c, "paul", "dogbark", "",
-			stubPlacementPicker(map[string]time.Duration{
-				"aws-ap-southeast-2.entire.io": 190 * time.Millisecond,
-				"aws-us-east-2.entire.io":      16 * time.Millisecond,
+			stubPlacementPicker(map[string]probeResult{
+				"aws-ap-southeast-2.entire.io": {rtt: 190 * time.Millisecond},
+				"aws-us-east-2.entire.io":      {rtt: 16 * time.Millisecond},
 			}))
 		require.NoError(t, err)
 		require.Equal(t, "entire://aws-us-east-2.entire.io/et/paul/dogbark", got)
@@ -868,9 +868,9 @@ func TestSelectCloneTarget(t *testing.T) {
 		// The primary is eu-west and would win without the flag. Substituting
 		// the measured nearest for it is precisely what --nearest asks for.
 		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io",
-			stubPlacementPicker(map[string]time.Duration{
-				"aws-eu-west-1.entire.io": 210 * time.Millisecond,
-				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			stubPlacementPicker(map[string]probeResult{
+				"aws-eu-west-1.entire.io": {rtt: 210 * time.Millisecond},
+				"aws-us-east-2.entire.io": {rtt: 14 * time.Millisecond},
 			}))
 		require.NoError(t, err)
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
@@ -882,7 +882,7 @@ func TestSelectCloneTarget(t *testing.T) {
 		// network must land where a caller who never passed the flag lands,
 		// not on an error the flag introduced.
 		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io",
-			stubPlacementPicker(map[string]time.Duration{}))
+			stubPlacementPicker(map[string]probeResult{}))
 		require.NoError(t, err)
 		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
 	})
@@ -897,9 +897,9 @@ func TestSelectCloneTarget(t *testing.T) {
 		cmd.SetOut(&nopWriter{})
 		cmd.SetErr(&stderr)
 		_, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io",
-			stubPlacementPicker(map[string]time.Duration{
-				"aws-eu-west-1.entire.io": 210 * time.Millisecond,
-				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			stubPlacementPicker(map[string]probeResult{
+				"aws-eu-west-1.entire.io": {rtt: 210 * time.Millisecond},
+				"aws-us-east-2.entire.io": {rtt: 14 * time.Millisecond},
 			}))
 		require.NoError(t, err)
 		require.Contains(t, stderr.String(), "aws-us-east-2.entire.io")
@@ -916,9 +916,9 @@ func TestSelectCloneTarget(t *testing.T) {
 		cmd.SetOut(&nopWriter{})
 		cmd.SetErr(&stderr)
 		_, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-us-east-2.entire.io",
-			stubPlacementPicker(map[string]time.Duration{
-				"aws-eu-west-1.entire.io": 210 * time.Millisecond,
-				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			stubPlacementPicker(map[string]probeResult{
+				"aws-eu-west-1.entire.io": {rtt: 210 * time.Millisecond},
+				"aws-us-east-2.entire.io": {rtt: 14 * time.Millisecond},
 			}))
 		require.NoError(t, err)
 		require.NotContains(t, stderr.String(), "not the primary")
@@ -929,7 +929,7 @@ func TestSelectCloneTarget(t *testing.T) {
 		// A choice already made must not cost a dial, so a probe that fails the
 		// test if called proves the short-circuit.
 		picker := withLatencyProbe(clonePlacementPicker())
-		picker.probe = func(context.Context, []string) map[string]time.Duration {
+		picker.probe = func(context.Context, []string) map[string]probeResult {
 			t.Error("probed despite an explicit --cluster")
 			return nil
 		}
@@ -947,12 +947,12 @@ func TestSelectCloneTarget(t *testing.T) {
 // Passing nil instead models the DEFAULT picker, which has no probe at all —
 // the two are distinct: no probe never dials, a failed probe dialled and got
 // nothing, and both must end at the same alphabetical behaviour.
-func stubPlacementPicker(rtt map[string]time.Duration) placementPicker {
+func stubPlacementPicker(rtt map[string]probeResult) placementPicker {
 	p := clonePlacementPicker()
 	if rtt == nil {
 		return p
 	}
-	p.probe = func(context.Context, []string) map[string]time.Duration { return rtt }
+	p.probe = func(context.Context, []string) map[string]probeResult { return rtt }
 	return p
 }
 
