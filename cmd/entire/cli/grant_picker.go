@@ -72,16 +72,23 @@ func handleCandidate(handle string) grantCandidate {
 	return grantCandidate{ref: handle, label: handle}
 }
 
-// option is the row as a picker shows it. label is the identity and is what
-// every message about the grant says; the role is appended where one is known,
-// so a destructive choice is made and confirmed with the access in view. Source
-// is deliberately absent: the remove pools offer direct grants only, so it
-// would be the same word on every row.
+// option is the row as a picker shows it and as a prompt names it. label is the
+// identity and is what every message about the grant says; the role is
+// parenthesised after it where one is known, so a destructive choice is made
+// and confirmed with the access in view.
+//
+// Parenthesised rather than spaced into a column because the labels are
+// handles of every length, so no separator aligns them — and the single-grantee
+// confirmation puts this inside a sentence ("Revoke github:alice (admin) from
+// project widgets?"), where a column gap reads as a typo.
+//
+// Source is deliberately absent: the remove pools offer direct grants only, so
+// it would be the same word on every row.
 func (c grantCandidate) option() string {
 	if c.role == "" {
 		return c.label
 	}
-	return c.label + "  " + c.role
+	return c.label + " (" + c.role + ")"
 }
 
 // grantSelection pairs a chosen grantee with the role to grant them. Roles are
@@ -124,12 +131,27 @@ func boundedList[T any](ctx context.Context, budget int, fetch func(ctx context.
 	})
 }
 
+// listWindow is what a bounded walk knows about its own completeness: how many
+// listing rows it READ, and whether more were left behind.
+//
+// scanned counts rows read, never rows kept. Every use of it is a statement
+// about how much of a listing something covers, and the pools drop rows — an
+// org member who already holds the target, a grant the owner row carries — so
+// "the first 800 members" would name a number that was never the first
+// anything. It is also what makes an empty pool sayable: with more rows
+// unread, "every member already has a grant" is a claim about an org this
+// never looked at.
+type listWindow struct {
+	scanned int
+	partial bool
+}
+
 // reportPartialPool discloses that a pool stopped at the fetch budget, and
 // names the way past it. A picker is a convenience over a listing the control
 // plane cannot filter or sort, so a truncated one is still useful — what it
 // must not do is look complete. Always on stderr: --json owns stdout.
-func reportPartialPool(cmd *cobra.Command, shown int, what string) {
-	fmt.Fprintf(cmd.ErrOrStderr(), "Showing the first %d %s; pass the grantee explicitly if the one you want is not listed.\n", shown, what)
+func reportPartialPool(cmd *cobra.Command, w listWindow, what string) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "Only the first %d %s were read; pass the grantee explicitly if the one you want is not listed.\n", w.scanned, what)
 }
 
 // ownerNotOrgError reports that a project is owned by an account rather than an
@@ -161,9 +183,8 @@ func owningOrgOf(ctx context.Context, c *coreapi.Client, projectID string) (stri
 // answers to "who can I add?".
 type memberPool struct {
 	candidates  []grantCandidate
-	total       int  // members fetched for the org
-	addressable int  // of those, the ones that can be granted at all
-	partial     bool // more members exist than the fetch budget took
+	window      listWindow // how much of the org's membership this read
+	addressable int        // of the members read, the ones that can be granted at all
 }
 
 // orgMemberCandidates lists the owning org's members who can be granted the
@@ -193,7 +214,7 @@ func orgMemberCandidates(ctx context.Context, c *coreapi.Client, orgID string, d
 	if err != nil {
 		return memberPool{}, err
 	}
-	pool := memberPool{total: len(members), partial: partial}
+	pool := memberPool{window: listWindow{scanned: len(members), partial: partial}}
 	for _, m := range members {
 		handle, ok := grantableMember(m)
 		if !ok {
@@ -224,15 +245,26 @@ func listOrgMembers(c *coreapi.Client, orgID string) func(context.Context, corea
 	}
 }
 
-// grantableMember reports whether a membership row can be granted or revoked by
-// this command at all. Both pools apply it: a row with no handle, or one whose
-// member has not joined, cannot be resolved to the (provider, providerUserId)
-// pair every org route needs, so offering it would mean accepting a selection
-// that fails at the call — and on the remove side the first such failure stops
-// the loop, leaving the rest of the chosen set untouched.
+// grantableMember reports whether a membership row is worth offering in a
+// picker. Both pools apply it, so the two agree on who is addressable — and on
+// the remove side that matters twice over, because revoking walks the chosen
+// set and returns on the first error, so one unaddressable row would strand
+// every row after it.
 //
-// It is why a pending invitation cannot be cancelled here: there is no org
-// route that takes one. `org member` work would be where that lives.
+// The handle is the load-bearing half: every org route goes through the
+// (provider, providerUserId) pair resolveGranteeProvider derives from it, so a
+// row without one cannot be acted on at all.
+//
+// The status half is a deliberately conservative guess, NOT an established
+// server behaviour. Membership.status is an unconstrained string in
+// core.openapi.json — no enum — and every membership observable from here (47
+// rows across four orgs) is "active" WITH a handle, so nothing proves that a
+// non-active row would fail to resolve, or even that one can carry a handle.
+// What makes the guess safe to keep is that it only hides a row from a
+// PICKER: `<noun> grant remove <ref> provider:handle` still addresses anyone
+// the server will resolve. Verify against the control plane's real status
+// vocabulary before relying on this as a rule, or before extending it to a
+// path where being filtered out is the end of the road.
 func grantableMember(m coreapi.Membership) (handle string, ok bool) {
 	handle = strings.TrimSpace(m.Handle.Or(""))
 	return handle, handle != "" && m.Status == orgMembershipActive
@@ -546,6 +578,13 @@ func pickerUnavailable(t grantPickerTarget, reason string) error {
 	return fmt.Errorf("%s; pass a grantee as provider:handle, e.g. %s", reason, example)
 }
 
+// revokeUnavailable is pickerUnavailable's remove-worded half: whatever stopped
+// the picker, naming the grantee is the way through.
+func revokeUnavailable(t grantPickerTarget, reason string) error {
+	example := fmt.Sprintf("entire %s grant remove %s github:alice", t.noun, t.ref)
+	return fmt.Errorf("%s; pass the grantee as provider:handle, e.g. %s", reason, example)
+}
+
 // The remove half. Its pool is the inverse of add's — who holds the target
 // now — and unlike add it exists for all three targets: org membership cannot
 // be offered for adding, because everyone eligible is by definition absent from
@@ -595,23 +634,23 @@ func fetchGrantHolders[Row any](
 	ctx context.Context,
 	fetch func(context.Context, coreapi.OptString) ([]Row, coreapi.OptString, error),
 	to func(Row) grantRow,
-) ([]grantCandidate, bool, error) {
+) ([]grantCandidate, listWindow, error) {
 	rows, partial, err := boundedList(ctx, coreListFetchBudget, fetch)
 	if err != nil {
-		return nil, false, err
+		return nil, listWindow{}, err
 	}
-	return grantHolders(mapRows(rows, to)), partial, nil
+	return grantHolders(mapRows(rows, to)), listWindow{scanned: len(rows), partial: partial}, nil
 }
 
 // grantSourceDirect is the source of a grant written on the resource itself,
 // as opposed to one inherited from its project or implied by its owner.
 const grantSourceDirect = "direct"
 
-func projectGrantHolders(ctx context.Context, c *coreapi.Client, projectID string) ([]grantCandidate, bool, error) {
+func projectGrantHolders(ctx context.Context, c *coreapi.Client, projectID string) ([]grantCandidate, listWindow, error) {
 	return fetchGrantHolders(ctx, listProjectGrants(c, projectID), projectGrantRowOf)
 }
 
-func repoGrantHolders(ctx context.Context, c *coreapi.Client, repoID string) ([]grantCandidate, bool, error) {
+func repoGrantHolders(ctx context.Context, c *coreapi.Client, repoID string) ([]grantCandidate, listWindow, error) {
 	return fetchGrantHolders(ctx, listRepoGrants(c, repoID), repoGrantRowOf)
 }
 
@@ -625,10 +664,10 @@ func repoGrantHolders(ctx context.Context, c *coreapi.Client, repoID string) ([]
 //
 // The role comes along for the row, so removing an owner does not look like
 // removing anyone else.
-func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]grantCandidate, bool, error) {
+func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]grantCandidate, listWindow, error) {
 	members, partial, err := boundedList(ctx, coreListFetchBudget, listOrgMembers(c, orgID))
 	if err != nil {
-		return nil, false, err
+		return nil, listWindow{}, err
 	}
 	holders := make([]grantCandidate, 0, len(members))
 	for _, m := range members {
@@ -640,7 +679,7 @@ func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]g
 		h.role = m.Role
 		holders = append(holders, h)
 	}
-	return holders, partial, nil
+	return holders, listWindow{scanned: len(members), partial: partial}, nil
 }
 
 // removePicker is the seam the remove flow's form sits behind, matching

@@ -63,7 +63,7 @@ type grantTarget[Row any] struct {
 	// the fetch budget with more left. Set on all three targets: the members to
 	// remove from an org ARE an enumerable list, which is what the add side
 	// lacks.
-	holders func(ctx context.Context, c *coreapi.Client, id string) ([]grantCandidate, bool, error)
+	holders func(ctx context.Context, c *coreapi.Client, id string) ([]grantCandidate, listWindow, error)
 	// ownerNotOrg phrases an ownerNotOrgError for this target, given the name of
 	// the account-owned project. The repo wording has to name the project
 	// standing between the repo and the missing org, so one shared sentence
@@ -189,9 +189,17 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		return nil, err
 	}
 	if len(pool.candidates) == 0 {
-		// An empty pool is not a failure. Nothing went wrong, nothing is left
-		// for the user to fix, and in the common case the state they wanted
-		// already holds — the same reasoning that makes revoking an
+		// Every sentence below is a statement about the WHOLE org, and a
+		// truncated walk read the first N of it — so on a partial pool none of
+		// them can be said, and this is the one empty pool that is not a clean
+		// success: the state the user wanted may not hold at all, it simply was
+		// not looked for past the budget. Name the way through instead.
+		if pool.window.partial {
+			return nil, pickerUnavailable(pt, fmt.Sprintf("none of the first %d members of the org owning %s can be added here, and it has more", pool.window.scanned, pt.describe()))
+		}
+		// An empty pool is otherwise not a failure. Nothing went wrong, nothing
+		// is left for the user to fix, and in the common case the state they
+		// wanted already holds — the same reasoning that makes revoking an
 		// already-revoked grant a success rather than a 404. So this reports
 		// and stops, and the command exits 0.
 		//
@@ -201,7 +209,7 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		// of them holds a grant on this target itself.
 		var reason string
 		switch {
-		case pool.total == 0:
+		case pool.window.scanned == 0:
 			reason = pt.describe() + " has no org members to choose from"
 		case pool.addressable == 0:
 			reason = fmt.Sprintf("no member of the org owning %s can be granted access here", pt.describe())
@@ -211,8 +219,8 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		reportNothingToAdd(cmd, reason)
 		return nil, nil
 	}
-	if pool.partial {
-		reportPartialPool(cmd, len(pool.candidates), "members of the org owning "+pt.describe())
+	if pool.window.partial {
+		reportPartialPool(cmd, pool.window, "members of the org owning "+pt.describe())
 	}
 	return grantPicker(cmd, pt, pool.candidates, nil, role)
 }
@@ -434,15 +442,21 @@ func revokeConfirmation(pt grantPickerTarget, picked []grantCandidate) (label, d
 // error rather than a silent success: the user asked to revoke something and
 // nothing was revoked.
 func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string) ([]grantCandidate, error) {
-	holders, partial, err := t.holders(ctx, c, id)
+	holders, window, err := t.holders(ctx, c, id)
 	if err != nil {
 		return nil, err
 	}
 	if len(holders) == 0 {
+		// "has no grants" is a statement about the target; a truncated walk
+		// only read the first N rows on it, which is a different claim and a
+		// different remedy.
+		if window.partial {
+			return nil, revokeUnavailable(pt, fmt.Sprintf("none of the first %d grants on %s can be revoked here, and it has more", window.scanned, pt.describe()))
+		}
 		return nil, fmt.Errorf("%s has no grants that can be revoked here", pt.describe())
 	}
-	if partial {
-		reportPartialPool(cmd, len(holders), "grants on "+pt.describe())
+	if window.partial {
+		reportPartialPool(cmd, window, "grants on "+pt.describe())
 	}
 	// Whole rows, so the confirmation can name what was shown rather than the
 	// id it acts on.
@@ -468,11 +482,11 @@ func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Clie
 	})
 }
 
-// granteeRequiredErr is the remove side of pickerUnavailable: no terminal to
+// granteeRequiredErr is the no-terminal case of revokeUnavailable: nothing to
 // choose on, so the grantee has to be named. One message serves all three
 // targets, because all three accept the same single form.
 func granteeRequiredErr(pt grantPickerTarget) error {
-	return fmt.Errorf("no grantee given; pass one as provider:handle, e.g. entire %s grant remove %s github:alice", pt.noun, pt.ref)
+	return revokeUnavailable(pt, "no grantee given")
 }
 
 // validateRole rejects a --role outside the target's set at the CLI boundary

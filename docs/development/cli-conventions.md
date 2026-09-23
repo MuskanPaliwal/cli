@@ -386,6 +386,16 @@ the commands are always runnable in every build.
   The grantee multi-select is `Filterable`, the pool being a whole org's
   membership.
 
+  **A bounded walk cannot make a statement about the whole thing.** `listWindow`
+  carries how many rows were READ (never how many survived filtering, which was
+  never "the first" anything) and whether more remain, and the empty-pool
+  branches consult it *before* they speak. "Every member of the org already has
+  a grant on it" and "has no grants that can be revoked here" are claims about
+  an org and a target; on a truncated walk neither is known, so both become an
+  error naming the explicit `provider:handle` form instead — the one empty pool
+  that is not a clean success, because the state the user wanted was never
+  looked for past the budget.
+
   **The least-privileged role is named, not indexed.** `grantTarget.leastRole`
   feeds `grantPickerTarget.least`, which is what an unanswered role row starts on
   and what a refusal's example suggests. Help order runs in opposite directions —

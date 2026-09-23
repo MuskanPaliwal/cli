@@ -877,6 +877,19 @@ func TestRevokeConfirmation_NamesEveryGrantee(t *testing.T) {
 	require.Equal(t, "2 grants on project widgets", label)
 	require.Contains(t, detail, "github:alice")
 	require.Contains(t, detail, "github:bob")
+
+	// The single-grantee title is read as a sentence — "Revoke <label>?" — so
+	// the role it carries has to be punctuated into it rather than spaced after
+	// it, which would run "admin" straight into "from".
+	label, _ = revokeConfirmation(pt, []grantCandidate{{ref: "x", label: "github:alice", role: "admin"}})
+	require.Equal(t, "github:alice (admin) from project widgets", label)
+
+	_, detail = revokeConfirmation(pt, []grantCandidate{
+		{ref: "x", label: "github:alice", role: "admin"},
+		{ref: "y", label: "github:bob", role: "reader"},
+	})
+	require.Contains(t, detail, "github:alice (admin)")
+	require.Contains(t, detail, "github:bob (reader)")
 }
 
 // TestGrantRemove_DecliningRevokesNothing is what the confirmation is for: a
@@ -1008,7 +1021,7 @@ func TestRemovePicker_RowsCarryTheRole(t *testing.T) {
 	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"github:alice"}, labels(*offered))
-	require.Equal(t, []string{"github:alice  writer"}, []string{(*offered)[0].option()})
+	require.Equal(t, []string{"github:alice (writer)"}, []string{(*offered)[0].option()})
 }
 
 // TestGrantRemove_ATypedGranteeIsNeverPrompted is the rule that keeps a
@@ -1045,46 +1058,148 @@ func TestGrantRemove_ATypedGranteeIsNeverPrompted(t *testing.T) {
 	require.Contains(t, out, "✓ Revoked github:alice")
 }
 
+// endlessOrgMembersServer pages org memberships forever, so only the fetch
+// budget can end the walk. row builds the member at each position, which is
+// what tells the truncation cases apart: grantable rows fill the pool, and
+// ungrantable ones leave it empty while the org plainly has more.
+func endlessOrgMembersServer(t *testing.T, row func(page, i int) coreapi.Membership) (*httptest.Server, *int) {
+	t.Helper()
+	pages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/members") {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			return
+		}
+		pages++
+		members := make([]coreapi.Membership, budgetTestPageSize)
+		for i := range members {
+			members[i] = row(pages, i)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := printJSON(w, &coreapi.ListOrgMembersOutputBody{
+			Members:       members,
+			NextPageToken: coreapi.NewOptString(fmt.Sprintf("page-%d", pages+1)),
+		}); err != nil {
+			t.Errorf("encode members: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &pages
+}
+
+// budgetTestPageSize is chosen so two pages clear coreListFetchBudget and a
+// third is never asked for.
+const budgetTestPageSize = 600
+
 // TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed: a pool is read in full
 // before a single row can be shown, so it stops at the shared fetch budget
 // rather than walking an org of any size one round trip per page. A window onto
 // a long list is still useful — looking complete is what it must not do, so the
 // truncation is disclosed on stderr along with the way past it.
 //
-// The server pages forever, so the budget is the only thing that ends the walk.
-//
 // Not parallel: swaps the activeCoreClient and removePicker seams.
 func TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed(t *testing.T) {
-	const perPage = 600
-	requested := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/members") {
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			return
-		}
-		requested++
-		members := make([]coreapi.Membership, perPage)
-		for i := range members {
-			members[i] = member(fmt.Sprintf("github:u%d-%d", requested, i), fmt.Sprintf("acct-%d-%d", requested, i))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := printJSON(w, &coreapi.ListOrgMembersOutputBody{
-			Members:       members,
-			NextPageToken: coreapi.NewOptString(fmt.Sprintf("page-%d", requested+1)),
-		}); err != nil {
-			t.Errorf("encode members: %v", err)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
+	srv, requested := endlessOrgMembersServer(t, func(page, i int) coreapi.Membership {
+		return member(fmt.Sprintf("github:u%d-%d", page, i), fmt.Sprintf("acct-%d-%d", page, i))
+	})
 	offered := captureRemovePicker(t, func([]grantCandidate) []grantCandidate { return nil })
 
 	_, stderr, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
 	require.NoError(t, err, "choosing nobody is a clean stop")
-	require.Equal(t, 2, requested, "the walk stops at the budget, not at the end of an endless list")
-	require.Len(t, *offered, 2*perPage)
-	require.Contains(t, stderr, "Showing the first 1200 grants on org "+pickerOrgULID)
+	require.Equal(t, 2, *requested, "the walk stops at the budget, not at the end of an endless list")
+	require.Len(t, *offered, 2*budgetTestPageSize)
+	// 1200 is what was READ, not what survived filtering: the count only ever
+	// says how much of the listing the pool covers.
+	require.Contains(t, stderr, "Only the first 1200 grants on org "+pickerOrgULID+" were read")
 	require.Contains(t, stderr, "pass the grantee explicitly")
+}
+
+// TestRemovePicker_ATruncatedEmptyPoolSaysSo: "has no grants that can be
+// revoked here" is a statement about the target, and a truncated walk only read
+// the first N rows on it. Reporting the unqualified sentence would tell a user
+// their grant does not exist when it was simply never looked at.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_ATruncatedEmptyPoolSaysSo(t *testing.T) {
+	// Nobody addressable, so the window is full and the pool empty.
+	srv, _ := endlessOrgMembersServer(t, func(page, i int) coreapi.Membership {
+		return inactive(fmt.Sprintf("github:u%d-%d", page, i), fmt.Sprintf("acct-%d-%d", page, i))
+	})
+	captureRemovePicker(t, func([]grantCandidate) []grantCandidate {
+		t.Error("the picker must not open with nothing to offer")
+		return nil
+	})
+
+	_, _, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
+	require.ErrorContains(t, err, "none of the first 1200 grants on org "+pickerOrgULID+" can be revoked here, and it has more")
+	require.ErrorContains(t, err, "entire org grant remove "+pickerOrgULID+" github:alice")
+	require.NotContains(t, err.Error(), "has no grants that can be revoked here",
+		"the unqualified sentence claims the target has none, which this never established")
+}
+
+// TestGrantPicker_ATruncatedEmptyPoolIsNotAQuietSuccess: the three empty-pool
+// messages are each a statement about the WHOLE org, so a truncated walk can
+// say none of them. Exiting 0 with "every member already has a grant" would
+// report a state this never looked for past the budget, so the truncated case
+// is an error naming the explicit form instead.
+//
+// The grant listing is finite and covers exactly the members the budget takes,
+// so the window comes back empty while the org plainly has more.
+//
+// Not parallel: swaps the activeCoreClient and grantPicker seams.
+func TestGrantPicker_ATruncatedEmptyPoolIsNotAQuietSuccess(t *testing.T) {
+	held := make([]coreapi.ProjectGrant, 0, 2*budgetTestPageSize)
+	for page := 1; page <= 2; page++ {
+		for i := range budgetTestPageSize {
+			held = append(held, coreapi.ProjectGrant{
+				GranteeId:   fmt.Sprintf("acct-%d-%d", page, i),
+				GranteeType: granteeTypeAccount,
+				GranteeName: coreapi.NewOptString(fmt.Sprintf("github:u%d-%d", page, i)),
+				Role:        "writer",
+				Source:      grantSourceDirect,
+			})
+		}
+	}
+	memberPages := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var payload any
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/members") && strings.Contains(r.URL.Path, "/orgs/"):
+			memberPages++
+			members := make([]coreapi.Membership, budgetTestPageSize)
+			for i := range members {
+				members[i] = member(fmt.Sprintf("github:u%d-%d", memberPages, i), fmt.Sprintf("acct-%d-%d", memberPages, i))
+			}
+			payload = &coreapi.ListOrgMembersOutputBody{
+				Members:       members,
+				NextPageToken: coreapi.NewOptString(fmt.Sprintf("page-%d", memberPages+1)),
+			}
+		case strings.HasSuffix(r.URL.Path, "/members"):
+			// The filter, not the pool: finite, so the walk over it ends.
+			payload = &coreapi.ListProjectMembersOutputBody{Members: held}
+		case strings.HasSuffix(r.URL.Path, "/projects/"+pickerProjULID):
+			payload = &coreapi.Project{ID: pickerProjULID, Name: "widgets", OwnerId: pickerOrgULID, OwnerType: coreapi.ProjectOwnerTypeOrg}
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			return
+		}
+		if err := printJSON(w, payload); err != nil {
+			t.Errorf("encode %s: %v", r.URL.Path, err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	capturePicker(t, func([]grantCandidate, []string, string) ([]grantSelection, error) {
+		t.Error("the picker must not open with nothing to offer")
+		return nil, nil
+	})
+
+	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "add", pickerProjULID)
+	require.ErrorContains(t, err, "none of the first 1200 members of the org owning project "+pickerProjULID+" can be added here, and it has more")
+	require.ErrorContains(t, err, "github:alice --role reader")
+	require.NotContains(t, err.Error(), "already has a grant",
+		"that sentence is about the whole org, which this never read")
 }
 
 // TestCancelledPicker_NamesWhatWasCancelled: the grantee multi-select is the
