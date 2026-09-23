@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -733,26 +734,40 @@ func antigravityPromptEnvFrom(base []string, repoDir string) []string {
 	switch antigravityAuthModeFrom(base) {
 	case antigravityAuthADC:
 		env := append(
-			filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE", "HOME", antigravityADCEnvKey, googleCloudProjectEnvKey,
+			filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE", "HOME", "USERPROFILE", antigravityADCEnvKey, googleCloudProjectEnvKey,
 				geminiAPIKeyEnvKey, googleAPIKeyEnvKey),
 			"ACCESSIBLE=1",
 			antigravityADCEnvKey+"=1",
-			"HOME="+antigravityTestHomeDir(repoDir),
 		)
+		env = append(env, antigravityIsolatedHomeEnv(repoDir)...)
 		if projectID := antigravityProjectID(base); projectID != "" {
 			env = append(env, googleCloudProjectEnvKey+"="+projectID)
 		}
 		return env
 	case antigravityAuthAPIKey:
-		return append(
-			filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE", "HOME", antigravityADCEnvKey, googleCloudProjectEnvKey, googleAPIKeyEnvKey),
+		env := append(
+			filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE", "HOME", "USERPROFILE", antigravityADCEnvKey, googleCloudProjectEnvKey, googleAPIKeyEnvKey),
 			"ACCESSIBLE=1",
-			"HOME="+antigravityTestHomeDir(repoDir),
 		)
+		return append(env, antigravityIsolatedHomeEnv(repoDir)...)
 	case antigravityAuthOAuth:
 		return append(filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE"), "ACCESSIBLE=1")
 	}
 	return append(filterEnv(base, "ENTIRE_TEST_TTY", "ACCESSIBLE"), "ACCESSIBLE=1")
+}
+
+// antigravityIsolatedHomeEnv points agy AND the entire hooks it spawns at the
+// per-repo test home. HOME is what agy and every Unix caller read; on Windows
+// os.UserHomeDir (which the CLI uses to find agy's brain directory) reads
+// USERPROFILE instead, so both are redirected there or the two sides would
+// disagree about where the transcript lives.
+func antigravityIsolatedHomeEnv(repoDir string) []string {
+	home := antigravityTestHomeDir(repoDir)
+	env := []string{"HOME=" + home}
+	if runtime.GOOS == "windows" {
+		env = append(env, "USERPROFILE="+home)
+	}
+	return env
 }
 
 // antigravityPrepareHome makes the isolated test home ready for the resolved

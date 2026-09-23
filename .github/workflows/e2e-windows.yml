@@ -9,7 +9,7 @@ on:
         type: string
         default: ""
       agent:
-        description: "Agent to test (claude-code, factoryai-droid)"
+        description: "Agent to test (claude-code, factoryai-droid, antigravity)"
         required: false
         type: string
         default: claude-code
@@ -27,6 +27,7 @@ on:
         options:
           - claude-code
           - factoryai-droid
+          - antigravity
 
 concurrency:
   group: e2e-windows-tests-${{ inputs.agent }}
@@ -67,15 +68,37 @@ jobs:
           # droid.exe lands in %USERPROFILE%\bin, not .local\bin.
           "$env:USERPROFILE\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install antigravity
+        if: inputs.agent == 'antigravity'
+        run: |
+          # Pinned to the same release as e2e.yml's Linux leg; nightly-e2e.yml
+          # is the one that tracks latest. The archive ships the binary as
+          # antigravity.exe (agy.exe in some builds); agy is the installed name.
+          $version = "1.2.7"
+          $tmp = Join-Path $env:RUNNER_TEMP "agy"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/google-antigravity/antigravity-cli/releases/download/$version/agy_cli_windows_x64.zip" -OutFile "$tmp\agy.zip"
+          Expand-Archive -Path "$tmp\agy.zip" -DestinationPath "$tmp\unpacked" -Force
+          $exes = Get-ChildItem -Path "$tmp\unpacked" -Recurse -File -Filter *.exe
+          $bin = $exes | Where-Object { $_.Name -in @("antigravity.exe", "agy.exe") } | Select-Object -First 1
+          if (-not $bin) { $bin = $exes | Select-Object -First 1 }
+          if (-not $bin) { throw "no .exe found in agy_cli_windows_x64.zip" }
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\bin" | Out-Null
+          Copy-Item $bin.FullName "$env:USERPROFILE\bin\agy.exe"
+          "$env:USERPROFILE\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$env:USERPROFILE\bin\agy.exe" --version
+
       - name: Bootstrap agent
         shell: bash
         env:
           AGENT: ${{ inputs.agent }}
           # droid's runner writes ANTHROPIC_API_KEY into its BYOK settings, so
           # both agents bootstrap off the same key; FACTORY_API_KEY is droid's
-          # own auth.
+          # own auth. antigravity runs in agy's Gemini API-key mode off the
+          # shared GEMINI_API_KEY, as on Linux.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: go run ./e2e/bootstrap "$AGENT"
 
       - name: Run isolated test
@@ -85,6 +108,7 @@ jobs:
           AGENT: ${{ inputs.agent }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts
           E2E_PARALLEL: 1
         run: |
