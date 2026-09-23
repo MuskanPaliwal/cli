@@ -336,23 +336,46 @@ the commands are always runnable in every build.
   moves to stderr and stdout gets the empty array, so a caller parsing stdout is
   never handed a sentence.
 
-  **`remove` confirms, but only where there is a terminal, and there is no flag
-  to bypass it.** This is deliberately not what `delete` does — that refuses
-  without `--force` — and the difference is blast radius: a deleted repo is
-  gone, a revoked grant is one command from being restored. So a script that has
-  always revoked unprompted keeps working and no `--force` has to exist for it.
-  Do not "finish the job" by adding the refusal and the flag; the flag is only
-  needed once the non-interactive path is broken. The prompt comes after the
-  picker so it names what was chosen, and covers the whole set at once — a count
-  in the title with the grantees listed under it, never a bare number.
-  `confirmDestructiveAction` is the shared gate and `destructiveAction` supplies
-  the words that differ, with `confirmControlPlaneDeletion` its delete-worded
-  wrapper.
+  **Only the picker confirms a `remove`, and there is no flag to bypass it.** A
+  typed grantee already names exactly who to revoke and is the form a script
+  uses, so `<noun> grant remove <ref> github:alice` revokes unprompted whether or
+  not a terminal is attached — gating it on terminal *detection* instead made a
+  redirected stdin reach a form, read EOF, take the default of "no", and exit 0
+  having revoked nothing. What a confirmation is for is the set clicked off a
+  list. Gating only that path is also what leaves nothing to bypass: no caller
+  who would want `--force` ever meets the prompt. Do not "finish the job" by
+  adding a refusal and the flag; that is `delete`'s bargain, and the difference
+  is blast radius — a deleted repo is gone, a revoked grant is one command from
+  being restored. The prompt comes after the picker so it names what was chosen,
+  and covers the whole set at once: a count in the title with the grantees listed
+  under it, never a bare number.
 
   No candidate is auto-picked even when only one is eligible, unlike
   `selectPlacement`, which returns a lone cluster without prompting: this writes
-  access. Picker prompts go to **stderr** (`promptForm`), because `huh` writes to
-  stdout in accessible mode and these commands can be asked for `--json`.
+  access.
+
+  **Prompts go where the user can see them**, via `runPromptForm`: stderr when
+  that is a terminal, and otherwise the controlling terminal for input *and*
+  output, with the cancellation message following the prompt to the same writer.
+  Pinning to stdout is wrong because `huh` writes there in accessible mode and
+  these commands can be asked for `--json`; pinning to stderr is wrong because
+  `... 2>log` then renders an invisible prompt on an apparently hung command.
+  `selectPlacement` uses the same helper.
+
+  **A pool is bounded; a filter is not.** A listing that IS a pool
+  (`boundedList` at `coreListFetchBudget`) is read in full before a single row
+  can be shown, so an unbounded walk would cost one round trip per page on a
+  large org — and a truncated pool is disclosed on stderr by `reportPartialPool`
+  along with the way past it. The grant rows *subtracted* from the add pool stay
+  unbounded: a partial filter would offer someone the target they already hold.
+  The grantee multi-select is `Filterable`, the pool being a whole org's
+  membership.
+
+  **The least-privileged role is named, not indexed.** `grantTarget.leastRole`
+  feeds `grantPickerTarget.least`, which is what an unanswered role row starts on
+  and what a refusal's example suggests. Help order runs in opposite directions —
+  reader/writer/admin is least-first, owner/admin/member last — so `roles[0]` is
+  right for two targets and backwards for the third.
 
 Forge tokens (`gh`, `et`) are the path segments of an `entire://` URL, and
 `gitremote.pathForges` owns the *set* — `IsForgePathToken` answers "is this a

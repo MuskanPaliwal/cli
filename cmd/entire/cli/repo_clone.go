@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -634,29 +633,6 @@ func clonePlacementPicker() placementPicker {
 	}
 }
 
-// placementPromptTerminal is the controlling terminal the placement picker
-// falls back to when the command's stderr is not one. Same shape as
-// pluginPromptTerminal: in is the terminal rather than os.Stdin, out is its
-// output handle, close releases both. All three are nil in tests that replace
-// the opener.
-type placementPromptTerminal struct {
-	in    io.Reader
-	out   io.Writer
-	close func() error
-}
-
-// openPlacementPromptTerminal is a var so tests can drive the interactive path
-// without a real terminal. The picker's output routing is the whole contract
-// behind `repo remote url`'s shell substitution and is otherwise unreachable
-// under go test, where CanPromptInteractively() is false.
-var openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
-	tty, err := interactive.OpenPromptTTY()
-	if err != nil {
-		return placementPromptTerminal{}, fmt.Errorf("open placement picker terminal: %w", err)
-	}
-	return placementPromptTerminal{in: tty.Input(), out: tty.Output(), close: tty.Close}, nil
-}
-
 // selectPlacement resolves which mirror placement a verb should act on. With one
 // placement it returns it directly. With an explicit clusterSel it picks the
 // matching one (or errors listing the available hosts). With more than one and no
@@ -702,21 +678,9 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	}
 
 	// The answer is read from the terminal, so the question has to be visible
-	// there. Neither of the command's own streams is guaranteed to be one:
-	// `repo remote url` exists to have its stdout captured (`git remote add
-	// entire "$(...)"`), and stderr is redirected often enough
-	// (`repo clone /gh/o/r 2>log`) that picking either unconditionally just
-	// moves which redirect breaks the prompt. Bubble Tea makes that failure
-	// silent rather than loud — it sets ttyOutput only when the writer is a
-	// terminal and then cannot query the window size, so it renders into a 0x0
-	// viewport while stdin is still in raw mode: an invisible prompt on an
-	// apparently hung command. Its /dev/tty fallback covers input only.
-	//
-	// So prefer stderr when it IS a terminal (keeps the escape sequences off a
-	// captured stdout) and fall back to the controlling terminal when it is
-	// not. Same shape as runPluginConfirm; interactive.OpenPromptTTY rather
-	// than tea.OpenTTY because its Close releases the read Bubble Tea leaves
-	// pending, which otherwise costs a second keypress on Windows.
+	// there, and `repo remote url` exists to have its stdout captured (`git
+	// remote add entire "$(...)"`). runPromptForm owns that routing and hands
+	// back the writer it rendered on, which is also where the outcome goes.
 	var selected string
 	form := NewAccessibleForm(
 		huh.NewGroup(
@@ -726,30 +690,8 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 				Value(&selected),
 		),
 	)
-	// render is where the prompt goes AND where anything explaining its outcome
-	// goes. They have to be the same writer: in the fallback branch stderr is by
-	// definition not visible, so a cancellation message sent there would explain
-	// a prompt the user watched disappear, into a stream they are not reading.
-	render := cmd.ErrOrStderr()
-	if !interactive.IsTerminalWriter(render) {
-		term, err := openPlacementPromptTerminal()
-		if err != nil {
-			return coreapi.ResolvedPlacement{}, err
-		}
-		if term.close != nil {
-			defer func() {
-				_ = term.close() //nolint:errcheck // best-effort cleanup after terminal interaction, as plugin_confirm.go does
-			}()
-		}
-		if term.out != nil {
-			render = term.out
-		}
-		if term.in != nil {
-			form = form.WithInput(term.in)
-		}
-	}
-	form = form.WithOutput(render)
-	if err := form.RunWithContext(cmd.Context()); err != nil {
+	render, err := runPromptForm(cmd, form)
+	if err != nil {
 		// handleFormCancellation prints "<action> cancelled." and returns nil for a
 		// Ctrl+C / cancelled-context abort. Surface that as a SilentError so the
 		// caller stops instead of falling through to act on a zero-value target

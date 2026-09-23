@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -28,10 +29,12 @@ import (
 // from input, returning what the form printed to the command's stderr.
 //
 // Only stdin is a process-global swap; the prompts are captured from the cobra
-// command, because the picker pins its forms' output to cmd.ErrOrStderr().
+// command, because the picker renders to cmd.ErrOrStderr() whenever that is
+// where the user can see them.
 func runAccessibleForm(t *testing.T, input string, fn func(cmd *cobra.Command)) string {
 	t.Helper()
 	t.Setenv("ACCESSIBLE", "1")
+	stubPromptTerminal(t)
 
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
@@ -64,7 +67,7 @@ func runAccessibleForm(t *testing.T, input string, fn func(cmd *cobra.Command)) 
 //
 // Not parallel: swaps the process's stdin and stdout.
 func TestPickRoles_EachRowKeepsItsOwnRole(t *testing.T) {
-	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
 	var got []grantSelection
 	out := runAccessibleForm(t, "3\n", func(cmd *cobra.Command) {
 		var err error
@@ -88,7 +91,7 @@ func TestPickRoles_EachRowKeepsItsOwnRole(t *testing.T) {
 //
 // Not parallel: swaps the process's stdin and stdout.
 func TestPickRoles_FixedRoleIsShownAndNotAsked(t *testing.T) {
-	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
 	var got []grantSelection
 	// No answers at all: a form that asked anything would block or fail here.
 	out := runAccessibleForm(t, "", func(cmd *cobra.Command) {
@@ -116,6 +119,7 @@ func TestPickRoles_FixedRoleIsShownAndNotAsked(t *testing.T) {
 // Not parallel: swaps the process's stdin.
 func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
 	t.Setenv("ACCESSIBLE", "1")
+	stubPromptTerminal(t)
 
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
@@ -136,7 +140,7 @@ func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
 	cmd.SetErr(&prompts)
 	cmd.SetOut(&stdout)
 
-	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
 	_, err = pickRoles(cmd, pt, []grantCandidate{handleCandidate("github:alice")}, "writer")
 	require.NoError(t, err)
 
@@ -148,4 +152,54 @@ func TestPickRoles_PromptsStayOffStdout(t *testing.T) {
 	require.Contains(t, prompts.String(), "github:alice", "the prompt goes to stderr")
 	require.Empty(t, string(leaked), "nothing may reach the process's stdout")
 	require.Empty(t, stdout.String(), "nor the command's stdout, which carries --json")
+}
+
+// stubPromptTerminal keeps a form on the command's own streams. A test's stderr
+// is a buffer, never a terminal, so runPromptForm would otherwise fall back to
+// the controlling terminal and read the developer's keyboard. The zero value
+// leaves input and output alone, which is the branch these tests are about.
+func stubPromptTerminal(t *testing.T) {
+	t.Helper()
+	prev := openPromptTerminal
+	openPromptTerminal = func() (promptTerminal, error) { return promptTerminal{}, nil }
+	t.Cleanup(func() { openPromptTerminal = prev })
+}
+
+// TestPromptForm_FallsBackToTheControllingTerminal is the routing the picker's
+// screens depend on. Stderr is redirected often enough (`grant add … 2>log`)
+// that pinning a prompt to it fails silently rather than loudly: Bubble Tea
+// sets ttyOutput only for a terminal writer, then cannot query the window size
+// and renders into a 0x0 viewport while stdin is in raw mode — an invisible
+// prompt on an apparently hung command.
+//
+// So a non-terminal stderr falls back to the controlling terminal for BOTH
+// halves. A test's stderr is a buffer, so this is the branch that runs here;
+// the stub stands in for /dev/tty.
+//
+// Not parallel: sets ACCESSIBLE and swaps the terminal opener.
+func TestPromptForm_FallsBackToTheControllingTerminal(t *testing.T) {
+	t.Setenv("ACCESSIBLE", "1")
+
+	var terminal bytes.Buffer
+	prev := openPromptTerminal
+	openPromptTerminal = func() (promptTerminal, error) {
+		return promptTerminal{in: strings.NewReader("2\n"), out: &terminal}, nil
+	}
+	t.Cleanup(func() { openPromptTerminal = prev })
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	var stderr, stdout bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&stdout)
+
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
+	got, err := pickRoles(cmd, pt, []grantCandidate{handleCandidate("github:alice")}, "")
+	require.NoError(t, err)
+	// Answered on the terminal's own input: option 2 of reader/writer/admin.
+	require.Equal(t, []grantSelection{{handle: "github:alice", role: "writer"}}, got)
+
+	require.Contains(t, terminal.String(), "github:alice", "the prompt goes where it can be seen")
+	require.Empty(t, stderr.String(), "not to a stderr that is not a terminal")
+	require.Empty(t, stdout.String(), "and never to stdout, which carries --json")
 }

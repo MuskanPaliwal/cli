@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,7 +46,9 @@ type pickerFixture struct {
 	members   []coreapi.Membership
 	held      []holder // accounts holding the target directly
 	// viaProject holds the grantees a repo carries through its project. Listing
-	// returns them alongside the direct rows, and the pool must subtract both.
+	// returns them alongside the direct rows, and the add pool must NOT subtract
+	// them: they hold no grant on the repo itself, so granting one here is a
+	// real action. Only the direct rows are subtracted.
 	viaProject []holder
 	// withOwnerRow adds the synthetic row for the owning org, which every real
 	// listing carries and neither picker may offer.
@@ -214,7 +216,7 @@ func captureRemovePicker(t *testing.T, answer func(offered []grantCandidate) []s
 		return answer(candidates), nil
 	}
 	prevConfirm := revokeConfirmed
-	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+	revokeConfirmed = func(*cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
 		return true, nil
 	}
 	t.Cleanup(func() { removePicker, revokeConfirmed = prev, prevConfirm })
@@ -812,12 +814,9 @@ func TestGrantRemove_NoGranteeIsRefusedBeforeAnyRequest(t *testing.T) {
 }
 
 // TestGrantRemove_NeedsNoConfirmationBypass pins the shape of the confirmation:
-// it is asked only where there is a terminal to ask on, so a script that has
-// always revoked without being prompted keeps working and there is no flag to
-// bypass. `delete` refuses instead, because a deleted resource is gone, while a
-// revoked grant is one command from being restored.
-//
-// `go test` is non-interactive, so this is the unprompted path.
+// it belongs to the picker, so a typed grantee revokes unprompted and there is
+// no flag to bypass anything. `delete` refuses instead, because a deleted
+// resource is gone, while a revoked grant is one command from being restored.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestGrantRemove_NeedsNoConfirmationBypass(t *testing.T) {
@@ -849,7 +848,7 @@ func TestGrantRemove_NeedsNoConfirmationBypass(t *testing.T) {
 // as a sentence.
 func TestRevokeConfirmation_NamesEveryGrantee(t *testing.T) {
 	t.Parallel()
-	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles}
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
 
 	label, detail := revokeConfirmation(pt, []grantCandidate{{ref: "x", label: "github:alice"}})
 	require.Equal(t, "github:alice from project widgets", label)
@@ -879,7 +878,7 @@ func TestGrantRemove_DecliningRevokesNothing(t *testing.T) {
 
 	var asked []grantCandidate
 	prev := revokeConfirmed
-	revokeConfirmed = func(_ context.Context, _ *cobra.Command, _ grantPickerTarget, picked []grantCandidate) (bool, error) {
+	revokeConfirmed = func(_ *cobra.Command, _ grantPickerTarget, picked []grantCandidate) (bool, error) {
 		asked = picked
 		return false, nil
 	}
@@ -893,15 +892,16 @@ func TestGrantRemove_DecliningRevokesNothing(t *testing.T) {
 	require.Equal(t, []string{"github:alice", "github:bob"}, labels(asked))
 }
 
-// TestGrantRemove_ConfirmationIsSkippedWithoutATerminal pins the rule that
-// removes the need for a bypass flag: no terminal, no prompt, and the revoke
-// goes through exactly as it always has.
+// TestGrantRemove_ConfirmationIsSkippedWithoutATerminal is the non-interactive
+// half of TestGrantRemove_ATypedGranteeIsNeverPrompted: the same typed revoke
+// goes through untouched with no terminal at all. Together they pin that the
+// outcome does not depend on terminal detection.
 //
 // Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
 func TestGrantRemove_ConfirmationIsSkippedWithoutATerminal(t *testing.T) {
 	asked := false
 	prev := revokeConfirmed
-	revokeConfirmed = func(context.Context, *cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+	revokeConfirmed = func(*cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
 		asked = true
 		return true, nil
 	}
@@ -919,4 +919,154 @@ func TestGrantRemove_ConfirmationIsSkippedWithoutATerminal(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, asked, "a script is never asked a question it cannot answer")
 	require.Contains(t, revoked, "/grants/account/github/12345")
+}
+
+// TestGrantAdd_TypedGranteeIsOnlyAskedForARole covers the one user-visible
+// change on the typed path: `project grant add widgets github:alice` with no
+// --role used to fail cobra's required-flag check and now prompts for one.
+//
+// What must hold is that the grantee is carried into the picker rather than
+// re-chosen there — the pool is never fetched and the multi-select never opens.
+// Passing nil instead of the typed grantee would discard it and open the full
+// picker, which nothing else here would notice.
+//
+// Not parallel: swaps the activeCoreClient and grantPicker seams.
+func TestGrantAdd_TypedGranteeIsOnlyAskedForARole(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
+		member("github:alice", "acct-a"), member("github:bob", "acct-b"),
+	}}, &grants, nil)
+	t.Cleanup(srv.Close)
+
+	var gotKnown []string
+	var gotOffered []grantCandidate
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	prev := grantPicker
+	grantPicker = func(_ *cobra.Command, _ grantPickerTarget, candidates []grantCandidate, known []string, _ string) ([]grantSelection, error) {
+		gotOffered, gotKnown = candidates, known
+		return []grantSelection{{handle: known[0], role: "admin"}}, nil
+	}
+	t.Cleanup(func() { grantPicker = prev })
+
+	out, _, err := runPickerCmd(t, newProjectGrantCmd, srv.URL, pickerProjULID, "github:alice")
+	require.NoError(t, err)
+	require.Equal(t, []string{"github:alice"}, gotKnown, "the typed grantee is the whole selection")
+	require.Empty(t, gotOffered, "no pool is offered when the grantee was named")
+	require.Contains(t, out, "✓ Granted github:alice admin access to project "+pickerProjULID)
+}
+
+// TestRemovePicker_DropsMembersTheRoutesCannotAddress: the remove pool applies
+// the same filter as the add pool, and for a sharper reason. Revoking walks the
+// chosen set and returns on the first error, so offering a member with no
+// resolvable provider identity does not merely fail for that row — it strands
+// every row after it.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_DropsMembersTheRoutesCannotAddress(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{members: []coreapi.Membership{
+		inactive("github:pending", "acct-p"),
+		member("github:alice", "acct-a"),
+	}}, &grants, nil)
+	t.Cleanup(srv.Close)
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+
+	out, _, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"github:alice"}, handles(*offered), "an invited member is never offered")
+	require.Contains(t, out, "✓ Revoked github:alice from org "+pickerOrgULID)
+}
+
+// TestRemovePicker_RowsCarryTheRole: revoking is destructive and the row is the
+// last thing read before confirming, so it says what is being taken away and
+// not only from whom. label stays the identity alone, because every message
+// about the grant is built from it.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_RowsCarryTheRole(t *testing.T) {
+	var grants []string
+	srv := pickerServer(t, pickerFixture{held: []holder{acctAlice}}, &grants, nil)
+	t.Cleanup(srv.Close)
+	offered := captureRemovePicker(t, func(cs []grantCandidate) []string { return []string{cs[0].ref} })
+
+	_, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", pickerProjULID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"github:alice"}, labels(*offered))
+	require.Equal(t, []string{"github:alice  writer"}, []string{(*offered)[0].option()})
+}
+
+// TestGrantRemove_ATypedGranteeIsNeverPrompted is the rule that keeps a
+// scripted revoke working: the confirmation belongs to the picker, and a typed
+// grantee already names exactly who to revoke.
+//
+// ENTIRE_TEST_TTY=1 is the point — a terminal IS available here, and the
+// command still must not ask. Without this, `grant remove <ref> <handle>` with
+// stdin redirected reached a form, read EOF, took the default of "no", and
+// exited 0 having revoked nothing.
+//
+// Not parallel: runCoreCmd swaps the package-level activeCoreClient seam.
+func TestGrantRemove_ATypedGranteeIsNeverPrompted(t *testing.T) {
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	asked := false
+	prev := revokeConfirmed
+	revokeConfirmed = func(*cobra.Command, grantPickerTarget, []grantCandidate) (bool, error) {
+		asked = true
+		return false, nil
+	}
+	t.Cleanup(func() { revokeConfirmed = prev })
+
+	var revoked string
+	srv := httptest.NewServer(grantWiringHandler(t,
+		func(_, path string) { revoked = path },
+		func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) },
+	))
+	t.Cleanup(srv.Close)
+
+	out, _, err := runCoreCmd(t, newProjectGrantCmd, srv.URL, "remove", wiringProjULID, "github:alice")
+	require.NoError(t, err)
+	require.False(t, asked, "a named grantee is an instruction, not a proposal")
+	require.Contains(t, revoked, "/grants/account/github/12345")
+	require.Contains(t, out, "✓ Revoked github:alice")
+}
+
+// TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed: a pool is read in full
+// before a single row can be shown, so it stops at the shared fetch budget
+// rather than walking an org of any size one round trip per page. A window onto
+// a long list is still useful — looking complete is what it must not do, so the
+// truncation is disclosed on stderr along with the way past it.
+//
+// The server pages forever, so the budget is the only thing that ends the walk.
+//
+// Not parallel: swaps the activeCoreClient and removePicker seams.
+func TestRemovePicker_APoolLongerThanTheBudgetIsDisclosed(t *testing.T) {
+	const perPage = 600
+	requested := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/members") {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			return
+		}
+		requested++
+		members := make([]coreapi.Membership, perPage)
+		for i := range members {
+			members[i] = member(fmt.Sprintf("github:u%d-%d", requested, i), fmt.Sprintf("acct-%d-%d", requested, i))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := printJSON(w, &coreapi.ListOrgMembersOutputBody{
+			Members:       members,
+			NextPageToken: coreapi.NewOptString(fmt.Sprintf("page-%d", requested+1)),
+		}); err != nil {
+			t.Errorf("encode members: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	offered := captureRemovePicker(t, func([]grantCandidate) []string { return nil })
+
+	_, stderr, err := runCoreCmd(t, newOrgGrantCmd, srv.URL, "remove", pickerOrgULID)
+	require.NoError(t, err, "choosing nobody is a clean stop")
+	require.Equal(t, 2, requested, "the walk stops at the budget, not at the end of an endless list")
+	require.Len(t, *offered, 2*perPage)
+	require.Contains(t, stderr, "Showing the first 1200 grants on org "+pickerOrgULID)
+	require.Contains(t, stderr, "pass the grantee explicitly")
 }

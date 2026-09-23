@@ -141,8 +141,9 @@ func resolveAccountRef(ctx context.Context, c *coreapi.Client, ref string) (stri
 // --provider-user-id was the COR-699 footgun ("provider identity not found") —
 // so the CLI always resolves it first. A bare account ULID is rejected here:
 // the by-provider routes can't be addressed by ULID, and there is no reverse
-// account→provider-id lookup; callers that accept a ULID grantee (project/repo
-// remove) handle it via the typed-id route before reaching this helper.
+// account→provider-id lookup. No caller takes one either — the grant commands
+// refuse a typed ULID outright, and the one path that revokes by ULID reads it
+// off a listing row and goes straight to the typed-id route.
 func resolveGranteeProvider(ctx context.Context, c *coreapi.Client, ref string) (provider, providerUserID string, err error) {
 	// A ULID is a tempting paste from `grant … list` (which prints the grantee
 	// ID), but the by-provider routes can't be addressed by ULID. Reject it with

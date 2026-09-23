@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
@@ -22,9 +23,10 @@ import (
 // the command shape and the shared plumbing; a grantTarget owns the typed calls.
 //
 // Grantees are addressed by a provider-qualified handle (e.g. github:alice),
-// which the CLI resolves to the provider account behind the scenes. `remove`
-// also accepts an account ULID where the API has a typed-id route (project and
-// repo). A user account is the only grantee kind the API grants to today.
+// which the CLI resolves to the provider account behind the scenes, and by
+// nothing else: ensureGranteeIsHandle refuses an account ULID on all three
+// targets, before any lookup, on add and remove alike. A user account is the
+// only grantee kind the API grants to today.
 
 // grantTarget describes one resource kind the shared `<noun> grant` subtree
 // manages. Row is the wire type of one listing entry.
@@ -33,6 +35,7 @@ type grantTarget[Row any] struct {
 	refUsage    string   // how a target is addressed, for Long: "name or ULID"; reads after "addressed by"
 	exampleRef  string   // a target ref for the Example lines
 	roles       []string // accepted --role values, in help order
+	leastRole   string   // the least-privileged of roles; help order runs least-first for access but most-first for org, so it is named rather than indexed
 	defaultRole string   // "" means --role is required; else the server default applied when --role is omitted
 	columns     []string
 	row         func(Row) []string
@@ -45,9 +48,10 @@ type grantTarget[Row any] struct {
 	grant            func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (granted string, wire any, err error)
 	list             func(ctx context.Context, c *coreapi.Client, id string, pageToken coreapi.OptString) ([]Row, coreapi.OptString, error)
 	revokeByProvider func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID string) error
-	// revokeByID is the typed-id route for an account ULID grantee. nil when
-	// the target has none (org), so a ULID grantee falls through to
-	// resolveGranteeProvider and is refused with the handle form named.
+	// revokeByID revokes by the grantee ULID a listing row carries, which needs
+	// no handle lookup and survives a rename. Only the remove picker reaches
+	// it — a typed ULID is refused — so it is nil on org, whose rows are
+	// addressed by handle because org membership has no such route.
 	revokeByID func(ctx context.Context, c *coreapi.Client, id, granteeID string) error
 	// candidates lists who could be granted this target for the interactive
 	// picker: members of the owning org with no direct grant on it, plus the
@@ -55,10 +59,11 @@ type grantTarget[Row any] struct {
 	// (org), which is what leaves `org grant add` exactly as it was.
 	candidates func(ctx context.Context, c *coreapi.Client, id string) (memberPool, error)
 	// holders lists the grants on this target that revoking would actually
-	// remove, for the remove picker. Set on all three targets: the members to
+	// remove, for the remove picker, and reports whether the listing stopped at
+	// the fetch budget with more left. Set on all three targets: the members to
 	// remove from an org ARE an enumerable list, which is what the add side
 	// lacks.
-	holders func(ctx context.Context, c *coreapi.Client, id string) ([]grantCandidate, error)
+	holders func(ctx context.Context, c *coreapi.Client, id string) ([]grantCandidate, bool, error)
 	// ownerNotOrg phrases an ownerNotOrgError for this target, given the name of
 	// the account-owned project. The repo wording has to name the project
 	// standing between the repo and the missing org, so one shared sentence
@@ -117,7 +122,7 @@ func newGrantAddCmd[Row any](t grantTarget[Row]) *cobra.Command {
 					return err
 				}
 			}
-			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles}
+			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles, least: t.leastRole}
 			grantee := ""
 			if len(args) == 2 {
 				grantee = args[1]
@@ -205,6 +210,9 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		}
 		reportNothingToAdd(cmd, reason)
 		return nil, nil
+	}
+	if pool.partial {
+		reportPartialPool(cmd, len(pool.candidates), "members of the org owning "+pt.describe())
 	}
 	return grantPicker(cmd, pt, pool.candidates, nil, role)
 }
@@ -311,7 +319,7 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 		Args:    cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles}
+			pt := grantPickerTarget{noun: t.noun, ref: args[0], roles: t.roles, least: t.leastRole}
 			if len(args) == 2 {
 				if err := ensureGranteeIsHandle(args[1]); err != nil {
 					return err
@@ -327,33 +335,34 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				// A typed grantee is its own label, so the confirmation names
-				// exactly what the user wrote; a picked one is reported by the
+				// Either way the set is grantCandidates: a typed grantee is
+				// its own ref and label, while a picked row is reported by the
 				// name the picker showed rather than the id it acts on.
+				typed := len(args) == 2
 				picked := []grantCandidate{}
-				if len(args) == 2 {
+				if typed {
 					picked = append(picked, handleCandidate(args[1]))
 				} else if picked, err = pickGrantsToRevoke(ctx, cmd, c, t, pt, id); err != nil {
 					return err
 				}
-				// Revoking confirms once for the whole set, after the picker so
-				// the prompt names what was actually chosen.
-				//
-				// Only where there is a terminal to ask on, and with no flag to
-				// bypass it. `delete` refuses instead, because a deleted repo
-				// is gone; a revoked grant is one command from being restored,
-				// so a script that has always revoked without being asked keeps
-				// doing so rather than needing an escape hatch invented for it.
-				// The prompt is there for the hand on the keyboard — above all
-				// for a set just picked off a list — and that hand is by
-				// definition at a terminal.
 				// Nobody chosen: nothing to confirm and nothing to revoke.
 				// Confirming anyway asked "Revoke 0 grants on …?".
 				if len(picked) == 0 {
 					return nil
 				}
-				if interactive.CanPromptInteractively() {
-					proceed, err := revokeConfirmed(ctx, cmd, pt, picked)
+				// Only the picker confirms, once for the whole set it chose.
+				//
+				// A typed grantee is already an explicit instruction naming who
+				// to revoke, and it is the form a script uses: `entire <noun>
+				// grant remove <ref> github:alice` revoked without asking before
+				// this command grew a picker, and still does — whether or not a
+				// terminal happens to be attached, so a redirected stdin cannot
+				// turn it into a prompt nobody answers. What a confirmation is
+				// for is a set clicked off a list, where the user chose rows
+				// rather than names. Gating only that path is also what leaves
+				// nothing to bypass: no caller who wanted --force ever meets it.
+				if !typed {
+					proceed, err := revokeConfirmed(cmd, pt, picked)
 					if err != nil || !proceed {
 						return err
 					}
@@ -373,9 +382,38 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 // revokeConfirmed is the seam the confirmation sits behind, matching
 // removePicker's role for the picker: the form needs a terminal, which `go
 // test` does not have, so a test answers it here instead.
-var revokeConfirmed = func(ctx context.Context, cmd *cobra.Command, pt grantPickerTarget, picked []grantCandidate) (bool, error) {
+//
+// It is the picker's own prompt rather than confirmControlPlaneDeletion's.
+// That gate exists to refuse without a terminal and offers --force to get past
+// the refusal; this one has neither, because it only ever runs behind the
+// picker. And it must be read where the picker was shown: runPromptForm puts
+// the question on a writer the user can see, where huh's accessible mode would
+// otherwise print it to stdout, in among the `✓ Revoked` lines.
+var revokeConfirmed = func(cmd *cobra.Command, pt grantPickerTarget, picked []grantCandidate) (bool, error) {
+	// huh opens the TTY during form startup regardless of context state, so
+	// guard explicitly to honor an already-cancelled command context.
+	if cmd.Context().Err() != nil {
+		return false, nil
+	}
 	label, detail := revokeConfirmation(pt, picked)
-	return confirmDestructiveAction(ctx, cmd.OutOrStdout(), revokeAction, label, detail, false, true)
+	confirmed := false
+	prompt := huh.NewConfirm().Title("Revoke " + label + "?").Value(&confirmed)
+	if detail != "" {
+		prompt = prompt.Description(detail)
+	}
+	render, err := runPromptForm(cmd, NewAccessibleForm(huh.NewGroup(prompt)))
+	if err != nil {
+		// An abort is a decision not to revoke, not a failure.
+		if cerr := handleFormCancellation(render, "Revocation", err); cerr != nil {
+			return false, cerr
+		}
+		return false, nil
+	}
+	if !confirmed {
+		fmt.Fprintln(render, "Revocation cancelled.")
+		return false, nil
+	}
+	return true, nil
 }
 
 // revokeConfirmation describes what is about to be revoked. A single grantee
@@ -383,11 +421,11 @@ var revokeConfirmed = func(ctx context.Context, cmd *cobra.Command, pt grantPick
 // so the prompt never hides who is in the set behind a number.
 func revokeConfirmation(pt grantPickerTarget, picked []grantCandidate) (label, detail string) {
 	if len(picked) == 1 {
-		return picked[0].label + " from " + pt.describe(), ""
+		return picked[0].option() + " from " + pt.describe(), ""
 	}
 	var b strings.Builder
 	for _, p := range picked {
-		fmt.Fprintf(&b, "%s%s\n", uiform.SelectOptionIndent, p.label)
+		fmt.Fprintf(&b, "%s%s\n", uiform.SelectOptionIndent, p.option())
 	}
 	return fmt.Sprintf("%d grants on %s", len(picked), pt.describe()), b.String()
 }
@@ -396,12 +434,15 @@ func revokeConfirmation(pt grantPickerTarget, picked []grantCandidate) (label, d
 // error rather than a silent success: the user asked to revoke something and
 // nothing was revoked.
 func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string) ([]grantCandidate, error) {
-	holders, err := t.holders(ctx, c, id)
+	holders, partial, err := t.holders(ctx, c, id)
 	if err != nil {
 		return nil, err
 	}
 	if len(holders) == 0 {
 		return nil, fmt.Errorf("%s has no grants that can be revoked here", pt.describe())
+	}
+	if partial {
+		reportPartialPool(cmd, len(holders), "grants on "+pt.describe())
 	}
 	refs, err := removePicker(cmd, pt, holders)
 	if err != nil {
@@ -420,8 +461,10 @@ func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *cor
 	return picked, nil
 }
 
-// revokeOne revokes a single grantee, routing on the form of the ref exactly as
-// a typed argument does — so a picked row and a typed one take the same path.
+// revokeOne revokes a single grantee. It routes on g.byID — set by the pool
+// that built the row, never sniffed from the ref's shape (see
+// grantCandidate.byID) — so a picked project or repo row goes by ULID, while a
+// typed grantee, which is always a handle, resolves its provider identity first.
 func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Client, t grantTarget[Row], pt grantPickerTarget, id string, g grantCandidate) error {
 	if g.byID {
 		return revokeGrant(cmd, g.label+" from "+pt.describe(), func() error {
@@ -438,8 +481,8 @@ func revokeOne[Row any](ctx context.Context, cmd *cobra.Command, c *coreapi.Clie
 }
 
 // granteeRequiredErr is the remove side of pickerUnavailable: no terminal to
-// choose on, so the grantee has to be named. It spells out the forms this
-// target accepts, which differ — only project and repo take an account ULID.
+// choose on, so the grantee has to be named. One message serves all three
+// targets, because all three accept the same single form.
 func granteeRequiredErr(pt grantPickerTarget) error {
 	return fmt.Errorf("no grantee given; pass one as provider:handle, e.g. entire %s grant remove %s github:alice", pt.noun, pt.ref)
 }
@@ -511,8 +554,15 @@ func granteeName(name coreapi.OptString, granteeID string) string {
 const granteeTypeAccount = "account"
 
 // accessRoles are the project and repo grant roles; the two targets share the
-// set because the server's SpiceDB relations are the same for both.
+// set because the server's SpiceDB relations are the same for both. They are
+// listed least-privileged first, which leastAccessRole names so nothing has to
+// rely on that order holding.
 var accessRoles = []string{"reader", "writer", "admin"}
+
+const leastAccessRole = "reader"
+
+// orgRoleMember is the org's least-privileged role and the server's default.
+const orgRoleMember = "member"
 
 // orgGrantTarget is org membership: roles owner/admin/member with member as
 // the server default, a target addressed by name or ULID, and no typed-id
@@ -521,8 +571,9 @@ var orgGrantTarget = grantTarget[coreapi.Membership]{
 	noun:        cmdOrg,
 	refUsage:    "name or ULID",
 	exampleRef:  "acme",
-	roles:       []string{"owner", "admin", "member"},
-	defaultRole: "member",
+	roles:       []string{"owner", "admin", orgRoleMember},
+	leastRole:   orgRoleMember,
+	defaultRole: orgRoleMember,
 	columns:     orgMemberColumns,
 	row:         orgMemberRow,
 	resolve:     resolveOrgRef,
@@ -557,6 +608,7 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 	refUsage:   "name or ULID",
 	exampleRef: "widgets",
 	roles:      accessRoles,
+	leastRole:  leastAccessRole,
 	columns:    grantColumns,
 	row:        projectGrantRow,
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
@@ -602,6 +654,7 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 	refUsage:   "its /" + nativeCloneForge + "/<project>/<repo> path",
 	exampleRef: "/" + nativeCloneForge + "/acme/web",
 	roles:      accessRoles,
+	leastRole:  leastAccessRole,
 	columns:    grantColumns,
 	row:        repoGrantRow,
 	resolve: func(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
