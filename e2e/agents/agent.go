@@ -118,6 +118,14 @@ type RepoPreparer interface {
 	PrepareRepo(repoDir string) error
 }
 
+// RepoCleaner is implemented by agents whose PrepareRepo (or prompt runs) leave
+// state beside the test repo — Antigravity's isolated HOME is a sibling
+// directory of it — so that state goes with the repo when the test cleans up.
+// Called from the repo's t.Cleanup, after artifacts are captured. Optional.
+type RepoCleaner interface {
+	CleanupRepo(repoDir string) error
+}
+
 // ArtifactCollector is implemented by agents that keep state outside the test
 // repo (an isolated HOME, the agent's own logs) worth capturing when artifacts
 // are collected. Keys are artifact names (written under the test's artifact

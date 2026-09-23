@@ -616,6 +616,16 @@ func antigravityPrepareRepo(env []string, repoDir string) error {
 	return os.WriteFile(hooksPath, append(out, '\n'), 0o600)
 }
 
+// CleanupRepo removes the isolated HOME that antigravityPrepareHome created
+// beside the repo. It has no *testing.T of its own, so the repo's cleanup calls
+// this; RemoveAll on the OAuth path, where no such directory exists, is a no-op.
+func (a *Antigravity) CleanupRepo(repoDir string) error {
+	if err := os.RemoveAll(antigravityTestHomeDir(repoDir)); err != nil {
+		return fmt.Errorf("antigravity E2E: remove isolated home: %w", err)
+	}
+	return nil
+}
+
 // ExtraArtifacts exposes agy's own state from the isolated HOME (its CLI log
 // directory and the settings.json the harness wrote) so CI failures inside
 // agy are diagnosable from artifacts. Nothing is captured in OAuth mode: the
