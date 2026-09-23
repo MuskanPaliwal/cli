@@ -372,6 +372,42 @@ func lockStatusFile(st statusStore, name string) (release func(), err error) {
 	return release, nil
 }
 
+// pruneStaleSnapshot removes one stale conversation's snapshot file, holding
+// that conversation's lock if it has one. Reports whether the file is gone.
+//
+// A lock file beside the snapshot means some tee has been mid-append for this
+// conversation, so take that lock — non-blocking — before unlinking, the way
+// the orphan-lock loop is careful about its own: a dormant conversation
+// resumed between the caller's stat and this unlink is mid-append, and pulling
+// the file from under its open fd loses the per-line detail between the
+// baseline and now. A held lock means it is alive right now, which is reason
+// enough to leave it for the next prune.
+//
+// No lock file means no tee ever was, because AppendStatusSnapshot takes the
+// lock BEFORE creating the .jsonl — the ordering the orphan-lock loop already
+// relies on. So absence is evidence here, and the file is unlinked directly.
+// The try-lock is not a free probe: flock opens with O_CREATE|O_EXCL, so
+// asking for a lock that does not exist CREATES one, and it would be left
+// behind for a conversation that is being deleted — an orphan the loop below
+// cannot collect this pass (it walks an entries snapshot taken before the lock
+// existed) and will not collect on the next one until it has aged past the
+// cutoff itself.
+func pruneStaleSnapshot(st statusStore, name string) bool {
+	target := path.Join(st.dir, name)
+	hasLock, err := snapshotFileExists(st, target+statusLockSuffix)
+	if err != nil {
+		return false
+	}
+	if hasLock {
+		release, locked := tryLockStatusFile(st, target)
+		if !locked {
+			return false
+		}
+		defer release()
+	}
+	return osroot.RemoveNoSymlinks(st.root, target) == nil
+}
+
 // tryLockStatusFile takes a conversation's lock only if it is free right now.
 // An already-expired deadline selects flock's non-blocking path: one LOCK_NB
 // attempt, then the context error rather than a wait. locked is false when
@@ -558,21 +594,9 @@ func pruneStaleStatusFiles(st statusStore, activeConversationID string) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			// Take the conversation's own lock before unlinking, the way the
-			// loop below is careful about its locks. A dormant conversation
-			// resumed between the stat above and this unlink is mid-append,
-			// and removing the file from under its open fd loses the
-			// per-line detail between the baseline and now. Non-blocking: a
-			// held lock means that conversation is alive right now, which is
-			// reason enough to leave its file for the next prune.
-			release, locked := tryLockStatusFile(st, path.Join(st.dir, name))
-			if !locked {
-				continue
-			}
-			if osroot.RemoveNoSymlinks(st.root, path.Join(st.dir, name)) == nil {
+			if pruneStaleSnapshot(st, name) {
 				delete(present, name)
 			}
-			release()
 		}
 	}
 	// A lock file whose snapshot file is gone (pruned above, or by an earlier

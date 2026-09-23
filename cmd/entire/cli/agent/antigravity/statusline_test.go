@@ -933,3 +933,37 @@ func TestAppendStatusSnapshot_PruneSkipsALockedStaleFile(t *testing.T) {
 		t.Errorf("a stale file whose conversation holds its lock must survive the prune: %v", err)
 	}
 }
+
+// The try-lock is not a free probe: flock opens with O_CREATE|O_EXCL, so asking
+// for a lock that does not exist creates one. Doing that while pruning would
+// leave an orphan lock behind for every conversation deleted — the orphan-lock
+// loop cannot collect it in the same pass, and on the next it must age past the
+// cutoff first, so each deletion leaks a file for another retention window.
+// A conversation with no lock file has never had a tee mid-append, since the
+// lock is taken before the .jsonl is created, so it is unlinked directly.
+func TestAppendStatusSnapshot_PruneLeavesNoOrphanLockBehind(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(statusDirEnv, dir)
+
+	// Stale, and deliberately without a lock file beside it.
+	stale := filepath.Join(dir, "lockless-conv.jsonl")
+	if err := os.WriteFile(stale, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-statusRetention - time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte(`{"conversation_id":"conv-new","context_window":{"total_input_tokens":1}}`)
+	if err := AppendStatusSnapshot(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("a stale file with no lock must still be pruned, stat err = %v", err)
+	}
+	if _, err := os.Stat(stale + statusLockSuffix); !os.IsNotExist(err) {
+		t.Error("pruning created a lock file for the conversation it deleted")
+	}
+}
