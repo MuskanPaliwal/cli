@@ -177,8 +177,8 @@ func newGrantRemoveCmd[Row any](t grantTarget[Row]) *cobra.Command {
 
 // validateRole rejects a --role outside the target's set at the CLI boundary
 // so the user gets a clear message instead of a server 422. The generated
-// bodies use a distinct enum type per target that shares these values, so the
-// targets cast the validated string to whichever type they need.
+// bodies type their role field as an enum, so the targets cast the validated
+// string to whichever type they need.
 func validateRole(role string, allowed []string) error {
 	if slices.Contains(allowed, role) {
 		return nil
@@ -245,6 +245,18 @@ const granteeTypeAccount = "account"
 // set because the server's SpiceDB relations are the same for both.
 var accessRoles = []string{"reader", "writer", "admin"}
 
+// grantAccessBody builds the request body the project and repo grant routes
+// share. Provider and providerUserId are optional on the wire because the
+// route also accepts an accountId; the CLI always addresses a grantee by
+// provider handle, so it always sends the pair.
+func grantAccessBody(provider, providerUserID, role string) *coreapi.GrantAccessBody {
+	return &coreapi.GrantAccessBody{
+		Provider:       coreapi.NewOptString(provider),
+		ProviderUserId: coreapi.NewOptString(providerUserID),
+		Role:           coreapi.GrantAccessBodyRole(role),
+	}
+}
+
 // orgGrantTarget is org membership: roles owner/admin/member with member as
 // the server default, a target addressed by name or ULID, and no typed-id
 // revoke route — members are removed by their provider identity.
@@ -293,11 +305,7 @@ var projectGrantTarget = grantTarget[coreapi.ProjectGrant]{
 		return resolveProjectRef(ctx, c, ref)
 	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {
-		out, err := c.GrantProjectAccess(ctx, &coreapi.GrantProjectAccessInputBody{
-			Provider:       provider,
-			ProviderUserId: providerUserID,
-			Role:           coreapi.GrantProjectAccessInputBodyRole(role),
-		}, coreapi.GrantProjectAccessParams{ProjectId: id})
+		out, err := c.GrantProjectAccess(ctx, grantAccessBody(provider, providerUserID, role), coreapi.GrantProjectAccessParams{ProjectId: id})
 		if err != nil {
 			return "", nil, err
 		}
@@ -331,11 +339,7 @@ var repoGrantTarget = grantTarget[coreapi.RepoGrant]{
 		return resolveRepoPath(ctx, c, ref)
 	},
 	grant: func(ctx context.Context, c *coreapi.Client, id, provider, providerUserID, role string) (string, any, error) {
-		out, err := c.GrantRepoAccess(ctx, &coreapi.GrantRepoAccessInputBody{
-			Provider:       provider,
-			ProviderUserId: providerUserID,
-			Role:           coreapi.GrantRepoAccessInputBodyRole(role),
-		}, coreapi.GrantRepoAccessParams{RepoId: id})
+		out, err := c.GrantRepoAccess(ctx, grantAccessBody(provider, providerUserID, role), coreapi.GrantRepoAccessParams{RepoId: id})
 		if err != nil {
 			return "", nil, err
 		}
