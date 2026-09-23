@@ -120,15 +120,26 @@ func TestProbeAddress(t *testing.T) {
 // selection tests inject: address construction, the concurrent fan-out, and
 // what happens to a host that does not answer. It stays hermetic by probing
 // loopback listeners it owns, so it needs no network and no name resolution.
+// listenLoopback opens a loopback listener on an arbitrary free port. It goes
+// through net.ListenConfig rather than net.Listen so the listen is bound to the
+// test's context (noctx), which also tears it down if the test is cancelled.
+func listenLoopback(t *testing.T) net.Listener {
+	t.Helper()
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	return ln
+}
+
 func TestDialLatencies(t *testing.T) {
 	t.Parallel()
 
 	// listen returns a live loopback listener's host:port. The listener closes
-	// with the test, so nothing outlives it.
+	// with the test, so nothing outlives it. ListenConfig rather than
+	// net.Listen because the latter takes no context (noctx).
 	listen := func(t *testing.T) string {
 		t.Helper()
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		ln := listenLoopback(t)
 		t.Cleanup(func() { _ = ln.Close() })
 		return ln.Addr().String()
 	}
@@ -150,8 +161,7 @@ func TestDialLatencies(t *testing.T) {
 		t.Parallel()
 		// A listener closed before the probe leaves a port nothing answers on,
 		// which is the reachable-then-gone case the ordering must survive.
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		ln := listenLoopback(t)
 		dead := ln.Addr().String()
 		require.NoError(t, ln.Close())
 
