@@ -151,6 +151,9 @@ func classifyProbeVersion(version string) error {
 // hooksProbeEnvelope is the subset of agy's --output-format json envelope the
 // probe reads: command.data.hooks[] carries one entry per hooks.json "name"
 // key with the file it came from.
+// agyProbeStatusSuccess is the status agy reports for a completed command.
+const agyProbeStatusSuccess = "SUCCESS"
+
 type hooksProbeEnvelope struct {
 	Status  string `json:"status"`
 	Command struct {
@@ -173,6 +176,15 @@ func parseHooksProbeOutput(out []byte, hooksPath string) (loaded bool, sources [
 	var env hooksProbeEnvelope
 	if err := json.Unmarshal(out, &env); err != nil {
 		return false, nil, fmt.Errorf("agy -p /hooks: unexpected output: %w", err)
+	}
+	// A non-success envelope carries no hooks, which is indistinguishable from
+	// a genuine empty list once the status is dropped — and the caller's
+	// remediation for an empty list is "your hooks are NOT LOADED", the wrong
+	// thing to tell someone whose probe failed. An absent status is left alone
+	// rather than treated as failure: only a status agy actually reported is
+	// evidence about the probe.
+	if env.Status != "" && !strings.EqualFold(env.Status, agyProbeStatusSuccess) {
+		return false, nil, fmt.Errorf("agy -p /hooks: reported status %q", env.Status)
 	}
 	wantPath := resolveAgySymlinks(hooksPath)
 	for _, h := range env.Command.Data.Hooks {

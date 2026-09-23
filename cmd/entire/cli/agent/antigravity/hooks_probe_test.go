@@ -60,3 +60,29 @@ func TestParseHooksProbeOutput(t *testing.T) {
 		t.Fatal("garbage output must error, not report loaded=false silently")
 	}
 }
+
+// A failed probe and a genuine empty hook list both arrive with no hooks, so
+// dropping the envelope's status made them indistinguishable — and doctor's
+// remediation for an empty list tells the user their hooks are NOT LOADED,
+// which is the wrong advice for someone whose probe never ran.
+func TestParseHooksProbeOutput_RejectsNonSuccessStatus(t *testing.T) {
+	t.Parallel()
+
+	hooksPath := filepath.Join(t.TempDir(), "hooks.json")
+
+	loaded, _, err := parseHooksProbeOutput(
+		[]byte(`{"status":"ERROR","command":{"name":"hooks","data":{"hooks":[]}}}`), hooksPath)
+	if err == nil {
+		t.Error("a non-success envelope must be reported as a failed probe, not as no hooks loaded")
+	}
+	if loaded {
+		t.Error("loaded must stay false for a failed probe")
+	}
+
+	// An absent status is not evidence of failure: only a status agy actually
+	// reported says anything about the probe.
+	if _, _, err := parseHooksProbeOutput(
+		[]byte(`{"command":{"name":"hooks","data":{"hooks":[]}}}`), hooksPath); err != nil {
+		t.Errorf("an envelope with no status must still parse: %v", err)
+	}
+}
