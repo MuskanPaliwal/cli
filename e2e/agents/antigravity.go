@@ -555,6 +555,15 @@ const antigravityHookProbeEnvKey = "E2E_ANTIGRAVITY_HOOK_PROBE"
 const antigravityHookProbeLog = ".entire/logs/agy-hook-probe.log"
 
 func antigravityHookProbeEnabled(env []string) bool {
+	// The probe is an sh script. agy hands hook commands to cmd.exe on Windows,
+	// where it fails with "The filename, directory name, or volume label syntax
+	// is incorrect" — and a failing PreToolUse hook makes agy refuse the tool
+	// call, so the probe would block the very edit the test waits for
+	// (observed on the first windows-latest run). The Entire hooks' own log
+	// lines are the evidence that agy runs hooks there.
+	if runtime.GOOS == "windows" {
+		return false
+	}
 	if value, ok := antigravityEnvValue(env, antigravityHookProbeEnvKey); ok {
 		return antigravityTruthyEnv(env, antigravityHookProbeEnvKey) && value != ""
 	}
