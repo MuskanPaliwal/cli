@@ -495,6 +495,42 @@ func TestRemoteReportKeepsALocalPathIntact(t *testing.T) {
 	require.NotContains(t, err.Error(), ":///srv")
 }
 
+// explicitPushURLs must answer only for a pushurl that is really configured.
+// `git remote get-url --push` echoes the FETCH url when none is set, and
+// against that every ordinary repoint looks stranded — the fetch URL is by
+// definition about to change — so a plain --override would print a spurious
+// "still pushes elsewhere" and talk the user into creating the very pushurl it
+// was warning about.
+func TestExplicitPushURLsIgnoresGitsFetchURLEcho(t *testing.T) {
+	t.Parallel()
+	const forgeURL = "git@github.com:octocat/hello-world.git"
+
+	t.Run("no pushurl configured is no push URL", func(t *testing.T) {
+		t.Parallel()
+		dir := applyPlanRepo(t, map[string]string{"origin": forgeURL})
+		require.Empty(t, explicitPushURLs(t.Context(), dir, "origin"))
+
+		// The end-to-end consequence: nothing to warn about on a plain repoint.
+		plan, err := planMirrorRemote("origin", planTestMirrorURL, forgeURL,
+			explicitPushURLs(t.Context(), dir, "origin"), true, map[string]bool{"origin": true})
+		require.NoError(t, err)
+		require.Empty(t, plan.strandedPushURLs)
+
+		var out strings.Builder
+		reportMirrorRemotePlan(&out, plan)
+		require.NotContains(t, out.String(), "still pushes elsewhere")
+	})
+
+	t.Run("a configured pushurl is reported", func(t *testing.T) {
+		t.Parallel()
+		dir := applyPlanRepo(t, map[string]string{"origin": forgeURL})
+		set := exec.CommandContext(t.Context(), "git", "remote", "set-url", "--push", "origin", "https://github.com/o/fork.git")
+		set.Dir = dir
+		require.NoError(t, set.Run())
+		require.Equal(t, []string{"https://github.com/o/fork.git"}, explicitPushURLs(t.Context(), dir, "origin"))
+	})
+}
+
 // An explicit pushurl outranks the URL this command writes, so a remote that
 // still pushes to the forge must be named rather than reported as fully
 // repointed — the Long promises fetch AND push go through Entire.

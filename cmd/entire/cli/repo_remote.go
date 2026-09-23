@@ -171,10 +171,32 @@ func planMirrorRemote(remote, mirrorURL, currentURL string, pushURLs []string, o
 	return plan, nil
 }
 
-// strandedPushURLs returns the configured push URLs that will not point at
-// mirrorURL after the write. `git remote get-url --push` echoes the fetch URL
-// when no pushurl is configured, so a value equal to mirrorURL is not stranded
-// — it is the remote this run is writing.
+// explicitPushURLs returns the remote's configured `pushurl` values, which are
+// the only ones that survive the `git remote set-url` this command performs.
+//
+// It reads the config key rather than `git remote get-url --push`, which echoes
+// the FETCH url when no pushurl is set: against that output every ordinary
+// repoint looks like a stranded push target, since the fetch URL is by
+// definition about to change. The key is absent far more often than not, and
+// git exits 1 for an absent key, so that is reported as "none" rather than as a
+// failure — this feeds a warning, not the write.
+func explicitPushURLs(ctx context.Context, dir, remote string) []string {
+	out, err := gitRunner(ctx, dir, "config", "--get-all", "remote."+remote+".pushurl")
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	for _, line := range strings.Split(out, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	return urls
+}
+
+// strandedPushURLs returns the explicitly configured push URLs that will not
+// point at mirrorURL after the write. One already naming mirrorURL is not
+// stranded — pushes through it already reach the mirror.
 func strandedPushURLs(mirrorURL string, pushURLs []string) []string {
 	var stranded []string
 	for _, u := range pushURLs {
@@ -394,20 +416,14 @@ func runRepoRemoteAdd(cmd *cobra.Command, args []string, cluster string, overrid
 		return err
 	}
 	// GetRemoteURLInDir errors when the remote is absent; that is the
-	// "add" case, which carries no current URL — and no push URL, since
-	// git derives one from the fetch URL only once it exists.
+	// "add" case, which carries neither a current URL nor a pushurl.
 	currentURL := ""
 	var pushURLs []string
 	if remotes[remote] {
 		if currentURL, err = gitremote.GetRemoteURLInDir(ctx, repoRoot, remote); err != nil {
 			return fmt.Errorf("read current URL of remote %q: %w", remote, err)
 		}
-		// Best-effort: a remote whose push URLs cannot be read is still
-		// one this command can repoint, and the note below is an extra
-		// warning rather than part of the write.
-		if pushURLs, err = gitremote.GetPushURLsInDir(ctx, repoRoot, nil, remote); err != nil {
-			logging.Debug(ctx, "could not read push URLs; not checking for a stranded push target", "remote", remote, "error", err)
-		}
+		pushURLs = explicitPushURLs(ctx, repoRoot, remote)
 	}
 
 	plan, err := planMirrorRemote(remote, mirrorURL, currentURL, pushURLs, override, remotes)
