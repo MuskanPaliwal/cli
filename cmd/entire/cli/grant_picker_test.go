@@ -118,6 +118,20 @@ func pickerServer(t *testing.T, f pickerFixture, grants *[]string, grantStatus f
 		}
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A /et/<project>/<repo> ref resolves through repos/resolve, which is a
+		// POST like the grant routes are — so it is answered before them rather
+		// than recorded as a grant. The requested name is echoed back, because
+		// the resolver matches on it and this fixture answers for whatever repo
+		// path a test addresses.
+		if strings.HasSuffix(r.URL.Path, "/repos/resolve") {
+			var body coreapi.ResolveReposInputBody
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Repositories) == 0 {
+				t.Errorf("decode resolve body: %v", err)
+				return
+			}
+			write(w, http.StatusOK, nativeResolution(body.Repositories[0].FullName, pickerRepoULID))
+			return
+		}
 		if r.Method == http.MethodPost {
 			var body struct {
 				ProviderUserID string `json:"providerUserId"`
