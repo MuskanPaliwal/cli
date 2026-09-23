@@ -585,7 +585,7 @@ func extractToolDetail(toolName string, input transcript.ToolInput) string {
 	return input.Pattern
 }
 
-// FormatCondensedTranscript formats an Input into a human-readable string for LLM.
+// FormatCondensedTranscript formats an Input into a human-readable string.
 // The format is:
 //
 //	[User] user prompt here
@@ -593,7 +593,22 @@ func extractToolDetail(toolName string, input transcript.ToolInput) string {
 //	[Assistant] assistant response here
 //
 //	[Tool] ToolName: description or file path
+//
+// It is unbounded: `entire explain --full` renders it for a reader who asked
+// for the whole transcript. Summary prompts go through
+// FormatCondensedTranscriptForPrompt, which applies the size bounds.
 func FormatCondensedTranscript(input Input) string {
+	return formatCondensedTranscript(input, false)
+}
+
+// FormatCondensedTranscriptForPrompt is FormatCondensedTranscript with the
+// transcript and file-list bounds a summary prompt needs (see
+// maxCondensedTranscriptBytes). Every LLM-bound caller uses this one.
+func FormatCondensedTranscriptForPrompt(input Input) string {
+	return formatCondensedTranscript(input, true)
+}
+
+func formatCondensedTranscript(input Input, bounded bool) string {
 	var sb strings.Builder
 
 	for i, entry := range input.Transcript {
@@ -621,7 +636,10 @@ func FormatCondensedTranscript(input Input) string {
 		}
 	}
 
-	out := boundTranscriptText(sb.String())
+	out := sb.String()
+	if bounded {
+		out = boundTranscriptText(out)
+	}
 
 	// Appended after the transcript bound, under its own: the file list is the
 	// part a summary can least afford to lose, but it is not short by
@@ -630,7 +648,7 @@ func FormatCondensedTranscript(input Input) string {
 	// prompt, so an unbounded tail would reopen the E2BIG failure the
 	// transcript bound closed.
 	if len(input.FilesTouched) > 0 {
-		out += boundFilesList(input.FilesTouched)
+		out += formatFilesList(input.FilesTouched, bounded)
 	}
 
 	return out
@@ -659,14 +677,15 @@ const maxCondensedTranscriptBytes = 96 * 1024
 // count, not the names, and the total stays inside the argv ceiling above.
 const maxCondensedFilesBytes = 16 * 1024
 
-// boundFilesList renders the [Files Modified] section, keeping whole lines up
-// to maxCondensedFilesBytes and closing with how many paths were left out.
-func boundFilesList(files []string) string {
+// formatFilesList renders the [Files Modified] section. When bounded, it
+// keeps whole lines up to maxCondensedFilesBytes and closes with how many
+// paths were left out.
+func formatFilesList(files []string, bounded bool) string {
 	var sb strings.Builder
 	sb.WriteString("\n[Files Modified]\n")
 	for i, file := range files {
 		line := "- " + file + "\n"
-		if sb.Len()+len(line) > maxCondensedFilesBytes {
+		if bounded && sb.Len()+len(line) > maxCondensedFilesBytes {
 			fmt.Fprintf(&sb, "- [... %d more files omitted to fit the summary prompt ...]\n", len(files)-i)
 			break
 		}

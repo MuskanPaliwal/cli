@@ -1270,7 +1270,7 @@ func TestFormatCondensedTranscript_BoundsOversizedFileLists(t *testing.T) {
 	for i := range 4000 {
 		files = append(files, fmt.Sprintf("pkg/module%04d/deeply/nested/directory/structure/file_with_a_long_name_%04d.go", i, i))
 	}
-	result := FormatCondensedTranscript(Input{
+	result := FormatCondensedTranscriptForPrompt(Input{
 		Transcript:   []Entry{{Type: EntryTypeUser, Content: "touch everything"}},
 		FilesTouched: files,
 	})
@@ -1283,8 +1283,14 @@ func TestFormatCondensedTranscript_BoundsOversizedFileLists(t *testing.T) {
 	if !strings.Contains(result, "more files omitted to fit the summary prompt") {
 		t.Error("the bound must say how many files were left out")
 	}
+	// The display formatter is never bounded: a reader who asked for the full
+	// transcript gets every file.
+	full := FormatCondensedTranscript(Input{FilesTouched: files})
+	if strings.Contains(full, "omitted") || !strings.Contains(full, "- pkg/module3999/") {
+		t.Error("FormatCondensedTranscript must render the whole file list for display")
+	}
 	// A short list is untouched.
-	short := FormatCondensedTranscript(Input{FilesTouched: []string{"a.go", "b.go"}})
+	short := FormatCondensedTranscriptForPrompt(Input{FilesTouched: []string{"a.go", "b.go"}})
 	if strings.Contains(short, "omitted") || !strings.Contains(short, "- b.go\n") {
 		t.Errorf("a short file list must be rendered in full, got %q", short)
 	}
@@ -1303,7 +1309,10 @@ func TestFormatCondensedTranscript_BoundsOversizedTranscripts(t *testing.T) {
 		FilesTouched: []string{"/kept.go"},
 	}
 
-	result := FormatCondensedTranscript(input)
+	result := FormatCondensedTranscriptForPrompt(input)
+	if display := FormatCondensedTranscript(input); strings.Contains(display, "truncated to fit the summary prompt") {
+		t.Error("the display formatter must not truncate; only the prompt variant is bounded")
+	}
 
 	if len(result) > maxCondensedTranscriptBytes+512 {
 		t.Errorf("formatted transcript is %d bytes, want <= budget (%d) plus the files list",
