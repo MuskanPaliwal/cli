@@ -17,9 +17,15 @@ import (
 // (both observed live, trail 444, 2026-09-22), which is how
 // `entire dispatch --local --agent antigravity` came to hand agy an empty
 // prompt. argv is the only documented route ("Usage: agy --print 'your
-// prompt here'"). Summary prompts are a few tens of KB at most, well inside
-// the Unix per-argument limit; Windows' 32K command-line limit is the one
-// place a very long prompt could fail, and it fails loudly.
+// prompt here'").
+//
+// That makes prompt size this agent's problem in a way it is not for agents
+// that use RunIsolatedTextGeneratorCLI's stdin. Linux caps a SINGLE argument
+// at MAX_ARG_STRLEN (128 KiB) however large the total ARG_MAX is, so an
+// unbounded prompt fails with E2BIG. summarize.maxCondensedTranscriptBytes is
+// what keeps summary prompts inside it. Windows' ~32 KiB whole-command-line
+// limit is tighter than any useful transcript budget and is not covered; a
+// long enough prompt still fails there, loudly.
 func (a *AntigravityAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
 	args := []string{"-p", prompt}
 	if model != "" {

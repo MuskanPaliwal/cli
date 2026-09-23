@@ -621,12 +621,54 @@ func FormatCondensedTranscript(input Input) string {
 		}
 	}
 
+	out := boundTranscriptText(sb.String())
+
+	// Appended after bounding: the file list is short, and it is the part a
+	// summary can least afford to lose.
 	if len(input.FilesTouched) > 0 {
-		sb.WriteString("\n[Files Modified]\n")
+		var files strings.Builder
+		files.WriteString("\n[Files Modified]\n")
 		for _, file := range input.FilesTouched {
-			fmt.Fprintf(&sb, "- %s\n", file)
+			fmt.Fprintf(&files, "- %s\n", file)
 		}
+		out += files.String()
 	}
 
-	return sb.String()
+	return out
+}
+
+// maxCondensedTranscriptBytes bounds the transcript text a summary prompt
+// carries. Two independent reasons, and the tighter one sets the number:
+//
+//   - Cost. Every byte here becomes prompt tokens, on every provider, on every
+//     checkpoint. Long sessions were previously unbounded.
+//   - argv. Antigravity takes its prompt as a single argv element, because agy
+//     ignores stdin in print mode (see antigravity.GenerateText). Linux caps a
+//     SINGLE argument at MAX_ARG_STRLEN — 128 KiB — regardless of the much
+//     larger total ARG_MAX, so an unbounded transcript fails with E2BIG on
+//     exactly the long sessions a summary is most wanted for. macOS's ~1 MiB
+//     total is permissive enough to hide this in local testing.
+//
+// 96 KiB keeps the whole prompt inside that 128 KiB once
+// buildSummarizationPrompt's wrapper is added. It does NOT rescue Windows,
+// which caps an entire command line near 32 KiB; that limit is narrower than
+// any transcript budget worth having and needs a different fix.
+const maxCondensedTranscriptBytes = 96 * 1024
+
+// boundTranscriptText caps transcript text at maxCondensedTranscriptBytes,
+// dropping from the middle. Both ends carry the most signal for a summary —
+// the opening says what was asked, the tail says how it ended — and a middle
+// cut is the one that keeps both.
+func boundTranscriptText(s string) string {
+	if len(s) <= maxCondensedTranscriptBytes {
+		return s
+	}
+
+	const marker = "\n[... transcript truncated to fit the summary prompt ...]\n"
+	keep := maxCondensedTranscriptBytes - len(marker)
+	head := keep / 2
+
+	// ToValidUTF8 drops the partial rune a byte-offset cut can leave at either
+	// new edge.
+	return strings.ToValidUTF8(s[:head], "") + marker + strings.ToValidUTF8(s[len(s)-(keep-head):], "")
 }

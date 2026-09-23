@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
@@ -1254,5 +1255,57 @@ func TestBuildCondensedTranscriptFromBytes_Antigravity(t *testing.T) {
 	}
 	if entries[2].Type != EntryTypeAssistant || entries[2].Content != "Created red.md." {
 		t.Errorf("entry 2 = %+v, want the assistant text", entries[2])
+	}
+}
+
+// A summary prompt travels to Antigravity as a single argv element, and Linux
+// caps one argument at MAX_ARG_STRLEN (128 KiB) however large ARG_MAX is. An
+// unbounded transcript therefore failed with E2BIG on exactly the long sessions
+// a summary is most wanted for, so the formatted transcript carries a budget.
+func TestFormatCondensedTranscript_BoundsOversizedTranscripts(t *testing.T) {
+	t.Parallel()
+
+	// Comfortably past the budget, in entries no single one of which exceeds it.
+	var entries []Entry
+	for range 40 {
+		entries = append(entries, Entry{Type: EntryTypeAssistant, Content: strings.Repeat("x", 8*1024)})
+	}
+	input := Input{
+		Transcript:   append([]Entry{{Type: EntryTypeUser, Content: "OPENING MARKER"}}, entries...),
+		FilesTouched: []string{"/kept.go"},
+	}
+
+	result := FormatCondensedTranscript(input)
+
+	if len(result) > maxCondensedTranscriptBytes+512 {
+		t.Errorf("formatted transcript is %d bytes, want <= budget (%d) plus the files list",
+			len(result), maxCondensedTranscriptBytes)
+	}
+	if !strings.Contains(result, "truncated to fit the summary prompt") {
+		t.Error("an over-budget transcript must say it was truncated")
+	}
+	// Both ends survive: the opening says what was asked, the files list is
+	// appended after bounding.
+	if !strings.Contains(result, "OPENING MARKER") {
+		t.Error("the start of the session was dropped; the cut must come from the middle")
+	}
+	if !strings.Contains(result, "- /kept.go") {
+		t.Error("the files list must survive bounding")
+	}
+	if !utf8.ValidString(result) {
+		t.Error("bounding cut a rune in half")
+	}
+}
+
+// Under budget, nothing is touched.
+func TestFormatCondensedTranscript_LeavesSmallTranscriptsAlone(t *testing.T) {
+	t.Parallel()
+
+	result := FormatCondensedTranscript(Input{
+		Transcript: []Entry{{Type: EntryTypeUser, Content: "short"}},
+	})
+
+	if strings.Contains(result, "truncated") {
+		t.Errorf("a short transcript must not be truncated, got %q", result)
 	}
 }
