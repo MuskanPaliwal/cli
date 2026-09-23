@@ -1552,13 +1552,22 @@ func writeCodexHookStatus(w io.Writer, diagnostics codex.HookDiagnostics, active
 }
 
 // antigravityDoctorSubject gates both Antigravity checks the same way: they
-// only apply where Entire's Antigravity hooks are installed AND agy is on PATH.
-// A teammate's checkout can carry the hooks on a machine that never uses agy;
-// reporting there would be a false positive. One gate, evaluated once.
+// only apply where Entire's Antigravity hooks are installed and switched on
+// AND agy is on PATH. A teammate's checkout can carry the hooks on a machine
+// that never uses agy; reporting there would be a false positive. One gate,
+// evaluated once.
+//
+// The "enabled": false check is here rather than in AreHooksInstalled because
+// that predicate also drives agent auto-detection and `entire agent list`,
+// where an entry the user switched off is still genuinely present. Only
+// doctor's advice is unwanted for a configuration nobody asked to run.
 func antigravityDoctorSubject(cmd *cobra.Command) (*antigravity.AntigravityAgent, bool) {
 	ag := &antigravity.AntigravityAgent{}
 	installed, err := ag.AreHooksInstalled(cmd.Context())
 	if err != nil || !installed {
+		return nil, false
+	}
+	if disabled, err := ag.HooksDisabled(cmd.Context()); err != nil || disabled {
 		return nil, false
 	}
 	if _, err := exec.LookPath("agy"); err != nil {

@@ -568,3 +568,53 @@ func TestHooksEntryMatchesHost(t *testing.T) {
 		t.Fatalf("user-disabled: installed=%v current=%v err=%v; want true,true,nil", installed, current, err)
 	}
 }
+
+// "enabled": false is a deliberate opt-out that InstallHooks already honours.
+// It has to be readable on its own, separately from installed-ness: the entry
+// stays genuinely present for agent detection and `entire agent list`, and only
+// `entire doctor` wants to go quiet about it.
+func TestHooksDisabled_SeparatesOptOutFromPresence(t *testing.T) {
+	for name, tc := range map[string]struct {
+		entry        string
+		wantDisabled bool
+	}{
+		"explicitly disabled": {`{"enabled":false,"Stop":[{"type":"command","command":"entire hooks antigravity stop"}]}`, true},
+		"explicitly enabled":  {`{"enabled":true,"Stop":[{"type":"command","command":"entire hooks antigravity stop"}]}`, false},
+		"enabled unset":       {`{"Stop":[{"type":"command","command":"entire hooks antigravity stop"}]}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// No t.Parallel — uses t.Chdir and t.Setenv
+			tmpDir := t.TempDir()
+			t.Chdir(tmpDir)
+			t.Setenv(configDirEnv, t.TempDir())
+
+			agentsDir := filepath.Join(tmpDir, ".agents")
+			if err := os.MkdirAll(agentsDir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			hooks := `{"entire":` + tc.entry + `}`
+			if err := os.WriteFile(filepath.Join(agentsDir, AgentsHooksFileName), []byte(hooks), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			a := &AntigravityAgent{}
+			disabled, err := a.HooksDisabled(context.Background())
+			if err != nil {
+				t.Fatalf("HooksDisabled: %v", err)
+			}
+			if disabled != tc.wantDisabled {
+				t.Errorf("HooksDisabled() = %v, want %v", disabled, tc.wantDisabled)
+			}
+
+			// Present either way: detection and `entire agent list` describe
+			// what is on disk, so the opt-out must not make the entry vanish.
+			installed, err := a.AreHooksInstalled(context.Background())
+			if err != nil {
+				t.Fatalf("AreHooksInstalled: %v", err)
+			}
+			if !installed {
+				t.Error("AreHooksInstalled() = false; a disabled entry is still present")
+			}
+		})
+	}
+}

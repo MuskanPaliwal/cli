@@ -123,23 +123,60 @@ func (a *AntigravityAgent) HooksEntryMatchesHost(ctx context.Context) (installed
 	if err != nil {
 		return false, false, err
 	}
-	data, err := cfg.Read()
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, false, nil
-		}
-		return false, false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
-	}
-	var rawFile map[string]json.RawMessage
-	if err := json.Unmarshal(data, &rawFile); err != nil {
-		return false, false, fmt.Errorf("parse hook config: %w", err)
-	}
-	existing, ok := rawFile["entire"]
-	if !ok {
-		return false, false, nil
+	existing, ok, err := readEntireEntry(cfg)
+	if err != nil || !ok {
+		return false, false, err
 	}
 	disabled, same := entireEntryMatches(existing, buildEntireHookConfig())
 	return true, disabled || same, nil
+}
+
+// readEntireEntry returns the raw "entire" entry from the repo's hooks.json.
+// ok is false when the file or the entry is absent, which every caller reads
+// as "no Entire hooks here" rather than as an error.
+//
+// Parsed per-entry, not as a whole file of HookConfigs: foreign entries are
+// free-form user content and need not match our struct shapes, and a strict
+// whole-file unmarshal would fail on them and permanently report our own
+// entry as missing.
+func readEntireEntry(cfg *agent.HookConfigFile) (json.RawMessage, bool, error) {
+	data, err := cfg.Read()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
+	}
+	var rawFile map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawFile); err != nil {
+		return nil, false, fmt.Errorf("parse hook config: %w", err)
+	}
+	entry, ok := rawFile["entire"]
+	return entry, ok, nil
+}
+
+// HooksDisabled reports whether the repo's "entire" entry is present but
+// explicitly switched off with "enabled": false. InstallHooks already treats
+// that as a deliberate opt-out and leaves the entry alone.
+//
+// It exists so `entire doctor` can stay quiet about a configuration the user
+// turned off. AreHooksInstalled and DetectPresence deliberately still report
+// such an entry as present: they drive agent auto-detection and
+// `entire agent list`, which describe what is on disk.
+func (a *AntigravityAgent) HooksDisabled(ctx context.Context) (bool, error) {
+	cfg, err := a.hookConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	entry, ok, err := readEntireEntry(cfg)
+	if err != nil || !ok {
+		return false, err
+	}
+	var existingCfg HookConfig
+	if err := json.Unmarshal(entry, &existingCfg); err != nil {
+		return false, fmt.Errorf("parse entire hook entry: %w", err)
+	}
+	return existingCfg.Enabled != nil && !*existingCfg.Enabled, nil
 }
 
 // hookConfig opens the repo's .agents/hooks.json through agent.HookConfigFile,
@@ -194,25 +231,9 @@ func (a *AntigravityAgent) AreHooksInstalled(ctx context.Context) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	data, err := hookCfg.Read()
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
-	}
-
-	// Parse per-entry: foreign hook entries are free-form user content and
-	// may not match Entire's handler struct shapes — a strict whole-file
-	// unmarshal would fail on them and permanently report "not installed"
-	// even though our entry is fine. Only the "entire" entry must conform.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return false, fmt.Errorf("parse hook config: %w", err)
-	}
-	entireRaw, ok := raw["entire"]
-	if !ok {
-		return false, nil
+	entireRaw, ok, err := readEntireEntry(hookCfg)
+	if err != nil || !ok {
+		return false, err
 	}
 	var cfg HookConfig
 	if err := json.Unmarshal(entireRaw, &cfg); err != nil {
