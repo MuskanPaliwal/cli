@@ -2,7 +2,9 @@ package antigravity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +77,7 @@ func openAgyConfigRoot(create bool) (*os.Root, error) {
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // preserved for os.IsNotExist at call sites
+		return nil, err //nolint:wrapcheck // preserved for errors.Is(err, fs.ErrNotExist) at call sites
 	}
 	return root, nil
 }
@@ -120,7 +122,10 @@ func shellSingleQuote(s string) string {
 // the wrong original with no error anywhere. The lock file sits beside
 // settings.json, like the status store's beside its snapshot file. With create
 // the config directory is made first; without it a missing directory is
-// reported through os.IsNotExist for callers that then have nothing to do.
+// reported through errors.Is(err, fs.ErrNotExist) for callers that then have
+// nothing to do. errors.Is rather than os.IsNotExist because it keeps working
+// if any layer below starts wrapping: openAgyConfigRoot and the osroot helpers
+// currently return ENOENT unwrapped on purpose, which os.IsNotExist depends on.
 func lockAgySettings(create bool) (release func(), err error) {
 	root, err := openAgyConfigRoot(create)
 	if err != nil {
@@ -209,7 +214,7 @@ func UninstallTitleTee() error {
 	// uninstall, and no reason to create the directory just to lock in it.
 	release, err := lockAgySettings(false)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -308,14 +313,14 @@ func readAgySettings() (map[string]json.RawMessage, error) {
 	rawFile := make(map[string]json.RawMessage)
 	root, err := openAgyConfigRoot(false)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return rawFile, nil
 		}
 		return nil, fmt.Errorf("failed to open agy config dir: %w", err)
 	}
 	defer root.Close()
 	data, err := osroot.ReadFileNoFollow(root, agySettingsFileName)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return rawFile, nil
 	}
 	if err != nil {
@@ -344,7 +349,7 @@ func writeAgySettings(rawFile map[string]json.RawMessage) error {
 	defer root.Close()
 	if info, err := osroot.LstatNoSymlinks(root, agySettingsFileName); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("failed to write agy settings: %w", osroot.ErrSymlinkedPath)
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("failed to inspect agy settings: %w", err)
 	}
 	if err := jsonutil.WriteFileAtomicIn(root, agySettingsFileName, output, 0o600); err != nil {
