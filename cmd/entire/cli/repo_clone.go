@@ -485,10 +485,12 @@ func newRepoCloneCmd() *cobra.Command {
 			"clusters. On a single cluster it clones directly; on more than one, it " +
 			"prompts you to pick which to clone from, and without a terminal it " +
 			"uses the repo's primary cluster. Pass --cluster to choose either way.\n\n" +
-			"--nearest measures the round trip to each cluster and clones from the " +
+			"--nearest times a connection to each cluster and clones from the " +
 			"fastest, ordering the prompt by distance and replacing the primary as " +
-			"the no-terminal default. The measurement is local: the CLI times its " +
-			"own connections and sends nothing about where you are.\n\n" +
+			"the no-terminal default, when the primary was measured and lost.\n\n" +
+			"The timing is local and the control plane is never told where you " +
+			"are. Each candidate cluster does see a connection from you, where " +
+			"without the flag only the one you clone from would.\n\n" +
 			"A full `entire://` URL already names the cluster, so it's passed straight " +
 			"through to `git clone` with no lookup (and --cluster is ignored). The " +
 			"optional [target-dir] is passed through to `git clone` either way.",
@@ -527,7 +529,7 @@ func newRepoCloneCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&cluster, "cluster", "", "Cluster host to clone from when the repo is readable on more than one (for /gh/ refs it may belong to another auth context)")
-	cmd.Flags().BoolVar(&nearest, "nearest", false, "Measure the round trip to each cluster and clone from the fastest, instead of prompting")
+	cmd.Flags().BoolVar(&nearest, "nearest", false, "Time a connection to each cluster and clone from the fastest, instead of prompting")
 	return cmd
 }
 
@@ -804,6 +806,22 @@ func withLatencyProbe(p placementPicker) placementPicker {
 	return p
 }
 
+// probeableHosts returns the hosts that are safe to dial: those validateClusterHost
+// admits. Everything else is dropped with a debug line rather than an error,
+// because a host this rejects is refused after selection anyway — the probe
+// simply must not reach it first.
+func probeableHosts(ctx context.Context, hosts []string) []string {
+	out := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if err := validateClusterHost(host); err != nil {
+			logging.Debug(ctx, "skipping an invalid cluster host in the latency probe", "host", host, "error", err)
+			continue
+		}
+		out = append(out, host)
+	}
+	return out
+}
+
 // placementPromptTerminal is the controlling terminal the placement picker
 // falls back to when the command's stderr is not one. Same shape as
 // pluginPromptTerminal: in is the terminal rather than os.Stdin, out is its
@@ -867,7 +885,16 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 	// earns a dial. p.probe is nil unless the caller opted in.
 	var rtt map[string]probeResult
 	if clusterSel == "" && len(hosts) > 1 && p.probe != nil {
-		rtt = p.probe(cmd.Context(), hosts)
+		// validateClusterHost gates the CHOSEN placement further down, as
+		// "defense-in-depth against a malformed host reaching git". Dialling
+		// first would walk in front of that guard: these hosts arrive from the
+		// API unvalidated, an empty one dials ":443" (the local machine), and
+		// probeAddress honours an embedded port, so the target is not even
+		// pinned to 443. Validate before connecting, not after choosing.
+		//
+		// A rejected host is dropped from the probe, not from the picker: it is
+		// refused after selection anyway, with a message that names it.
+		rtt = p.probe(cmd.Context(), probeableHosts(cmd.Context(), hosts))
 		hosts = orderHostsByLatency(hosts, rtt)
 		logging.Debug(cmd.Context(), "probed placement latency", "hosts", hosts, "measured", len(rtt))
 	}
@@ -892,15 +919,18 @@ func selectPlacement(cmd *cobra.Command, placements []coreapi.ResolvedPlacement,
 		// reader should see named: a mirror lags its primary, which matters to
 		// a clone that is about to be read back from. The line goes to stderr,
 		// clear of `repo remote url`'s captured stdout.
-		if nearest, ok := nearestHost(hosts, rtt); ok {
-			msg := "Nearest placement: " + nearest + " [" + formatProbedRTT(rtt[nearest], true) + "]"
-			if !strings.EqualFold(nearest, wanted) && wanted != "" {
-				msg += ", not the primary " + wanted
-			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s — pass %s to choose another\n", msg, p.selector)
+		//
+		// nearestHost answers only when the primary was itself measured and
+		// beaten, so reaching here means both numbers exist and the winner is
+		// not the primary — the message can state the trade unconditionally.
+		if nearest, ok := nearestHost(hosts, wanted, rtt); ok {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Nearest placement: %s [%s], not the primary %s [%s] — pass %s to choose another\n",
+				nearest, formatProbedRTT(rtt[nearest], true),
+				wanted, formatProbedRTT(rtt[strings.ToLower(wanted)], true), p.selector)
 			return byHost[nearest], nil
 		}
-		// An unmeasurable network falls through to the primary, which is a
+		// An unmeasurable network — or an unmeasured primary, or a primary that
+		// was already the nearest — falls through to the primary, which is a
 		// better answer than the error --nearest used to end at and the same
 		// answer a caller who never passed the flag would get.
 		if match, ok := byHost[strings.ToLower(wanted)]; ok {

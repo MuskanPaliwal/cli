@@ -876,6 +876,57 @@ func TestSelectCloneTarget(t *testing.T) {
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
+	t.Run("--nearest keeps a primary that answered no probe", func(t *testing.T) {
+		t.Parallel()
+		// End to end on the regression: the mirror is measured but slow in
+		// absolute terms and the primary is silent. The primary stays, because
+		// one number is not a comparison.
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io",
+			stubPlacementPicker(map[string]probeResult{
+				"aws-us-east-2.entire.io": {rtt: 300 * time.Millisecond},
+			}))
+		require.NoError(t, err)
+		require.Equal(t, "aws-eu-west-1.entire.io", got.ClusterHost)
+	})
+
+	t.Run("nothing is announced when the primary is kept", func(t *testing.T) {
+		t.Parallel()
+		// The announcement exists to name a trade. No trade was made, so a line
+		// claiming a "nearest placement" would report a choice that never happened.
+		var stderr strings.Builder
+		cmd := newRepoCloneCmd()
+		cmd.SetOut(&nopWriter{})
+		cmd.SetErr(&stderr)
+		_, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-eu-west-1.entire.io",
+			stubPlacementPicker(map[string]probeResult{
+				"aws-us-east-2.entire.io": {rtt: 300 * time.Millisecond},
+			}))
+		require.NoError(t, err)
+		require.Empty(t, stderr.String())
+	})
+
+	t.Run("an invalid placement host is never dialled", func(t *testing.T) {
+		t.Parallel()
+		// validateClusterHost gates the CHOSEN placement further down; the probe
+		// must not reach past that guard. An empty host dials ":443" — the local
+		// machine — so the probe has to be handed a filtered list.
+		blank := coreapi.ResolvedPlacement{ClusterHost: ""}
+		picker := withLatencyProbe(clonePlacementPicker())
+		picker.probe = func(_ context.Context, hosts []string) map[string]probeResult {
+			require.NotContains(t, hosts, "", "an unvalidated host reached the probe")
+			require.Len(t, hosts, 2, "only the valid hosts are dialled")
+			return map[string]probeResult{
+				"aws-eu-west-1.entire.io": {rtt: 210 * time.Millisecond},
+				"aws-us-east-2.entire.io": {rtt: 14 * time.Millisecond},
+			}
+		}
+		got, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest, blank}, "", "aws-eu-west-1.entire.io", picker)
+		require.NoError(t, err)
+		// Still offered, just unmeasured: a rejected host is dropped from the
+		// probe, not from the picker, and is refused after selection anyway.
+		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
+	})
+
 	t.Run("--nearest falls back to the primary when every probe failed", func(t *testing.T) {
 		t.Parallel()
 		// Opting in does not guarantee a measurement, and an unmeasurable
@@ -905,6 +956,9 @@ func TestSelectCloneTarget(t *testing.T) {
 		require.Contains(t, stderr.String(), "aws-us-east-2.entire.io")
 		require.Contains(t, stderr.String(), "14ms")
 		require.Contains(t, stderr.String(), "not the primary aws-eu-west-1.entire.io")
+		// Both figures, so the reader can weigh the trade rather than take the
+		// word "nearest" on trust.
+		require.Contains(t, stderr.String(), "210ms")
 		require.Contains(t, stderr.String(), "--cluster")
 	})
 
@@ -915,12 +969,13 @@ func TestSelectCloneTarget(t *testing.T) {
 		cmd := newRepoCloneCmd()
 		cmd.SetOut(&nopWriter{})
 		cmd.SetErr(&stderr)
-		_, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-us-east-2.entire.io",
+		got, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "", "aws-us-east-2.entire.io",
 			stubPlacementPicker(map[string]probeResult{
 				"aws-eu-west-1.entire.io": {rtt: 210 * time.Millisecond},
 				"aws-us-east-2.entire.io": {rtt: 14 * time.Millisecond},
 			}))
 		require.NoError(t, err)
+		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 		require.NotContains(t, stderr.String(), "not the primary")
 	})
 

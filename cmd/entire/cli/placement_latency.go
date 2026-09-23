@@ -22,10 +22,15 @@ import (
 // It is opt-in. Nothing here runs unless the caller passes the flag, so the
 // default clone path dials nothing and behaves exactly as it always has.
 //
-// The measurement is entirely client-side. Nothing is sent to the server about
-// where the caller is, and no placement is inferred from an IP address — the
-// CLI times its own connections and keeps the answer in memory for the length
-// of one command.
+// The measurement is client-side and the control plane learns nothing: no
+// location is reported to it and no placement is inferred from an IP address.
+// The CLI times its own connections and keeps the answer in memory for the
+// length of one command.
+//
+// What it does cost is worth stating plainly, because it is easy to overclaim
+// here: a TCP SYN tells the cluster it reaches the caller's source IP, which is
+// roughly where they are. Without the flag one cluster learns that — the one
+// being cloned from. With it, every candidate does.
 
 // placementProbeBudget caps the whole probe, not each dial: every candidate is
 // dialled concurrently under one deadline, so the wall-clock cost of ordering
@@ -66,7 +71,7 @@ func probeAddress(host string) string {
 // probeResult is one host's probe outcome. There are three of them, and the
 // picker shows each differently:
 //
-//   - answered inside the budget: rtt holds the round trip.
+//   - answered inside the budget: rtt holds the connect time.
 //   - still connecting when the budget ran out: timedOut, rendered ">400ms".
 //     The exact figure is unknown but the lower bound is not, and a reader
 //     comparing "18ms" against ">400ms" learns what they came to learn.
@@ -82,7 +87,7 @@ type probeResult struct {
 	timedOut bool
 }
 
-// latencyProbe measures the round trip to each host, keyed by host.
+// latencyProbe measures the connect time to each host, keyed by host.
 //
 // It is a field on placementPicker rather than a package var so that tests can
 // substitute one without mutating shared state, which t.Parallel forbids. A nil
@@ -92,11 +97,18 @@ type latencyProbe func(ctx context.Context, hosts []string) map[string]probeResu
 
 // dialLatencies times a TCP connect to each host concurrently.
 //
-// TCP connect, not a TLS handshake or an HTTP request: it is one round trip
-// against a port that is already open, it authenticates nothing and sends no
-// bytes that identify the caller or the repo, and its ratio between placements
-// is what the ordering needs. An absolute number would need the handshake; a
-// comparison does not.
+// TCP connect, not a TLS handshake or an HTTP request: it authenticates
+// nothing, sends no bytes that identify the caller or the repo, and its ratio
+// between placements is what the ordering needs.
+//
+// What it measures is connect time, NOT a round trip. DialContext resolves the
+// name inside the timed region, so a cold resolver cache is counted and a host
+// resolved earlier in the same command carries a systematic advantage; it is
+// also a single unrepeated sample. The figures are therefore comparable enough
+// to rank placements and are not a latency benchmark, which is why nothing
+// user-facing calls them a round trip. Narrowing the measurement — resolving
+// outside the timing, or taking the best of two dials — would change what the
+// budget covers and is deliberately left out of this change.
 func dialLatencies(ctx context.Context, hosts []string) map[string]probeResult {
 	ctx, cancel := context.WithTimeout(ctx, placementProbeBudget)
 	defer cancel()
@@ -137,7 +149,7 @@ func dialLatencies(ctx context.Context, hosts []string) map[string]probeResult {
 }
 
 // orderHostsByLatency returns hosts nearest-first, in three tiers: hosts that
-// answered, ascending by round trip; then hosts that ran out of budget, which
+// answered, ascending by connect time; then hosts that ran out of budget, which
 // are slower than every host that answered but by an unknown amount; then hosts
 // the probe could not measure at all, in the order given.
 //
@@ -147,7 +159,7 @@ func dialLatencies(ctx context.Context, hosts []string) map[string]probeResult {
 // the ordering, not its place in the list.
 func orderHostsByLatency(hosts []string, rtt map[string]probeResult) []string {
 	// tier sorts the three outcomes; rtt breaks ties inside the first one only,
-	// since the other two have no round trip to compare.
+	// since the other two have no connect time to compare.
 	tier := func(host string) (int, time.Duration) {
 		r, ok := rtt[host]
 		switch {
@@ -172,46 +184,61 @@ func orderHostsByLatency(hosts []string, rtt map[string]probeResult) []string {
 	return ordered
 }
 
-// nearestHost returns the fastest measured host, or false when no host was
-// measured at all.
+// nearestHost returns the host that should displace incumbent — the caller's
+// default, which is the repo's primary cluster — or false to keep it.
 //
-// There is no margin and no incumbent to beat: the caller typed --nearest, so
-// the nearest placement is the answer they asked for. An earlier draft required
-// a candidate to beat the default by 25ms, on the grounds that a mirror trails
-// its primary and a few milliseconds do not pay for that staleness. Under an
-// opt-in flag that reasoning inverts — a user who asks for the nearest and is
-// handed the far one has been overruled by a rule they cannot see — and the
-// "incumbent" it compared against was the alphabetically first host, which is
-// not the primary and means nothing. A staleness guard belongs here only once
-// the primary is identifiable (publicv1 models the role; coreapi does not yet
-// carry it) and only if this ever becomes the default.
+// The incumbent must be measured for anything to beat it. A placement that
+// answers no probe is silent, not slow, and orderHostsByLatency already says
+// why: "a dropped SYN, a paused laptop or a corporate proxy produce the same
+// silence — so it loses its position in the ordering, not its place in the
+// list." Selecting on that same silence would contradict it, and did: a primary
+// that dropped one probe lost to a mirror measured at 300ms, which was then
+// announced as "nearest" and written into .git/config. Comparing two numbers
+// requires two numbers.
 //
-// False is decisive rather than a fallback to first-measured-wins: with no
-// measurement there is no nearest, and the caller reports that instead of
-// picking a host on a coin flip.
+// There is no margin. The caller typed --nearest, so a measured win is the
+// answer they asked for however small. An earlier draft required a 25ms lead,
+// on the grounds that a mirror trails its primary; under an opt-in flag that
+// inverts, because a user who asks for the nearest and is handed the far one
+// has been overruled by a rule they cannot see.
 //
-// A host that ran out of budget is not a candidate. ">400ms" is enough to rank
-// it in the picker, where a person weighs it, but not enough to choose it
-// unattended: two timed-out placements are indistinguishable, and the caller's
-// fallback (the repo's primary) is a better answer than either.
-func nearestHost(hosts []string, rtt map[string]probeResult) (string, bool) {
-	var (
-		best    string
-		bestRTT time.Duration
-	)
+// A host that ran out of budget is not a candidate either. ">400ms" is enough
+// to rank it in the picker, where a person weighs it, but not enough to choose
+// it unattended: two timed-out placements are indistinguishable, and the
+// incumbent is a better answer than either.
+func nearestHost(hosts []string, incumbent string, rtt map[string]probeResult) (string, bool) {
+	incumbentRTT, ok := measuredRTT(rtt, incumbent)
+	if !ok {
+		return "", false
+	}
+	best, bestRTT := incumbent, incumbentRTT
 	for _, host := range hosts {
-		got, ok := rtt[host]
-		if !ok || got.timedOut || (best != "" && got.rtt >= bestRTT) {
+		got, ok := measuredRTT(rtt, host)
+		if !ok || got >= bestRTT {
 			continue
 		}
-		best, bestRTT = host, got.rtt
+		best, bestRTT = host, got
 	}
-	return best, best != ""
+	if strings.EqualFold(best, incumbent) {
+		return "", false // the incumbent won on its own merits; the caller keeps it
+	}
+	return best, true
 }
 
-// formatProbedRTT renders a probe outcome for the picker label: a round trip in
-// whole milliseconds, ">400ms" for a host still connecting when the budget ran
-// out, or "" for one the probe could not measure.
+// measuredRTT reports a host's connect time, and false unless the probe actually
+// produced one — an absent host and a timed-out host both answer false, because
+// neither yields a number to compare.
+func measuredRTT(rtt map[string]probeResult, host string) (time.Duration, bool) {
+	r, ok := rtt[strings.ToLower(strings.TrimSpace(host))]
+	if !ok || r.timedOut {
+		return 0, false
+	}
+	return r.rtt, true
+}
+
+// formatProbedRTT renders a probe outcome for the picker label: a connect time
+// in whole milliseconds, ">400ms" for a host still connecting when the budget
+// ran out, or "" for one the probe could not measure.
 //
 // The lower bound is worth printing. A blank label leaves a reader unable to
 // tell a slow placement from an unmeasurable one, whereas ">400ms" next to

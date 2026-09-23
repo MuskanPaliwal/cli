@@ -71,9 +71,9 @@ func TestNearestHost(t *testing.T) {
 
 	hosts := []string{"near.entire.io", "far.entire.io"}
 
-	t.Run("picks the fastest measured host", func(t *testing.T) {
+	t.Run("displaces a measured incumbent that lost", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, map[string]probeResult{
+		got, ok := nearestHost(hosts, "far.entire.io", map[string]probeResult{
 			"near.entire.io": {rtt: 12 * time.Millisecond},
 			"far.entire.io":  {rtt: 230 * time.Millisecond},
 		})
@@ -85,7 +85,7 @@ func TestNearestHost(t *testing.T) {
 		t.Parallel()
 		// No margin: the caller asked for the nearest placement, so the nearest
 		// placement is the answer even when the lead is small.
-		got, ok := nearestHost(hosts, map[string]probeResult{
+		got, ok := nearestHost(hosts, "far.entire.io", map[string]probeResult{
 			"near.entire.io": {rtt: 14 * time.Millisecond},
 			"far.entire.io":  {rtt: 20 * time.Millisecond},
 		})
@@ -93,31 +93,57 @@ func TestNearestHost(t *testing.T) {
 		require.Equal(t, "near.entire.io", got)
 	})
 
-	t.Run("ignores hosts that were not measured", func(t *testing.T) {
+	t.Run("an unmeasured incumbent is never displaced", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, map[string]probeResult{"far.entire.io": {rtt: 230 * time.Millisecond}})
-		require.True(t, ok)
-		require.Equal(t, "far.entire.io", got)
+		// The regression: a primary that dropped one probe used to lose to a
+		// mirror measured at 300ms, which was then announced as "nearest" and
+		// written into .git/config. Silence is not a measurement, and the
+		// challenger being slow in absolute terms is beside the point — there
+		// is no second number to compare it against.
+		_, ok := nearestHost(hosts, "far.entire.io", map[string]probeResult{
+			"near.entire.io": {rtt: 300 * time.Millisecond},
+		})
+		require.False(t, ok)
 	})
 
-	t.Run("a timed-out host never wins against one that answered", func(t *testing.T) {
+	t.Run("a timed-out incumbent is never displaced", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, map[string]probeResult{
-			"near.entire.io": {timedOut: true},
+		// ">400ms" is a lower bound, not a measurement: it ranks the host in the
+		// picker but cannot lose a comparison on the caller's behalf.
+		_, ok := nearestHost(hosts, "far.entire.io", map[string]probeResult{
+			"near.entire.io": {rtt: 12 * time.Millisecond},
+			"far.entire.io":  {timedOut: true},
+		})
+		require.False(t, ok)
+	})
+
+	t.Run("an incumbent that is already nearest stays", func(t *testing.T) {
+		t.Parallel()
+		_, ok := nearestHost(hosts, "near.entire.io", map[string]probeResult{
+			"near.entire.io": {rtt: 12 * time.Millisecond},
+			"far.entire.io":  {rtt: 230 * time.Millisecond},
+		})
+		require.False(t, ok)
+	})
+
+	t.Run("the incumbent matches case-insensitively", func(t *testing.T) {
+		t.Parallel()
+		// defaultHost comes from the API in whatever case it stores; the probe
+		// map is keyed by the picker's folded hosts. A case difference must not
+		// read as an unmeasured incumbent and silently disable the flag.
+		got, ok := nearestHost(hosts, "FAR.Entire.IO", map[string]probeResult{
+			"near.entire.io": {rtt: 12 * time.Millisecond},
 			"far.entire.io":  {rtt: 230 * time.Millisecond},
 		})
 		require.True(t, ok)
-		require.Equal(t, "far.entire.io", got)
+		require.Equal(t, "near.entire.io", got)
 	})
 
-	t.Run("only timed-out hosts means no nearest", func(t *testing.T) {
+	t.Run("a timed-out challenger never wins", func(t *testing.T) {
 		t.Parallel()
-		// ">400ms" ranks a host for a person reading the picker, but two of them
-		// are indistinguishable, so an unattended run falls back to the primary
-		// rather than picking one of them.
-		_, ok := nearestHost(hosts, map[string]probeResult{
+		_, ok := nearestHost(hosts, "far.entire.io", map[string]probeResult{
 			"near.entire.io": {timedOut: true},
-			"far.entire.io":  {timedOut: true},
+			"far.entire.io":  {rtt: 230 * time.Millisecond},
 		})
 		require.False(t, ok)
 	})
@@ -126,7 +152,18 @@ func TestNearestHost(t *testing.T) {
 		t.Parallel()
 		// Every probe failed, so there is nothing to choose on and the caller
 		// must say so rather than fall back to first-measured-wins.
-		_, ok := nearestHost(hosts, nil)
+		_, ok := nearestHost(hosts, "far.entire.io", nil)
+		require.False(t, ok)
+	})
+
+	t.Run("an incumbent outside the candidate set is not displaced", func(t *testing.T) {
+		t.Parallel()
+		// A caller that could not name a primary passes "". There is then no
+		// incumbent to measure, so the selection falls through to the caller's
+		// own default handling rather than picking on one number alone.
+		_, ok := nearestHost(hosts, "", map[string]probeResult{
+			"near.entire.io": {rtt: 12 * time.Millisecond},
+		})
 		require.False(t, ok)
 	})
 }
