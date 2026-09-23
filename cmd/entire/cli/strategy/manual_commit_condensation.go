@@ -1629,6 +1629,15 @@ func resolvePendingTranscriptOffset(ctx context.Context, ag agent.Agent, state *
 	}
 	state.TranscriptOffsetPending = false
 	if !state.Phase.IsActive() {
+		// Logged at the same level as the advance below, so the skip and the
+		// advance are equally visible: this is where the checkpoint scope
+		// silently keeps the previous turn's already-condensed tail, which
+		// then shows up as duplicated content in a summary.
+		logging.Info(ctx, "skipping deferred turn-end offset advance outside ACTIVE phase; this checkpoint's scope keeps the condensed tail",
+			slog.String("session_id", state.SessionID),
+			slog.String("phase", string(state.Phase)),
+			slog.Int("offset", state.CheckpointTranscriptStart),
+		)
 		return
 	}
 	if _, ok := agent.AsLateTranscriptWriter(ag); !ok {
