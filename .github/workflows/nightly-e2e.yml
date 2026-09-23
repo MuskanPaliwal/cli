@@ -175,30 +175,43 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "AGENTS=claude-code opencode codex cursor-cli factoryai-droid copilot-cli antigravity" >> "$GITHUB_ENV"
 
-      # cursor-cli is absent: its E2E driver sends every prompt through tmux
-      # (e2e/agents/cursor_cli.go), because Cursor's headless -p mode fires no
-      # hooks — and there is no tmux on Windows. antigravity is absent too: the
-      # harness has not been exercised on Windows (e2e.yml runs it on Linux).
+      # cursor-cli is the only absence here: its E2E driver sends every prompt
+      # through tmux (e2e/agents/cursor_cli.go), because Cursor's headless -p
+      # mode fires no hooks — and there is no tmux on Windows.
+      #
+      # antigravity matters most on this leg: it is the one agent whose Windows
+      # hook path differs from its Unix one (agy hands hook commands to
+      # cmd.exe, not sh), and a hook that fails there is silent — agy still
+      # reports success. Nothing else exercises that path automatically.
       - name: Install agent CLIs (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           irm https://claude.ai/install.ps1 | iex
           irm https://app.factory.ai/cli/windows | iex
+          irm https://antigravity.google/cli/install.ps1 | iex
           npm install -g @openai/codex @github/copilot opencode-ai
           # Stop does not cover native commands ($PSNativeCommandUseError-
           # ActionPreference defaults to $false), so npm's failure needs this.
           if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit $LASTEXITCODE)" }
-          # Neither iex line needs such a guard: both installers throw or exit
-          # on every failure path, and that ends this step. Verified 2026-09-09
-          # for claude, 2026-09-10 for droid, whose installer shadows
-          # Write-Error with one that exits 1.
+          # None of the three iex lines needs such a guard: each installer
+          # throws or exits on every failure path, and that ends this step.
+          # Verified 2026-09-09 for claude, 2026-09-10 for droid, whose
+          # installer shadows Write-Error with one that exits 1, and
+          # 2026-09-23 for agy, which throws rather than exits when it is run
+          # sourced, as `| iex` runs it.
           "$HOME\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           # droid's Windows installer puts droid.exe in %USERPROFILE%\bin, not
           # .local\bin, and updates only the stored user PATH, which later
           # steps do not re-read.
           "$HOME\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "AGENTS=claude-code codex copilot-cli opencode factoryai-droid" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # agy lands in %LOCALAPPDATA%\agy\bin, and its installer updates the
+          # stored user PATH the same way. It picks the architecture itself and
+          # always serves latest, so there is nothing to keep in sync here;
+          # e2e-windows.yml downloads the release zip instead only because it
+          # pins an exact version, which this installer has no flag for.
+          "$env:LOCALAPPDATA\agy\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "AGENTS=claude-code codex copilot-cli opencode factoryai-droid antigravity" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # One step per agent: a step timeout is the only per-agent bound that
       # works on all three runners (macOS has no timeout(1)), and one hung agent
