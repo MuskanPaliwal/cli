@@ -51,8 +51,10 @@ func newHooksCmd() *cobra.Command {
 			if _, err := agent.Get(agentName); err != nil {
 				// Hooks left behind by a retired built-in agent must not fail
 				// every event in the agent that still runs them. Checked after
-				// discovery so an external plugin may claim the name.
-				if agentName == retiredGeminiAgentName {
+				// discovery so an external plugin may claim the name, and not
+				// taken when that plugin is installed but discovery missed it
+				// (a timeout): its hook should fail loudly, not vanish.
+				if agentName == retiredGeminiAgentName && !retiredGeminiNameClaimed() {
 					logging.Debug(cmd.Context(), "ignoring hook for retired agent",
 						"agent", string(agentName), "hook", hookName)
 					return nil

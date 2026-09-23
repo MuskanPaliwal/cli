@@ -1403,14 +1403,21 @@ func checkSummaryProvider(cmd *cobra.Command) {
 
 	name := types.AgentName(s.SummaryGeneration.Provider)
 	_, registered, capable := summaryCapableAgent(name)
-	if !registered || capable {
+	// The retired name is unregistered, but unlike a plugin's it is known not
+	// to be coming back, so it is reported rather than left to the resolver.
+	retired := !registered && name == retiredGeminiAgentName && !retiredGeminiNameClaimed()
+	if (!registered && !retired) || capable {
 		return
 	}
 
 	w := cmd.OutOrStdout()
 	sourceFile, isLocal := summaryProviderSourceLayer(ctx, s)
 	fmt.Fprintln(w, "Summary provider: UNUSABLE")
-	fmt.Fprintf(w, "  summary_generation.provider is %q in %s, which cannot generate text.\n", name, sourceFile)
+	if retired {
+		fmt.Fprintf(w, "  summary_generation.provider is %q in %s, but Gemini CLI is no longer supported.\n", name, sourceFile)
+	} else {
+		fmt.Fprintf(w, "  summary_generation.provider is %q in %s, which cannot generate text.\n", name, sourceFile)
+	}
 	fmt.Fprintln(w, "  `entire checkpoint explain --generate`, `entire dispatch`, and")
 	fmt.Fprintln(w, "  `entire runner setup` all fail while it is set.")
 	// The command names an INSTALLED provider, not merely a capable one.

@@ -1226,6 +1226,16 @@ func ReadAgentTypeFromTree(tree *object.Tree, checkpointPath string) types.Agent
 	if detectedCount == 1 {
 		return detected
 	}
+	// Gemini CLI support was removed, but a session still in flight when it
+	// was leaves a shadow branch until its next commit, and its JSON-document
+	// transcript cannot be read as anything else. Only a last resort: counted
+	// with the others, a leftover .gemini would make every later session in a
+	// repo that also has another agent's marker ambiguous.
+	if detectedCount == 0 {
+		if _, err := tree.File(".gemini/settings.json"); err == nil {
+			return agent.AgentTypeGemini
+		}
+	}
 	return agent.AgentTypeUnknown
 }
 

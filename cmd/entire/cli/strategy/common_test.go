@@ -1628,7 +1628,12 @@ func TestReadAgentTypeFromTree(t *testing.T) {
 		{"only factory", []string{".factory/settings.json"}, agent.AgentTypeFactoryAIDroid},
 		{"claude and codex is ambiguous", []string{".claude/settings.json", ".codex/config.json"}, agent.AgentTypeUnknown},
 		{"claude and cursor is ambiguous", []string{".claude/settings.json", ".cursor/settings.json"}, agent.AgentTypeUnknown},
-		{"leftover gemini config is not a marker", []string{".gemini/settings.json"}, agent.AgentTypeUnknown},
+		// A Gemini session in flight when its support was removed still has a
+		// shadow branch, and only this marker says how to read its transcript.
+		{"only gemini is a last-resort marker", []string{".gemini/settings.json"}, agent.AgentTypeGemini},
+		// But never counted with the others: a leftover .gemini must not make a
+		// later session of another agent ambiguous.
+		{"leftover gemini does not shadow another agent", []string{".claude/settings.json", ".gemini/settings.json"}, agent.AgentTypeClaudeCode},
 		{"no agent dirs", []string{"f.txt"}, agent.AgentTypeUnknown},
 	}
 

@@ -1788,7 +1788,7 @@ func localExists(ctx context.Context) bool {
 
 // runRemoveAgent removes hooks for a specific agent.
 func runRemoveAgent(ctx context.Context, w io.Writer, name string) error {
-	if types.AgentName(name) == retiredGeminiAgentName {
+	if types.AgentName(name) == retiredGeminiAgentName && !retiredGeminiNameClaimed() {
 		return runRemoveRetiredGeminiHooks(ctx, w)
 	}
 
@@ -2147,7 +2147,7 @@ func printMissingAgentError(w io.Writer) {
 
 // printWrongAgentError writes a helpful error when an unknown agent name is provided.
 func printWrongAgentError(w io.Writer, name string) {
-	if types.AgentName(name) == retiredGeminiAgentName {
+	if types.AgentName(name) == retiredGeminiAgentName && !retiredGeminiNameClaimed() {
 		printAgentError(w, "Gemini CLI is no longer supported.")
 		return
 	}

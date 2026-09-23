@@ -8,8 +8,10 @@ import (
 	"os"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // Gemini CLI support was removed, but repositories that enabled it still carry
@@ -26,17 +28,42 @@ const retiredGeminiAgentName types.AgentName = "gemini"
 // retiredGeminiHookConfigRelPath is where Gemini CLI support installed hooks.
 const retiredGeminiHookConfigRelPath = ".gemini/settings.json"
 
+// retiredGeminiLegacyHooksKey is the non-array value old Entire versions wrote
+// directly under "hooks" ("enabled": true). Gemini CLI 0.33+ rejects any
+// non-array hooks property.
+const retiredGeminiLegacyHooksKey = "enabled"
+
+// retiredGeminiNameClaimed reports whether an external plugin owns the
+// "gemini" name, registered or merely installed on $PATH. Every retired-Gemini
+// path defers to it: the hooks such a plugin installs look exactly like the
+// ones removed support left behind, so they must be neither no-op'd nor
+// stripped. Checking $PATH without executing the plugin keeps this usable from
+// doctor, which must not run plugins, and covers a plugin that discovery
+// skipped (a timeout, or external_agents not enabled).
+func retiredGeminiNameClaimed() bool {
+	if _, err := agent.Get(retiredGeminiAgentName); err == nil {
+		return true
+	}
+	return external.BinaryOnPath(retiredGeminiAgentName)
+}
+
 // removeRetiredGeminiHooks removes Entire-managed hook entries from the
 // worktree's .gemini/settings.json and reports whether it changed the file.
 // Other hooks, matchers, and settings are preserved field for field; a hook
 // type left with no matchers is dropped, as Gemini CLI support's own uninstall
-// did. A missing file is not an error.
+// did. A missing file is not an error. The file keeps its permissions.
 func removeRetiredGeminiHooks(worktreeRoot string) (bool, error) {
 	cfg, output, changed, err := planRetiredGeminiHookRemoval(worktreeRoot)
 	if err != nil || !changed {
 		return false, err
 	}
-	if err := cfg.Write(output, 0o600); err != nil {
+	perm := os.FileMode(0o644)
+	if root, name := cfg.Root(); root != nil {
+		if info, statErr := root.Lstat(name); statErr == nil {
+			perm = info.Mode().Perm()
+		}
+	}
+	if err := cfg.Write(output, perm); err != nil {
 		return false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 	return true, nil
@@ -54,14 +81,26 @@ func retiredGeminiHooksInstalled(worktreeRoot string) (bool, error) {
 
 // planRetiredGeminiHookRemoval reads .gemini/settings.json and returns the
 // file handle and its content with Entire's entries stripped. changed is false
-// when the file is missing or holds no Entire entries.
+// when the file is missing or holds no Entire entries, and when a plugin has
+// claimed the "gemini" name (see retiredGeminiNameClaimed).
+//
+// A symlinked .gemini (a dotfiles checkout, say) also reads as nothing to do.
+// Entire refuses to write through it, and .gemini is no longer vouchable, so
+// reporting it would be an error on every doctor run that no remedy clears.
+// Entries left behind it are harmless: the hook command they run is a no-op.
 func planRetiredGeminiHookRemoval(worktreeRoot string) (*agent.HookConfigFile, []byte, bool, error) {
+	if retiredGeminiNameClaimed() {
+		return nil, nil, false, nil
+	}
 	cfg, err := agent.OpenHookConfig(worktreeRoot, retiredGeminiHookConfigRelPath)
+	if errors.Is(err, osroot.ErrSymlinkedPath) {
+		return nil, nil, false, nil
+	}
 	if err != nil {
 		return nil, nil, false, err //nolint:wrapcheck // agent.HookConfigFile already names the file in its error
 	}
 	data, err := cfg.Read()
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, osroot.ErrSymlinkedPath) {
 		return nil, nil, false, nil
 	}
 	if err != nil {
@@ -75,11 +114,12 @@ func planRetiredGeminiHookRemoval(worktreeRoot string) (*agent.HookConfigFile, [
 }
 
 // stripRetiredGeminiHooks returns settings with every Entire-managed hook
-// command removed. It also drops non-array values directly under "hooks": old
-// Entire versions wrote "enabled": true there, which Gemini CLI 0.33+ rejects
-// (hooks.additionalProperties must be arrays), so a file rewritten with it in
-// place would not load. Gemini CLI support's own uninstall stripped them the
-// same way. A matcher without a hooks list is left as it is.
+// command removed. When it removes any, it also drops the legacy
+// "hooks.enabled" old Entire versions wrote there, which Gemini CLI 0.33+
+// rejects (every hooks property must be an array), so the rewritten file still
+// loads. That key never counts as Entire's on its own: a file holding it and no
+// Entire entries is left untouched. Other values it does not recognize (another
+// non-array hooks key, a matcher without a hooks list) are left as they are.
 func stripRetiredGeminiHooks(data []byte) ([]byte, bool, error) {
 	var rawSettings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawSettings); err != nil {
@@ -96,11 +136,6 @@ func stripRetiredGeminiHooks(data []byte) ([]byte, bool, error) {
 
 	changed := false
 	for hookType, value := range rawHooks {
-		if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '[' {
-			delete(rawHooks, hookType)
-			changed = true
-			continue
-		}
 		var matchers []map[string]json.RawMessage
 		if json.Unmarshal(value, &matchers) != nil {
 			continue
@@ -125,6 +160,11 @@ func stripRetiredGeminiHooks(data []byte) ([]byte, bool, error) {
 	}
 	if !changed {
 		return nil, false, nil
+	}
+	if legacy, ok := rawHooks[retiredGeminiLegacyHooksKey]; ok {
+		if trimmed := bytes.TrimSpace(legacy); len(trimmed) > 0 && trimmed[0] != '[' {
+			delete(rawHooks, retiredGeminiLegacyHooksKey)
+		}
 	}
 
 	if len(rawHooks) == 0 {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -113,29 +114,36 @@ func TestStripRetiredGeminiHooks_RemovesHooksKeyWhenNothingRemains(t *testing.T)
 // Old Entire versions wrote "enabled": true directly under "hooks", which
 // Gemini CLI 0.33+ rejects because every hooks property must be an array.
 // Rewriting the file with it left in place would hand the user a settings file
-// Gemini refuses to load, so it goes along with Entire's entries — and on its
-// own, since it is Entire's artifact too.
-func TestStripRetiredGeminiHooks_DropsLegacyNonArrayHookFields(t *testing.T) {
+// Gemini refuses to load, so it goes along with Entire's entries. Any other
+// non-array key is the user's and stays.
+func TestStripRetiredGeminiHooks_DropsLegacyEnabledWithEntireEntries(t *testing.T) {
 	t.Parallel()
 
-	for name, tc := range map[string]struct{ input, want string }{
-		"alongside entire and user hooks": {
-			input: `{"hooks": {"enabled": true, "SessionStart": [{"hooks": [
-				{"type": "command", "command": "entire hooks gemini session-start"},
-				{"type": "command", "command": "./my-start.sh"}]}]}}`,
-			want: `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./my-start.sh"}]}]}}`,
-		},
-		"alone": {
-			input: `{"theme": "dark", "hooks": {"enabled": true}}`,
-			want:  `{"theme": "dark"}`,
-		},
+	input := `{"hooks": {"enabled": true, "myToggle": true, "SessionStart": [{"hooks": [
+		{"type": "command", "command": "entire hooks gemini session-start"},
+		{"type": "command", "command": "./my-start.sh"}]}]}}`
+	out, changed, err := stripRetiredGeminiHooks([]byte(input))
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{"hooks": {"myToggle": true, "SessionStart": [{"hooks": [{"type": "command", "command": "./my-start.sh"}]}]}}`, string(out))
+}
+
+// Without Entire's entries beside it, a non-array hooks key is no evidence
+// Entire was ever here: it must not make uninstall claim something is
+// installed, nor let doctor rewrite the user's file.
+func TestStripRetiredGeminiHooks_NonArrayKeysAloneAreNotEntires(t *testing.T) {
+	t.Parallel()
+
+	for name, input := range map[string]string{
+		"legacy enabled": `{"theme": "dark", "hooks": {"enabled": true}}`,
+		"user toggle":    `{"theme": "dark", "hooks": {"myCustomToggle": true}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			out, changed, err := stripRetiredGeminiHooks([]byte(tc.input))
+			out, changed, err := stripRetiredGeminiHooks([]byte(input))
 			require.NoError(t, err)
-			require.True(t, changed)
-			require.JSONEq(t, tc.want, string(out))
+			require.False(t, changed)
+			require.Nil(t, out)
 		})
 	}
 }
@@ -464,4 +472,107 @@ func TestRunUninstall_UncheckableRetiredGeminiHooksFailTheCommand(t *testing.T) 
 	data, err := os.ReadFile(settingsPath)
 	require.NoError(t, err)
 	require.Equal(t, `{"hooks":`, string(data))
+}
+
+// A rewrite must not tighten or loosen the file's permissions.
+func TestRemoveRetiredGeminiHooks_KeepsFileMode(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	settingsPath := writeRetiredGeminiSettings(t, dir, retiredGeminiSettingsFixture())
+	require.NoError(t, os.Chmod(settingsPath, 0o644))
+
+	changed, err := removeRetiredGeminiHooks(dir)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	info, err := os.Stat(settingsPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+}
+
+// A symlinked .gemini (a dotfiles checkout) is refused by Entire's no-follow
+// I/O, and .gemini is no longer vouchable. Reporting that as an error would fail
+// every doctor run and every uninstall with a remedy that cannot clear it, so it
+// reads as nothing Entire manages, and the file behind the link is untouched.
+func TestRetiredGeminiHooks_SymlinkedDirIsNothingToDo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	target := t.TempDir()
+	targetSettings := filepath.Join(target, "settings.json")
+	require.NoError(t, os.WriteFile(targetSettings, []byte(retiredGeminiSettingsFixture()), 0o600))
+	if err := os.Symlink(target, filepath.Join(dir, ".gemini")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	installed, err := retiredGeminiHooksInstalled(dir)
+	require.NoError(t, err)
+	require.False(t, installed)
+
+	changed, err := removeRetiredGeminiHooks(dir)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	data, err := os.ReadFile(targetSettings)
+	require.NoError(t, err)
+	require.Equal(t, retiredGeminiSettingsFixture(), string(data))
+}
+
+// installFakeGeminiPlugin puts an entire-agent-gemini executable on a PATH of
+// its own. It is never run: the retired-Gemini paths only look it up.
+func installFakeGeminiPlugin(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("exec.LookPath needs a PATHEXT extension on Windows")
+	}
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "entire-agent-gemini"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	t.Setenv("PATH", binDir)
+}
+
+// An external plugin may claim the "gemini" name, and the hooks it installs
+// look exactly like the ones removed support left. Every retired-Gemini path
+// must then stand aside: doctor and uninstall leave the file alone, and the
+// hook command fails like any unregistered plugin's instead of vanishing.
+func TestRetiredGemini_DefersToAClaimingPlugin(t *testing.T) {
+	// Cannot use t.Parallel(): t.Setenv and setupTestRepo's t.Chdir.
+	dir := setupTestRepo(t)
+	settingsPath := writeRetiredGeminiSettings(t, dir, retiredGeminiSettingsFixture())
+	installFakeGeminiPlugin(t)
+
+	installed, err := retiredGeminiHooksInstalled(dir)
+	require.NoError(t, err)
+	require.False(t, installed)
+	changed, err := removeRetiredGeminiHooks(dir)
+	require.NoError(t, err)
+	require.False(t, changed)
+	data, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	require.Equal(t, retiredGeminiSettingsFixture(), string(data))
+
+	cmd := newHooksCmd()
+	cmd.SetArgs([]string{"gemini", "session-start"})
+	cmd.SetIn(strings.NewReader(`{}`))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err = cmd.ExecuteContext(context.Background())
+	require.Error(t, err, "an installed-but-undiscovered plugin's hook must not silently no-op")
+	require.Contains(t, err.Error(), `unknown agent "gemini"`)
+}
+
+// doctor is where users are told to look, so a summary provider still naming
+// the retired agent is reported there instead of surfacing only as an
+// unexplained `explain --generate` failure.
+func TestCheckSummaryProvider_ReportsRetiredGemini(t *testing.T) {
+	// Cannot use t.Parallel(): mutates package-level resolution seams.
+	got := runCheckSummaryProvider(t, "gemini")
+	require.Contains(t, got, "Summary provider: UNUSABLE")
+	require.Contains(t, got, "Gemini CLI is no longer supported")
+	require.Contains(t, got, "entire configure --summarize-provider codex")
 }
