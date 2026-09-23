@@ -11,11 +11,14 @@ import (
 
 // Nearest-placement selection for the clone picker.
 //
-// A repo readable from several clusters used to be offered in alphabetical
-// host order, so `aws-ap-southeast-2` outranked `us-east-1` on the letter `a`
-// alone and a non-interactive caller got an error instead of a default. The
-// ordering here replaces that with a measured one: dial each candidate, order
-// nearest first, and let a clearly-closer placement become the default.
+// A repo readable from several clusters is offered in alphabetical host order,
+// so `aws-ap-southeast-2` outranks `us-east-1` on the letter `a` alone and a
+// non-interactive caller gets an error instead of a default. `--nearest` asks
+// for a measured order instead: dial each candidate, offer them nearest first,
+// and resolve to the fastest without a prompt.
+//
+// It is opt-in. Nothing here runs unless the caller passes the flag, so the
+// default clone path dials nothing and behaves exactly as it always has.
 //
 // The measurement is entirely client-side. Nothing is sent to the server about
 // where the caller is, and no placement is inferred from an IP address — the
@@ -37,17 +40,6 @@ const placementProbeBudget = 400 * time.Millisecond
 // offered and then failing under `git clone`.
 const placementProbePort = "443"
 
-// placementLatencyMargin is how much closer a placement must be than the
-// incumbent before it is chosen WITHOUT a human in the loop. Below it the two
-// are treated as equally near and the incumbent wins.
-//
-// The margin exists because near and correct are different questions. A mirror
-// trails its primary by a replication delay, so trading the incumbent for a
-// few milliseconds buys latency nobody notices and adds staleness somebody
-// eventually debugs. A margin this size only ever fires on a genuine
-// inter-region difference, which is the case this feature is for.
-const placementLatencyMargin = 25 * time.Millisecond
-
 // latencyProbe measures round-trip time to each host, keyed by host. Hosts that
 // do not answer inside the budget are ABSENT from the result rather than
 // present with a sentinel: "unknown" and "slow" order differently, and a
@@ -55,7 +47,8 @@ const placementLatencyMargin = 25 * time.Millisecond
 //
 // It is a field on placementPicker rather than a package var so that tests can
 // substitute one without mutating shared state, which t.Parallel forbids. A nil
-// probe disables latency ordering and restores the alphabetical picker.
+// probe is the DEFAULT, not an error path: without --nearest no probe is set,
+// so nothing dials and the alphabetical picker stands.
 type latencyProbe func(ctx context.Context, hosts []string) map[string]time.Duration
 
 // dialLatencies times a TCP connect to each host concurrently.
@@ -119,31 +112,36 @@ func orderHostsByLatency(hosts []string, rtt map[string]time.Duration) []string 
 	return ordered
 }
 
-// nearestHost reports the host to default to, given the incumbent the caller
-// would otherwise have used.
+// nearestHost returns the fastest measured host, or false when no host was
+// measured at all.
 //
-// It answers false — meaning "keep the incumbent, and say so" — in every case
-// short of a clear win: no measurement for the candidate, no measurement for
-// the incumbent to compare against, or a lead inside placementLatencyMargin.
-// An unmeasured incumbent is deliberately decisive: without both numbers there
-// is no comparison, only a preference for whichever host happened to answer.
-func nearestHost(hosts []string, incumbent string, rtt map[string]time.Duration) (string, bool) {
-	incumbentRTT, ok := rtt[incumbent]
-	if !ok {
-		return "", false
-	}
-	best, bestRTT := incumbent, incumbentRTT
+// There is no margin and no incumbent to beat: the caller typed --nearest, so
+// the nearest placement is the answer they asked for. An earlier draft required
+// a candidate to beat the default by 25ms, on the grounds that a mirror trails
+// its primary and a few milliseconds do not pay for that staleness. Under an
+// opt-in flag that reasoning inverts — a user who asks for the nearest and is
+// handed the far one has been overruled by a rule they cannot see — and the
+// "incumbent" it compared against was the alphabetically first host, which is
+// not the primary and means nothing. A staleness guard belongs here only once
+// the primary is identifiable (publicv1 models the role; coreapi does not yet
+// carry it) and only if this ever becomes the default.
+//
+// False is decisive rather than a fallback to first-measured-wins: with no
+// measurement there is no nearest, and the caller reports that instead of
+// picking a host on a coin flip.
+func nearestHost(hosts []string, rtt map[string]time.Duration) (string, bool) {
+	var (
+		best    string
+		bestRTT time.Duration
+	)
 	for _, host := range hosts {
 		got, ok := rtt[host]
-		if !ok || got >= bestRTT {
+		if !ok || (best != "" && got >= bestRTT) {
 			continue
 		}
 		best, bestRTT = host, got
 	}
-	if best == incumbent || incumbentRTT-bestRTT < placementLatencyMargin {
-		return "", false
-	}
-	return best, true
+	return best, best != ""
 }
 
 // formatProbedRTT renders a measured round trip for the picker label, or ""

@@ -439,9 +439,9 @@ func TestResolveNativeCloneURL(t *testing.T) {
 
 	resolve := func(t *testing.T, c *coreapi.Client, clusterSel string) (string, error) {
 		t.Helper()
-		// A nil probe keeps these hermetic: the real picker dials every
-		// candidate host, and these cases are about URL construction, not
-		// about which placement wins. The probed native path has its own case.
+		// The default picker, which has no probe: these cases are about URL
+		// construction, not about which placement wins. The --nearest native
+		// path has its own case below.
 		return resolveNativeCloneURL(t.Context(), newCloneTestCmd(), c, "paul", "dogbark", clusterSel, stubPlacementPicker(nil))
 	}
 
@@ -718,6 +718,30 @@ func TestMirrorCellLabel(t *testing.T) {
 	}
 }
 
+// TestRepoClone_NearestWithCluster locks in that the two cluster selectors are
+// refused together rather than silently ranked. They disagree whenever
+// --cluster is not already the nearest, and the loser here is the remote URL
+// the user keeps.
+func TestRepoClone_NearestWithCluster(t *testing.T) {
+	t.Parallel()
+	cmd := newRepoCloneCmd()
+	cmd.SetOut(&nopWriter{})
+	cmd.SetErr(&nopWriter{})
+	cmd.SetArgs([]string{"/gh/entirehq/entire-api", "--nearest", "--cluster", "aws-us-east-2.entire.io"})
+	err := cmd.ExecuteContext(t.Context())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pass one")
+}
+
+// TestRepoClone_NearestIsOptIn locks in that the probe is wired to the flag and
+// nothing else: the default picker must have no probe, so a plain clone dials
+// no cluster and keeps the behaviour it has always had.
+func TestRepoClone_NearestIsOptIn(t *testing.T) {
+	t.Parallel()
+	require.Nil(t, clonePlacementPicker().probe, "the default clone picker must not probe")
+	require.NotNil(t, withLatencyProbe(clonePlacementPicker()).probe, "--nearest must install a probe")
+}
+
 // TestRepoClone_InvalidClusterFlag locks in that a malformed --cluster is
 // rejected up front (before any core is dialled), so the anti-token-leak guard
 // validateClusterHost applies to the user-supplied cluster the clone routes to.
@@ -790,7 +814,7 @@ func TestSelectCloneTarget(t *testing.T) {
 	t.Run("multiple placements with no terminal errors with a --cluster pointer", func(t *testing.T) {
 		t.Parallel()
 		// go test is non-interactive, so the picker path is unreachable here.
-		// A nil probe is what keeps this hermetic: the real one dials.
+		// Without --nearest the picker has no probe and dials nothing.
 		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "", stubPlacementPicker(nil))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--cluster")
@@ -809,24 +833,40 @@ func TestSelectCloneTarget(t *testing.T) {
 		require.Equal(t, "aws-us-east-2.entire.io", got.ClusterHost)
 	})
 
-	t.Run("no terminal still errors when the placements are equally near", func(t *testing.T) {
+	t.Run("no terminal still errors when every probe failed", func(t *testing.T) {
 		t.Parallel()
-		// Inside the margin there is no winner to default to, and picking one
-		// anyway would be the alphabetical bug wearing a measurement.
+		// Opting in does not guarantee a measurement, and an unmeasurable
+		// network must land on the same error as not opting in at all.
 		_, err := selectPlacement(newCloneTestCmd(), []coreapi.ResolvedPlacement{usEast, euWest}, "",
-			stubPlacementPicker(map[string]time.Duration{
-				"aws-eu-west-1.entire.io": 20 * time.Millisecond,
-				"aws-us-east-2.entire.io": 14 * time.Millisecond,
-			}))
+			stubPlacementPicker(map[string]time.Duration{}))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--cluster")
+	})
+
+	t.Run("the chosen placement is announced on stderr", func(t *testing.T) {
+		t.Parallel()
+		// The host lands in .git/config and every later fetch follows it, so a
+		// selection the user never saw is one they cannot question.
+		var stderr strings.Builder
+		cmd := newRepoCloneCmd()
+		cmd.SetOut(&nopWriter{})
+		cmd.SetErr(&stderr)
+		_, err := selectPlacement(cmd, []coreapi.ResolvedPlacement{usEast, euWest}, "",
+			stubPlacementPicker(map[string]time.Duration{
+				"aws-eu-west-1.entire.io": 210 * time.Millisecond,
+				"aws-us-east-2.entire.io": 14 * time.Millisecond,
+			}))
+		require.NoError(t, err)
+		require.Contains(t, stderr.String(), "aws-us-east-2.entire.io")
+		require.Contains(t, stderr.String(), "14ms")
+		require.Contains(t, stderr.String(), "--cluster")
 	})
 
 	t.Run("an explicit --cluster is never probed", func(t *testing.T) {
 		t.Parallel()
 		// A choice already made must not cost a dial, so a probe that fails the
 		// test if called proves the short-circuit.
-		picker := clonePlacementPicker()
+		picker := withLatencyProbe(clonePlacementPicker())
 		picker.probe = func(context.Context, []string) map[string]time.Duration {
 			t.Error("probed despite an explicit --cluster")
 			return nil
@@ -837,11 +877,19 @@ func TestSelectCloneTarget(t *testing.T) {
 	})
 }
 
-// stubPlacementPicker is `repo clone`'s picker with the dialling probe replaced
-// by a fixed table, so placement-selection tests stay hermetic and parallel. A
-// nil table means "every probe failed", the fallback every path must survive.
+// stubPlacementPicker is the opted-in (`--nearest`) picker with the dialling
+// probe replaced by a fixed table, so placement-selection tests stay hermetic
+// and parallel. An empty table means "every probe failed", the fallback every
+// path must survive.
+//
+// Passing nil instead models the DEFAULT picker, which has no probe at all —
+// the two are distinct: no probe never dials, a failed probe dialled and got
+// nothing, and both must end at the same alphabetical behaviour.
 func stubPlacementPicker(rtt map[string]time.Duration) placementPicker {
 	p := clonePlacementPicker()
+	if rtt == nil {
+		return p
+	}
 	p.probe = func(context.Context, []string) map[string]time.Duration { return rtt }
 	return p
 }

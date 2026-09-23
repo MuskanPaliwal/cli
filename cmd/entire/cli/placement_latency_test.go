@@ -43,9 +43,9 @@ func TestNearestHost(t *testing.T) {
 
 	hosts := []string{"near.entire.io", "far.entire.io"}
 
-	t.Run("picks a host that clearly beats the incumbent", func(t *testing.T) {
+	t.Run("picks the fastest measured host", func(t *testing.T) {
 		t.Parallel()
-		got, ok := nearestHost(hosts, "far.entire.io", map[string]time.Duration{
+		got, ok := nearestHost(hosts, map[string]time.Duration{
 			"near.entire.io": 12 * time.Millisecond,
 			"far.entire.io":  230 * time.Millisecond,
 		})
@@ -53,32 +53,30 @@ func TestNearestHost(t *testing.T) {
 		require.Equal(t, "near.entire.io", got)
 	})
 
-	t.Run("keeps the incumbent inside the margin", func(t *testing.T) {
+	t.Run("a small lead still wins", func(t *testing.T) {
 		t.Parallel()
-		// 9ms of difference is not worth the staleness a mirror carries.
-		_, ok := nearestHost(hosts, "far.entire.io", map[string]time.Duration{
-			"near.entire.io": 21 * time.Millisecond,
-			"far.entire.io":  30 * time.Millisecond,
+		// No margin: the caller asked for the nearest placement, so the nearest
+		// placement is the answer even when the lead is small.
+		got, ok := nearestHost(hosts, map[string]time.Duration{
+			"near.entire.io": 14 * time.Millisecond,
+			"far.entire.io":  20 * time.Millisecond,
 		})
-		require.False(t, ok)
+		require.True(t, ok)
+		require.Equal(t, "near.entire.io", got)
 	})
 
-	t.Run("keeps the incumbent when the incumbent was not measured", func(t *testing.T) {
+	t.Run("ignores hosts that were not measured", func(t *testing.T) {
 		t.Parallel()
-		// One arm of the comparison is missing, so there is no comparison —
-		// only a preference for whichever host answered a probe.
-		_, ok := nearestHost(hosts, "far.entire.io", map[string]time.Duration{
-			"near.entire.io": 12 * time.Millisecond,
-		})
-		require.False(t, ok)
+		got, ok := nearestHost(hosts, map[string]time.Duration{"far.entire.io": 230 * time.Millisecond})
+		require.True(t, ok)
+		require.Equal(t, "far.entire.io", got)
 	})
 
-	t.Run("keeps the incumbent when it is already the nearest", func(t *testing.T) {
+	t.Run("no measurement means no nearest", func(t *testing.T) {
 		t.Parallel()
-		_, ok := nearestHost(hosts, "near.entire.io", map[string]time.Duration{
-			"near.entire.io": 12 * time.Millisecond,
-			"far.entire.io":  230 * time.Millisecond,
-		})
+		// Every probe failed, so there is nothing to choose on and the caller
+		// must say so rather than fall back to first-measured-wins.
+		_, ok := nearestHost(hosts, nil)
 		require.False(t, ok)
 	})
 }
