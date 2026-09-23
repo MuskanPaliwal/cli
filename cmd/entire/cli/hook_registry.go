@@ -91,9 +91,10 @@ func getHookType(hookName string) string {
 // parsing, and lifecycle dispatch.
 // Used by both the registered subcommand path and the RunE fallback for external agents.
 // When stampSession is true, it attaches the hook session context itself (used by
-// the RunE fallback since it doesn't go through PersistentPreRun). Built-in agent
-// subcommands pass false since their parent command's PersistentPreRun already
-// did it.
+// the RunE fallback since it doesn't go through PersistentPreRun). Built-in hook
+// verbs pass false because each verb's OWN PersistentPreRun already did it — not
+// an inherited one: the shared per-agent command deliberately defines no hook, so
+// anything else attached to it (Antigravity's title-tee) is not stamped either.
 func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName string, stampSession bool) error {
 	// Skip silently if not in a git repository - hooks shouldn't prevent the agent from working
 	if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
