@@ -110,6 +110,36 @@ func TestStripRetiredGeminiHooks_RemovesHooksKeyWhenNothingRemains(t *testing.T)
 	require.JSONEq(t, `{"theme": "dark"}`, string(out))
 }
 
+// Old Entire versions wrote "enabled": true directly under "hooks", which
+// Gemini CLI 0.33+ rejects because every hooks property must be an array.
+// Rewriting the file with it left in place would hand the user a settings file
+// Gemini refuses to load, so it goes along with Entire's entries — and on its
+// own, since it is Entire's artifact too.
+func TestStripRetiredGeminiHooks_DropsLegacyNonArrayHookFields(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ input, want string }{
+		"alongside entire and user hooks": {
+			input: `{"hooks": {"enabled": true, "SessionStart": [{"hooks": [
+				{"type": "command", "command": "entire hooks gemini session-start"},
+				{"type": "command", "command": "./my-start.sh"}]}]}}`,
+			want: `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "./my-start.sh"}]}]}}`,
+		},
+		"alone": {
+			input: `{"theme": "dark", "hooks": {"enabled": true}}`,
+			want:  `{"theme": "dark"}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out, changed, err := stripRetiredGeminiHooks([]byte(tc.input))
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.JSONEq(t, tc.want, string(out))
+		})
+	}
+}
+
 func TestStripRetiredGeminiHooks_NoEntireEntriesIsUnchanged(t *testing.T) {
 	t.Parallel()
 

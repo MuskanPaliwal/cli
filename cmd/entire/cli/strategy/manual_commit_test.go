@@ -2144,6 +2144,26 @@ func TestCountTranscriptItems(t *testing.T) {
 			expected:  0,
 		},
 		{
+			// A Gemini session still in the store when its support was removed
+			// is condensed on the next commit; its offsets are message indices,
+			// so counting the pretty-printed document's lines would be wrong.
+			name:      "Gemini CLI session JSON counts messages",
+			agentType: agent.AgentTypeGemini,
+			content: `{
+				"messages": [
+					{"type": "user", "content": [{"text": "Hello"}]},
+					{"type": "gemini", "content": "Hi"}
+				]
+			}`,
+			expected: 2,
+		},
+		{
+			name:      "Gemini CLI malformed JSON",
+			agentType: agent.AgentTypeGemini,
+			content:   `{"messages": [`,
+			expected:  0,
+		},
+		{
 			name:      "OpenCode export JSON with messages",
 			agentType: agent.AgentTypeOpenCode,
 			content: `{

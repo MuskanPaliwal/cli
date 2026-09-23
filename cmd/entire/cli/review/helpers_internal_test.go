@@ -76,10 +76,10 @@ func TestExampleAgentList(t *testing.T) {
 	catalog := []reviewAgentCatalogEntry{
 		{Name: "claude-code", Installed: true},
 		{Name: "codex", Installed: false},
-		{Name: "pi", Installed: true},
+		{Name: "opencode", Installed: true},
 		{Name: "pi", Installed: true},
 	}
-	if got := exampleAgentList(catalog); got != "claude-code,pi" {
+	if got := exampleAgentList(catalog); got != "claude-code,opencode" {
 		t.Errorf("installed list = %q, want first two installed", got)
 	}
 }

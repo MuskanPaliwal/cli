@@ -140,3 +140,21 @@ func TestReassembleChunks_InvalidChunk(t *testing.T) {
 		t.Error("ReassembleChunks() should error on invalid JSON chunk")
 	}
 }
+
+// Stored chunks may carry fields this package does not model; reassembly must
+// hand back the history as stored rather than the condensed read model.
+func TestReassembleChunks_PreservesUnmodeledFields(t *testing.T) {
+	t.Parallel()
+
+	chunk1 := []byte(`{"messages":[{"id":"m1","type":"user","timestamp":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}]}`)
+	chunk2 := []byte(`{"messages":[{"id":"m2","type":"gemini","content":"hi","tokens":{"input":10},"thoughts":[{"subject":"s"}],"toolCalls":[{"id":"t1","name":"read_file","args":{},"result":[{"output":"x"}]}]}]}`)
+
+	result, err := ReassembleChunks([][]byte{chunk1, chunk2})
+	if err != nil {
+		t.Fatalf("ReassembleChunks() error = %v", err)
+	}
+	want := `{"messages":[{"id":"m1","type":"user","timestamp":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]},{"id":"m2","type":"gemini","content":"hi","tokens":{"input":10},"thoughts":[{"subject":"s"}],"toolCalls":[{"id":"t1","name":"read_file","args":{},"result":[{"output":"x"}]}]}]}`
+	if string(result) != want {
+		t.Errorf("ReassembleChunks() =\n%s\nwant\n%s", result, want)
+	}
+}

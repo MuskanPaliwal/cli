@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,8 +75,11 @@ func planRetiredGeminiHookRemoval(worktreeRoot string) (*agent.HookConfigFile, [
 }
 
 // stripRetiredGeminiHooks returns settings with every Entire-managed hook
-// command removed. Values it does not recognize (a non-array hook type, a
-// matcher without a hooks list) are left as they are.
+// command removed. It also drops non-array values directly under "hooks": old
+// Entire versions wrote "enabled": true there, which Gemini CLI 0.33+ rejects
+// (hooks.additionalProperties must be arrays), so a file rewritten with it in
+// place would not load. Gemini CLI support's own uninstall stripped them the
+// same way. A matcher without a hooks list is left as it is.
 func stripRetiredGeminiHooks(data []byte) ([]byte, bool, error) {
 	var rawSettings map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawSettings); err != nil {
@@ -92,6 +96,11 @@ func stripRetiredGeminiHooks(data []byte) ([]byte, bool, error) {
 
 	changed := false
 	for hookType, value := range rawHooks {
+		if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '[' {
+			delete(rawHooks, hookType)
+			changed = true
+			continue
+		}
 		var matchers []map[string]json.RawMessage
 		if json.Unmarshal(value, &matchers) != nil {
 			continue

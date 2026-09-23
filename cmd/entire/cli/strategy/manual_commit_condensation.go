@@ -25,6 +25,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
+	"github.com/entireio/cli/cmd/entire/cli/transcript/geminilegacy"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/imageextract"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/perf"
@@ -976,6 +977,16 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 
 	var scopedTranscript []byte
 	switch state.AgentType {
+	case agent.AgentTypeGemini:
+		// No new Gemini sessions start, but one still in the session store when
+		// Gemini CLI support was removed is condensed on the next commit.
+		scoped, sliceErr := geminilegacy.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
+		if sliceErr != nil {
+			logging.Warn(summarizeCtx, "failed to scope Gemini transcript for summary",
+				slog.String("session_id", state.SessionID),
+				slog.String("error", sliceErr.Error()))
+		}
+		scopedTranscript = scoped
 	case agent.AgentTypeOpenCode:
 		scoped, sliceErr := opencode.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
 		if sliceErr != nil {
@@ -1559,7 +1570,8 @@ func liveSubagentsDir(ag agent.Agent, state *SessionState, transcriptPath string
 
 // countTranscriptItems counts lines (JSONL) or messages (JSON) in a transcript.
 // For Claude Code and JSONL-based agents, this counts lines.
-// For OpenCode (export JSON), this counts messages.
+// For OpenCode (export JSON) and Gemini CLI (session JSON, from sessions
+// still in the store when its support was removed), this counts messages.
 // Returns 0 if the content is empty or malformed.
 func countTranscriptItems(agentType types.AgentType, content string) int {
 	if content == "" {
@@ -1571,6 +1583,14 @@ func countTranscriptItems(agentType types.AgentType, content string) int {
 		session, err := opencode.ParseExportSession([]byte(content))
 		if err == nil && session != nil {
 			return len(session.Messages)
+		}
+		return 0
+	}
+
+	if agentType == agent.AgentTypeGemini {
+		transcript, err := geminilegacy.ParseTranscript([]byte(content))
+		if err == nil && transcript != nil {
+			return len(transcript.Messages)
 		}
 		return 0
 	}

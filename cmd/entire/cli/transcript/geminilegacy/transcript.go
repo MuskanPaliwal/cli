@@ -128,19 +128,24 @@ func SliceFromMessage(data []byte, startMessageIndex int) ([]byte, error) {
 // ReassembleChunks merges Gemini JSON chunks by combining their message arrays.
 // Transcripts over the chunk size limit were stored as several
 // {"messages":[...]} documents; concatenating them as JSONL would produce
-// invalid JSON.
+// invalid JSON. Messages are carried as raw JSON, not decoded into Message,
+// so fields this package does not model survive reassembly byte for byte.
 func ReassembleChunks(chunks [][]byte) ([]byte, error) {
-	var allMessages []Message
+	allMessages := []json.RawMessage{}
 
 	for _, chunk := range chunks {
-		var transcript Transcript
+		var transcript struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
 		if err := json.Unmarshal(chunk, &transcript); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal chunk: %w", err)
 		}
 		allMessages = append(allMessages, transcript.Messages...)
 	}
 
-	result, err := json.Marshal(Transcript{Messages: allMessages})
+	result, err := json.Marshal(struct {
+		Messages []json.RawMessage `json:"messages"`
+	}{Messages: allMessages})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal reassembled transcript: %w", err)
 	}
