@@ -111,21 +111,30 @@ jobs:
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
             antigravity)
-              mkdir -p "$HOME/.local/bin"
-              tmp="$(mktemp -d)"
-              # Pinned, not `latest`: this job gates merges on every PR, and a
-              # third-party release regressing hook execution (see #893) would
-              # redden PRs that never touched Antigravity. nightly-e2e.yml keeps
-              # `latest` so an agy change under us still surfaces, in the job
-              # built to report it. Bump deliberately after a green dispatch.
-              agy_version=1.2.7
-              curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${agy_version}/agy_cli_linux_x64.tar.gz" -o "$tmp/agy.tar.gz"
-              tar -xzf "$tmp/agy.tar.gz" -C "$tmp"
-              # The release tarball ships the binary as `antigravity` (every 1.x
-              # release so far); `agy` is the name it is installed under.
-              agy_bin="$(find "$tmp" -type f \( -name antigravity -o -name agy \) | head -n 1)"
-              test -n "$agy_bin"
-              install -m 0755 "$agy_bin" "$HOME/.local/bin/agy"
+              # Deliberately NOT pinned, because pinning agy does not work.
+              # agy self-updates IN PLACE — the updater replaces the executable
+              # at its own path, which in CI is the file installed here — and
+              # it spawns that updater on essentially every launch, ~0.4s in,
+              # with auth not gating it. Its only brake is a 15-minute check
+              # keyed on state a fresh CI home never has. So a pinned tarball
+              # governs only the FIRST agy spawn of the job, and the harness
+              # spawns agy once per prompt (e2e/agents/antigravity.go), so
+              # everything after prompt one runs whatever the updater fetched.
+              # Measured on Windows 11 ARM64: 1.2.7 installed, one headless
+              # prompt, 1.2.9 at the same path afterwards. agy offers no way
+              # out — no flag, no settings key, no env var.
+              #
+              # The consequence, stated rather than implied: this job's agy
+              # version floats, so a third-party agy regression CAN redden PRs
+              # that never touched Antigravity (see #893). That exposure was
+              # always real; the pin that used to sit here only read like
+              # protection. Closing it needs the updater actually blocked —
+              # an unwritable install path, or no egress for this step — and
+              # neither is tested yet.
+              #
+              # nightly-e2e.yml also tracks latest, but for its own reason:
+              # that job exists to report agy drift.
+              curl -fsSL https://antigravity.google/cli/install.sh | bash
               ;;
             codex)       npm install -g @openai/codex ;;
             cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
