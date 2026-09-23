@@ -13,16 +13,13 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
-// The project and repo the native lookups below resolve to.
-const (
-	repoGrantProjULID = "01HZX7QABCDEFGHJKMNPQRSTAA"
-	repoGrantRepoULID = "01HZX7QABCDEFGHJKMNPQRSTAB"
-)
+// The repo the native lookup below resolves to.
+const repoGrantRepoULID = "01HZX7QABCDEFGHJKMNPQRSTAB"
 
 // grantActiveCoreServer serves what `repo grant` asks the active context's
-// core: the project and repo by-name lookups behind a /et/<project>/<repo>
-// ref and that repo's grants, plus the placement lookup a mirror ref needs
-// before its collaborators can be read on the cluster that holds it.
+// core: the path resolution behind a /et/<project>/<repo> ref and that repo's
+// grants, plus the placement lookup a mirror ref needs before its
+// collaborators can be read on the cluster that holds it.
 // placements is what that lookup returns, so a test can make a repo mirrored
 // anywhere or nowhere. Every request path is recorded, so a test can assert
 // that a command which should not reach the control plane made no call at all.
@@ -43,10 +40,8 @@ func grantActiveCoreServer(t *testing.T, paths *[]string, placements ...string) 
 				GranteeId: "01ACCT", GranteeName: coreapi.NewOptString("github:alice"),
 				GranteeType: granteeTypeAccount, Role: "writer", Source: "repo",
 			}}}
-		case strings.HasSuffix(r.URL.Path, "/repos"):
-			payload = &coreapi.ListProjectReposOutputBody{Repo: coreapi.NewOptRepo(coreapi.Repo{ID: repoGrantRepoULID, Name: "web"})}
-		case strings.HasSuffix(r.URL.Path, "/projects"):
-			payload = &coreapi.ListProjectsOutputBody{Project: coreapi.NewOptProject(coreapi.Project{ID: repoGrantProjULID, Name: "acme", OwnerId: "01HZX7QABCDEFGHJKMNPQRSTAC", OwnerType: coreapi.ProjectOwnerTypeOrg})}
+		case strings.HasSuffix(r.URL.Path, "/repos/resolve"):
+			payload = nativeResolution("acme/web", repoGrantRepoULID)
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			return
