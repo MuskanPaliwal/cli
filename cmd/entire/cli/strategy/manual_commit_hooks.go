@@ -2031,7 +2031,15 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx context.Context, state *SessionState, stagedFiles []string) (bool, error) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
-	if !s.hasNewTranscriptWork(ctx, state) {
+	// Hook-captured files are evidence of new work on their own: FilesTouched
+	// is cleared by condensation, so anything in it is uncondensed. Transcript
+	// growth is only consulted when the hooks recorded nothing, because for a
+	// late-transcript writer the file is still empty mid-turn — before agy's
+	// first Stop, position and CheckpointTranscriptStart are both zero — and
+	// letting that veto the hook-captured edits dropped the trailer from a
+	// user's mid-turn commit made from a terminal (the no-TTY fast path never
+	// reaches this function).
+	if len(state.FilesTouched) == 0 && !s.hasNewTranscriptWork(ctx, state) {
 		return false, nil
 	}
 
