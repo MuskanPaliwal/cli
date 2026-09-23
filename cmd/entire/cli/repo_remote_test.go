@@ -87,7 +87,7 @@ const planTestMirrorURL = "entire://aws-us-east-2.entire.io/gh/octocat/hello-wor
 // asserts the plan rather than restating the nil-error check.
 func mustPlan(t *testing.T, remote, currentURL string, override bool, remotes map[string]bool) mirrorRemotePlan {
 	t.Helper()
-	plan, err := planMirrorRemote(remote, planTestMirrorURL, currentURL, override, remotes)
+	plan, err := planMirrorRemote(remote, planTestMirrorURL, currentURL, nil, override, remotes)
 	require.NoError(t, err)
 	return plan
 }
@@ -100,14 +100,14 @@ func TestPlanMirrorRemote_OccupiedNameNeedsOverride(t *testing.T) {
 	const mirrorURL = planTestMirrorURL
 	const forgeURL = "git@github.com:octocat/hello-world.git"
 
-	_, err := planMirrorRemote("origin", mirrorURL, forgeURL, false, map[string]bool{"origin": true})
+	_, err := planMirrorRemote("origin", mirrorURL, forgeURL, nil, false, map[string]bool{"origin": true})
 	require.ErrorContains(t, err, "origin")
 	require.ErrorContains(t, err, "already exists")
 	require.ErrorContains(t, err, "--override")
 
 	// A remote already pointing at this very URL is what the caller asked for,
 	// so it reports rather than refusing — re-running must stay safe.
-	plan, err := planMirrorRemote("origin", mirrorURL, mirrorURL, false, map[string]bool{"origin": true})
+	plan, err := planMirrorRemote("origin", mirrorURL, mirrorURL, nil, false, map[string]bool{"origin": true})
 	require.NoError(t, err)
 	require.True(t, plan.noop)
 }
@@ -257,13 +257,13 @@ func TestListGitRemotes_NoRemotes(t *testing.T) {
 	require.Empty(t, remotes)
 }
 
-func TestResolveMirrorUseUpstream(t *testing.T) {
+func TestResolveRemoteRepoRef(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
 		// remotes configures the repo's remotes before resolving.
 		remotes map[string]string
-		// remote is the write target passed to resolveMirrorUseUpstream;
+		// remote is the write target passed to resolveRemoteRepoRef;
 		// defaults to "origin" when empty.
 		remote    string
 		arg       string
@@ -359,7 +359,7 @@ func TestResolveMirrorUseUpstream(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			remote := cmp.Or(tt.remote, "origin")
-			got, err := resolveMirrorUseUpstream(t.Context(), applyPlanRepo(t, tt.remotes), remote, tt.arg)
+			got, err := resolveRemoteRepoRef(t.Context(), applyPlanRepo(t, tt.remotes), remote, tt.arg)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -473,4 +473,74 @@ func TestApplyMirrorRemotePlan_GitFailureSurfaces(t *testing.T) {
 	// A path that is not a git repository makes `git remote set-url` fail.
 	err := applyMirrorRemotePlan(context.Background(), t.TempDir(), plan)
 	require.ErrorContains(t, err, "point remote \"origin\" at the mirror")
+}
+
+// A remote URL is legitimately a local path, and the report is the only record
+// of a URL --override just overwrote. RedactURL mangles one ("/srv/repo.git"
+// becomes ":///srv/repo.git"); RedactURLOrPath is the one that must be used.
+func TestRemoteReportKeepsALocalPathIntact(t *testing.T) {
+	t.Parallel()
+	const localPath = "/srv/repo.git"
+
+	var out strings.Builder
+	reportMirrorRemotePlan(&out, mirrorRemotePlan{
+		remote:      "backup",
+		mirrorURL:   planTestMirrorURL,
+		replacedURL: localPath,
+	})
+	require.Contains(t, out.String(), "was: "+localPath)
+
+	_, err := planMirrorRemote("backup", planTestMirrorURL, localPath, nil, false, map[string]bool{"backup": true})
+	require.ErrorContains(t, err, localPath)
+	require.NotContains(t, err.Error(), ":///srv")
+}
+
+// An explicit pushurl outranks the URL this command writes, so a remote that
+// still pushes to the forge must be named rather than reported as fully
+// repointed — the Long promises fetch AND push go through Entire.
+func TestStrandedPushURLsAreReported(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a differing push URL is stranded and named", func(t *testing.T) {
+		t.Parallel()
+		plan, err := planMirrorRemote("origin", planTestMirrorURL, "git@github.com:o/r.git",
+			[]string{"https://github.com/o/fork.git"}, true, map[string]bool{"origin": true})
+		require.NoError(t, err)
+		require.Equal(t, []string{"https://github.com/o/fork.git"}, plan.strandedPushURLs)
+
+		var out strings.Builder
+		reportMirrorRemotePlan(&out, plan)
+		require.Contains(t, out.String(), "still pushes elsewhere")
+		require.Contains(t, out.String(), "https://github.com/o/fork.git")
+		require.Contains(t, out.String(), "git remote set-url --push origin")
+	})
+
+	// `git remote get-url --push` echoes the fetch URL when no pushurl is set,
+	// so the URL this run writes is not a stranded push target.
+	t.Run("the mirror URL itself is not stranded", func(t *testing.T) {
+		t.Parallel()
+		plan, err := planMirrorRemote("origin", planTestMirrorURL, "git@github.com:o/r.git",
+			[]string{planTestMirrorURL}, true, map[string]bool{"origin": true})
+		require.NoError(t, err)
+		require.Empty(t, plan.strandedPushURLs)
+
+		var out strings.Builder
+		reportMirrorRemotePlan(&out, plan)
+		require.NotContains(t, out.String(), "still pushes elsewhere")
+	})
+}
+
+// A bare "exit status 128" says nothing the user can act on; git's own sentence
+// is the only thing that names the cause.
+func TestGitRunnerSurfacesGitsOwnDiagnosis(t *testing.T) {
+	t.Parallel()
+	dir := applyPlanRepo(t, map[string]string{"origin": "https://github.com/o/r.git"})
+	// Two url values make `git remote set-url` refuse with a message of its own.
+	add := exec.CommandContext(t.Context(), "git", "config", "--add", "remote.origin.url", "https://github.com/o/second.git")
+	add.Dir = dir
+	require.NoError(t, add.Run())
+
+	_, err := gitRunner(t.Context(), dir, "remote", "set-url", "origin", planTestMirrorURL)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple values", "git's own diagnosis reaches the user")
 }

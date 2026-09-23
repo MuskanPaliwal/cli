@@ -180,15 +180,13 @@ the commands are always runnable in every build.
   identically. With several placements and no `--cluster`, a terminal gets the
   picker and a script gets the **primary**, passed to `selectPlacement` by host
   rather than inferred from list order. For a native repo that is the cluster it
-  lives on. For a GitHub repo it takes a second read: `/mirrors/placements`
-  returns peers with no primary among them, so `githubPrimaryHost` asks POST
-  `/repos/resolve` for `primaries.processing` — an id from the same space as
-  `ResolvedPlacement.MirrorId` — and matches it back to a listed placement. Its
-  sibling `data_primary` is the **forge** for a GitHub repo (`github:<id>`, not
-  a cluster) and can never name a remote. That second read is skipped unless its
-  answer would be used — an explicit `--cluster`, a lone placement, or a
-  terminal all decide without it — and is best-effort: a failure leaves the
-  caller its `--cluster` pointer rather than failing outright. The picker renders on stderr when that is a terminal and on the
+  lives on. For a GitHub repo it is `defaultClusterHost`, the
+  cluster onboarding always places a mirror on, so it is the one every mirror
+  set has in common. That is an assumption, not a lookup: a repo mirrored only
+  elsewhere matches nothing and still gets the `--cluster` pointer. The server
+  can name the real one (POST `/repos/resolve` returns `primaries.processing`,
+  an id from the same space as `ResolvedPlacement.MirrorId`), at the cost of a
+  second round trip. The picker renders on stderr when that is a terminal and on the
   controlling terminal otherwise (`openPlacementPromptTerminal`), because Bubble
   Tea fails *silently* on a redirected writer — no window size, a 0x0 viewport,
   and stdin still in raw mode. The cancellation message follows the same writer,
