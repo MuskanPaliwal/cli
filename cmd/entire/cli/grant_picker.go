@@ -146,12 +146,17 @@ type listWindow struct {
 	partial bool
 }
 
-// reportPartialPool discloses that a pool stopped at the fetch budget, and
-// names the way past it. A picker is a convenience over a listing the control
-// plane cannot filter or sort, so a truncated one is still useful — what it
-// must not do is look complete. Always on stderr: --json owns stdout.
-func reportPartialPool(cmd *cobra.Command, w listWindow, what string) {
-	fmt.Fprintf(cmd.ErrOrStderr(), "Only the first %d %s were read; pass the grantee explicitly if the one you want is not listed.\n", w.scanned, what)
+// partialPoolNote is what a truncated pool has to say for itself. A picker is a
+// convenience over a listing the control plane cannot filter or sort, so a
+// truncated one is still useful — what it must not do is look complete.
+//
+// It is text for the picker to SHOW, not a line to print before it. The form
+// may be rendering on the controlling terminal precisely because stderr is
+// redirected (see runPromptForm), so a caveat written to a stream is one the
+// person reading the list never sees — and it would be missing in exactly the
+// case the routing exists for. Carried to the screen on grantPickerTarget.
+func partialPoolNote(w listWindow, what string) string {
+	return fmt.Sprintf("Only the first %d %s were read — cancel and name the grantee if the one you want is not listed.", w.scanned, what)
 }
 
 // ownerNotOrgError reports that a project is owned by an account rather than an
@@ -389,7 +394,7 @@ func runGrantPicker(cmd *cobra.Command, t grantPickerTarget, candidates []grantC
 		chosen = append(chosen, handleCandidate(h))
 	}
 	if len(chosen) == 0 {
-		picked, err := pickGrantees(cmd, grantAction, "Select grantees for "+t.describe(), candidates)
+		picked, err := pickGrantees(cmd, t, grantAction, "Select grantees for "+t.describe(), candidates)
 		if err != nil {
 			return nil, err
 		}
@@ -418,6 +423,11 @@ type grantPickerTarget struct {
 	// rather than taken as roles[0], because help order runs in opposite
 	// directions: reader/writer/admin is least first, owner/admin/member last.
 	least string
+	// poolNote qualifies the rows on offer — today, that the listing behind
+	// them was truncated. Empty when the pool is everything there is. It rides
+	// here rather than being printed by the caller so that it reaches whatever
+	// writer the form does; see partialPoolNote.
+	poolNote string
 }
 
 func (t grantPickerTarget) describe() string { return t.noun + " " + t.ref }
@@ -457,7 +467,7 @@ const (
 // confirmation — so returning refs meant both callers rebuilding the same map
 // afterwards, and an unchecked lookup on each. Recovering the row here makes
 // that one lookup, and it is the same one that checks the answer was on offer.
-func pickGrantees(cmd *cobra.Command, action, title string, candidates []grantCandidate) ([]grantCandidate, error) {
+func pickGrantees(cmd *cobra.Command, t grantPickerTarget, action, title string, candidates []grantCandidate) ([]grantCandidate, error) {
 	offered := make(map[string]grantCandidate, len(candidates))
 	options := make([]huh.Option[string], len(candidates))
 	for i, c := range candidates {
@@ -467,17 +477,21 @@ func pickGrantees(cmd *cobra.Command, action, title string, candidates []grantCa
 	var selected []string
 	// Filterable because the pool is a whole org's membership: at a few hundred
 	// people an unfiltered list is an arrow-key scroll with no way to search.
-	err := runPickerScreen(cmd, action,
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title(title).
-				Options(options...).
-				Filterable(true).
-				Height(uiform.SingleLineMultiSelectHeight(len(options))).
-				Value(&selected),
-		),
-	)
-	if err != nil {
+	// The caveat goes in the TITLE, not in Description: huh's accessible mode
+	// renders a field's title and its options and nothing else, so a
+	// Description would be dropped for exactly the readers who cannot see the
+	// styled form. Its own line, so neither mode runs the two together.
+	if t.poolNote != "" {
+		title += "\n" + t.poolNote
+	}
+	if err := runPickerScreen(cmd, action, huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title(title).
+			Options(options...).
+			Filterable(true).
+			Height(uiform.SingleLineMultiSelectHeight(len(options))).
+			Value(&selected),
+	)); err != nil {
 		return nil, err
 	}
 	// Confirming an empty selection is a decision not to grant anything, not a
@@ -685,5 +699,5 @@ func orgMemberHolders(ctx context.Context, c *coreapi.Client, orgID string) ([]g
 // removePicker is the seam the remove flow's form sits behind, matching
 // grantPicker's role for add.
 var removePicker = func(cmd *cobra.Command, t grantPickerTarget, candidates []grantCandidate) ([]grantCandidate, error) {
-	return pickGrantees(cmd, revokeAction, "Select grants to revoke on "+t.describe(), candidates)
+	return pickGrantees(cmd, t, revokeAction, "Select grants to revoke on "+t.describe(), candidates)
 }

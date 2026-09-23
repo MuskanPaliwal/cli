@@ -231,3 +231,26 @@ func TestPromptForm_FallsBackToTheControllingTerminal(t *testing.T) {
 	require.Empty(t, stderr.String(), "not to a stderr that is not a terminal")
 	require.Empty(t, stdout.String(), "and never to stdout, which carries --json")
 }
+
+// TestPickGrantees_ShowsThePoolCaveatWithTheRows drives the real multi-select
+// and checks the truncation caveat is rendered as part of it. Carrying the note
+// on grantPickerTarget only helps if the screen actually prints it — and the
+// whole reason it travels that way is that a line sent to stderr can be
+// invisible exactly when the form is not.
+//
+// Not parallel: swaps the process's stdin and the terminal opener.
+func TestPickGrantees_ShowsThePoolCaveatWithTheRows(t *testing.T) {
+	const caveat = "Only the first 1200 members of the org owning project widgets were read"
+	pt := grantPickerTarget{
+		noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole,
+		poolNote: caveat,
+	}
+	out := runAccessibleForm(t, "\n", func(cmd *cobra.Command) {
+		_, err := pickGrantees(cmd, pt, grantAction, "Select grantees for project widgets",
+			[]grantCandidate{handleCandidate("github:alice"), handleCandidate("github:bob")})
+		require.NoError(t, err)
+	})
+
+	require.Contains(t, out, caveat, "the caveat is shown with the rows it qualifies")
+	require.Contains(t, out, "github:alice", "and the rows are still there")
+}

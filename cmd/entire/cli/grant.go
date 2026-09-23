@@ -220,7 +220,7 @@ func resolveGrantSelections[Row any](ctx context.Context, cmd *cobra.Command, c 
 		return nil, nil
 	}
 	if pool.window.partial {
-		reportPartialPool(cmd, pool.window, "members of the org owning "+pt.describe())
+		pt.poolNote = partialPoolNote(pool.window, "members of the org owning "+pt.describe())
 	}
 	return grantPicker(cmd, pt, pool.candidates, nil, role)
 }
@@ -456,7 +456,7 @@ func pickGrantsToRevoke[Row any](ctx context.Context, cmd *cobra.Command, c *cor
 		return nil, fmt.Errorf("%s has no grants that can be revoked here", pt.describe())
 	}
 	if window.partial {
-		reportPartialPool(cmd, window, "grants on "+pt.describe())
+		pt.poolNote = partialPoolNote(window, "grants on "+pt.describe())
 	}
 	// Whole rows, so the confirmation can name what was shown rather than the
 	// id it acts on.

@@ -377,6 +377,20 @@ the commands are always runnable in every build.
   `... 2>log` then renders an invisible prompt on an apparently hung command.
   `selectPlacement` uses the same helper.
 
+  **The prompt moves; the result does not.** Anything that asks a question or
+  qualifies what the question is showing — the form, its cancellation line, the
+  truncated-pool caveat — follows the prompt to whatever writer it rendered on.
+  Anything that reports what the command DID (`✓ Revoked …`, `✓ Granted …`)
+  stays on `cmd.OutOrStdout()`, because it is the command's output and a caller
+  redirected it deliberately. `repo remote url` is the case that settles this:
+  it prompts on the controlling terminal precisely so its URL can stay on a
+  stdout being captured by `$(…)`. Do not "fix" results onto the terminal.
+
+  A caveat that belongs to a form goes IN the form — for the pool note, in the
+  field's `Title`. `huh`'s accessible mode renders a field's title and options
+  and nothing else, so a `Description` is silently dropped for exactly the
+  readers who cannot see the styled version.
+
   **A pool is bounded; a filter is not.** A listing that IS a pool
   (`boundedList` at `coreListFetchBudget`) is read in full before a single row
   can be shown, so an unbounded walk would cost one round trip per page on a
