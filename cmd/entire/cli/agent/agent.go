@@ -275,6 +275,15 @@ type LateTranscriptWriter interface {
 	// format quirk (e.g. a blank line) silently shifts extraction for the
 	// next checkpoint.
 	CountTranscriptPosition(content []byte) int
+
+	// SliceTranscriptFromPosition returns content scoped to the lines after
+	// startOffset, counted by the same rule CountTranscriptPosition uses.
+	// Consumers that scope a transcript to one checkpoint range must go
+	// through this rather than a generic line slicer: startOffset was
+	// produced by the agent's metric, and re-deriving it under another rule
+	// reintroduces exactly the drift CountTranscriptPosition exists to stop.
+	// Returns nil when nothing follows startOffset.
+	SliceTranscriptFromPosition(content []byte, startOffset int) []byte
 }
 
 // TranscriptFetcher is implemented by agents that can materialize a session

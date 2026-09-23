@@ -956,6 +956,22 @@ func (s *ManualCommitStrategy) extractOrCreateSessionData(ctx context.Context, r
 	}
 }
 
+// sliceByAgentMetric scopes a transcript through the agent's own offset metric
+// when it declares one, so the slice and the stored offset share a counting
+// rule. ok is false for agents without the capability, which scope by
+// transcript format instead.
+func sliceByAgentMetric(agentType types.AgentType, content []byte, startOffset int) (scoped []byte, ok bool) {
+	ag, err := agent.GetByAgentType(agentType)
+	if err != nil {
+		return nil, false
+	}
+	lw, ok := agent.AsLateTranscriptWriter(ag)
+	if !ok {
+		return nil, false
+	}
+	return lw.SliceTranscriptFromPosition(content, startOffset), true
+}
+
 // generateSummary produces an LLM-generated summary of the session transcript.
 // The transcript must be pre-redacted to avoid sending secrets to the LLM.
 // Returns nil if the scoped transcript is empty or generation fails.
@@ -964,30 +980,38 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 	transcriptBytes := redactedTranscript.Bytes()
 
 	var scopedTranscript []byte
-	switch state.AgentType {
-	case agent.AgentTypeGemini:
-		scoped, sliceErr := geminicli.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
-		if sliceErr != nil {
-			logging.Warn(summarizeCtx, "failed to scope Gemini transcript for summary",
-				slog.String("session_id", state.SessionID),
-				slog.String("error", sliceErr.Error()))
-		}
+	// Late-transcript agents own their offset metric, so they own the slice
+	// too: CheckpointTranscriptStart was produced by the agent's own counting
+	// rule (CountTranscriptPosition), and re-deriving the position here with a
+	// generic line slicer reintroduces exactly the drift that rule exists to
+	// prevent. Same delegation the counting side already uses.
+	if scoped, viaAgentMetric := sliceByAgentMetric(state.AgentType, transcriptBytes, state.CheckpointTranscriptStart); viaAgentMetric {
 		scopedTranscript = scoped
-	case agent.AgentTypeOpenCode:
-		scoped, sliceErr := opencode.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
-		if sliceErr != nil {
-			logging.Warn(summarizeCtx, "failed to scope OpenCode transcript for summary",
-				slog.String("session_id", state.SessionID),
-				slog.String("error", sliceErr.Error()))
+	} else {
+		switch state.AgentType {
+		case agent.AgentTypeGemini:
+			scoped, sliceErr := geminicli.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
+			if sliceErr != nil {
+				logging.Warn(summarizeCtx, "failed to scope Gemini transcript for summary",
+					slog.String("session_id", state.SessionID),
+					slog.String("error", sliceErr.Error()))
+			}
+			scopedTranscript = scoped
+		case agent.AgentTypeOpenCode:
+			scoped, sliceErr := opencode.SliceFromMessage(transcriptBytes, state.CheckpointTranscriptStart)
+			if sliceErr != nil {
+				logging.Warn(summarizeCtx, "failed to scope OpenCode transcript for summary",
+					slog.String("session_id", state.SessionID),
+					slog.String("error", sliceErr.Error()))
+			}
+			scopedTranscript = scoped
+		case agent.AgentTypeCodex, agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeAntigravity, agent.AgentTypeUnknown:
+			// Plain JSONL: one record per line, so the stored offset is a
+			// line count. Antigravity is listed only to keep the switch
+			// exhaustive — it scopes through its own metric above, and
+			// reaches this line only if its registry lookup fails.
+			scopedTranscript = transcript.SliceFromLine(transcriptBytes, state.CheckpointTranscriptStart)
 		}
-		scopedTranscript = scoped
-	case agent.AgentTypeCodex, agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeAntigravity, agent.AgentTypeUnknown:
-		// Antigravity is JSONL like Claude/Codex, so line slicing applies.
-		// (agy offsets count non-blank lines; SliceFromLine slices raw lines —
-		// exact only when the transcript has no interior blank lines, which
-		// matches every captured agy transcript. Worst case the summary scope
-		// shifts by a line; prompts/positions are unaffected.)
-		scopedTranscript = transcript.SliceFromLine(transcriptBytes, state.CheckpointTranscriptStart)
 	}
 
 	if len(scopedTranscript) == 0 {

@@ -252,6 +252,22 @@ func (a *AntigravityAgent) CountTranscriptPosition(content []byte) int {
 	return forEachNonBlankLine(content, 0, nil)
 }
 
+// SliceTranscriptFromPosition implements agent.LateTranscriptWriter. It scopes
+// content the same way CountTranscriptPosition counts it, through the one
+// iterator that owns the metric. transcript.SliceFromLine cannot stand in: it
+// counts raw \n-delimited lines, so a single interior blank line puts the
+// summary's window a line off from the offset that was stored for it.
+func (a *AntigravityAgent) SliceTranscriptFromPosition(content []byte, startOffset int) []byte {
+	var kept [][]byte
+	forEachNonBlankLine(content, startOffset, func(raw []byte) {
+		kept = append(kept, raw)
+	})
+	if len(kept) == 0 {
+		return nil
+	}
+	return append(bytes.Join(kept, []byte("\n")), '\n')
+}
+
 // ExtractModifiedFilesFromOffset implements agent.TranscriptAnalyzer. It scans
 // agy step lines after startOffset for mutating tool calls and returns the
 // target file paths they touch, deduplicated, alongside the new line position.

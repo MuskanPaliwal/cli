@@ -543,3 +543,30 @@ func TestDecodeAgyArgs_PreservesEmptyStrings(t *testing.T) {
 		}
 	}
 }
+
+// The offset stored for a checkpoint counts non-blank lines, so the slice that
+// scopes a summary to that checkpoint has to count them the same way. A raw
+// \n-line slicer drifts by one for each interior blank line, which silently
+// puts the summary's window over the wrong turns.
+func TestSliceTranscriptFromPosition_IgnoresInteriorBlankLines(t *testing.T) {
+	t.Parallel()
+
+	const tail = `{"n":3}` + "\n" + `{"n":4}` + "\n"
+	dense := `{"n":1}` + "\n" + `{"n":2}` + "\n" + tail
+	sparse := `{"n":1}` + "\n\n" + `{"n":2}` + "\n   \n" + tail
+
+	a := &AntigravityAgent{}
+	if got := a.CountTranscriptPosition([]byte(sparse)); got != 4 {
+		t.Fatalf("CountTranscriptPosition(sparse) = %d, want 4", got)
+	}
+
+	for name, content := range map[string]string{"dense": dense, "sparse": sparse} {
+		if got := string(a.SliceTranscriptFromPosition([]byte(content), 2)); got != tail {
+			t.Errorf("SliceTranscriptFromPosition(%s, 2) = %q, want %q", name, got, tail)
+		}
+	}
+
+	if got := a.SliceTranscriptFromPosition([]byte(dense), 4); got != nil {
+		t.Errorf("nothing past the end should slice to nil, got %q", got)
+	}
+}
