@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -2416,7 +2417,19 @@ func sessionLacksCondensableContent(state *SessionState) bool {
 			// entry-table size), and the readers downstream cannot condense
 			// it, so anything that is not a regular file counts as no content.
 			info, statErr := lstatLateTranscript(ag, state)
-			return statErr != nil || !info.Mode().IsRegular() || info.Size() == 0
+			if statErr != nil {
+				// An absent file, or a path the store refuses (a symlink at
+				// any component, a non-regular leaf), is "no content": the
+				// full path would refuse it too. Any other stat failure
+				// (EACCES, ENOTDIR, an I/O error) says nothing about the
+				// transcript, and classing it as empty would drop the session
+				// from this commit's trailer with no visible error; the full
+				// path reads the file and reports what is wrong with it.
+				return errors.Is(statErr, fs.ErrNotExist) ||
+					errors.Is(statErr, osroot.ErrSymlinkedPath) ||
+					errors.Is(statErr, osroot.ErrNotRegularFile)
+			}
+			return !info.Mode().IsRegular() || info.Size() == 0
 		}
 	}
 	return false

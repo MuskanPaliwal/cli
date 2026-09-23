@@ -61,6 +61,20 @@ func TestSessionLacksCondensableContent_LateTranscriptWriterPathShapes(t *testin
 			"a directory is not a transcript, whatever Size() reports for it")
 	})
 
+	t.Run("stat failure other than not-exist counts as content", func(t *testing.T) {
+		t.Parallel()
+		// A regular file where a directory is expected: Lstat fails with
+		// ENOTDIR, which says nothing about the transcript. Only an absent
+		// file is "no content"; anything else must not drop the session from
+		// the commit's trailer on the fast path.
+		notADir := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
+		path := filepath.Join(notADir, "transcript_full.jsonl")
+		_, err := os.Lstat(path)
+		require.Error(t, err)
+		require.False(t, sessionLacksCondensableContent(newState(path)),
+			"an unclassifiable stat error must fail toward condensing, not toward silently skipping")
+	})
 	t.Run("symlinked transcript lacks content", func(t *testing.T) {
 		t.Parallel()
 		target := filepath.Join(t.TempDir(), "real.jsonl")
