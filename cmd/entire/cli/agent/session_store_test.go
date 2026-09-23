@@ -359,18 +359,35 @@ func TestSessionStore_FollowsSymlinkedAncestorOfAMissingStore(t *testing.T) {
 }
 
 // Nested directories inherit the store root's 0700 rather than 0750: they hold
-// the same transcripts, and Copilot, Cursor and Codex all write into them.
+// the same transcripts, and Copilot, Cursor and Codex all write into them. Both
+// writers that create those directories are covered: CreateExclusive reaches
+// the same tree as WriteFile, through the late-transcript placeholder.
 func TestSessionStore_CreatesNestedDirectories0700(t *testing.T) {
 	t.Parallel()
 
-	storeDir := filepath.Join(t.TempDir(), "store")
-	store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
-	require.NoError(t, err)
-	require.NoError(t, store.WriteFile("nested/deeper/session.jsonl", []byte("hi\n"), 0o600))
+	writers := map[string]func(*agent.SessionStore) error{
+		"WriteFile": func(s *agent.SessionStore) error {
+			return s.WriteFile("nested/deeper/session.jsonl", []byte("hi\n"), 0o600)
+		},
+		"CreateExclusive": func(s *agent.SessionStore) error {
+			return s.CreateExclusive("nested/deeper/session.jsonl", 0o600)
+		},
+	}
 
-	for _, dir := range []string{storeDir, filepath.Join(storeDir, "nested"), filepath.Join(storeDir, "nested", "deeper")} {
-		info, err := os.Stat(dir)
-		require.NoError(t, err, dir)
-		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			storeDir := filepath.Join(t.TempDir(), "store")
+			store, err := agent.OpenSessionStoreAt(&storeStubAgent{dir: storeDir, resolve: joinResolve}, storeDir)
+			require.NoError(t, err)
+			require.NoError(t, write(store))
+
+			for _, dir := range []string{storeDir, filepath.Join(storeDir, "nested"), filepath.Join(storeDir, "nested", "deeper")} {
+				info, err := os.Stat(dir)
+				require.NoError(t, err, dir)
+				assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+			}
+		})
 	}
 }

@@ -435,7 +435,7 @@ func (s *SessionStore) CreateExclusive(name string, perm os.FileMode) error {
 	}
 	defer root.Close()
 	if dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(name))); dir != "." {
-		if err := osroot.MkdirAllNoSymlink(root, dir, 0o750); err != nil {
+		if err := osroot.MkdirAllNoSymlink(root, dir, 0o700); err != nil {
 			return fmt.Errorf("create session directory: %w", err)
 		}
 	}
