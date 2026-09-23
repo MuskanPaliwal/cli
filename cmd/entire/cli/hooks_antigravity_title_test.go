@@ -82,3 +82,44 @@ func TestTitleTee_GarbageInputAndFailingWrapNeverError(t *testing.T) {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 }
+
+// agy fires its title command on every state change during a turn, so
+// title-tee must inherit nothing that scans session state or builds redactors:
+// one real 35-second turn logged 32 "redaction configured" lines when it did.
+//
+// cobra.EnableTraverseRunHooks (root.go) runs EVERY ancestor's PersistentPreRun
+// from the root down, not just the nearest, so title-tee cannot shadow an
+// ancestor's hook with its own — the only way it inherits nothing is for no
+// ancestor to define one. The command path is load-bearing and must not move
+// to dodge this: `entire hooks antigravity title-tee` is persisted verbatim in
+// users' agy settings.json by InstallTitleTee and matched by shape on
+// uninstall, so re-parenting would silently strand every installed tee.
+func TestTitleTee_InheritsNoPersistentPreRun(t *testing.T) {
+	root := NewRootCmd()
+
+	titleTee, _, err := root.Find([]string{"hooks", "antigravity", "title-tee"})
+	if err != nil {
+		t.Fatalf("`entire hooks antigravity title-tee` must stay at this exact path: %v", err)
+	}
+	if titleTee.Name() != "title-tee" {
+		t.Fatalf("resolved %q, not title-tee; the persisted command path moved", titleTee.CommandPath())
+	}
+
+	// Every ancestor below the root: the root's own hook sets up logging and
+	// belongs on every command. The per-agent hooks command is the one that
+	// must stay clear — its hook scanned session state and built redactors.
+	for p := titleTee; p != nil && p.Parent() != nil; p = p.Parent() {
+		if p.PersistentPreRun != nil || p.PersistentPreRunE != nil {
+			t.Errorf("%q defines a PersistentPreRun, which EnableTraverseRunHooks runs for title-tee too", p.CommandPath())
+		}
+	}
+
+	// The lifecycle verbs still get one: that is where the hook session belongs.
+	stop, _, err := root.Find([]string{"hooks", "antigravity", "stop"})
+	if err != nil {
+		t.Fatalf("find stop verb: %v", err)
+	}
+	if stop.PersistentPreRun == nil && stop.PersistentPreRunE == nil {
+		t.Error("the stop verb lost its hook-session PersistentPreRun")
+	}
+}
