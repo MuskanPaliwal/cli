@@ -551,6 +551,23 @@ func TestStrandedPushURLsAreReported(t *testing.T) {
 		require.Contains(t, out.String(), "git remote set-url --push origin")
 	})
 
+	// A fetch URL already naming the mirror says nothing about an explicit
+	// pushurl, so the no-op path must report one too — this is what an
+	// idempotent script hits on its second run.
+	t.Run("a no-op still names a stranded push URL", func(t *testing.T) {
+		t.Parallel()
+		plan, err := planMirrorRemote("origin", planTestMirrorURL, planTestMirrorURL,
+			[]string{"https://github.com/o/fork.git"}, false, map[string]bool{"origin": true})
+		require.NoError(t, err)
+		require.True(t, plan.noop)
+
+		var out strings.Builder
+		reportMirrorRemotePlan(&out, plan)
+		require.Contains(t, out.String(), "already points at the mirror")
+		require.Contains(t, out.String(), "still pushes elsewhere",
+			"a no-op fetch URL does not make an explicit pushurl harmless")
+	})
+
 	// `git remote get-url --push` echoes the fetch URL when no pushurl is set,
 	// so the URL this run writes is not a stranded push target.
 	t.Run("the mirror URL itself is not stranded", func(t *testing.T) {
@@ -579,4 +596,22 @@ func TestGitRunnerSurfacesGitsOwnDiagnosis(t *testing.T) {
 	_, err := gitRunner(t.Context(), dir, "remote", "set-url", "origin", planTestMirrorURL)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "multiple values", "git's own diagnosis reaches the user")
+	// The line naming what git could not set is the one that matters, and it
+	// embeds a URL. Redacting per line would route the whole sentence through
+	// RedactURL — which rebuilds it from a parsed scheme — and leave "fatal://".
+	require.Contains(t, err.Error(), "could not set", "the sentence survives the URL redaction")
+	require.NotContains(t, err.Error(), "fatal://", "a prose line must not be rebuilt as a URL")
+}
+
+// Redaction inside a stderr line must strip credentials from the URL without
+// destroying the sentence carrying it.
+func TestGitStderrRedactsOnlyTheURL(t *testing.T) {
+	t.Parallel()
+	err := &exec.ExitError{ProcessState: nil}
+	err.Stderr = []byte("error: cannot fetch https://user:ghp_SECRET@github.com/o/r\nfatal: could not set 'remote.origin.url'\n")
+
+	got := gitStderr(err)
+	require.NotContains(t, got, "ghp_SECRET", "credentials are stripped")
+	require.Contains(t, got, "error: cannot fetch https://github.com/o/r", "the sentence and the host survive")
+	require.Contains(t, got, "fatal: could not set 'remote.origin.url'")
 }

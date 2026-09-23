@@ -484,12 +484,6 @@ func resolveRepoRemoteURL(cmd *cobra.Command, ref, cluster string, picker placem
 	// `git clone entire://…` directly. The guard applies on the shorthand path
 	// where we *synthesize* the URL from a --cluster flag or an API-supplied
 	// host — values that flow into the STS audience under our own construction.
-	//
-	// A caller that PRINTS the URL gets the guard, because that argument does
-	// not reach it: the value is pasted into `git remote add` / git config
-	// rather than exec'd, so a malformed one is written to .git/config and
-	// fails later, far from the command that produced it. `entire://` alone
-	// used to print and exit 0.
 	if isEntireCloneURL(ref) {
 		return ref, nil
 	}

@@ -83,8 +83,21 @@ var gitRunner = func(ctx context.Context, dir string, args ...string) (string, e
 	return strings.TrimSpace(string(out)), nil
 }
 
-// gitStderr returns what git wrote to stderr before failing, redacted and
-// flattened to one line. Empty when the error carries none.
+// stderrURLRe matches a URL embedded in a line of prose, so credentials can be
+// stripped from it without touching the sentence around it. Quotes and
+// whitespace end the match, which is what git's own `to 'https://…'` quoting
+// needs. Deliberately not applied to scp-style remotes (git@host:path): they
+// carry no password, and the pattern would match far more than a URL.
+var stderrURLRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s'"]*`)
+
+// gitStderr returns what git wrote to stderr before failing, flattened to one
+// line with any embedded URL redacted. Empty when the error carries none.
+//
+// Redaction is per URL, never per line: RedactURLOrPath routes anything
+// containing "://" through RedactURL, which rebuilds the value from a parsed
+// scheme/host/path — and a prose line parses as an opaque URL whose scheme is
+// its first word, so "fatal: could not set 'x' to 'https://h/p'" collapses to
+// "fatal://". That destroys the very sentence this function exists to surface.
 func gitStderr(err error) string {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -92,9 +105,11 @@ func gitStderr(err error) string {
 	}
 	var parts []string
 	for _, line := range strings.Split(string(exitErr.Stderr), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			parts = append(parts, gitremote.RedactURLOrPath(trimmed))
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
 		}
+		parts = append(parts, stderrURLRe.ReplaceAllStringFunc(trimmed, gitremote.RedactURL))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -231,6 +246,11 @@ func applyMirrorRemotePlan(ctx context.Context, dir string, plan mirrorRemotePla
 func reportMirrorRemotePlan(out io.Writer, plan mirrorRemotePlan) {
 	if plan.noop {
 		fmt.Fprintf(out, "Remote %q already points at the mirror:\n  %s\n", plan.remote, plan.mirrorURL)
+		// Not a return: the fetch URL needing no change says nothing about an
+		// explicit pushurl, and a remote that fetches from the mirror while
+		// pushing to the forge is exactly what the note below exists to catch.
+		// This is the case an idempotent script hits on its second run.
+		reportStrandedPushURLs(out, plan)
 		return
 	}
 	if plan.add {
@@ -241,17 +261,23 @@ func reportMirrorRemotePlan(out io.Writer, plan mirrorRemotePlan) {
 	}
 	fmt.Fprintf(out, "\nFetch through it:\n  git fetch %s\n", plan.remote)
 
-	// An explicit pushurl outranks the URL just written, so without this the
-	// command reports that fetch and push now go through Entire while pushes
-	// still reach the forge. Named rather than rewritten: the push target is
-	// the user's, and clearing it is not what they asked for.
-	if len(plan.strandedPushURLs) > 0 {
-		fmt.Fprintf(out, "\nNOTE: remote %q still pushes elsewhere — `git remote set-url --push` was set on it:\n", plan.remote)
-		for _, u := range plan.strandedPushURLs {
-			fmt.Fprintf(out, "  %s\n", gitremote.RedactURLOrPath(u))
-		}
-		fmt.Fprintf(out, "To push through the mirror too:\n  git remote set-url --push %s %s\n", plan.remote, plan.mirrorURL)
+	reportStrandedPushURLs(out, plan)
+}
+
+// reportStrandedPushURLs names any explicit pushurl that will not reach the
+// mirror. It outranks the URL this command writes, so without it the command
+// would report that fetch and push both go through Entire while pushes still
+// reach the forge. Named rather than rewritten: the push target is the user's,
+// and clearing it is not what they asked for.
+func reportStrandedPushURLs(out io.Writer, plan mirrorRemotePlan) {
+	if len(plan.strandedPushURLs) == 0 {
+		return
 	}
+	fmt.Fprintf(out, "\nNOTE: remote %q still pushes elsewhere — `git remote set-url --push` was set on it:\n", plan.remote)
+	for _, u := range plan.strandedPushURLs {
+		fmt.Fprintf(out, "  %s\n", gitremote.RedactURLOrPath(u))
+	}
+	fmt.Fprintf(out, "To push through the mirror too:\n  git remote set-url --push %s %s\n", plan.remote, plan.mirrorURL)
 }
 
 // resolveRemoteRepoRef determines the repository `remote add` should look for
@@ -390,42 +416,34 @@ func runRepoRemoteAdd(cmd *cobra.Command, args []string, cluster string, overrid
 	if err != nil {
 		return err
 	}
-	if remotes[remote] && !override {
-		currentURL, uerr := gitremote.GetRemoteURLInDir(ctx, repoRoot, remote)
-		if uerr != nil {
-			return fmt.Errorf("read current URL of remote %q: %w", remote, uerr)
-		}
-		// A remote already holding the URL this run would write is not a
-		// collision, but which URL that is takes the lookup below. Only
-		// a remote that cannot be the no-op case is refused here; the
-		// rest is left to planMirrorRemote.
-		if !isEntireCloneURL(currentURL) {
-			return occupiedRemoteError(remote, currentURL)
-		}
-	}
-
-	repoRef, err := resolveRemoteRepoRef(ctx, repoRoot, remote, repoArg)
-	if err != nil {
-		return err
-	}
-	name := repoRef.owner + "/" + repoRef.repo
-	qualified := "/" + repoRef.forge + "/" + name
-
-	mirrorURL, err := resolveRemoteMirrorURL(cmd, repoRef, qualified, clusterHost)
-	if err != nil {
-		return err
-	}
-	// GetRemoteURLInDir errors when the remote is absent; that is the
-	// "add" case, which carries neither a current URL nor a pushurl.
+	// GetRemoteURLInDir errors when the remote is absent; that is the "add"
+	// case, which carries neither a current URL nor a pushurl.
 	currentURL := ""
 	var pushURLs []string
 	if remotes[remote] {
 		if currentURL, err = gitremote.GetRemoteURLInDir(ctx, repoRoot, remote); err != nil {
 			return fmt.Errorf("read current URL of remote %q: %w", remote, err)
 		}
+		// A remote already holding the URL this run would write is not a
+		// collision, but which URL that is takes the lookup below. Only a
+		// remote that cannot be the no-op case is refused here; the rest is
+		// left to planMirrorRemote.
+		if !override && !isEntireCloneURL(currentURL) {
+			return occupiedRemoteError(remote, currentURL)
+		}
 		pushURLs = explicitPushURLs(ctx, repoRoot, remote)
 	}
 
+	repoRef, err := resolveRemoteRepoRef(ctx, repoRoot, remote, repoArg)
+	if err != nil {
+		return err
+	}
+	qualified := "/" + repoRef.forge + "/" + repoRef.owner + "/" + repoRef.repo
+
+	mirrorURL, err := resolveRemoteMirrorURL(cmd, repoRef, qualified, clusterHost)
+	if err != nil {
+		return err
+	}
 	plan, err := planMirrorRemote(remote, mirrorURL, currentURL, pushURLs, override, remotes)
 	if err != nil {
 		return err
@@ -566,8 +584,9 @@ func newRepoRemoteAddCmd() *cobra.Command {
 			"--cluster selects one either way, the same as `entire repo clone`.\n\n" +
 			"<remote-name> must not already exist: as with `git remote add`, an " +
 			"occupied name is refused rather than repointed. --override repoints " +
-			"it instead, printing the URL it replaced — which is the only record " +
-			"of that URL, so keep it if you need it.\n\n" +
+			"it instead, printing the URL it replaced — the only record of it, " +
+			"and with any credentials redacted, so keep the original yourself if " +
+			"you need it.\n\n" +
 			"It only ever edits local git config — the cluster must already serve " +
 			"the repo (`entire repo mirror add`); nothing server-side is " +
 			"changed.\n\n" + mirrorRepoRefHelp,
