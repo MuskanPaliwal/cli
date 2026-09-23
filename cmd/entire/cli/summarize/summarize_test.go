@@ -1262,6 +1262,34 @@ func TestBuildCondensedTranscriptFromBytes_Antigravity(t *testing.T) {
 // caps one argument at MAX_ARG_STRLEN (128 KiB) however large ARG_MAX is. An
 // unbounded transcript therefore failed with E2BIG on exactly the long sessions
 // a summary is most wanted for, so the formatted transcript carries a budget.
+// The file list has its own bound: FilesTouched is unbounded, and the argv
+// ceiling behind maxCondensedTranscriptBytes applies to the whole prompt.
+func TestFormatCondensedTranscript_BoundsOversizedFileLists(t *testing.T) {
+	t.Parallel()
+	files := make([]string, 0, 4000)
+	for i := range 4000 {
+		files = append(files, fmt.Sprintf("pkg/module%04d/deeply/nested/directory/structure/file_with_a_long_name_%04d.go", i, i))
+	}
+	result := FormatCondensedTranscript(Input{
+		Transcript:   []Entry{{Type: EntryTypeUser, Content: "touch everything"}},
+		FilesTouched: files,
+	})
+	if len(result) > maxCondensedTranscriptBytes+maxCondensedFilesBytes+512 {
+		t.Fatalf("formatted prompt is %d bytes; the file list must be bounded too", len(result))
+	}
+	if !strings.Contains(result, "- pkg/module0000/") {
+		t.Error("the first files must survive the bound")
+	}
+	if !strings.Contains(result, "more files omitted to fit the summary prompt") {
+		t.Error("the bound must say how many files were left out")
+	}
+	// A short list is untouched.
+	short := FormatCondensedTranscript(Input{FilesTouched: []string{"a.go", "b.go"}})
+	if strings.Contains(short, "omitted") || !strings.Contains(short, "- b.go\n") {
+		t.Errorf("a short file list must be rendered in full, got %q", short)
+	}
+}
+
 func TestFormatCondensedTranscript_BoundsOversizedTranscripts(t *testing.T) {
 	t.Parallel()
 

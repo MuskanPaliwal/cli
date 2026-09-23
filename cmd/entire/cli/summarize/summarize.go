@@ -623,15 +623,14 @@ func FormatCondensedTranscript(input Input) string {
 
 	out := boundTranscriptText(sb.String())
 
-	// Appended after bounding: the file list is short, and it is the part a
-	// summary can least afford to lose.
+	// Appended after the transcript bound, under its own: the file list is the
+	// part a summary can least afford to lose, but it is not short by
+	// construction — a wide refactor names thousands of paths — and the argv
+	// ceiling that sizes maxCondensedTranscriptBytes applies to the whole
+	// prompt, so an unbounded tail would reopen the E2BIG failure the
+	// transcript bound closed.
 	if len(input.FilesTouched) > 0 {
-		var files strings.Builder
-		files.WriteString("\n[Files Modified]\n")
-		for _, file := range input.FilesTouched {
-			fmt.Fprintf(&files, "- %s\n", file)
-		}
-		out += files.String()
+		out += boundFilesList(input.FilesTouched)
 	}
 
 	return out
@@ -649,11 +648,32 @@ func FormatCondensedTranscript(input Input) string {
 //     exactly the long sessions a summary is most wanted for. macOS's ~1 MiB
 //     total is permissive enough to hide this in local testing.
 //
-// 96 KiB keeps the whole prompt inside that 128 KiB once
-// buildSummarizationPrompt's wrapper is added. It does NOT rescue Windows,
+// 96 KiB, plus maxCondensedFilesBytes for the file list, keeps the whole prompt
+// inside that 128 KiB once buildSummarizationPrompt's wrapper is added. It does NOT rescue Windows,
 // which caps an entire command line near 32 KiB; that limit is narrower than
 // any transcript budget worth having and needs a different fix.
 const maxCondensedTranscriptBytes = 96 * 1024
+
+// maxCondensedFilesBytes bounds the [Files Modified] list that follows the
+// transcript. 16 KiB is a few hundred paths; past that a summary needs the
+// count, not the names, and the total stays inside the argv ceiling above.
+const maxCondensedFilesBytes = 16 * 1024
+
+// boundFilesList renders the [Files Modified] section, keeping whole lines up
+// to maxCondensedFilesBytes and closing with how many paths were left out.
+func boundFilesList(files []string) string {
+	var sb strings.Builder
+	sb.WriteString("\n[Files Modified]\n")
+	for i, file := range files {
+		line := "- " + file + "\n"
+		if sb.Len()+len(line) > maxCondensedFilesBytes {
+			fmt.Fprintf(&sb, "- [... %d more files omitted to fit the summary prompt ...]\n", len(files)-i)
+			break
+		}
+		sb.WriteString(line)
+	}
+	return sb.String()
+}
 
 // boundTranscriptText caps transcript text at maxCondensedTranscriptBytes,
 // dropping from the middle. Both ends carry the most signal for a summary —
