@@ -5,6 +5,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,11 +35,32 @@ import (
 // `$(…)`, where a second of silence reads as a hung shell.
 const placementProbeBudget = 400 * time.Millisecond
 
-// placementProbePort is the port dialled to time a cluster. It is the git
-// smart-HTTP port every placement already serves, so a reachable placement
-// answers and an unreachable one is excluded from the ordering rather than
-// offered and then failing under `git clone`.
+// placementProbePort is the port dialled to time a cluster that does not name
+// one. It is the git smart-HTTP port every placement serves, so a reachable
+// placement answers and an unreachable one is excluded from the ordering rather
+// than offered and then failing under `git clone`.
 const placementProbePort = "443"
+
+// probeAddress builds the dial address for a cluster host.
+//
+// A placement host may already carry a port: validateClusterHost admits a bare
+// "host[:port]" and hostFromPublicURL preserves what the cluster registry
+// published, so a dev or self-hosted cluster on host:8080 is a legal placement.
+// Appending 443 unconditionally turned those into "[host:8080]:443", which
+// never resolves — the probe would report the placement unreachable and
+// --nearest would silently rank it last or omit it while `git clone` reached it
+// fine. The port that is dialled has to be the port the clone will use.
+//
+// IPv6 needs both halves of this: "[::1]:8080" already has a port and is
+// returned as is, while a bare "::1" is bracketed exactly once. JoinHostPort
+// brackets any host containing a colon, so a host that arrives pre-bracketed
+// has them stripped first rather than doubled into "[[::1]]:443".
+func probeAddress(host string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), placementProbePort)
+}
 
 // latencyProbe measures round-trip time to each host, keyed by host. Hosts that
 // do not answer inside the budget are ABSENT from the result rather than
@@ -73,12 +95,12 @@ func dialLatencies(ctx context.Context, hosts []string) map[string]time.Duration
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, placementProbePort))
+			conn, err := dialer.DialContext(ctx, "tcp", probeAddress(host))
 			if err != nil {
 				return // unreachable or over budget: omitted, never guessed at
 			}
 			elapsed := time.Since(start)
-			_ = conn.Close() //nolint:errcheck // probe socket, nothing was written
+			_ = conn.Close()
 			mu.Lock()
 			defer mu.Unlock()
 			out[host] = elapsed

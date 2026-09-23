@@ -508,7 +508,7 @@ func newRepoCloneCmd() *cobra.Command {
 			// with, and neither order is obviously right to the person who
 			// typed both.
 			if nearest && cluster != "" {
-				return fmt.Errorf("--nearest and --cluster both choose a cluster; pass one")
+				return errors.New("--nearest and --cluster both choose a cluster; pass one")
 			}
 			picker := clonePlacementPicker()
 			if nearest {
