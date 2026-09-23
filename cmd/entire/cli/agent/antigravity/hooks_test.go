@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -344,6 +345,7 @@ func TestInstallHooks_IdempotentStillRepairsTitleTee(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 	t.Setenv(configDirEnv, t.TempDir())
+	putFakeAgyOnPath(t)
 
 	a := &AntigravityAgent{}
 	if _, err := a.InstallHooks(context.Background(), false); err != nil {
@@ -617,6 +619,22 @@ func TestHooksDisabled_SeparatesOptOutFromPresence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// putFakeAgyOnPath makes InstallHooks see an installed agy: the global title
+// slot is only claimed on machines where `agy` resolves on PATH, so a test that
+// expects the tee to be installed has to stand one up. The file is never run.
+func putFakeAgyOnPath(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	name := antigravityBinaryName
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { //nolint:gosec // an executable stand-in is the point
+		t.Fatalf("write fake agy: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // The title slot lives in agy's machine-global settings.json, so a repo-local
