@@ -213,7 +213,7 @@ func decodeAgyArgs(args map[string]json.RawMessage) map[string]any {
 	}
 	out := make(map[string]any, len(args))
 	for key, raw := range args {
-		if s := decodeAgyString(raw); s != "" {
+		if s, ok := decodeAgyStringOK(raw); ok {
 			out[key] = s
 			continue
 		}

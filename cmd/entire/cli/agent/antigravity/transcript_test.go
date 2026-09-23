@@ -517,3 +517,29 @@ not json
 		t.Errorf("step 2 = %+v, want the assistant text", steps[2])
 	}
 }
+
+// agy double-encodes string args, so an empty string arrives as the raw value
+// `"\"\""`. It must survive as "", not as the two-character literal `""` that
+// a plain decode of the raw value produces — tool args go into generated
+// summaries, where a corrupted value reads as real content.
+func TestDecodeAgyArgs_PreservesEmptyStrings(t *testing.T) {
+	t.Parallel()
+
+	got := decodeAgyArgs(map[string]json.RawMessage{
+		"doubleEmpty": json.RawMessage(`"\"\""`),
+		"plainEmpty":  json.RawMessage(`""`),
+		"doubleValue": json.RawMessage(`"\"hi\""`),
+		"number":      json.RawMessage(`42`),
+	})
+
+	for key, want := range map[string]any{
+		"doubleEmpty": "",
+		"plainEmpty":  "",
+		"doubleValue": "hi",
+		"number":      float64(42),
+	} {
+		if got[key] != want {
+			t.Errorf("decodeAgyArgs()[%q] = %#v, want %#v", key, got[key], want)
+		}
+	}
+}

@@ -249,21 +249,33 @@ func extractFilesFromToolCall(tc *ToolCall) (modifiedFiles, newFiles []string) {
 // decodeAgyString handles agy's double-encoded string args. Tries the
 // docs-shape format first (a plain JSON string), then falls back to the
 // agy-actual format (a JSON string whose content is itself a JSON-encoded
-// string). Returns "" when neither form decodes cleanly.
+// string). Returns "" when neither form decodes cleanly, which callers that
+// only want a path or a name can treat as absent.
 func decodeAgyString(raw json.RawMessage) string {
+	s, _ := decodeAgyStringOK(raw)
+	return s
+}
+
+// decodeAgyStringOK is decodeAgyString with the decode result reported
+// separately, for callers that must tell a legitimately empty string from a
+// value that is not a string at all. Collapsing the two corrupts agy's
+// double-encoded empty string: it decodes to "", and a caller that reads ""
+// as failure falls back to a plain decode of the raw value, yielding the
+// two-character literal `""`.
+func decodeAgyStringOK(raw json.RawMessage) (string, bool) {
 	if len(raw) == 0 {
-		return ""
+		return "", false
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return ""
+		return "", false
 	}
 	// agy double-encodes — unwrap once more if the inner content is itself JSON-quoted.
 	var inner string
 	if err := json.Unmarshal([]byte(s), &inner); err == nil {
-		return inner
+		return inner, true
 	}
-	return s
+	return s, true
 }
 
 // decodeAgyBool handles agy's double-encoded bool args. Tries the docs-shape
