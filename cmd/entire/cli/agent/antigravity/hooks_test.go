@@ -618,3 +618,37 @@ func TestHooksDisabled_SeparatesOptOutFromPresence(t *testing.T) {
 		})
 	}
 }
+
+// The title slot lives in agy's machine-global settings.json, so a repo-local
+// `entire agent add antigravity` must not claim it on a machine that has never
+// run agy. `entire doctor` gates its matching check on the same lookup.
+func TestInstallHooks_SkipsTitleTeeWhenAgyIsAbsent(t *testing.T) {
+	// No t.Parallel — uses t.Chdir and t.Setenv
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	cfgDir := t.TempDir()
+	t.Setenv(configDirEnv, cfgDir)
+	// An empty PATH is the "agy was never installed here" machine.
+	t.Setenv("PATH", t.TempDir())
+
+	a := &AntigravityAgent{}
+	if _, err := a.InstallHooks(context.Background(), false); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+
+	// Repo hooks still installed: the global slot is a separate concern.
+	installed, err := a.AreHooksInstalled(context.Background())
+	if err != nil {
+		t.Fatalf("AreHooksInstalled: %v", err)
+	}
+	if !installed {
+		t.Error("repo hooks must install even when agy is absent")
+	}
+
+	if TitleTeeInstalled() {
+		t.Error("the machine-global title slot was claimed on a machine with no agy")
+	}
+	if _, err := os.Stat(filepath.Join(cfgDir, agySettingsFileName)); err == nil {
+		t.Error("agy's global settings.json was created on a machine that never ran agy")
+	}
+}

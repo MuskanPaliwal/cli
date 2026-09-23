@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -60,7 +61,18 @@ func (a *AntigravityAgent) InstallHooks(ctx context.Context, force bool) (int, e
 	// must still repair it — otherwise the doctor's "re-run setup" hint is a
 	// no-op. InstallTitleTee is itself idempotent. Best-effort: a failure to
 	// claim the global slot must not fail repo-level hook setup.
-	if err := InstallTitleTee(); err != nil {
+	//
+	// Gated on agy actually being on PATH. The slot lives in agy's global
+	// settings.json, so claiming it from a machine that has never run agy
+	// writes a shared user-level file on the strength of a repo-local
+	// command — `entire agent add antigravity` in a teammate's checkout, say.
+	// `entire doctor` gates its matching check the same way. The order above
+	// is unchanged: this still runs before the idempotency early-return, so
+	// stale-slot repair keeps working wherever agy is installed.
+	if _, lookErr := exec.LookPath(antigravityBinaryName); lookErr != nil {
+		logging.Debug(ctx, "skipping antigravity title tee: agy is not on PATH",
+			"error", lookErr.Error())
+	} else if err := InstallTitleTee(); err != nil {
 		logging.Warn(ctx, "failed to install antigravity title tee",
 			"error", err.Error())
 	}
