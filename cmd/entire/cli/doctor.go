@@ -47,29 +47,43 @@ Checks performed:
      entire/checkpoints/v1 branches share no common ancestor (caused by a
      previous bug). Fixes by cherry-picking local checkpoints onto remote tip.
 
-  2. Operational logs: warn when .entire/logs cannot be written. Every other
+  2. Oversized checkpoint metadata: detects metadata.json blobs on
+     entire/checkpoints/v1 over 50 MiB (GitHub refuses blobs over 100 MiB, so
+     the branch cannot be pushed or mirrored there). Caused by CLI versions
+     before v0.10.1 recording nested git checkouts in the prompt_attributions
+     diagnostic field. Interactively offers to rewrite the branch without that
+     field and update the checkpoint sync remote (lease-guarded); --force does
+     NOT apply this one, because it rewrites history and pushes. Use
+     'entire doctor shrink-checkpoint-metadata' to apply it non-interactively.
+
+  3. Linked-worktree portability: warn when Entire settings and the shared
+     Claude project hook config are present in another worktree, but this
+     worktree is missing either part. The check is read-only and explains how
+     to make the setup available to future worktrees and clones.
+
+  4. Operational logs: warn when .entire/logs cannot be written. Every other
      diagnostic is delivered by writing there, and that write is silent about
      its own failure, so an unwritable log directory looks exactly like a repo
      where nothing ran.
 
   When Codex hooks are installed:
-  3. Codex hook trust: warn when hooks declared in .codex/hooks.json
+  5. Codex hook trust: warn when hooks declared in .codex/hooks.json
      lack a trusted_hash entry in the user's Codex config (i.e. /hooks
      review hasn't run yet on this machine, or a newer entire release
      added a hook the user hasn't approved yet).
 
   For each installed agent that reports hook-config drift:
-  4. Hook config: warn when the installed hooks no longer match what this
+  6. Hook config: warn when the installed hooks no longer match what this
      CLI writes (e.g. an older release wrote Claude Code tool matchers that
      no longer fire, or a committed Pi/OpenCode extension has gone stale).
      Fix by re-running 'entire enable --force'.
 
-  5. Summary provider: warn when summary_generation.provider names a registered
+  7. Summary provider: warn when summary_generation.provider names a registered
      agent that cannot generate text (e.g. factoryai-droid), which makes
      'entire checkpoint explain --generate', 'entire dispatch' and
      'entire runner setup' fail. Reports the file to change; does not rewrite it.
 
-  6. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
+  8. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
 
 A session is considered stuck if:
   - It is in ACTIVE phase with no interaction for over 1 hour
@@ -115,6 +129,7 @@ points at --force instead of prompting.`,
 	cmd.AddCommand(newDoctorLogsCmd())
 	cmd.AddCommand(newDoctorBundleCmd())
 	cmd.AddCommand(newDoctorMigrateCheckpointsCmd())
+	cmd.AddCommand(newDoctorShrinkCheckpointMetadataCmd())
 
 	return cmd
 }
@@ -139,9 +154,20 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 		finalErr = NewSilentError(fmt.Errorf("metadata check failed: %w", metadataErr))
 	}
 
+	// Check 2: metadata.json blobs GitHub refuses. After the disconnection
+	// check, which may have advanced the local branch from the remote, so the
+	// scan sees the reconciled history. Deliberately not given `force`: the
+	// fix rewrites history and pushes, and only an interactive yes or the
+	// dedicated subcommand may trigger that.
+	if sizeErr := checkOversizedCheckpointMetadata(cmd); sizeErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Error: checkpoint metadata size check failed: %v\n", sizeErr)
+		finalErr = NewSilentError(fmt.Errorf("checkpoint metadata size check failed: %w", sizeErr))
+	}
+
 	fmt.Fprintln(cmd.OutOrStdout())
 
 	ctx := cmd.Context()
+	setupIssue := inspectWorktreeSetup(ctx)
 
 	// Ahead of checkGitHooks, which is the check a symlinked hooks directory
 	// makes fail: the cause should be on screen before the failure it explains.
@@ -150,10 +176,11 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 	// The git hook surface. Checked before the agent hook checks because it is
 	// the more fundamental one: if git hooks are broken, commits are not captured
 	// at all and agent-config drift is noise by comparison.
-	if hooksErr := checkGitHooks(cmd, force); hooksErr != nil {
+	if hooksErr := checkGitHooksWithWorktreeSetup(cmd, force, setupIssue); hooksErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Error: git hook check failed: %v\n", hooksErr)
 		finalErr = NewSilentError(fmt.Errorf("git hook check failed: %w", hooksErr))
 	}
+	writeWorktreeSetupIssue(cmd.OutOrStdout(), setupIssue)
 
 	// Before checkLogSink, because a symlinked .entire/logs is one of the reasons
 	// that check fires and this one names the cause.
@@ -628,12 +655,17 @@ func confirmDoctorFix(ctx context.Context, w io.Writer, title string) (bool, err
 // writes exactly what the next turn-start would write anyway. Someone reaching
 // for doctor after a rejected push wants to be unblocked, not handed a second
 // command to run.
-func checkGitHooks(cmd *cobra.Command, force bool) error {
+func checkGitHooksWithWorktreeSetup(cmd *cobra.Command, force bool, setupIssue *worktreeSetupIssue) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 
 	switch strategy.CheckGitHookState(ctx) {
 	case strategy.GitHooksCurrent:
+		if setupIssue != nil && setupIssue.CurrentCaptureInactive {
+			fmt.Fprintln(w, "Git hooks: INSTALLED BUT INACTIVE")
+			fmt.Fprintln(w, "  This worktree has no Entire settings, so its hooks skip checkpoint capture.")
+			return nil
+		}
 		fmt.Fprintln(w, "✓ Git hooks: OK")
 		return nil
 

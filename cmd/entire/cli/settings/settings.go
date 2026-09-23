@@ -662,7 +662,19 @@ func worktreeSettingsPaths(worktreeRoot string) (base, local string) {
 	return filepath.Join(worktreeRoot, EntireSettingsFile), filepath.Join(worktreeRoot, EntireSettingsLocalFile)
 }
 
+// LoadForWorktreeRoot is Load for an explicit worktree root instead of the
+// process working directory. Code that already holds a repository — a doctor
+// repair, a test fixture — must read that repository's settings, not whatever
+// the current directory happens to be inside.
+func LoadForWorktreeRoot(ctx context.Context, worktreeRoot string) (*EntireSettings, error) {
+	return loadForWorktreeRoot(ctx, worktreeRoot)
+}
+
 func loadForWorktreeRoot(ctx context.Context, worktreeRoot string) (*EntireSettings, error) {
+	return loadForWorktreeRootWithAgentPolicy(ctx, worktreeRoot, true)
+}
+
+func loadForWorktreeRootWithAgentPolicy(ctx context.Context, worktreeRoot string, installAgentPolicy bool) (*EntireSettings, error) {
 	settingsFileAbs, localSettingsFileAbs := worktreeSettingsPaths(worktreeRoot)
 	preferencesFileAbs := ""
 	if path, prefErr := clonePreferencesPathForWorktreeRoot(ctx, worktreeRoot); prefErr == nil {
@@ -671,7 +683,7 @@ func loadForWorktreeRoot(ctx context.Context, worktreeRoot string) (*EntireSetti
 		logging.Debug(ctx, "clone preferences path unresolved; skipping preferences layer",
 			slog.String("error", prefErr.Error()))
 	}
-	return loadMergedSettings(ctx, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs)
+	return loadMergedSettingsWithAgentPolicy(ctx, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs, installAgentPolicy)
 }
 
 func clonePreferencesPathForWorktreeRoot(ctx context.Context, worktreeRoot string) (string, error) {
@@ -701,6 +713,14 @@ func worktreeRootOfSettingsFile(settingsFileAbs string) string {
 }
 
 func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string) (*EntireSettings, error) {
+	return loadMergedSettingsWithAgentPolicy(ctx, settingsFileAbs, preferencesFileAbs, localSettingsFileAbs, true)
+}
+
+func loadMergedSettingsWithAgentPolicy(
+	ctx context.Context,
+	settingsFileAbs, preferencesFileAbs, localSettingsFileAbs string,
+	installAgentPolicy bool,
+) (*EntireSettings, error) {
 	// Load base settings
 	settings, err := loadFromFile(settingsFileAbs)
 	if err != nil {
@@ -752,7 +772,9 @@ func loadMergedSettings(ctx context.Context, settingsFileAbs, preferencesFileAbs
 	// config, so it gets the same gate, and then installs the surviving set as
 	// the process-wide policy.
 	enforceSymlinkedAgentDirsTrust(ctx, settings, localSettingsFileAbs, localData)
-	applyVouchedAgentDirs(settings, worktreeRootOfSettingsFile(settingsFileAbs))
+	if installAgentPolicy {
+		applyVouchedAgentDirs(settings, worktreeRootOfSettingsFile(settingsFileAbs))
+	}
 
 	// Re-validate after merge. Individual files are validated by loadFromFile,
 	// but mergeJSON patches fields independently and can produce combinations
@@ -1740,6 +1762,17 @@ func IsSetUp(ctx context.Context) bool {
 // job is to say why it cannot see something.
 func FilesPresent(ctx context.Context) (project, local bool, err error) {
 	root, err := entiredir.OpenForRead(ctx)
+	return filesPresent(root, err)
+}
+
+// FilesPresentForWorktreeRoot is FilesPresent for an explicit worktree root.
+func FilesPresentForWorktreeRoot(worktreeRoot string) (project, local bool, err error) {
+	root, err := entiredir.OpenAtForRead(worktreeRoot)
+	return filesPresent(root, err)
+}
+
+func filesPresent(root *os.Root, openErr error) (project, local bool, err error) {
+	err = openErr
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return false, false, nil
@@ -1814,6 +1847,34 @@ func IsSetUpAndEnabled(ctx context.Context) bool {
 		return false
 	}
 	return s.Enabled
+}
+
+// IsSetUpAndEnabledForWorktreeRoot is a read-only IsSetUpAndEnabled for an
+// explicit worktree root. It does not install that worktree's agent-directory
+// policy into the process.
+func IsSetUpAndEnabledForWorktreeRoot(ctx context.Context, worktreeRoot string) bool {
+	project, local, err := FilesPresentForWorktreeRoot(worktreeRoot)
+	if err != nil || (!project && !local) {
+		return false
+	}
+	// This is an inspection of another worktree. Loading its effective settings
+	// must not replace the current worktree's process-wide agent-directory policy.
+	s, err := loadForWorktreeRootWithAgentPolicy(ctx, worktreeRoot, false)
+	if err != nil {
+		return false
+	}
+	return s.Enabled
+}
+
+// ProjectSettingsEnabledForWorktreeRoot reports whether an explicit worktree
+// has an enabled project settings layer, without consulting local overrides.
+func ProjectSettingsEnabledForWorktreeRoot(worktreeRoot string) bool {
+	project, _, err := FilesPresentForWorktreeRoot(worktreeRoot)
+	if err != nil || !project {
+		return false
+	}
+	s, err := loadFromFile(filepath.Join(worktreeRoot, EntireSettingsFile))
+	return err == nil && s.Enabled
 }
 
 // IsFilteredFetchesEnabled checks if filtered fetches should be used.
