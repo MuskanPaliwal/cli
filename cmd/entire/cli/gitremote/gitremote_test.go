@@ -85,6 +85,27 @@ func TestParseURL(t *testing.T) {
 			wantInfo: &Info{Protocol: ProtocolSSH, Host: "gitlab.com", Owner: "org", Repo: "repo"},
 		},
 		{
+			// git dispatches git+ssh:// and ssh+git:// to ssh (verified on git
+			// 2.54.0: GIT_SSH_COMMAND runs for both), so Protocol must report
+			// the transport rather than the spelling in .git/config.
+			name:     "git+ssh alias reports the ssh transport",
+			url:      "git+ssh://git@github.com/org/repo.git",
+			wantInfo: &Info{Protocol: ProtocolSSH, Host: "github.com", Forge: "gh", Owner: "org", Repo: "repo"},
+		},
+		{
+			name:     "ssh+git alias reports the ssh transport",
+			url:      "ssh+git://git@git.example.com:2222/org/repo.git",
+			wantInfo: &Info{Protocol: ProtocolSSH, Host: "git.example.com", Port: "2222", Owner: "org", Repo: "repo"},
+		},
+		{
+			// An unrecognized scheme is a remote helper to git (`git ls-remote
+			// bogus+ssh://…` → "remote helper 'bogus+ssh' aborted session"),
+			// so it stays itself and keeps failing closed downstream.
+			name:     "unknown scheme alias is not normalized",
+			url:      "bogus+ssh://git@github.com/org/repo.git",
+			wantInfo: &Info{Protocol: "bogus+ssh", Host: "github.com", Forge: "gh", Owner: "org", Repo: "repo"},
+		},
+		{
 			name:    "empty string",
 			url:     "",
 			wantErr: true,
@@ -144,6 +165,7 @@ func TestParseURL(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantInfo.Protocol, info.Protocol)
 			assert.Equal(t, tt.wantInfo.Host, info.Host)
+			assert.Equal(t, tt.wantInfo.Port, info.Port)
 			assert.Equal(t, tt.wantInfo.Forge, info.Forge)
 			assert.Equal(t, tt.wantInfo.Owner, info.Owner)
 			assert.Equal(t, tt.wantInfo.Repo, info.Repo)

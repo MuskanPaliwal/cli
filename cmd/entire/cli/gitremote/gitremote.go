@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// ProtocolSSH is the ssh transport, whichever of git's three spellings
+	// named it: ssh://, git+ssh://, or ssh+git:// (see normalizeProtocol).
 	ProtocolSSH   = "ssh"
 	ProtocolHTTPS = "https"
 	// ProtocolHTTP and ProtocolGit are the remaining schemes whose host is the
@@ -274,7 +276,28 @@ func ParseURL(rawURL string) (*Info, error) {
 		return nil, err
 	}
 
-	return &Info{Protocol: u.Scheme, Host: u.Hostname(), Port: u.Port(), Forge: forge, Owner: owner, Repo: repo}, nil
+	return &Info{Protocol: normalizeProtocol(u.Scheme), Host: u.Hostname(), Port: u.Port(), Forge: forge, Owner: owner, Repo: repo}, nil
+}
+
+// normalizeProtocol returns the transport git dials for scheme.
+//
+// Protocol answers how a remote is reached, not how it is spelled. git accepts
+// git+ssh:// and ssh+git:// as aliases of ssh:// and dispatches all three to
+// ssh, so a caller switching on Protocol must never see an alias as a scheme
+// of its own: it would take a default branch, or refuse a remote it admits
+// under another name.
+//
+// Every other scheme is returned unchanged. An unrecognized "<x>+ssh" is a
+// remote helper to git, not a transport, and must keep failing closed. ftps://
+// is absent deliberately: git accepts it, but it is read-only and cannot carry
+// a push.
+func normalizeProtocol(scheme string) string {
+	switch scheme {
+	case "git+ssh", "ssh+git":
+		return ProtocolSSH
+	default:
+		return scheme
+	}
 }
 
 // splitForgePrefix returns the leading forge/namespace segment of an entire://

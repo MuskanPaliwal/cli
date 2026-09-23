@@ -125,7 +125,7 @@ jobs:
           TEST_FILTER: ${{ inputs.test }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          E2E_CODEX_MODEL: ${{ matrix.agent == 'codex' && 'gpt-5.6-luna' || '' }}
+          E2E_CODEX_MODEL: ${{ matrix.agent == 'codex' && 'gpt-6-luna' || '' }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           # Only the copilot-cli leg gets the token; other agents must not receive it.
