@@ -747,7 +747,7 @@ func chooseMirrorAddRegions(cmd *cobra.Command, ref mirrorRepoRef, nativeRepo *c
 // mirrorAddOutcome bundles the create response with the clone status
 // observed while waiting. polled is false for --no-wait, where status is unset.
 type mirrorAddOutcome struct {
-	created *coreapi.CreatedMirror
+	created *coreapi.MirrorRequestResult
 	status  coreapi.MirrorStatus
 	polled  bool
 }
@@ -1466,7 +1466,7 @@ func parseMirrorCloneURL(raw string) (clusterHost, provider, owner, repo string,
 	// same as the bare clone URL (matching gitremote.ParseURL). GitHub repo
 	// names can contain dots, so only the suffix is trimmed, not all dots.
 	repo = strings.ToLower(strings.TrimSuffix(parts[2], mirrorGitDirSuffix))
-	return u.Host, string(coreapi.CreateMirrorInputBodyProviderGithub), strings.ToLower(parts[1]), repo, nil
+	return u.Host, string(coreapi.CreateMirrorRequestInputBodyProviderGithub), strings.ToLower(parts[1]), repo, nil
 }
 
 func noMirrorErr(ref string) error {

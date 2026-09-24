@@ -1111,7 +1111,7 @@ func TestParseMirrorCloneURL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseMirrorCloneURL(%q): %v", tt.raw, err)
 			}
-			if provider != string(coreapi.CreateMirrorInputBodyProviderGithub) {
+			if provider != string(coreapi.CreateMirrorRequestInputBodyProviderGithub) {
 				t.Errorf("provider = %q, want github", provider)
 			}
 			if cluster != tt.wantCluster || owner != tt.wantOwner || repo != tt.wantRepo {
@@ -1168,7 +1168,7 @@ func TestResolveMirrorRef(t *testing.T) {
 		}
 		// The (cluster, provider, owner) narrowing must be server-side; only the
 		// repo is matched client-side (ListMirrors has no repo filter).
-		if gotCluster != "aws-eu-central-1.entire.io" || gotProvider != string(coreapi.CreateMirrorInputBodyProviderGithub) || gotOwner != "entirehq" {
+		if gotCluster != "aws-eu-central-1.entire.io" || gotProvider != string(coreapi.CreateMirrorRequestInputBodyProviderGithub) || gotOwner != "entirehq" {
 			t.Errorf("filters = cluster %q provider %q owner %q, want the clone URL's coords", gotCluster, gotProvider, gotOwner)
 		}
 	})
