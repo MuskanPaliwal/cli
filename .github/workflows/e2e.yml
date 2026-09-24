@@ -53,8 +53,8 @@ jobs:
           if [ -n "$input" ]; then
             echo "agents=[\"$input\"]" >> "$GITHUB_OUTPUT"
           else
-            # antigravity runs in agy's Gemini API-key mode (the shared
-            # GEMINI_API_KEY secret, no account session). agy < 1.1.25 loaded
+            # antigravity runs in agy's Gemini API-key mode (the
+            # GEMINI_API_KEY repo secret, no account session). agy < 1.1.25 loaded
             # .agents/hooks.json on that route but never executed the hooks
             # (google-antigravity/antigravity-cli#893); the install step above
             # always fetches the latest release, which has executed them since
@@ -150,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           # ADC is optional since agy 1.1.13: without the secret the harness runs
-          # agy in Gemini API-key mode (GEMINI_API_KEY, shared with gemini-cli).
+          # agy in Gemini API-key mode (the GEMINI_API_KEY repo secret).
           if [ -z "${ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON:-}" ]; then
             echo "No ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON secret; Antigravity E2E uses GEMINI_API_KEY (agy API-key mode)"
             exit 0
