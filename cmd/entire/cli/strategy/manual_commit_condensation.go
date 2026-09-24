@@ -1628,17 +1628,25 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 // checkpoint would start inside the previous turn, attributing the previous
 // turn's prompt to this checkpoint.
 //
-// The flag is one-shot: condensation rewrites CheckpointTranscriptStart to
-// the current transcript end on success regardless, so a pending advance must
-// never outlive this attempt. Outside ACTIVE phase the file may already
-// include the current turn's (uncondensed) content, so the advance is skipped
-// — the scope is bloated by the condensed tail this once, then self-heals.
+// The flag is consumed by every outcome EXCEPT the one it exists for: an
+// ACTIVE session whose transcript still has not flushed, where the advance
+// cannot be computed yet (GetTranscriptPosition fails, or returns a position
+// no later than the stale offset). Clearing it there discarded the deferral on
+// a second commit made inside the same unflushed window and reproduced the
+// prompt shift the flag was added to prevent. Letting it survive is safe:
+// condensation rewrites CheckpointTranscriptStart to the transcript end on
+// success, so a flag that outlives a successful pass finds pos <= start on the
+// next one and no-ops. Outside ACTIVE phase the file may already include the
+// current turn's (uncondensed) content, so the advance is skipped and the flag
+// IS consumed — the scope is bloated by the condensed tail this once, then
+// self-heals. The capability checks consume it too: they can never come true
+// for this agent, so a surviving flag would be re-read forever.
 func resolvePendingTranscriptOffset(ctx context.Context, ag agent.Agent, state *SessionState) {
 	if !state.TranscriptOffsetPending {
 		return
 	}
-	state.TranscriptOffsetPending = false
 	if !state.Phase.IsActive() {
+		state.TranscriptOffsetPending = false
 		// Logged at the same level as the advance below, so the skip and the
 		// advance are equally visible: this is where the checkpoint scope
 		// silently keeps the previous turn's already-condensed tail, which
@@ -1650,19 +1658,31 @@ func resolvePendingTranscriptOffset(ctx context.Context, ag agent.Agent, state *
 		)
 		return
 	}
+	// Permanent for this agent: a flag left set would be re-read on every
+	// condensation for the life of the session without ever resolving.
 	if _, ok := agent.AsLateTranscriptWriter(ag); !ok {
+		state.TranscriptOffsetPending = false
 		return
 	}
 	analyzer, ok := agent.AsTranscriptAnalyzer(ag)
 	if !ok {
+		state.TranscriptOffsetPending = false
 		return
 	}
+	// From here the flag SURVIVES a failure: the transcript simply has not
+	// flushed yet, which is the state the deferral was recorded for, so the
+	// next condensation must get the same chance rather than inherit a stale
+	// offset pointing inside the previous, already-condensed turn.
 	transcriptPath, err := resolveTranscriptPath(state)
 	if err != nil {
 		return
 	}
 	pos, posErr := analyzer.GetTranscriptPosition(transcriptPath)
 	if posErr != nil || pos <= state.CheckpointTranscriptStart {
+		logging.Info(ctx, "deferred turn-end offset advance still unresolved (transcript not flushed); keeping it pending",
+			slog.String("session_id", state.SessionID),
+			slog.Int("offset", state.CheckpointTranscriptStart),
+		)
 		return
 	}
 	logging.Info(ctx, "completing deferred turn-end offset advance before condensation",
@@ -1671,6 +1691,7 @@ func resolvePendingTranscriptOffset(ctx context.Context, ag agent.Agent, state *
 		slog.Int("new_offset", pos),
 	)
 	state.CheckpointTranscriptStart = pos
+	state.TranscriptOffsetPending = false
 }
 
 // resolveCondensationPrompts is the last rung of the prompt ladder. It

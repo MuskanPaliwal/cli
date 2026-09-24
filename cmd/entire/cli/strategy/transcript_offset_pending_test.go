@@ -150,3 +150,39 @@ func TestResolvePendingTranscriptOffset_NoFlag(t *testing.T) {
 	resolvePendingTranscriptOffset(context.Background(), ag, state)
 	require.Equal(t, 2, state.CheckpointTranscriptStart)
 }
+
+// TestResolvePendingTranscriptOffset_StillUnflushedKeepsPending covers the case
+// the flag exists for: an ACTIVE session whose transcript has STILL not
+// flushed when the next condensation runs. Clearing the flag there discarded
+// the deferral, so the advance never happened once the flush landed and the
+// next checkpoint scoped from an offset inside the previous, already-condensed
+// turn — the prompt shift the flag was added to prevent. The flag must survive
+// an attempt that could not compute the advance, and resolve on a later one.
+func TestResolvePendingTranscriptOffset_StillUnflushedKeepsPending(t *testing.T) {
+	t.Parallel()
+	ag, err := agent.GetByAgentType(agent.AgentTypeAntigravity)
+	require.NoError(t, err)
+
+	// The empty placeholder PrepareTranscript materialises when Stop beats the
+	// flush: position 0, equal to the stale offset, so no advance is possible.
+	path := writeAgyTranscript(t, "")
+	state := &SessionState{
+		SessionID:                 "agy-resolve-still-unflushed",
+		AgentType:                 agent.AgentTypeAntigravity,
+		Phase:                     session.PhaseActive,
+		TranscriptPath:            path,
+		CheckpointTranscriptStart: 0,
+		TranscriptOffsetPending:   true,
+	}
+
+	resolvePendingTranscriptOffset(context.Background(), ag, state)
+	require.Equal(t, 0, state.CheckpointTranscriptStart, "nothing to advance to while the transcript is empty")
+	require.True(t, state.TranscriptOffsetPending,
+		"an attempt that could not compute the advance must leave the deferral pending")
+
+	// The flush lands; the next condensation must still complete the advance.
+	require.NoError(t, os.WriteFile(path, []byte(agyTurnOneContent), 0o600))
+	resolvePendingTranscriptOffset(context.Background(), ag, state)
+	require.Equal(t, 2, state.CheckpointTranscriptStart, "the deferred advance completes once the flush lands")
+	require.False(t, state.TranscriptOffsetPending, "a completed advance clears the flag")
+}
