@@ -1,41 +1,851 @@
-https://github.com/entireio/cli/pull/2370 we have got a review comment here. let's understand the bug and fix it. use subagents so we don't spend too much tokens
+okay commit the changes
 
 ---
 
-before doing any fixes, tell me what you are going to do? and what is the bug
+# AGENTS.md instructions for /Users/muskanpaliwal/Work/open-source/entire/cli/fix-checkpoint-push-remote-eligibility
 
----
+<INSTRUCTIONS>
+These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
 
-the comment itsekf prpose a solution?
+# Working Agreement
 
----
+These instructions apply across repositories and agent tools. Explicit user
+instructions and more specific repository instructions take precedence.
 
-so tell me what is happening here? what bug we fixed and what new bug it caused?
+## Communication
 
----
+- Use direct, understandable language.
+- Be concise for routine work. Be comprehensive when explaining a difficult
+  concept or consequential decision.
+- When teaching, build intuition with concrete examples and alternative
+  perspectives. Ask a short question or offer an exercise when active practice
+  would improve understanding.
+- Do not use em dashes in generated content such as emails, documentation, or
+  application copy. Chat replies and code are exempt.
 
-wait i didn't understand any of this. explain in simple terms.
+## Reading My Prompts
 
----
+- I often dictate prompts. Focus on the intended meaning even when wording,
+  punctuation, or terminology is rough.
+- Infer the desired outcome from the request, conversation, and relevant project
+  context.
+- Resolve routine uncertainty by inspecting available context and making
+  reasonable, reversible decisions.
+- Ask only when a missing answer would materially change the result and cannot
+  be inferred safely.
 
-okay so in real terms what's happening?
+## Scope
 
----
+- Complete the requested outcome with the smallest sufficient change.
+- Explicit user instructions override these defaults.
+- Inspect the relevant code, call paths, and project conventions before editing.
+  Do not explore the entire repository for a small change.
+- Prefer existing code and patterns, then standard-library or built-in platform
+  capabilities, then dependencies already installed. Add new dependencies only
+  when the existing options are insufficient.
+- Fix the governing rule or root cause, not only the example that exposed it.
+- Do not add abstractions, compatibility layers, configuration, or future-only
+  features that the current task does not require.
+- Fix nearby issues only when they block the requested work. Otherwise, report
+  them separately.
+- Remove replaced implementations. Preserve an old path only when compatibility
+  is explicitly required.
+- Preserve necessary validation, error handling, security, accessibility, and
+  user-facing behavior.
 
-you keep that address in a separate config file linked from .git/config. ohh so this is possible that people keep the fork linked to config somewhere else? what is the scenario here?
+## Approval and Decisions
 
----
+- Work independently within the authorized scope. Do not repeatedly ask whether
+  to continue.
+- Before editing any repository file, give the user a pre-edit brief that states:
+  - the observed problem or requested behavior;
+  - the evidence-backed root cause, or that the cause is still unknown; and
+  - the proposed change, its scope, and any meaningful tradeoffs.
+- Wait for the user's explicit approval of the proposed change before editing.
+  A request to fix or implement something authorizes investigation, but it does
+  not approve a proposal that the user has not seen.
+- Until the user approves the proposal, restrict work to read-only investigation
+  and reproduction that does not modify repository files. If the root cause
+  remains unknown, continue investigating or ask for approval for a specific
+  diagnostic edit.
+- The user may explicitly waive this checkpoint.
+- Ask before material scope expansion, public publication, meaningful external
+  cost, destructive or irreversible actions, or decisions that would materially
+  change the requested outcome.
+- If multiple approaches have meaningful tradeoffs, compare them, recommend one,
+  and ask for the decision.
+- If the request is only to analyze, explain, or review, do not edit files.
 
-that's because entire only reads .git/config and not any other config in user's file right?
+## Testing
 
----
+- NEVER write unit tests after writing the production code.
+- Prefer end-to-end tests as the sole testing mechanism for complex features.
+  Exercise the real user-facing workflow and produce a repeatable, inspectable
+  artifact.
+- If a system must be tested in isolation, first enumerate the meaningful ways
+  it can fail, then write the unit tests, and only then write the production
+  code.
+- Do not backfill unit tests after implementation merely to increase coverage.
+- Reuse existing tests before adding new ones.
+- Add tests for behavior and regression risks, not tests that mechanically
+  repeat implementation details.
+- Temporary verification scripts do not need to become permanent test files.
 
-okay but that file can have other configs too but entire is local first so we should not be worried about anything right?
+## Doing the Work
 
----
+- Carry the task through implementation, integration, and relevant verification.
+- An intermediate artifact, passing build, or list of findings is complete only
+  when it satisfies the requested outcome.
+- Make clear, small fixes directly. Write a short plan only when the approach is
+  unclear or the impact is substantial.
+- Keep implementing, verifying, and fixing within the authorized scope.
+- If the plan grows into future-only layers, unrelated refactoring, or extra
+  features, return to the current requirement and remove the excess work.
+- Keep explanations concise without shortening the actual work.
 
-okay go on
+## Verification
 
----
+- Verify the result in the way it will actually be used. Tests and builds are
+  evidence, not substitutes for the requested outcome.
+- For visual work, inspect the rendered result in its intended context. Check the
+  relevant states and interactions.
+- For performance work, measure the actual bottleneck first. Compare the same
+  workload before and after, report the numbers and tradeoffs, and preserve
+  behavior.
+- Fix issues found during verification and run the relevant check again.
+- Before finishing, compare the result with the original request and later
+  corrections.
+- Report what was verified, what was not verified, and why.
+- If something remains blocked, state exactly what is unfinished and what
+  prevents completion.
 
-we have an integartion test for this right?
+## Code Quality
+
+- Prefer self-explanatory code.
+- Add a comment only for a non-obvious invariant, constraint, safety reason,
+  protocol quirk, or public contract that clearer code cannot express.
+- Keep comments short and explain why the logic is necessary. Do not narrate
+  obvious operations or restate the code.
+- Never put agent names, task names or IDs, ticket IDs, phase labels, session
+  notes, implementation chronology, or review-process metadata in source
+  comments or documentation comments.
+- Keep planning, tracking, and handoff context in issues, commits, pull requests,
+  or local coordination files rather than production code.
+- Remove stale or process-oriented comments when touching nearby code.
+
+## Constructor Design
+
+- Constructors should be cheap and predictable.
+- Primary or critical constructors may perform eager fallible setup when the
+  failure is returned explicitly.
+- Non-critical subsystems such as telemetry, metrics, and logging must not break
+  their caller. Initialize them lazily or on a best-effort basis.
+- Never hide fallible work behind an infallible constructor. If construction can
+  fail materially, return the language's explicit error type.
+- Apply this rule across languages and resources, including database pools, HTTP
+  clients, file handles, and background tasks.
+
+## Delegation
+
+- Handle small, tightly scoped work directly.
+- When delegation is available, delegate substantial independent work only when
+  it improves speed, coverage, or confidence.
+- Give delegated agents a bounded objective, relevant context, expected output,
+  and verification requirement.
+- Do not delegate merely to create activity.
+- The primary agent remains responsible for decisions, integration, and final
+  verification.
+
+## Skill Recommendations
+
+- Before classifying a request or calling `suggest-skills`, check whether the
+  current user message contains credentials or other secrets. If it does, skip
+  skill routing so the request is not sent to TypeSafe.
+- Shared skills are user-invoked. Do not load or follow a skill unless the
+  current user message explicitly invokes it.
+- Before starting a nontrivial new task without an explicit `/skill` or
+  `$ command` invocation, pass only the current user request to `suggest-skills`
+  on stdin.
+- Use a quoted heredoc with a delimiter absent from the request so untrusted
+  request text is never evaluated as shell syntax.
+- If suggestions are returned, show the ranked action list with a short reason
+  based on each supplied description. Format skills as `/skill-name` and
+  deterministic commands as `$ command`. Ask the user which action to use, then
+  end the turn without starting the task.
+- A command recommendation does not bypass that command's own confirmation or
+  publication approval.
+- If no suggestions are returned, continue normally.
+- If routing is unavailable, tell the user briefly and continue normally.
+- Skip routing for simple questions, conversational replies, direct
+  continuations of the currently authorized workflow, and explicit skill or
+  command invocations.
+- Treat a request as a direct continuation only when it advances the same
+  requested outcome through the same workflow. A new workflow, deliverable, or
+  external side effect is a new task even when it concerns the same repository
+  or topic; run `suggest-skills` before acting. Examples include bootstrapping a
+  repository, preparing a release, reviewing a pull request, creating a pull
+  request, and publishing a package.
+
+## Personal Workspace
+
+- `~/hub` is the source of truth for personal machine configuration, universal
+  agent instructions, reusable workflows, and automation.
+- `~/hub/AGENTS.md` is the universal instruction source. The installer links it
+  into Claude Code, Codex, OpenCode, and Delta; edit the source, not those links.
+- `~/hub/configs/` contains GNU Stow packages for dotfiles. Edit files in the
+  package that owns them rather than editing the linked path under `$HOME`.
+  Content edits propagate through existing links; rerun the relevant installer
+  scope only when links or package paths change.
+- `~/hub/skills/` contains judgment-heavy, explicitly user-invoked workflows.
+  Use `/skill-name`; do not turn deterministic mechanics into native skills.
+- `~/hub/scripts/` contains deterministic user commands and is on `PATH`. Use
+  `$ command` notation when recommending one. Agent-routable commands are
+  declared in `~/hub/scripts/actions.json`.
+- `~/hub/tools/` contains implementation packages behind commands. They are not
+  user-facing and must not re-enter the skill catalog.
+- `~/hub/archive/skills/` contains unloaded trial and converted definitions.
+  Archived skills do not appear in the slash menu or Jev catalog. Restore one
+  only after reviewing it against current workflows and adding routing coverage.
+- When changing the action catalog, keep `skills/README.md`,
+  `scripts/README.md`, `scripts/actions.json`, routing evals, and layout tests in
+  sync. Regenerate the skill index with `scripts/generate-skills-index`.
+- Entire is the first source for prior intent, provenance, and session history.
+  Use it before inventing branch context, then inspect current code and call
+  paths to close evidence gaps.
+
+### Repository Workflow
+
+- Work in one branch and worktree per concern. Keep the primary checkout on a
+  clean, current default branch; do not implement features or review PRs there.
+- Before new work, update the canonical default branch, then create a dedicated
+  feature worktree. In the bare-clone layout, use `$ worktree feature` and review
+  its plan before applying it.
+- Keep planning artifacts, implementation, tests, and local progress for one
+  concern together in its feature worktree. Parallel tasks get separate sibling
+  branches and worktrees rather than sharing one checkout.
+- Check out someone else's PR into its own review worktree with
+  `$ worktree checkout-pr`; inspect and review it there rather than changing the
+  primary checkout.
+- Prefer the lifecycle: recover intent with Entire or reproduce the behavior,
+  make the smallest justified change, verify through the real seam, use
+  `/commit`, update local progress when applicable, then run
+  `$ preflight-branch`.
+- Publish through `/push-branch` and `/create-pr`. Verify the exact head
+  repository, branch, base repository, checks, and Entire Trail association;
+  never infer publication identity from a remote name alone.
+- Keep PR descriptions reviewer-facing and current. Use
+  `/update-pr-description` when the branch story changes materially, and preserve
+  provider-managed metadata such as Entire Trail links.
+- After a PR is merged or closed, update the primary default branch, then use
+  `$ worktree cleanup` to inspect candidates. Remove only verified merged,
+  closed, or explicitly abandoned worktrees; never force-remove a dirty
+  worktree without separate approval.
+- Treat branch deletion, force pushes, external publication, Trail writes, and
+  cleanup of dirty worktrees as distinct approval-bearing actions.
+
+## Environment and Secrets
+
+- Keep credentials in 1Password and load them into the environment only for
+  processes that require them.
+- Never commit API keys, tokens, credentials, or real `.env` files.
+- Never write a secret into a file that may be committed, synchronized, or
+  shared.
+- Work freely inside the active project workspace. Ask before modifying files or
+  external state outside that workspace unless the task explicitly requires it.
+
+## Done Means
+
+- The requested behavior works.
+- The change fits the surrounding system and does not introduce unnecessary
+  concepts or hidden maintenance costs.
+- Relevant verification passes through the real seam.
+- Temporary files and obsolete implementations introduced by the work are
+  removed.
+- The final response states the outcome first, followed by concise verification
+  evidence and any remaining uncertainty.
+
+--- project-doc ---
+
+# Entire - CLI
+
+This repo contains the CLI for Entire.
+
+## Architecture
+
+- CLI built with github.com/spf13/cobra and github.com/charmbracelet/huh
+
+## Key Directories
+
+### Commands (`cmd/`)
+
+- `entire/`: Main CLI entry point. Also home to kubectl-style external-command resolution (`entire <name>` → `entire-<name>` on PATH) — see [External Commands](docs/architecture/external-commands.md).
+- `entire/cli`: CLI utilities and helpers (Cobra commands, helpers, group roots)
+- `entire/cli/commands`: actual command implementations
+- `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, Pi) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md) and [Agent Implementation Guide](docs/architecture/agent-guide.md)
+- `entire/cli/strategy`: strategy implementation (manual-commit) - see section below
+- `entire/cli/checkpoint`: checkpoint storage abstractions (ephemeral and persistent)
+- `entire/cli/session`: session state management
+- `entire/cli/integration_test`: integration tests (simulated hooks)
+- `e2e/`: E2E tests with real agent calls (see [e2e/README.md](e2e/README.md))
+
+### Command Layout
+
+The visible CLI is organized around a set of noun groups plus a small set of
+top-level verbs. The groups are the canonical home for each verb. Newer
+experimental command families are discoverable through `entire labs` and
+their canonical paths are always runnable.
+
+Experimental commands are gated by a build-time visibility flag (the
+`cmd/entire/cli/experimental` package): they are shown — grouped under an
+"Experimental commands:" help section — in developer and nightly builds, and
+hidden in stable release builds. Visibility is toggled by `experimental.Visible`
+(default `"true"`), which GoReleaser stamps `"false"` only on stable tags
+(`.Prerelease` empty); nightly (`vX.Y.Z-nightly.*`) and local builds leave it at
+the default. Register a command as experimental with `experimental.Register(parent,
+child)` instead of `parent.AddCommand(child)`. Gating only controls visibility —
+the commands are always runnable in every build.
+
+- `session` (alias: `sessions`): `list`, `info`, `tokens`, `stop`, `attach`, `adopt`, `resume`, `current`.
+  `resume` with a branch arg switches to it and resumes its session; with no arg
+  it opens an interactive picker of stopped sessions (across all worktrees),
+  resolving each to its branch and pointing at the owning worktree when the
+  branch is checked out elsewhere. Resume keeps an existing local session log
+  as-is by default (`--force` overwrites it from the checkpoint).
+  `adopt` moves an active session from another repo or worktree into the current
+  worktree and resets target-local checkpoint bookkeeping so future commits link
+  to the adopted session from the new location.
+  `current` and a bare `tokens` answer "which session is running this command?"
+  through `strategy.ResolveCallerSession`, not "which state file moved last" —
+  see [Resolving the calling session](#resolving-the-calling-session).
+- `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `tokens`, `search`.
+  `explain` also takes `--repo <owner/name>`, the drill-down for a cross-repo
+  `search` hit: it reads the checkpoint from that repo's entire-api cell over
+  HTTP (`/repos/{repo_id}/checkpoints/{id}` plus `.../transcript/raw`) rather
+  than fetching git objects, so a foreign checkpoint never enters this repo's
+  object store, ref namespace, or `tokens profile`. It needs a full checkpoint
+  ID and a pushed checkpoint; `--commit`, `--session`, `--search-all`, and
+  `--generate` are rejected with it, and naming the current repo is a no-op
+  that falls through to the local path. See `checkpoint_api_reader.go`
+  (`apiCheckpointReader`, which implements the two checkpoint reader tiers and
+  deliberately not `Writer`) and `explain_repo.go`.
+- `agent`: bare opens the interactive agent selector, plus `list`, `add`, `remove`
+- `configure`: bare prints help and a hint pointing at `entire agent`; flags
+  manage non-agent settings (telemetry, git-hook installation mode, strategy
+  options, summary provider). Agent CRUD lives under `entire agent`.
+- `auth`: `login`, `logout`, `status`, `contexts`, `use`, plus
+  `token` (prints the active control-plane bearer to stdout for scripting/curl;
+  honors `ENTIRE_TOKEN`, else the refreshed active-context login JWT). `token`
+  also takes `--jurisdiction <slug>` (e.g. `us`, `eu`), which instead mints a
+  jurisdictional identity token (RFC 8693 exchange, `scope=openid`,
+  `aud=<jurisdiction host>`) for that jurisdiction's entire-api cells (e.g.
+  `https://aws-us-east-2.api.entire.io/api/v1`), which reject the control-plane
+  bearer; it exchanges `ENTIRE_TOKEN` when set (deriving the environment from the
+  env token's `aud`), else the active login. `auth status` shows the caller's
+  home jurisdiction so the slug is discoverable. `logout`
+  takes `--everywhere` (revoke every session on the active core, not just the
+  current one) and `--all-contexts` (log out of every saved login)
+- `doctor`: bare runs the scan-and-fix flow, plus `trace`, `logs`, `bundle`
+- `org`: control-plane organization management — `create`, `list`, `get`, `delete`
+- `project`: control-plane project management — `create`, `list`, `get`, `delete`
+- `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
+  `clone`, plus the `mirror` and `visibility` subtrees. Git content operations
+  (log, diff, …) are intentionally out of scope. The `mirror` subtree is
+  server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
+  exception: `mirror use` repoints the *current clone's* git remote at a mirror
+  (local git config only — it creates nothing server-side). Interactively it
+  picks among the repo's placements and asks whether to replace the remote
+  (preserving the old URL under `--upstream`) or add a separate one;
+  non-interactively it repoints `--remote` directly. Both `use` and `clone`
+  choose a placement through the shared `selectPlacement` picker. `clone`
+  accepts a native `/et/<project>/<repo>` ref, a mirror `/gh/<owner>/<repo>`
+  ref, or a full `entire://` URL passed through verbatim. **Every ref names its
+  forge**: the leading token alone decides which grammar is tried, and the bare
+  `<project>/<repo>` shorthand was removed because both forges take that shape
+  and nothing in it says which was meant (#2252).
+  Requiring the prefix is a **namesquatting** guard, not tidiness: without it,
+  whichever namespace the CLI defaulted to could shadow the other, and
+  `TestCloneRefAlwaysRequiresItsForgePrefix` pins that no forge-less pair
+  resolves in either parser or in the command. It holds only for *intent* —
+  lookups are already unambiguous because native rows are stored prefixed in the
+  same `full_name` index (`et/<project>/<repo>`), which is why the bare-pair
+  `--repo` filters on `search`/`experts`/`explain` cannot cross namespaces
+  either.
+  Native names are validated client-side against the server's own rules
+  (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
+  `core/resource/project_name.go`); those bounds are server parity only and buy
+  a local error instead of a control-plane round trip, so a failure is phrased
+  as what the server accepts rather than as a rule of ours — drift is
+  one-directional and only a *looser* server would make us wrong. A ref matching
+  no grammar gets a targeted error (`invalidCloneRefError`) in descending
+  confidence: a ref naming `github.com` is pointed at its `/gh/` form, a ref
+  that declared a forge token keeps its own parser's reason, a bare pair is
+  offered the forge-qualified readings that would actually parse
+  (`bareRefSuggestions`), and anything left lists the accepted shapes.
+  A native ref resolves project → repo ULID → `GetRepo`, whose response is the
+  only one carrying both `clusterHost` and `path`, and clones
+  `entire://<clusterHost><path>` from the repo's home cluster (`--cluster` is
+  rejected on native refs).
+  A trailing `.git` is never part of a repo name, on **either** backend
+  (`gitDirSuffix` documents the mechanics): every ref parser drops it and `repo
+  create` refuses a name ending in it. This is a deliberate client-side
+  narrowing — GitHub rejects such a name outright, but the server accepts a
+  native `foo.git` (interior dot, same rule that makes `entire-trails.el` legal)
+  and strips the suffix for `/gh/` paths only. `gitremote.splitOwnerRepo` trims
+  unconditionally when reading a remote back, so such a repo is unaddressable by
+  name once cloned regardless; dropping it everywhere makes the CLI agree with
+  itself instead of leaving `repo clone` the one path that keeps it. Escape
+  hatches: the repo's ULID, or a full `entire://` URL. Two consequences worth
+  knowing — a `foo.git` created through the API or web UI *aliases* onto `foo`
+  in `resolveRepoRef`, and the durable fix is a server-side rule in
+  `normalizeName`, not this check.
+- `grant`: manage access grants and org membership — `org`, `project`, and `repo`
+  each support `add` / `list` / `remove`
+
+Forge tokens (`gh`, `et`) are the path segments of an `entire://` URL, and
+`gitremote.pathForges` owns the *set* — `IsForgePathToken` answers "is this a
+forge token", `ForgePathLabels` gives the placeholder spelling of the segments
+after it (`<owner>/<repo>` vs `<project>/<repo>`) so messages read correctly for
+both. The token strings are still spelled in a dozen call sites; only the set
+lives in one place. It is deliberately **not** `hostToForge`, which maps an
+*upstream* git host to its id: a native repo has no upstream host, so `et` is
+absent there, and conflating the two made `entire://et/<project>/<repo>` dial a
+cluster named `et` while `entire://gh/...` got an actionable message.
+`CanonicalHost` still reads `forgeToHost`, so a native remote falls back to its
+cluster host rather than inventing a forge host. The legacy `/git/` prefix is
+excluded because `repo clone` cannot act on such a ref.
+
+**Being a forge token says nothing about which APIs accept it** — the name says
+syntax on purpose. Trails are the current example: entire-api takes `et` in the
+path but cannot resolve it, so `entire trail` refuses it locally with the real
+reason (`errTrailsNativeUnsupported`). That refusal has to cover *both* ways a
+forge reaches the API — named in `--repo` and inferred from the origin remote —
+and the inferred one is the common path.
+
+Experimental commands (gated by the build-time visibility flag above — visible
+and grouped under "Experimental commands:" in developer/nightly builds, hidden
+in stable releases, always runnable): `tokens`, `import`, `review`,
+`investigate`, `blame`, `why`, `experts`, `runner`, and `checkpoint policy`.
+`tokens` is also advertised through `entire labs`.
+
+Top-level lifecycle and standalone commands: `enable`, `disable`, `status`,
+`login`, `logout`, `clean`, `version`, `dispatch`, `activity`, `help`,
+`configure`, `agent-help`, `api`, `search`. `search` is the canonical
+spelling (visible in every build, grouped with Sessions & Checkpoints);
+`checkpoint search` stays a working alias of the same command.
+
+`api` is an authenticated passthrough to Entire's HTTP APIs (gh-style): it
+attaches the right bearer and dials the right host so callers don't plumb auth
+themselves. `--to core` (default) hits the control plane; `--to cell` hits an
+entire-api cell. `--jurisdiction <slug>` (e.g. `us`, `eu`) targets a specific
+jurisdiction's cell instead of the caller's home cell and implies `--to cell`
+(cell routing + identity-token exchange live in `auth.NewEntireAPICellClient`
+via `auth.CellTarget`). `{owner}`/`{repo}`/`{repo_id}` in the path are filled
+from the current repo's origin remote. It is an escape hatch, so it is absent
+from `agent-help`'s curated listing but stays in `entire help` and agent-help's
+footer — an agent that needs raw access must find it rather than hand-roll curl
+with a token.
+
+`agent-help` renders machine-readable, agent-facing usage live from the Cobra
+command tree (so it always matches the installed binary): bare prints a curated
+"when to use entire" map; `agent-help <command>` drills into one command's
+current flags; `--json` emits structured output. It is the single source of
+truth the first-turn context injection and the `--agent-help-skill` skill point
+agents at, instead of enumerating a surface that goes stale.
+
+#### Where agent-facing text goes
+
+| What you have | Where it goes |
+| --- | --- |
+| A new command | `agentHelpClassification` in `agent_help_cmd.go` — one entry, keyed by command path, carrying `audience` and `listed` |
+| "When to use this at all" advice for agents | `agentHelpGuidance` — **never** cobra `Short`/`Long` |
+| A fact humans need too (e.g. "this output is not stable") | cobra `Long`. Human help is a reference, not a lecture: whoever typed `--help` already chose the command |
+| A per-task command recommendation | `agent-help`, which is pulled on demand. **Never** the first-turn injection, which carries only invariants true on every turn |
+
+**Flag it; don't decide it.** Whether a command is `listed`, and whether it is
+read-only / task-driven / user-owned, are product judgment calls — they change
+what agents do unprompted in every user's repo. Take the safe default
+(unlisted, user-owned), then say in the PR what you picked and why so a human
+can move it. Never quietly promote a command into the listing or into
+read-only.
+
+CI enforces the mechanical parts, so trust these rather than re-deriving them:
+every advertised top-level command and every child of a listed group is
+classified; a read-only group contains no writing subcommand; guidance text
+never appears in a command's `Short`/`Long`.
+
+Hidden commands opt into being advertised here by setting
+`Annotations[agentHelpAnnotation] = "true"` (e.g. `trail`). Because `agent-help`
+renders live and lists non-hidden commands, the experimental commands appear in
+`agent-help` in developer/nightly builds and are absent in stable releases — the
+advertised surface is build-dependent, matching what `entire help` shows.
+No-channel agents (Cursor, Copilot CLI, Factory Droid, MCP hosts — no
+context-injection channel and no agent-help skill template) reach it without an
+active push. All of them can discover it passively: it is visible in `entire
+help`, the `entire status` footer points at it, and `entire status --json`
+exposes it as the `agent_help` field. On top of that, Factory AI Droid (which is
+banner-only) gets the pointer appended to its SessionStart hook banner, and
+MCP-host agents can launch the hidden `entire mcp` stdio server, which exposes
+`agent_help` and `entire_status` as MCP tools using the same live rendering.
+Enabling a no-channel agent with `--agent-help-skill` reports the skill
+unsupported and points the agent at this passive path instead.
+
+Cobra-native aliases (no hint): `sessions` → `session`, `cp`/`checkpoints` →
+`checkpoint`.
+
+Hidden infrastructure commands: `hooks`, `trail`,
+`curl-bash-post-install`, `__send_analytics`, `__sweep_sessions`, `mcp` (MCP
+stdio server for MCP-host agents).
+
+Diagnostic subcommands live alongside `doctor.go` as `doctor_logs.go` and
+`doctor_bundle.go`. Group roots and noun-group children live in files
+named `<noun>_group.go` and `<noun>_<verb>.go` respectively.
+
+## Tech Stack
+
+- Language: Go 1.26.x
+- Build tool: mise, go modules
+- Linting: golangci-lint
+
+## Development
+
+### Running Tests
+
+```bash
+mise run test
+```
+
+### Running Integration Tests
+
+```bash
+mise run test:integration
+```
+
+### Running the Windows Installer Tests
+
+`scripts/install.ps1` has its own Pester suite and PSScriptAnalyzer pass under
+`scripts/test/`; `.github/workflows/install-ps1-e2e.yml` runs it in both
+Windows PowerShell 5.1 and pwsh on PRs that touch the installer or its tests,
+followed by a real install on a Windows runner, and `mise run test:ps1` runs
+the suite locally when `pwsh` is installed (it skips cleanly otherwise; it is
+not part of `check`). On a fresh machine run
+`scripts/test/init.ps1` once first: it installs Pester and PSScriptAnalyzer for
+the current user and, on Windows PowerShell 5.1, the NuGet package provider
+that `Install-Module` needs there.
+
+### Running All Tests (CI)
+
+```bash
+mise run test:ci
+```
+
+This runs unit tests, integration tests, and the E2E canary (Vogon agent) in sequence. Integration tests use the `//go:build integration` build tag and are located in `cmd/entire/cli/integration_test/`.
+
+### Running E2E Canary Tests (Vogon Agent)
+
+The Vogon agent is a deterministic fake agent that exercises the full E2E test suite without making any API calls.
+
+```bash
+mise run test:e2e:canary           # Run all E2E tests with the Vogon agent
+mise run test:e2e:canary TestFoo   # Run a specific test
+```
+
+- **Runs as part of `test:ci`** — canary failures block merges
+- **No API calls, no cost** — safe to run freely, unlike real agent E2E tests
+- **If a canary test fails, the bug is in the CLI or test infrastructure**, not in an agent
+- Located in `e2e/vogon/` (binary) and `cmd/entire/cli/agent/vogon/` (Agent interface)
+- The binary parses prompts via regex, creates/modifies/deletes files, and fires lifecycle hooks
+- **IMPORTANT: When changing E2E test prompt wording**, the Vogon binary (`e2e/vogon/main.go`) parses prompts with hardcoded regexes. New phrasing may not match existing patterns — always run `mise run test:e2e:canary` after changing prompt text and fix Vogon's parsing if tests fail.
+
+### Running E2E Tests (Only When Explicitly Requested)
+
+**IMPORTANT: Do NOT run E2E tests proactively.** E2E tests make real API calls to agents, which consume tokens and cost money. Only run them when the user explicitly asks for E2E testing.
+
+```bash
+mise run test:e2e [filter]                          # All agents, filtered
+mise run test:e2e --agent claude-code [filter]       # Claude Code only as an example here, replace `claude-code` with other agents to run tests for those agents
+```
+
+E2E tests:
+
+- Use the `//go:build e2e` build tag
+- Located in `e2e/tests/`
+- See [`e2e/README.md`](e2e/README.md) for full documentation (structure, debugging, adding agents)
+- Test real agent interactions (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, Pi, or Vogon creating files, committing, etc.)
+- Validate checkpoint scenarios documented in `docs/architecture/checkpoint-scenarios.md`
+- Support multiple agents via `E2E_AGENT` env var (`claude-code`, `gemini`, `opencode`, `cursor`, `factoryai-droid`, `copilot-cli`, `pi`, `vogon`)
+
+**Environment variables:**
+
+- `E2E_AGENT` - Agent to test with (default: `claude-code`)
+- `E2E_CLAUDE_MODEL` - Claude model to use (default: `haiku` for cost efficiency)
+- `E2E_TIMEOUT` - Per-prompt timeout, overriding each runner's own default (e.g. `E2E_TIMEOUT=4m`)
+
+The per-prompt default is the runner's, not a single number: codex, copilot-cli and gemini use 60s, cursor 90s, opencode 2m, and claude-code, droid, pi, vogon and roger-roger impose no per-prompt bound at all — for those the scenario timeout passed to `ForEachAgent` is the only deadline. `E2E_TIMEOUT` sets a bound for every runner including those, and a per-test `agents.WithPromptTimeout(...)` overrides it. All ten resolve through `promptTimeout` in `e2e/agents/agent.go`; a runner that resolves its own is a build failure (`TestEveryRunPromptResolvesThroughPromptTimeout`). A malformed value is an error rather than a silent fall back to the default.
+
+### Test Parallelization
+
+**Always use `t.Parallel()` in tests.** Every top-level test function and subtest should call `t.Parallel()` unless it modifies process-global state (e.g., `os.Chdir()`).
+
+```go
+func TestFeature_Foo(t *testing.T) {
+    t.Parallel()
+    // ...
+}
+
+// Integration tests with TestEnv
+func TestFeature_Bar(t *testing.T) {
+    t.Parallel()
+    env := NewFeatureBranchEnv(t)
+    // ...
+}
+```
+
+**Exception:** Tests that modify process-global state cannot be parallelized. This includes `os.Chdir()`/`t.Chdir()` and `os.Setenv()`/`t.Setenv()` — Go's test framework will panic if these are used after `t.Parallel()`.
+
+### Git in Tests
+
+**Tests that touch git state must use an isolated temp repo — never the real repo CWD.**
+
+Many handlers (lifecycle, strategy, hooks) resolve the git repo from CWD via `OpenRepository`, `GetGitCommonDir`, `DetectFileChanges`, etc. Without isolation, tests can create session state files, shadow branches, or other artifacts in the real `.git/` directory.
+
+Use the `testutil` helpers:
+
+```go
+tmpDir := t.TempDir()
+testutil.InitRepo(t, tmpDir)                    // git init + user config + disable GPG
+testutil.WriteFile(t, tmpDir, "f.txt", "init")  // create a file
+testutil.GitAdd(t, tmpDir, "f.txt")             // stage it
+testutil.GitCommit(t, tmpDir, "init")           // commit (needs at least one commit for HEAD)
+t.Chdir(tmpDir)                                 // redirect CWD-based git resolution
+```
+
+`testutil.InitRepo` configures `user.name`, `user.email`, and disables GPG signing — safe for CI environments without global git config.
+
+**Prefer `testutil.InitRepo()` over direct `git.PlainInit()` in tests.** When a test in this repo needs an initialized repository, use `testutil.InitRepo(t, dir)` unless the test specifically needs lower-level initialization behavior that the helper cannot provide. Do not call `git.PlainInit()` directly and then create commits or run CLI git operations without also reproducing the helper's repo-local config.
+
+**Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
+
+### Config/Cache/Keyring Isolation in Tests
+
+Tests must never read or write the developer's real `~/.config/entire`
+(contexts.json, version_check.json), `~/.cache/entire` (nodes.json,
+cluster_cores.json, api_discovery.json), or OS keychain. The developer may be
+using `entire` for real while tests run.
+
+- **Single resolver**: `internal/entireclient/userdirs` is the only place
+  that resolves the per-user config dir (`userdirs.Config()`:
+  `$ENTIRE_CONFIG_DIR` else `~/.config/entire`) and cache dir
+  (`userdirs.Cache()`: `$XDG_CACHE_HOME/entire` else `~/.cache/entire`).
+  Never derive these paths anywhere else.
+- **In-process safety net**: `userdirs` and the `tokenstore` default backend
+  detect `go test` (via `internal/testdirs`) and fall back to a throwaway
+  per-process temp directory when their env override is unset. The fallback
+  is shared across tests in one process — for per-test isolation still set
+  `t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())` and
+  `tokenstore.UseFileBackendForTesting(...)`.
+- **Spawned binaries are NOT covered**: `testing.Testing()` is false in a
+  subprocess. The integration and e2e TestMains set `ENTIRE_CONFIG_DIR`,
+  `XDG_CACHE_HOME`, `ENTIRE_TOKEN_STORE=file`, `ENTIRE_TOKEN_STORE_PATH`, and
+  `ENTIRE_TEST_AUTH_STORE_FILE` process-wide so every spawned `entire` (and
+  every agent-invoked hook) inherits isolation. Any new harness that spawns
+  the real binary must do the same.
+- **Legacy auth store**: `auth.NewStore()` talks straight to the zalando
+  keyring; packages whose tests can reach it need `keyring.MockInit()` in
+  `TestMain` (see `cmd/entire/cli/global_test.go`) — the `testdirs` fallback
+  does not cover it in-process.
+
+### Spawning subprocesses in tests (TTY detection)
+
+Tests that spawn the real `entire` or `git` binary need the child to be non-interactive so prompts don't hang on a developer terminal.
+
+`interactive.CanPromptInteractively()` resolves in this order:
+
+1. `ENTIRE_TEST_TTY=1` → force interactive ON (any other non-empty value → force OFF).
+2. `testing.Testing()` → false. In-process `go test` runs are non-interactive by default; no per-test `t.Setenv("ENTIRE_TEST_TTY", "0")` is needed.
+3. Agent sentinels → false. `interactive.agentSubprocessEnvVars` is the single
+   source of truth for the presence-checked ones (`COPILOT_CLI`, `CURSOR_AGENT`,
+   `GEMINI_CLI`, `OPENCODE`, `PI_CODING_AGENT`) — the function reads it and the
+   tests both enumerate and clear it, so adding a vendor is a one-line change.
+   `GIT_TERMINAL_PROMPT=0` stays separate because only that exact value counts.
+   `CLAUDECODE` is deliberately not a sentinel: Claude Code sets it, but adding
+   it withdraws prompts from the largest agent population at once, which is a
+   product decision rather than a detection fix.
+4. `CI=<non-empty-non-false>` → false.
+5. Controlling-terminal probe — `/dev/tty` on Unix, `CONIN$` + `CONOUT$` on
+   Windows. A terminal held in raw mode (canonical/line input off) belongs to a
+   full-screen TUI that spawned us, not to a shell we can prompt: TUI git clients
+   (lazygit, gitui, tig) run `git commit` as a child while owning the screen, so
+   the hook inherits the same terminal it must not prompt on. The mode check
+   fails open when it cannot read the mode. See `interactive/tty_*.go` and
+   `interactive/rawmode_{unix,windows}.go` for the platform split and rationale.
+
+For subprocesses spawning the real `entire` binary (e2e, integration tests, `entire` calling itself from a hook), prefer `execx.NonInteractive` over env-var plumbing:
+
+```go
+import "github.com/entireio/cli/cmd/entire/cli/execx"
+
+cmd := execx.NonInteractive(ctx, getTestBinary(), "status")
+cmd.Dir = repoDir
+out, err := cmd.CombinedOutput()
+```
+
+`execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's platform terminal probe fails naturally. No env var required.
+
+`interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., opening `interactive.OpenPromptTTY()` directly inside a prompt reader).
+
+### Linting and Formatting
+
+```bash
+mise run fmt && mise run lint
+```
+
+`mise run fmt` can rewrite files. Treat `mise run fmt && mise run lint` as a single verification sequence: if formatting changes anything, run lint again on the formatted tree rather than assuming a previous lint result still applies.
+
+### Before Every Commit (REQUIRED)
+
+**CI will fail if you skip these steps:**
+
+```bash
+mise run check
+```
+
+Equivalent expanded form:
+
+```bash
+mise run fmt      # Format code (CI enforces gofmt)
+mise run lint     # Lint check (CI enforces golangci-lint)
+mise run test:ci  # Run all tests (unit + integration)
+```
+
+`mise run check` runs the three commands above.
+
+Safety note: do not treat a clean `mise run lint` result as final unless it was run after the most recent `mise run fmt` pass.
+
+### Before Any Push Or Remote Code Update (REQUIRED)
+
+Before pushing commits or otherwise sending code changes to any remote, run `mise run lint` on the current tree and ensure it passes. If `mise run fmt` changed files, rerun `mise run lint` on the formatted tree before pushing.
+
+**Common CI failures from skipping this:**
+
+- `gofmt` formatting differences → run `mise run fmt`
+- Lint errors → run `mise run lint` and fix issues
+- Test failures → run `mise run test` and fix
+
+### Source-Level Guard Tests
+
+Four tests scan this repo's own source with `git grep` to enforce an invariant
+the compiler cannot: `TestRootBasesAreTrusted` (root bases are trusted paths),
+`TestTranscriptReadsOnlyShrink` (the unconfined transcript-read ratchet),
+`TestGitStatusCallSitesPassNoOptionalLocks`, and
+`TestAllHookConfigRelPaths_CoversEveryWorktreeConfigAgent`.
+
+**They all go through `testutil.GitGrepGuard`, which owns three flags.** Each was
+missing from at least one guard, and the same one was missing from three:
+
+- `--untracked`. `git grep` searches the INDEX. Every one of these guards has
+  "someone just added a file" as its subject, so the file it most needs to see is
+  the one not yet staged. Two failure shapes were worse than a miss: the
+  hook-config guard compares two sets built from the same blind grep, so a new
+  agent package calling `OpenHookConfig` without declaring `HookConfigRelPath`
+  was absent from both and the comparison *passed*; and the root-base guard's
+  staleness half reported a just-added entry as STALE, telling the author to
+  delete the entry that legitimised their new root.
+- `--no-color`. `color.ui`/`color.grep` set to `always` colorizes into a pipe and
+  the escapes land in the **filename** field. True of `-l` too, which looks
+  immune. Guards then either misparse (read as staleness, #2248) or compare
+  garbage to garbage while their "did we match anything" assertion still passes.
+- Repo-selector scrubbing. Git exports `GIT_DIR`/`GIT_WORK_TREE` to hooks and
+  they outrank `cmd.Dir`, so a `go test` under a hook or `git rebase --exec`
+  scanned a different repository. `RunGit`'s isolation does **not** cover this:
+  it filters `GIT_CONFIG_*` only.
+
+Two rules for writing one:
+
+- **A pathspec restricted to `*.go`, so an unparseable path can be fatal.** The
+  `git status` guard passed a bare `cmd internal`, which also matched testdata
+  `.jsonl` and a `.md`, so its non-`.go` branch had to `continue` — and that
+  skip was the only thing between colorized output and a guard that silently
+  checked nothing.
+- **Fail on zero matches.** A detection pattern that goes stale otherwise passes
+  forever. `GitGrepGuard` does this itself; the `checked == 0` tallies are the
+  second half of the same idea.
+
+### Code Duplication Prevention
+
+Before implementing Go code, use `/go:discover-related` to find existing utilities and patterns that might be reusable.
+
+**Check for duplication:**
+
+```bash
+mise run dup           # Comprehensive check (threshold 50) with summary
+mise run dup:staged    # Check only staged files
+mise run lint          # Normal lint includes dupl at threshold 75 (new issues only)
+mise run lint:full     # All issues at threshold 75
+```
+
+**Tiered thresholds:**
+
+- **75 tokens** (lint/CI) - Blocks on serious duplication (~20+ lines)
+- **50 tokens** (dup) - Advisory, catches smaller patterns (~10+ lines)
+
+When duplication is found:
+
+1. Check if a helper already exists in `common.go` or nearby utility files
+2. If not, consider extracting the duplicated logic to a shared helper
+3. If duplication is intentional (e.g., test setup), add a `//nolint:dupl` comment with explanation
+
+## Code Patterns
+
+### Error Handling
+
+The CLI uses a specific pattern for error output to avoid duplication between Cobra and main.go.
+
+**How it works:**
+
+- `root.go` sets `SilenceErrors: true` globally - Cobra never prints errors
+- `main.go` prints errors to stderr, unless the error is a `SilentError`
+- Commands return `NewSilentError(err)` when they've already printed a custom message
+
+**When to use `SilentError`:**
+Use `NewSilentError()` when you want to print a custom, user-friendly error message instead of the raw error:
+
+```go
+// In a command's RunE function:
+if _, err := paths.WorktreeRoot(); err != nil {
+    cmd.SilenceUsage = true  // Don't show usage for prerequisite errors
+    fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository.")
+    return NewSilentError(errors.New("not a git repository"))
+}
+```
+
+**When NOT to use `SilentError`:**
+For normal errors where the default error message is sufficient, return the error directly. main.go will print it:
+
+```go
+// Normal error - main.go will print "unknown strategy: foo"
+return fmt.Errorf("unknown strategy: %s", name)
+```
+
+**Key files:**
+
+- `errors.go` - Defines `SilentError` type and `NewSilentError()` constructor
+- `root.go` - Sets `SilenceErrors: true` on root command
+- `main.go` - Checks for `SilentError` before printing
+
+### `.entire` Must Be a Directory
+
+`<worktree-root>/.entire` is either absent or a real directory. A regular file, a
+symlink — **including a symlink pointing at a perfectly good directory** — a
+FIFO, a socket, or a device is a broken repo, and a command that would read or
+write through the path stops instead.
+
+**The entries directly inside it must be regular files or directories.** That is
+an allowlist, not a list of known-bad types: Entire only ever creates files and
+directories under `.entire`, so anything else arrived some other way and a mode
+bit nobody has considered yet is refused by default. A symlinked
+`.entire/metadata` redirects transcripts; a symlinked `.entire/settings.local.json`
+redirects the file that names the command Entire executes at pre-push; a FIFO in
+either place hangs the read instead. The scan is one level deep, and
+`fs.ModeIrregular` is its one deliberate exception — see the entry-scan
+mecha
+</INSTRUCTIONS>
