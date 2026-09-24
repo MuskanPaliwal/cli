@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,6 +87,13 @@ func TestAgentPackages_NoForbiddenImports(t *testing.T) {
 		pkgName := filepath.Base(pkgDir)
 		t.Run(pkgName, func(t *testing.T) {
 			t.Parallel()
+			// Clone, don't append onto allowedPrefixes: appending would write
+			// this package's scoped entries into that slice's backing array
+			// whenever it has spare capacity, handing every package checked
+			// afterwards the exception scopedPrefixes exists to contain. It
+			// holds today only because allowedPrefixes is a literal whose cap
+			// equals its len; that is not a property to depend on.
+			allowedHere := append(slices.Clone(allowedPrefixes), scopedPrefixes[pkgName]...)
 			imports := extractImports(t, pkgDir)
 			for _, imp := range imports {
 				if !strings.HasPrefix(imp, repoPrefix) && imp != forbiddenCLIPackage {
@@ -113,7 +121,7 @@ func TestAgentPackages_NoForbiddenImports(t *testing.T) {
 
 				// Check it's in the allowed list, or scoped to this package
 				allowed := false
-				for _, prefix := range append(allowedPrefixes, scopedPrefixes[pkgName]...) {
+				for _, prefix := range allowedHere {
 					if imp == prefix || strings.HasPrefix(imp, prefix+"/") {
 						allowed = true
 						break
