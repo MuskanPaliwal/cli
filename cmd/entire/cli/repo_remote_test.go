@@ -615,3 +615,29 @@ func TestGitStderrRedactsOnlyTheURL(t *testing.T) {
 	require.Contains(t, got, "error: cannot fetch https://github.com/o/r", "the sentence and the host survive")
 	require.Contains(t, got, "fatal: could not set 'remote.origin.url'")
 }
+
+// A credential containing a quote must not split the match: ending it on a
+// quote would redact the head of the URL and leave the tail of the password
+// sitting in the output.
+func TestGitStderrRedactsACredentialContainingAQuote(t *testing.T) {
+	t.Parallel()
+	err := &exec.ExitError{}
+	err.Stderr = []byte("error: cannot fetch https://user:pa'ss@github.com/o/r now\n")
+
+	got := gitStderr(err)
+	require.NotContains(t, got, "ss@", "no part of the credential survives")
+	require.NotContains(t, got, "pa'", "no part of the credential survives")
+	require.Contains(t, got, "https://github.com/o/r", "and the URL is still readable")
+}
+
+// git quotes the URL in its own messages; the sentence must stay intact.
+func TestGitStderrKeepsAQuotedURLsSentence(t *testing.T) {
+	t.Parallel()
+	err := &exec.ExitError{}
+	err.Stderr = []byte("fatal: could not set 'remote.origin.url' to 'https://user:tok@third/z'\n")
+
+	got := gitStderr(err)
+	require.NotContains(t, got, "tok")
+	require.Contains(t, got, "fatal: could not set 'remote.origin.url' to ")
+	require.Contains(t, got, "https://third/z")
+}

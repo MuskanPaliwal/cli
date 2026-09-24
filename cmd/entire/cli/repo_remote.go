@@ -84,11 +84,17 @@ var gitRunner = func(ctx context.Context, dir string, args ...string) (string, e
 }
 
 // stderrURLRe matches a URL embedded in a line of prose, so credentials can be
-// stripped from it without touching the sentence around it. Quotes and
-// whitespace end the match, which is what git's own `to 'https://…'` quoting
-// needs. Deliberately not applied to scp-style remotes (git@host:path): they
-// carry no password, and the pattern would match far more than a URL.
-var stderrURLRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s'"]*`)
+// stripped from it without touching the sentence around it.
+//
+// Only whitespace ends the match. Ending it on a quote as well would read
+// better against git's own `to 'https://…'` quoting, but a password containing
+// a quote would then split the match inside the credential and leave the rest
+// of it in the output — the one thing this must never do. A trailing quote
+// swept into the path is the harmless side of that trade.
+//
+// Deliberately not applied to scp-style remotes (git@host:path): they carry no
+// password, and a pattern loose enough to match one would match far more.
+var stderrURLRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://\S*`)
 
 // gitStderr returns what git wrote to stderr before failing, flattened to one
 // line with any embedded URL redacted. Empty when the error carries none.
