@@ -2039,7 +2039,15 @@ func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx contex
 	// letting that veto the hook-captured edits dropped the trailer from a
 	// user's mid-turn commit made from a terminal (the no-TTY fast path never
 	// reaches this function).
-	if len(state.FilesTouched) == 0 && !s.hasNewTranscriptWork(ctx, state) {
+	//
+	// Scoped to LateTranscriptWriter, because that reasoning is: only such an
+	// agent has an empty transcript mid-turn. For a streaming-transcript agent
+	// the growth check is meaningful evidence and stays a precondition, as it
+	// was before Antigravity — an agent added to the registry must not change
+	// the commit path of the agents already in it.
+	ag, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; AsLateTranscriptWriter handles nil
+	_, lateWriter := agent.AsLateTranscriptWriter(ag)
+	if (!lateWriter || len(state.FilesTouched) == 0) && !s.hasNewTranscriptWork(ctx, state) {
 		return false, nil
 	}
 
