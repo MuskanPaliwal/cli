@@ -50,8 +50,9 @@ the commands are always runnable in every build.
   through `strategy.ResolveCallerSession`, not "which state file moved last" —
   see [Resolving the calling session](#resolving-the-calling-session).
 - `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `tokens`, `search`.
-  `explain` also takes `--repo <owner/name>`, the drill-down for a cross-repo
-  `search` hit: it reads the checkpoint from that repo's entire-api cell over
+  `explain` also takes a forge-qualified `--repo` (`gh/<owner>/<name>` or
+  `et/<project>/<name>`), the drill-down for a cross-repo `search` hit: it
+  reads the checkpoint from that repo's entire-api cell over
   HTTP (`/repos/{repo_id}/checkpoints/{id}` plus `.../transcript/raw`) rather
   than fetching git objects, so a foreign checkpoint never enters this repo's
   object store, ref namespace, or `tokens profile`. It needs a full checkpoint
@@ -77,11 +78,43 @@ the commands are always runnable in every build.
   takes `--everywhere` (revoke every session on the active core, not just the
   current one) and `--all-contexts` (log out of every saved login)
 - `doctor`: bare runs the scan-and-fix flow, plus `trace`, `logs`, `bundle`
+- `cluster`: the control plane's data-plane cluster catalog — `list` only, since
+  clusters are provisioned by Entire rather than by users. It renders `GET
+  /clusters` (`coreapi.ListClusters`, the same call the mirror wizard and
+  `repo mirror list` already make to map slugs to hosts) sorted by region then
+  slug. The table's columns are the values other commands take: REGION is the
+  jurisdiction slug behind `org create --region` and `project create
+  --region`; CLUSTER is the placement slug `repo mirror list --cluster`
+  accepts; HOST is the bare public host behind `repo create --cluster-host`,
+  `repo mirror create` and `repo clone --cluster`, reduced through
+  `hostFromPublicURL` so a publicUrl that fails validation renders `-` rather
+  than a spoofable host. `--json` is the wire model, `apiUrl` and `isDefault`
+  included, plus a synthesized `host` merged into each object
+  (`clusterJSON`, via the additive-only `mergeSynthesizedField` that `repo
+  create` uses for `remote`): the same validated host the table shows, absent
+  rather than dashed when `publicUrl` fails validation, so a script never has
+  to re-implement the guard over the raw URL. `apiUrl` is never a table
+  column, because the CLI dials the API URL itself. `isDefault` becomes a
+  DEFAULT column only when the catalog holds a non-default cluster
+  (`clusterTable`): that is the catalog in which a reader needs telling where
+  a region falls back to when a command names the region alone, and in a
+  catalog with one cluster per region the column would read yes on every
+  row. The catalog carries no health, capacity or usage data — nothing
+  server-side does — and hidden or decommissioned clusters never reach it.
 - `org`: control-plane organization management — `create`, `list`, `get`, `delete`
 - `project`: control-plane project management — `create`, `list`, `get`, `delete`
 - `repo`: control-plane repository lifecycle — `create`, `list`, `get`, `delete`,
-  `clone`, plus the `mirror` and `visibility` subtrees. Git content operations
-  (log, diff, …) are intentionally out of scope. The `mirror` subtree is
+  `clone`, plus the `mirror`, `visibility` and `protection` subtrees. Git
+  content operations (log, diff, …) are intentionally out of scope.
+  `protection` (`list`, `add [--server-side-merge-only]`, `remove`) edits a
+  native repo's branch-protection rules through core's
+  `/repos/{repoId}/branch-protection` resource: `add` and `remove` are one
+  PATCH each (`addRules` upserts by ref), never a read-modify-write of the
+  list. `add` sends `serverSideMergeOnly` only when the flag was given: the
+  server keeps an existing rule's level when it is absent, so re-adding a
+  branch without the flag never lowers it and `--server-side-merge-only=false`
+  is the explicit way down. A short branch name expands to `refs/heads/`,
+  `HEAD` and `refs/...` pass through. The `mirror` subtree is
   server-side (`create`, `list`, `get`, `remove`, `collaborators`) with one
   exception: `mirror use` repoints the *current clone's* git remote at a mirror
   (local git config only — it creates nothing server-side). Interactively it
@@ -97,11 +130,25 @@ the commands are always runnable in every build.
   Requiring the prefix is a **namesquatting** guard, not tidiness: without it,
   whichever namespace the CLI defaulted to could shadow the other, and
   `TestCloneRefAlwaysRequiresItsForgePrefix` pins that no forge-less pair
-  resolves in either parser or in the command. It holds only for *intent* —
+  resolves in either parser, in `repo clone`, or in `resolveRepoRef` — the last
+  being the surface every other repo-ref command shares. It holds only for
+  *intent* —
   lookups are already unambiguous because native rows are stored prefixed in the
   same `full_name` index (`et/<project>/<repo>`), which is why the bare-pair
   `--repo` filters on `search`/`experts`/`explain` cannot cross namespaces
   either.
+  The native `/et/<project>/<repo>` path is **not** clone-only: it is the
+  `path` the API returns, and `resolveRepoRef` accepts it for every command
+  that takes a repo ref — `get`, `delete`, the `visibility` and `protection`
+  subtrees, and `grant repo add`/`list`/`remove` (COR-1632). The other two
+  clone shapes are not: a `/gh/` mirror ref is refused there (the by-name
+  lookup resolves a project and then a repo inside it, and a mirror is in no
+  project — so a mirror is addressed by ULID), and an `entire://` URL is not
+  parsed at all. `--project` serves the **bare-name** spelling alone, because
+  the control plane has no by-name repo route that is not project-scoped; the
+  path form is checked against it for agreement, and a ULID warns that it is
+  ignored rather than validating, which would cost a `GetRepo` on every command
+  but `repo get`.
   Native names are validated client-side against the server's own rules
   (`nativeProjectRe`/`nativeRepoRe`, mirroring `normalizeName` in entiredb
   `core/resource/project_name.go`); those bounds are server parity only and buy
@@ -234,7 +281,7 @@ named `<noun>_group.go` and `<noun>_<verb>.go` respectively.
 
 ## Tech Stack
 
-- Language: Go 1.26.x
+- Language: Go 1.27.x (`go.mod` pins the 1.27.1 minimum)
 - Build tool: mise, go modules
 - Linting: golangci-lint
 
@@ -424,6 +471,8 @@ out, err := cmd.CombinedOutput()
 `execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's platform terminal probe fails naturally. No env var required.
 
 `interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., opening `interactive.OpenPromptTTY()` directly inside a prompt reader).
+
+A prompt that runs Bubble Tea on a separately opened terminal (plugin confirmations, the login key prompt) must open it with `interactive.OpenPromptTTY()` and release it with `PromptTTY.Close()`, never `tea.OpenTTY()` plus a bare `Close`. Bubble Tea only gets a cancellable console reader for `os.Stdin`; on any other handle its reader loop leaves a read pending after the answer, and Go's `os.File.Close` on Windows waits for that read, which a console completes only on a keypress — the user had to press Enter twice. `PromptTTY.Close` cancels the pending read first (`CancelIoEx`, `tty_release_windows.go`); the reader then sees `io.EOF`, so the close must come after the form has returned.
 
 ### Linting and Formatting
 
@@ -1307,6 +1356,13 @@ comments at each site say which case applies:
   Those operations (`setupEntireDirectory`, `removeEntireDirectory`, the one
   `MkdirAll` of an agent's session dir in `resume.go`) legitimately use plain
   `os` calls.
+- **`Root.Link` takes two root-relative names, and `Root.Symlink` with an
+  absolute target is unusable on Windows.** `Root.Link(absPath, name)` is a
+  path escape everywhere. `Root.Symlink(absPath, name)` on Windows (Go 1.27)
+  writes the reparse target without the `\??\` prefix, so the link is created
+  but every follow fails with `ERROR_INVALID_NAME` — the 0-byte
+  `bin\entire-graph.exe` bug. See `plugin_store_windows.go` and
+  `materializeManagedEntry`.
 
 **Deliberately not rooted**, with the reason:
 
