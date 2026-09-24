@@ -23,25 +23,22 @@ import (
 type Agent interface {
 	// --- Identity ---
 
-	// Name returns the agent registry key (e.g., "claude-code", "gemini")
+	// Name returns the agent registry key (e.g., "claude-code", "codex")
 	Name() types.AgentName
 
-	// Type returns the agent type identifier (e.g., "Claude Code", "Gemini CLI")
+	// Type returns the agent type identifier (e.g., "Claude Code", "Codex")
 	// This is stored in metadata and trailers.
 	Type() types.AgentType
 
 	// Description returns a human-readable description for UI
 	Description() string
 
-	// IsPreview returns whether the agent integration is in preview or stable
-	IsPreview() bool
-
 	// DetectPresence checks if this agent is configured in the repository
 	DetectPresence(ctx context.Context) (bool, error)
 
 	// ProtectedDirs returns repo-root-relative directories that Entire must never
 	// record as session changes or capture into a checkpoint.
-	// Examples: [".claude"] for Claude, [".gemini"] for Gemini.
+	// Examples: [".claude"] for Claude, [".codex"] for Codex.
 	ProtectedDirs() []string
 
 	// --- Transcript Storage ---
@@ -73,9 +70,9 @@ type Agent interface {
 	// it verbatim when absolute. Callers that source agentSessionID from
 	// untrusted data (e.g. checkpoint metadata on the shared
 	// entire/checkpoints/v1 branch, hook input) MUST validate it with
-	// validation.ValidateSessionID first. The resume/log-restore paths do
-	// this at their choke points (transcript.resolveTranscriptPath and
-	// strategy.RestoreLogsOnly); do not call this with unvalidated input.
+	// validation.ValidateSessionID or resolve it through SessionStore.SessionFile,
+	// which applies that validation centrally. Do not call this method directly
+	// with unvalidated input.
 	ResolveSessionFile(sessionDir, agentSessionID string) string
 
 	// ReadSession reads session data from agent's storage.
@@ -209,13 +206,13 @@ type TranscriptAnalyzer interface {
 
 	// GetTranscriptPosition returns the current position (length) of a transcript.
 	// For JSONL formats (Claude Code), this is the line count.
-	// For JSON formats (Gemini CLI), this is the message count.
+	// For JSON formats (OpenCode), this is the message count.
 	// Returns 0 if the file doesn't exist or is empty.
 	GetTranscriptPosition(path string) (int, error)
 
 	// ExtractModifiedFilesFromOffset extracts files modified since a given offset.
 	// For JSONL formats (Claude Code), offset is the starting line number.
-	// For JSON formats (Gemini CLI), offset is the starting message index.
+	// For JSON formats (OpenCode), offset is the starting message index.
 	// Returns:
 	//   - files: list of file paths modified by the agent (from Write/Edit tools)
 	//   - currentPosition: the current position (line count or message count)
@@ -544,7 +541,7 @@ type SessionBaseDirProvider interface {
 	Agent
 
 	// GetSessionBaseDir returns the base directory containing per-project
-	// session subdirectories (e.g., ~/.claude/projects, ~/.gemini/tmp).
+	// session subdirectories (e.g., ~/.claude/projects, ~/.cursor/projects).
 	GetSessionBaseDir() (string, error)
 }
 

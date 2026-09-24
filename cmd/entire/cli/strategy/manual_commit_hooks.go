@@ -21,7 +21,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/checkpointpolicy"
 	"github.com/entireio/cli/cmd/entire/cli/gitdir"
 	"github.com/entireio/cli/cmd/entire/cli/gitops"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
@@ -2299,7 +2298,7 @@ func (s *ManualCommitStrategy) warnIfAttributionDiverged(ctx context.Context, se
 // The fast path activates when an eligible session exists and either:
 //   - No TTY is available (agent subprocess, CI), or
 //   - commit_linking="always" (user opted into auto-linking — needed because
-//     some agents like Gemini subagents commit mid-turn from processes that
+//     some agents' subagents commit mid-turn from processes that
 //     have /dev/tty but can't respond to prompts, and content detection fails
 //     since the shadow branch doesn't exist yet).
 //
@@ -3195,17 +3194,6 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		return 1 // Count as error - all checkpoints will be skipped
 	}
 	defer repo.Close()
-	policy, err := readLocalCheckpointPolicy(logCtx, repo)
-	if err != nil {
-		warnOrLogCheckpointPolicyReadFailure(logCtx, err)
-		state.TurnCheckpointIDs = nil
-		return 1
-	}
-	if !checkpointpolicy.CanSatisfyPolicy(policy) {
-		warnIfCheckpointPolicyNeedsUpgrade(logCtx, policy)
-		state.TurnCheckpointIDs = nil
-		return 1
-	}
 
 	prompts := readPromptsFromShadowBranch(ctx, repo, state)
 	if len(prompts) == 0 {

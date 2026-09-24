@@ -6,7 +6,7 @@ Entire stores AI session transcripts and metadata in your git repository. This d
 
 ### Where data is stored
 
-When you use Entire with an AI agent (Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, Pi), session transcripts, user prompts, and checkpoint metadata are committed to **your own git repository**. They stay out of your working branches' history, but they live in the same repo and travel with it.
+When you use Entire with an AI agent (Claude Code, Codex, OpenCode, Cursor, Factory AI Droid, Copilot CLI, Pi), session transcripts, user prompts, and checkpoint metadata are committed to **your own git repository**. They stay out of your working branches' history, but they live in the same repo and travel with it.
 
 Exactly where depends on the [checkpoint backend](architecture/ref-checkpoint-backend.md) the repo uses:
 
@@ -47,7 +47,7 @@ What that means for an image you paste is **not uniform across agents**, because
 | Claude Code | **Stored unredacted**, inline in the transcript as base64. The text scanner skips it (the `type: image` / `type: base64` skip rule below) rather than scanning it. | **Stored unredacted** as a raw binary blob under the checkpoint's `assets/` folder. |
 | Codex | **Destroyed.** Codex writes images as `data:` URIs inside `image_url` and tool-output strings, which the skip rule does not match, so the entropy layer treats the base64 as a secret and replaces it. The stored transcript keeps the surrounding message; the image is gone. | **Stored unredacted** under `assets/` (externalization runs before redaction, which is what preserves it). |
 | Cursor | **Not stored in the repository at all.** Cursor keeps images in its own per-session SQLite store, never in the transcript Entire reads. | **Stored unredacted** under `assets/`, captured from that store. |
-| Gemini CLI, OpenCode, Copilot CLI, Factory Droid, Pi | Depends on the agent's own transcript shape; Entire has no image handling for these. Assume the Claude Code row unless you have checked. | Unchanged — the setting only affects the three agents above. |
+| OpenCode, Copilot CLI, Factory Droid, Pi | Depends on the agent's own transcript shape; Entire has no image handling for these. Assume the Claude Code row unless you have checked. | Unchanged — the setting only affects the three agents above. |
 
 **Do not treat the Codex row as a protection.** It is a side effect of a skip rule not matching a shape, not a deliberate safeguard: it destroys data you may want, it does not apply to the `assets/` path, and a change to either the rule or Codex's format would flip it to the exposure case without notice.
 
@@ -582,10 +582,10 @@ repository would otherwise be a binary Entire executes.
 
 ## Why agent instruction fields are local-only
 
-`investigate.always_prompt`, every review `prompt` (per-agent and judge, in
-`review_profiles` and the legacy `review` map), and every review profile's
-`task` are placed verbatim in the prompts of agents that `entire investigate`
-and `entire review` spawn with approval checks disabled (claude-code's
+Every review `prompt` (per-agent and judge, in
+`review_profiles` and the legacy `review` map) and every review profile's
+`task` are placed verbatim in the prompts of agents that
+`entire review` spawns with approval checks disabled (claude-code's
 `bypassPermissions`, codex's `--dangerously-bypass-approvals-and-sandbox`). The
 prompt is the stated control for those spawns, so whoever writes these strings
 gets the last word in it. `task` and `prompt` are adjacent sections of the same
@@ -601,9 +601,15 @@ clone-local review preferences (stored inside `.git/`, which a clone never
 populates) or `.entire/settings.local.json` verified untracked in both the
 index and `HEAD`. Rejection is a downgrade, never an error — a dropped task
 falls back to the built-in text for conventional profile names, and
-`entire review` / `entire investigate` print a one-line notice naming the
+`entire review` prints a one-line notice naming the
 dropped field and where it has to move (suppressed when the dropped task equals
 the built-in default, since that drop changes nothing).
+
+The `entire-investigate` plugin applies the same reasoning to its own
+`always_prompt`, against its own `.entire/investigate.local.json`. That file
+has no committed counterpart at all, so there is no layer to gate — only a
+check that the file itself is untracked. It is outside this repository's
+control; see the plugin's `internal/config`.
 
 Deliberately not gated: `skills` (review validates every configured skill
 against the locally installed set before spawning, so free text there fails the

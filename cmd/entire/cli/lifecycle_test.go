@@ -27,8 +27,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
-	"github.com/entireio/cli/cmd/entire/cli/investigate"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/provenance"
 	"github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -49,7 +49,6 @@ var _ agent.Agent = (*mockLifecycleAgent)(nil)
 func (m *mockLifecycleAgent) Name() types.AgentName                          { return m.name }
 func (m *mockLifecycleAgent) Type() types.AgentType                          { return m.agentType }
 func (m *mockLifecycleAgent) Description() string                            { return "Mock agent for lifecycle tests" }
-func (m *mockLifecycleAgent) IsPreview() bool                                { return false }
 func (m *mockLifecycleAgent) DetectPresence(_ context.Context) (bool, error) { return false, nil }
 func (m *mockLifecycleAgent) ProtectedDirs() []string                        { return nil }
 func (m *mockLifecycleAgent) GetSessionID(_ *agent.HookInput) string         { return "" }
@@ -725,7 +724,7 @@ func TestHandleLifecycleSessionStart_StoresAgentTypeHint(t *testing.T) {
 // TestHandleLifecycleSessionStart_AgentTypeHintFirstWriterWins verifies that
 // when multiple agents fire SessionStart for the same session ID, only the
 // first agent's claim is recorded AND only the first emits the banner. This
-// matches both the Cursor cross-agent and the Gemini repeat-source
+// matches both the Cursor cross-agent and the repeat-source
 // (startup → resume) cases — the user must see the banner only once.
 func TestHandleLifecycleSessionStart_AgentTypeHintFirstWriterWins(t *testing.T) {
 	setupStopTestRepo(t)
@@ -801,7 +800,7 @@ func TestHandleLifecycleSessionStart_BannerClaimedOnce(t *testing.T) {
 	require.NotEmpty(t, first.lastMessage)
 
 	second := newMockHookResponseAgent()
-	second.agentType = agent.AgentTypeGemini
+	second.agentType = agent.AgentTypeCodex
 	require.NoError(t, handleLifecycleSessionStart(ctx, second, &agent.Event{
 		Type: agent.SessionStart, SessionID: sessionID, Timestamp: time.Now(),
 	}))
@@ -809,18 +808,17 @@ func TestHandleLifecycleSessionStart_BannerClaimedOnce(t *testing.T) {
 		"banner must not be re-emitted once a writer agent has shown it")
 }
 
-// TestHandleLifecycleSessionStart_GeminiRepeatSourceDoesNotDuplicate covers
-// the specific case the user reported: Gemini fires SessionStart twice for
-// the same session (e.g., source=startup followed by source=resume) and we
-// were emitting the banner both times.
-func TestHandleLifecycleSessionStart_GeminiRepeatSourceDoesNotDuplicate(t *testing.T) {
+// TestHandleLifecycleSessionStart_RepeatSourceDoesNotDuplicate covers an
+// agent firing SessionStart twice for the same session (e.g., source=startup
+// followed by source=resume): the banner must be emitted only the first time.
+func TestHandleLifecycleSessionStart_RepeatSourceDoesNotDuplicate(t *testing.T) {
 	setupStopTestRepo(t)
 
 	ctx := context.Background()
-	sessionID := "test-gemini-repeat"
+	sessionID := "test-repeat-source"
 
 	ag := newMockHookResponseAgent()
-	ag.agentType = agent.AgentTypeGemini
+	ag.agentType = agent.AgentTypeClaudeCode
 
 	require.NoError(t, handleLifecycleSessionStart(ctx, ag, &agent.Event{
 		Type: agent.SessionStart, SessionID: sessionID, Timestamp: time.Now(),
@@ -1466,7 +1464,7 @@ func TestHandleLifecycleCompaction_PreservesTranscriptOffset(t *testing.T) {
 	}
 
 	// Compaction should NOT reset the transcript offset.
-	// Many agents (e.g., Gemini) fire pre-compress as a no-op after every tool call;
+	// Some agents fire pre-compress as a no-op after every tool call;
 	// resetting the offset causes stale files to re-appear in carry-forward.
 	err := handleLifecycleCompaction(context.Background(), ag, event)
 	if err != nil {
@@ -2465,11 +2463,11 @@ const testInvestigateRunID = "abcdef012345"
 // the hook's agent for adoption to succeed.
 func setInvestigateEnv(t *testing.T, agentName, startingSHA, topic string) {
 	t.Helper()
-	t.Setenv(investigate.EnvSession, "1")
-	t.Setenv(investigate.EnvAgent, agentName)
-	t.Setenv(investigate.EnvStartingSHA, startingSHA)
-	t.Setenv(investigate.EnvRunID, testInvestigateRunID)
-	t.Setenv(investigate.EnvTopic, topic)
+	t.Setenv(provenance.InvestigateSession, "1")
+	t.Setenv(provenance.InvestigateAgent, agentName)
+	t.Setenv(provenance.InvestigateStartingSHA, startingSHA)
+	t.Setenv(provenance.InvestigateRunID, testInvestigateRunID)
+	t.Setenv(provenance.InvestigateTopic, topic)
 }
 
 // TestAdoptInvestigateEnv_Success verifies that adoptInvestigateEnv tags the
@@ -2618,11 +2616,11 @@ func TestAdoptInvestigateEnv_SessionEnvNotOne(t *testing.T) {
 
 	ag := newMockAgent()
 	headSHA := testutil.GetHeadHash(t, tmp)
-	t.Setenv(investigate.EnvSession, "0")
-	t.Setenv(investigate.EnvAgent, string(ag.Name()))
-	t.Setenv(investigate.EnvStartingSHA, headSHA)
-	t.Setenv(investigate.EnvRunID, testInvestigateRunID)
-	t.Setenv(investigate.EnvTopic, "topic")
+	t.Setenv(provenance.InvestigateSession, "0")
+	t.Setenv(provenance.InvestigateAgent, string(ag.Name()))
+	t.Setenv(provenance.InvestigateStartingSHA, headSHA)
+	t.Setenv(provenance.InvestigateRunID, testInvestigateRunID)
+	t.Setenv(provenance.InvestigateTopic, "topic")
 
 	state := &session.State{
 		SessionID:  "test-investigate-env-session-not-one",
@@ -2713,11 +2711,11 @@ func TestAdoptInvestigateEnv_RejectsBadRunID(t *testing.T) {
 
 			ag := newMockAgent()
 			headSHA := testutil.GetHeadHash(t, tmp)
-			t.Setenv(investigate.EnvSession, "1")
-			t.Setenv(investigate.EnvAgent, string(ag.Name()))
-			t.Setenv(investigate.EnvStartingSHA, headSHA)
-			t.Setenv(investigate.EnvRunID, tc.runID)
-			t.Setenv(investigate.EnvTopic, "topic")
+			t.Setenv(provenance.InvestigateSession, "1")
+			t.Setenv(provenance.InvestigateAgent, string(ag.Name()))
+			t.Setenv(provenance.InvestigateStartingSHA, headSHA)
+			t.Setenv(provenance.InvestigateRunID, tc.runID)
+			t.Setenv(provenance.InvestigateTopic, "topic")
 
 			state := &session.State{
 				SessionID:  "test-investigate-env-bad-run-id-" + tc.name,
