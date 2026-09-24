@@ -244,7 +244,7 @@ func (g *GeminiCLIAgent) GetTranscriptPosition(path string) (int, error) {
 //   - files: list of file paths modified by Gemini (from Write/Edit tools)
 //   - currentPosition: total number of messages in the transcript
 //   - error: any error encountered during reading
-func (g *GeminiCLIAgent) ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error) {
+func (g *GeminiCLIAgent) ExtractModifiedFilesFromOffset(_ context.Context, path string, startOffset int) (files []string, currentPosition int, err error) {
 	if path == "" {
 		return nil, 0, nil
 	}

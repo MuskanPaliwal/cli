@@ -283,7 +283,7 @@ func (a *AntigravityAgent) SliceTranscriptFromPosition(content []byte, startOffs
 //
 // The blank-skip -> lineNum++ -> (lineNum <= startOffset) ordering matches
 // ExtractPrompts so positions stay consistent across analyzer methods.
-func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error) {
+func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(ctx context.Context, path string, startOffset int) (files []string, currentPosition int, err error) {
 	if path == "" {
 		return nil, 0, nil
 	}
@@ -317,7 +317,7 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 					// file names it — this list alone is what is incomplete.
 					if step.truncated() {
 						dropped++
-						logging.Warn(logging.WithComponent(context.Background(), "antigravity"),
+						logging.Warn(logging.WithComponent(ctx, "antigravity"),
 							"transcript step truncated by agy; a modified file cannot be named from this step (it may still be captured by the PreToolUse hook or a later call)",
 							slog.String("transcript", path),
 							slog.Int("step_index", step.StepIndex),
@@ -333,7 +333,7 @@ func (a *AntigravityAgent) ExtractModifiedFilesFromOffset(path string, startOffs
 		}
 	})
 	if dropped > 0 {
-		logging.Warn(logging.WithComponent(context.Background(), "antigravity"),
+		logging.Warn(logging.WithComponent(ctx, "antigravity"),
 			"antigravity transcript-derived file list is incomplete (truncated steps); hook-captured files are unaffected",
 			slog.String("transcript", path),
 			slog.Int("dropped_truncated_calls", dropped))

@@ -2232,7 +2232,7 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 			}
 		}
 	} else {
-		files, _, err := analyzer.ExtractModifiedFilesFromOffset(state.TranscriptPath, offset)
+		files, _, err := analyzer.ExtractModifiedFilesFromOffset(logCtx, state.TranscriptPath, offset)
 		if err != nil {
 			logging.Debug(logCtx, "extractModifiedFilesFromLiveTranscript: main transcript extraction failed",
 				slog.String("transcript_path", state.TranscriptPath),

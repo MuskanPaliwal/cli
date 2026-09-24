@@ -218,7 +218,7 @@ type TranscriptAnalyzer interface {
 	//   - files: list of file paths modified by the agent (from Write/Edit tools)
 	//   - currentPosition: the current position (line count or message count)
 	//   - error: any error encountered during reading
-	ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error)
+	ExtractModifiedFilesFromOffset(ctx context.Context, path string, startOffset int) (files []string, currentPosition int, err error)
 }
 
 // PromptExtractor extracts user prompts from a transcript file.

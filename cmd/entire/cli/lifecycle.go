@@ -884,7 +884,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 			}
 		} else {
 			// Fall back to basic extraction (main transcript only)
-			if files, _, fileErr := analyzer.ExtractModifiedFilesFromOffset(transcriptRef, transcriptOffset); fileErr != nil {
+			if files, _, fileErr := analyzer.ExtractModifiedFilesFromOffset(logCtx, transcriptRef, transcriptOffset); fileErr != nil {
 				logging.Warn(logCtx, "failed to extract modified files",
 					slog.String("error", fileErr.Error()))
 			} else {
@@ -1850,7 +1850,7 @@ func subagentTranscriptAndFiles(
 	if transcriptPath != "" {
 		transcriptToScan = transcriptPath
 	}
-	files, _, err := analyzer.ExtractModifiedFilesFromOffset(transcriptToScan, 0)
+	files, _, err := analyzer.ExtractModifiedFilesFromOffset(logCtx, transcriptToScan, 0)
 	if err != nil && opts.analyzerFilesOnly {
 		// With no worktree-diff backup, leave the live record for SessionEnd to
 		// retry rather than permanently completing it as read-only.

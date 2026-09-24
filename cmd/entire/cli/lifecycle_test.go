@@ -124,7 +124,7 @@ var _ agent.TranscriptAnalyzer = (*mockAnalyzerAgent)(nil)
 
 func (m *mockAnalyzerAgent) GetTranscriptPosition(_ string) (int, error) { return 0, nil }
 
-func (m *mockAnalyzerAgent) ExtractModifiedFilesFromOffset(_ string, _ int) ([]string, int, error) {
+func (m *mockAnalyzerAgent) ExtractModifiedFilesFromOffset(_ context.Context, _ string, _ int) ([]string, int, error) {
 	if m.onExtract != nil {
 		m.onExtract()
 	}

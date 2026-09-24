@@ -257,7 +257,7 @@ func TestExtractModifiedFiles_FromToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &AntigravityAgent{}
-	files, pos, err := a.ExtractModifiedFilesFromOffset(path, 0)
+	files, pos, err := a.ExtractModifiedFilesFromOffset(context.Background(), path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestExtractModifiedFiles_PathConvention(t *testing.T) {
 	}
 
 	a := &AntigravityAgent{}
-	files, _, err := a.ExtractModifiedFilesFromOffset(transcript, 0)
+	files, _, err := a.ExtractModifiedFilesFromOffset(context.Background(), transcript, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestExtractModifiedFiles_TruncatedStepDoesNotPanicAndKeepsOthers(t *testing
 		t.Fatal(err)
 	}
 	a := &AntigravityAgent{}
-	files, pos, err := a.ExtractModifiedFilesFromOffset(path, 0)
+	files, pos, err := a.ExtractModifiedFilesFromOffset(context.Background(), path, 0)
 	if err != nil {
 		t.Fatalf("truncated step must degrade, not error: %v", err)
 	}

@@ -66,7 +66,7 @@ func (m *mockFullAgent) AreHooksInstalled(context.Context) (bool, error) { retur
 
 // TranscriptAnalyzer
 func (m *mockFullAgent) GetTranscriptPosition(string) (int, error) { return 0, nil }
-func (m *mockFullAgent) ExtractModifiedFilesFromOffset(string, int) ([]string, int, error) {
+func (m *mockFullAgent) ExtractModifiedFilesFromOffset(context.Context, string, int) ([]string, int, error) {
 	return nil, 0, nil
 }
 func (m *mockFullAgent) ExtractPrompts(string, int) ([]string, error) { return nil, nil }
