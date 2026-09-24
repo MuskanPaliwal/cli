@@ -13,7 +13,7 @@ import (
 )
 
 // TestAgentPackages_NoForbiddenImports verifies that agent implementation packages
-// (claudecode, geminicli, opencode, cursor, etc.) only import from allowed packages.
+// (claudecode, codex, opencode, cursor, etc.) only import from allowed packages.
 //
 // This prevents agent implementations from coupling to framework internals
 // (strategy, checkpoint, session, commands, hook_registry, lifecycle) which

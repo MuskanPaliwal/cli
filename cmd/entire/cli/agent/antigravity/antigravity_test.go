@@ -139,7 +139,7 @@ func TestWriteSession_RejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "nil session", session: nil},
 		{name: "wrong agent", session: &agent.AgentSession{
-			AgentName:  agent.AgentNameGemini,
+			AgentName:  agent.AgentNameClaudeCode,
 			SessionRef: validPath,
 			NativeData: []byte("{}\n"),
 		}},

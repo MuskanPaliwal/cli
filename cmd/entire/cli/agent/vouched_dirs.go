@@ -209,7 +209,6 @@ var vouchableDirs = []string{
 	".codex",
 	".cursor",
 	".factory",
-	".gemini",
 	".github",
 	".github/hooks",
 	".opencode",
