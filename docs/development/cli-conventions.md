@@ -445,6 +445,21 @@ the commands are always runnable in every build.
   it prompts on the controlling terminal precisely so its URL can stay on a
   stdout being captured by `$(…)`. Do not "fix" results onto the terminal.
 
+  **A cancelled context is an interruption, not an answer.** A confirmation
+  gate's `(false, nil)` means the user declined, and the caller exits 0 on it,
+  so nothing else may borrow that pair: a context cancelled out from under the
+  gate comes back as an error wrapping `ctx.Err()`. `main.go` matches
+  `errors.Is(err, context.Canceled)` against the signal it recorded and
+  re-raises it, which is what gives Ctrl+C its usual quiet 130 (143 for
+  SIGTERM) and breaks an enclosing shell loop — swallowing the cancellation
+  throws that away and exits 0 having done nothing, silently. Check either side
+  of the form, as `plugin_confirm.go` does: `huh` opens the TTY during startup
+  regardless of context state, and the far-side check must come before the form
+  error is inspected, because `handleFormCancellation` treats `context.Canceled`
+  as a clean abort. An abort from *inside* the form (`huh.ErrUserAborted`) is
+  the opposite case — that one IS an answer. `confirmControlPlaneDeletion` is
+  the outlier here and carries the same bug for `delete`.
+
   A caveat that belongs to a form goes IN the form — for the pool note, in the
   field's `Title`. `huh`'s accessible mode renders a field's title and options
   and nothing else, so a `Description` is silently dropped for exactly the

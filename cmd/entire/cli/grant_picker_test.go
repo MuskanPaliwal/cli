@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1277,4 +1278,32 @@ func truncatedAddPoolServer(t *testing.T, held []coreapi.ProjectGrant) *httptest
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// TestRevokeConfirmed_ACancelledContextIsNotADecline: (false, nil) is reserved
+// for the user answering no, because the caller exits 0 on it. A context
+// cancelled out from under the gate is an interruption, and reporting it as a
+// decline exited 0 having revoked nothing and said nothing — the silent no-op
+// this command's confirmation exists to avoid.
+//
+// Wrapping ctx.Err() is also load-bearing: main.go matches on
+// errors.Is(err, context.Canceled) plus the signal it recorded to re-raise it,
+// which is what gives Ctrl+C its usual quiet 130 and breaks an enclosing shell
+// loop. The same helper guards the far side of the form, where a signal can
+// land while it is up.
+func TestRevokeConfirmed_ACancelledContextIsNotADecline(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+	var render bytes.Buffer
+	cmd.SetErr(&render)
+
+	pt := grantPickerTarget{noun: "project", ref: "widgets", roles: accessRoles, least: leastAccessRole}
+	proceed, err := revokeConfirmed(cmd, pt, []grantCandidate{{ref: "x", label: "github:alice"}})
+
+	require.False(t, proceed, "nothing was confirmed")
+	require.ErrorIs(t, err, context.Canceled, "main.go keys the quiet signal exit off this")
+	require.Empty(t, render.String(), "an interruption is not the user being told they declined")
 }
