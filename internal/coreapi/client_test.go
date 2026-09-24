@@ -424,9 +424,9 @@ func TestListOrgsAndProjects_UnsentCapabilitiesDecode(t *testing.T) {
 
 // TestListOrgInvitations_UnknownEnumValuesPassThrough locks in the
 // forward-compat contract for spec/normalize.go's loosenReadModelEnums on
-// Invitation: the CLI only prints `role` and `status`, so a lifecycle state or
-// role the server adds later must decode and display rather than fail the whole
-// listing in ogen's Validate().
+// Invitation: future consumers must be able to display `role` and `status`,
+// so a lifecycle state or role the server adds later must decode rather than
+// fail the whole listing in ogen's Validate().
 func TestListOrgInvitations_UnknownEnumValuesPassThrough(t *testing.T) {
 	t.Parallel()
 

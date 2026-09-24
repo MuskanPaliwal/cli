@@ -44,15 +44,16 @@ the *client sends* (request bodies like `SetRepoVisibilityInputBody`) should
 stay strict.
 
 `Membership.role`/`status` and `Invitation.role`/`status` are the same shape:
-`entire org grant list` and `entire grant org invites` only print them, so a
-role or lifecycle state added later must display rather than fail the listing.
+`entire org grant list` displays memberships; the generated
+`ListOrgInvitations` client decodes invitations. A new role or lifecycle state
+must not fail either listing.
 
 **Workaround:** `spec/normalize.go` (`loosenReadModelEnums`, allowlist
 `readModelEnumFields`) deletes the `enum` constraint from those response
 read-model fields, so ogen emits plain strings with no `Validate()` and
 unknown values pass through for display. Only response read models are
 loosened; request-body enums stay strict — `CreateOrgInvitationInputBody.role`
-keeps its enum, so a bad `--role` is still refused before it is sent. Locked in
+keeps its enum for outgoing requests. Locked in
 by `TestListProjectRepos_UnknownEnumValuesPassThrough`,
 `TestListOrgInvitations_UnknownEnumValuesPassThrough` and
 `TestListOrgMembers_UnknownEnumValuesPassThrough` in `client_test.go`.
