@@ -239,36 +239,6 @@ func TestShadowStrategy_ListAllSessionStates(t *testing.T) {
 	}
 }
 
-// A dead owner is finalized by finalizeExitedSessions. Keep its IDLE state in
-// the list and on disk so that finalizer retains the ownership evidence it
-// needs, even when the session has not created a shadow branch.
-func TestShadowStrategy_ListAllSessionStates_KeepsIdleSessionWithDeadOwner(t *testing.T) {
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
-
-	ctx := context.Background()
-	s := &ManualCommitStrategy{}
-	state := &SessionState{
-		SessionID:  "idle-dead-owner",
-		BaseCommit: "bbb2223",
-		StartedAt:  time.Now(),
-		Phase:      session.PhaseIdle,
-		Owner:      &proclive.Identity{PID: os.Getpid(), Start: "not-this-process"},
-	}
-	require.NoError(t, s.saveSessionState(ctx, state))
-
-	states, err := s.listAllSessionStates(ctx)
-	require.NoError(t, err)
-	require.Len(t, states, 1)
-	assert.Equal(t, state.SessionID, states[0].SessionID)
-
-	persisted, err := LoadSessionState(ctx, state.SessionID)
-	require.NoError(t, err)
-	require.NotNil(t, persisted, "idle state must remain for exited-owner finalization")
-	assert.Equal(t, state.Owner, persisted.Owner)
-}
-
 // TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions tests that
 // listAllSessionStates cleans up stale sessions whose shadow branch no longer exists.
 // Deleted: ENDED never-condensed sessions. Kept: ACTIVE, condensed,
@@ -312,16 +282,6 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 		Owner:      &proclive.Identity{PID: os.Getpid(), Start: "not-this-process"},
 	}
 
-	// Session 2c: IDLE, no checkpoint ID, owner alive (a turn between commits): KEPT.
-	liveOwner, liveOwnerOK := proclive.ResolveOwner()
-	idleLiveOwner := &SessionState{
-		SessionID:  "idle-live-owner",
-		BaseCommit: "bbb2224",
-		StartedAt:  now.Add(-1 * time.Minute),
-		Phase:      "idle",
-		Owner:      &liveOwner,
-	}
-
 	// Session 3: ENDED session with no checkpoint ID
 	// Should be cleaned up.
 	staleEnded := &SessionState{
@@ -330,6 +290,18 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 		StartedAt:  now.Add(-6 * time.Hour),
 		StepCount:  1,
 		Phase:      "ended",
+	}
+
+	// Session 3b: IDLE phase but EndedAt stamped (partial finalizing write):
+	// ended per State.IsEnded, never condensed → cleaned up.
+	endedAt := now.Add(-5 * time.Hour)
+	idleWithEndedAt := &SessionState{
+		SessionID:  "idle-with-ended-at",
+		BaseCommit: "ccc3334",
+		StartedAt:  now.Add(-6 * time.Hour),
+		StepCount:  1,
+		Phase:      "idle",
+		EndedAt:    &endedAt,
 	}
 
 	// Session 4: ACTIVE session with no shadow branch (branch not yet created)
@@ -361,12 +333,8 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 		TaskRecords: []session.TaskRecord{{ToolUseID: "toolu_keep", StartedAt: now, CompletedAt: now}},
 	}
 
-	fixtures := []*SessionState{legacyEmpty, idleUnknownOwner, idleDeadOwner, staleEnded, activeNoShadow, condensedIdle, recordEnded}
+	fixtures := []*SessionState{legacyEmpty, idleUnknownOwner, idleDeadOwner, staleEnded, idleWithEndedAt, activeNoShadow, condensedIdle, recordEnded}
 	wantKept := []string{"active-no-shadow", "condensed-idle", "record-ended", "idle-dead-owner", "idle-unknown-owner", "legacy-empty-phase"}
-	if liveOwnerOK {
-		fixtures = append(fixtures, idleLiveOwner)
-		wantKept = append(wantKept, "idle-live-owner")
-	}
 	for _, state := range fixtures {
 		if err := s.saveSessionState(context.Background(), state); err != nil {
 			t.Fatalf("saveSessionState(%s) error = %v", state.SessionID, err)
@@ -405,12 +373,9 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 	if !kept["idle-dead-owner"] {
 		t.Error("idle session whose owner exited must be kept for exited-owner finalization")
 	}
-	if liveOwnerOK && !kept["idle-live-owner"] {
-		t.Error("idle session whose owner is alive must be kept — it is a live session between turns")
-	}
 
 	// Verify stale sessions were actually cleared from disk
-	for _, staleID := range []string{"stale-ended"} {
+	for _, staleID := range []string{"stale-ended", "idle-with-ended-at"} {
 		loaded, err := LoadSessionState(context.Background(), staleID)
 		if err != nil {
 			t.Errorf("LoadSessionState(%s) error = %v", staleID, err)

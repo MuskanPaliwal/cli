@@ -14,7 +14,7 @@ import (
 
 // An idle session with no shadow branch and no checkpoint is a live session
 // between turns; another worktree's commit hook must not delete it.
-func TestSessionStore_IdleLiveSessionSurvivesAnotherWorktreesCommitHook(t *testing.T) {
+func TestSessionStore_IdleSessionSurvivesAnotherWorktreesCommitHook(t *testing.T) {
 	t.Parallel()
 	parent := NewRepoWithCommit(t)
 	quiet := worktreeEnv(t, parent, "quiet")
@@ -30,7 +30,6 @@ func TestSessionStore_IdleLiveSessionSurvivesAnotherWorktreesCommitHook(t *testi
 	require.NotNil(t, state)
 	require.Equal(t, session.PhaseIdle, state.Phase)
 	require.True(t, state.LastCheckpointID.IsEmpty(), "precondition: nothing condensed yet")
-	require.NotNil(t, state.Owner, "precondition: the hook recorded a live owner")
 
 	// Another worktree's hook lists the shared store.
 	parent.WriteFile("notes.txt", "unrelated\n")
@@ -38,7 +37,7 @@ func TestSessionStore_IdleLiveSessionSurvivesAnotherWorktreesCommitHook(t *testi
 
 	state, err = parent.GetSessionState(sess.ID)
 	require.NoError(t, err)
-	require.NotNil(t, state, "an idle session whose agent is still running must not be deleted by another worktree's commit hook")
+	require.NotNil(t, state, "an idle session between turns must not be deleted by another worktree's commit hook")
 }
 
 // worktreeEnv adds a linked worktree, with Entire initialised, as a TestEnv.

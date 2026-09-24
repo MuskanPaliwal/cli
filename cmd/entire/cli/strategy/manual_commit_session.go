@@ -150,8 +150,7 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 		// Skip and cleanup orphaned sessions whose shadow branch no longer exists.
 		// Keep non-ended sessions (including legacy empty phases normalized to IDLE)
 		// and sessions with LastCheckpointID (needed for checkpoint ID reuse on
-		// subsequent commits). Eligible ENDED states that were never condensed are
-		// cleared.
+		// subsequent commits). Ended states that were never condensed are cleared.
 		// Record-bearing sessions hold condensable content off the shadow branch — never orphaned.
 		shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 		refName := plumbing.NewBranchReferenceName(shadowBranch)
@@ -172,20 +171,12 @@ func (s *ManualCommitStrategy) listAllSessionStates(ctx context.Context) ([]*Ses
 }
 
 // isOrphanedSessionState reports whether a state with no shadow branch may be
-// deleted. ACTIVE sessions may not have created it yet; a LastCheckpointID and
-// task records are kept. An IDLE state with none of those still belongs to the
-// exited-owner finalizer when its owner is dead, so it is never an orphan here.
-// Eligible ENDED states keep the old cleanup rule; legacy empty phases normalize
-// to IDLE and are retained. Other non-ended states age out or are finalized
-// through their dedicated lifecycle paths.
+// deleted: only a finalized session (State.IsEnded) that was never condensed
+// and carries no task records. IDLE states — including legacy empty phases,
+// which normalize to IDLE — are live sessions between turns or belong to the
+// exited-owner finalizer, so they age out through StaleSessionThreshold.
 func isOrphanedSessionState(state *SessionState) bool {
-	if state.Phase.IsActive() || !state.LastCheckpointID.IsEmpty() || state.HasTaskContent() {
-		return false
-	}
-	if state.Phase == session.PhaseIdle {
-		return false
-	}
-	return true
+	return state.IsEnded() && state.LastCheckpointID.IsEmpty() && !state.HasTaskContent()
 }
 
 // IsCondensableEndedSession reports whether an ENDED session still carries
