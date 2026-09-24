@@ -71,8 +71,22 @@ func newHooksCmd() *cobra.Command {
 			sub := newAgentHooksCmd(agentName, handler)
 			// title-tee is not a lifecycle verb: it runs globally (outside
 			// git repos, without the enabled check) and owns its stdout.
+			//
+			// Exempt from the root `.entire` guard, and only this command:
+			// cobra.EnableTraverseRunHooks means root's PersistentPreRunE runs
+			// for it, and RequireEntireDir answers nil only for
+			// ErrNotARepository — an unresolvable repository (git's
+			// safe.directory refusal, git absent from PATH) or a `.entire` that
+			// is not a real directory makes it print a multi-line remedy to
+			// stderr and fail the command. agy fires this on every agent state
+			// change, so that would be a repeating stderr blob and a non-zero
+			// exit per fire, against this command's NEVER-exit-non-zero
+			// contract, with token capture silently dead. The tee writes only
+			// to the per-user cache, never under `.entire`, so it has nothing
+			// the guard protects. The lifecycle verbs keep the guard: they are
+			// the checkpoint-writing path and must fail closed.
 			if agentName == agent.AgentNameAntigravity {
-				sub.AddCommand(newAntigravityTitleTeeCmd())
+				sub.AddCommand(exemptFromEntireDirCheck(newAntigravityTitleTeeCmd()))
 			}
 			cmd.AddCommand(sub)
 		}
