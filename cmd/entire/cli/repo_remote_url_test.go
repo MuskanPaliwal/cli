@@ -339,11 +339,11 @@ func TestRepoRemoteURL_PickerKeepsStdoutClean(t *testing.T) {
 
 	// Hosts are offered case-folded and sorted, so 1 = eu-west, 2 = us-east.
 	var terminal bytes.Buffer
-	prevTerm := openPlacementPromptTerminal
-	openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
-		return placementPromptTerminal{in: strings.NewReader("2\n"), out: &terminal}, nil
+	prevTerm := openPromptTerminal
+	openPromptTerminal = func() (promptTerminal, error) {
+		return promptTerminal{in: strings.NewReader("2\n"), out: &terminal}, nil
 	}
-	t.Cleanup(func() { openPlacementPromptTerminal = prevTerm })
+	t.Cleanup(func() { openPromptTerminal = prevTerm })
 
 	stdout, stderr, err := runCoreCmd(t, newRepoRemoteURLCmd, srv.URL, "/gh/owner/repo")
 	require.NoError(t, err)
