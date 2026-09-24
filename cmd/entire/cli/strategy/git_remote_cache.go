@@ -10,7 +10,7 @@ import (
 
 // The checkpoint sync remote is elected from scratch on every call — a
 // documented tradeoff (see CheckpointReadRemotes), and every election shells out
-// to git to answer two questions about .git/config: which remotes exist, and
+// to git to answer two questions about local Git config: which remotes exist, and
 // does remote X exist. Those answers are identical for every election within one
 // command against one repository, and there are several: `entire checkpoint list`
 // resolves the chain four times (metadata-disconnection warning, the branch
@@ -31,7 +31,7 @@ import (
 
 type gitRemoteCacheKey struct{}
 
-// gitRemoteCache memoizes .git/config remote reads, partitioned by repository.
+// gitRemoteCache memoizes local Git config remote reads, partitioned by repository.
 //
 // The partition is load-bearing, not tidiness: `entire dispatch --repos a,b`
 // walks several repositories in ONE process, scoping each one's election with
@@ -69,10 +69,10 @@ type remoteSnapshot struct {
 	orderedSet bool
 	// member holds isConfiguredRemote answers per remote name. Kept separate
 	// from ordered because the two ask git different questions: ordered lists
-	// only remotes carrying a url key in local config, while isConfiguredRemote
-	// runs `git remote get-url`, which also sees pushurl-only remotes and
-	// inherited scopes. Deriving one from the other would change election
-	// semantics, so each is memoized against its own git call.
+	// only remotes carrying a url key in local config or its includes, while
+	// isConfiguredRemote runs `git remote get-url`, which also sees pushurl-only
+	// remotes. Deriving one from the other would change election semantics, so
+	// each is memoized against its own call.
 	member map[string]bool
 }
 

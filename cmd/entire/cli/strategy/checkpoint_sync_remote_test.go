@@ -251,6 +251,34 @@ func TestResolveCheckpointSyncRemote_PushurlOnlyRemoteIsInvisible(t *testing.T) 
 	assert.Equal(t, CheckpointSyncRemote{Name: "first-real", Source: SyncRemoteSourceFirst}, got)
 }
 
+// Not parallel: uses t.Chdir().
+func TestCheckpointSyncRemote_IncludedRemote(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	ctx := context.Background()
+	dir := newCaptureTestRepo(t)
+	testutil.RunGit(t, dir, "remote", "remove", "fork")
+	testutil.WriteFile(t, dir, "remotes.cfg", "[remote \"fork\"]\n\turl = https://example.com/fork.git\n")
+	setGitConfig(t, dir, "include.path", filepath.Join(dir, "remotes.cfg"))
+	setGitConfig(t, dir, "remote.pushDefault", "fork")
+	require.Equal(t, "https://example.com/fork.git", strings.TrimSpace(testutil.RunGit(t, dir, "remote", "get-url", "fork")))
+	t.Chdir(dir)
+
+	got, err := ResolveCheckpointSyncRemote(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointSyncRemote{Name: "origin", Source: SyncRemoteSourceDefault}, got)
+	require.True(t, pendingCaptureCheckpointSyncRemote(ctx, "fork"), "the included remote is a valid capture target")
+	captureOnSuccessfulPush(ctx, "fork")
+	assert.Equal(t, []string{"fork"}, loadCapturedSyncRemotes(ctx))
+	got, err = ResolveCheckpointSyncRemote(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointSyncRemote{Name: "fork", Source: SyncRemoteSourceObserved}, got)
+
+	testutil.WriteCheckpointPushRemoteSetting(t, dir, "fork")
+	got, err = ResolveCheckpointSyncRemote(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointSyncRemote{Name: "fork", Source: SyncRemoteSourceConfig}, got)
+}
+
 // Not parallel: uses t.Chdir()
 // Regression guard for the tracking tier that was removed before merge: the
 // branch's tracking config must NOT decide the election.

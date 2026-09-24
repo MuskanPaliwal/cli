@@ -46,8 +46,8 @@ type CheckpointSyncRemote struct {
 // fetch URL), then the captured election (evidence-elected by a past push that
 // agreed with the branch's declared push destination; fail-soft if that remote
 // is no longer fetchable), then "origin", then the sole remote, then the first
-// remote in .git/config order. It knows nothing about the checkpoint_remote
-// URL feature; callers exempt that case themselves.
+// remote in local config traversal order, including included files. It knows
+// nothing about the checkpoint_remote URL feature; callers exempt that case.
 //
 // Deliberately NOT keyed on the branch's tracking config alone
 // (branch.<name>.pushRemote / remote.pushDefault / branch.<name>.remote).
@@ -216,10 +216,10 @@ func hintGatedCheckpointSync(ctx context.Context, pushRemote string) {
 		slog.String("push_remote", pushRemote))
 }
 
-// configuredRemotesInConfigOrder lists remote names in .git/config section
-// order (approximates "first remote added"; `git remote` output is
-// alphabetical and unsuitable). Remotes configured with only pushurl are
-// deliberately invisible (spec Unit 1). Errors yield an empty list.
+// configuredRemotesInConfigOrder lists remote names in local config traversal
+// order, including included files (approximates "first remote added"; `git
+// remote` output is alphabetical and unsuitable). Remotes configured with only
+// pushurl are deliberately invisible. Errors yield an empty list.
 func configuredRemotesInConfigOrder(ctx context.Context) []string {
 	return cachedRemotesInConfigOrder(ctx, readRemotesInConfigOrder)
 }
@@ -234,16 +234,16 @@ func isCheckpointSyncRemoteEligible(ctx context.Context, name string) bool {
 	return slices.Contains(configuredRemotesInConfigOrder(ctx), name)
 }
 
-// readRemotesInConfigOrder lists remote names, distinguishing "this repo has no
-// remotes" from "the read failed". Both used to collapse to nil, which was
-// harmless while every caller re-ran the command — but the per-invocation cache
-// would memoize a failure's nil as a legitimately empty list and then skip
+// readRemotesInConfigOrder lists remote names from local config and its includes,
+// distinguishing "this repo has no remotes" from "the read failed". Both used to
+// collapse to nil, which was harmless while every caller re-ran the command.
+// The per-invocation cache would memoize a failure's nil as an empty list and skip
 // checkpoint sync for the rest of the process. `git config --get-regexp` exits 1
 // for no match, so that exit code alone is the empty answer; anything else (a
 // fork failure under load, a cancelled context, a locked config) is an error the
 // cache must not keep.
 func readRemotesInConfigOrder(ctx context.Context) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--get-regexp", `^remote\..*\.url$`)
+	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--includes", "--get-regexp", `^remote\..*\.url$`)
 	if worktreeRoot, ok := settings.WorktreeRoot(ctx); ok {
 		cmd.Dir = worktreeRoot
 	}
