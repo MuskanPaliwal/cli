@@ -73,7 +73,7 @@ var openPromptTerminal = func() (promptTerminal, error) {
 // on the same stream.
 //
 // Neither of a command's streams is guaranteed to be a terminal: stdout is
-// captured by design in places (`repo remote url`'s shell substitution) and
+// captured by design in places (a `--json` read piped into a parser) and
 // stderr is redirected often enough (`... 2>log`) that picking either
 // unconditionally just moves which redirect breaks the prompt. Bubble Tea makes
 // that failure silent rather than loud — it sets ttyOutput only when the writer
