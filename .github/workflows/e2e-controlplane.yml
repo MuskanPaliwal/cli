@@ -23,9 +23,10 @@ jobs:
   controlplane:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Fork PRs get no secrets, so the suite could only fail at login; it runs
-    # for same-repo PRs, pushes to main, and manual dispatches.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Fork PRs get no secrets, and Dependabot-triggered runs get only
+    # Dependabot secrets, so either could only fail at login. It runs for other
+    # same-repo PRs, pushes to main, and manual dispatches.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
     permissions:
       contents: read
 
