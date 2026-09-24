@@ -78,7 +78,7 @@ E2E tests:
 - See [`e2e/README.md`](../../e2e/README.md) for full documentation (structure, debugging, adding agents)
 - Test agent interactions (creating files, committing, etc.); Vogon and Roger Roger are deterministic canaries rather than real-agent API calls.
 - Validate checkpoint scenarios documented in `docs/architecture/checkpoint-scenarios.md`
-- Select a runner via `E2E_AGENT`: `claude-code`, `gemini-cli`, `opencode`, `codex`, `cursor-cli`, `factoryai-droid`, `copilot-cli`, `pi`, `vogon`, or `roger-roger`. These are the filter names used by registration in `e2e/agents/`, not necessarily the CLI's agent identifiers.
+- Select a runner via `E2E_AGENT`: `claude-code`, `opencode`, `codex`, `cursor-cli`, `factoryai-droid`, `copilot-cli`, `pi`, `vogon`, or `roger-roger`. These are the filter names used by registration in `e2e/agents/`, not necessarily the CLI's agent identifiers.
 
 **Environment variables:**
 
@@ -86,7 +86,7 @@ E2E tests:
 - `E2E_CLAUDE_MODEL` - Claude model to use (default: `haiku` for cost efficiency)
 - `E2E_TIMEOUT` - Per-prompt timeout, overriding each runner's own default (e.g. `E2E_TIMEOUT=4m`)
 
-The per-prompt default is the runner's, not a single number: codex, copilot-cli and gemini use 60s, cursor 90s, opencode 2m, and claude-code, droid, pi, vogon and roger-roger impose no per-prompt bound at all — for those the scenario timeout passed to `ForEachAgent` is the only deadline. `E2E_TIMEOUT` sets a bound for every runner including those, and a per-test `agents.WithPromptTimeout(...)` overrides it. All ten resolve through `promptTimeout` in `e2e/agents/agent.go`; a runner that resolves its own is a build failure (`TestEveryRunPromptResolvesThroughPromptTimeout`). A malformed value is an error rather than a silent fall back to the default.
+The per-prompt default is the runner's, not a single number: codex and copilot-cli use 60s, cursor 90s, opencode 2m, and claude-code, droid, pi, vogon and roger-roger impose no per-prompt bound at all — for those the scenario timeout passed to `ForEachAgent` is the only deadline. `E2E_TIMEOUT` sets a bound for every runner including those, and a per-test `agents.WithPromptTimeout(...)` overrides it. All nine resolve through `promptTimeout` in `e2e/agents/agent.go`; a runner that resolves its own is a build failure (`TestEveryRunPromptResolvesThroughPromptTimeout`). A malformed value is an error rather than a silent fall back to the default.
 
 ### Test Parallelization
 
@@ -134,6 +134,29 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 **Prefer `testutil.InitRepo()` over direct `git.PlainInit()` in tests.** When a test in this repo needs an initialized repository, use `testutil.InitRepo(t, dir)` unless the test specifically needs lower-level initialization behavior that the helper cannot provide. Do not call `git.PlainInit()` directly and then create commits or run CLI git operations without also reproducing the helper's repo-local config.
 
 **Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
+
+#### Keeping the developer's git config out
+
+An isolated temp repo is not the same as an isolated git *config*. `testutil.InitRepo` writes repo-local settings, but `~/.gitconfig` still applies on top of them, so a host that sets `commit.gpgSign`, `tag.gpgSign` or `transfer.fsckObjects` can decide test outcomes. Isolation has two layers, and most packages need both:
+
+- **In-process go-git reads.** Register an empty `ConfigLoader` plugin in `TestMain` (see `checkpoint`, `strategy`, `cli`, `agentimport` `global_test.go`). Without it go-git resolves global scope through its `Auto` loader, which reads all of git's global sources.
+- **Git subprocesses.** The plugin does nothing for children. Production code under test shells out to git (remote fetches, hooks), and those children read the host config unless the environment is isolated:
+
+| Helper | Use for |
+| --- | --- |
+| `gitenv.Isolated()` / `testutil.GitIsolatedEnv()` | The `Env` of an `exec.Command` that runs git or the CLI binary |
+| `gitenv.IsolateProcess(t)` / `testutil.IsolateGitConfigEnv(t)` | One test that drives production code invoking git with `os.Environ()` |
+| `gitenv.IsolateMain()` | A `TestMain`; process-wide, so spawned binaries and git hooks inherit it and `t.Parallel` tests are not excluded |
+| `gitenv.Run(t, dir, args...)` / `testutil.RunGit(...)` | A one-off git command in a test |
+
+`gitenv` deliberately imports nothing from this repo, so internal tests of packages `testutil` itself imports (e.g. `gitrepo`) can use it without an import cycle; everywhere else prefer the `testutil` spelling.
+
+Two failure modes are worth recognizing, because neither names the host config in its error:
+
+- `commit.gpgSign` / `tag.gpgSign` make go-git writes fail with "cannot auto-sign … or register an ObjectSigner plugin" where no signer is registered, and turn a lightweight `git tag` into an annotated one that git then rejects for want of a message.
+- `transfer.fsckObjects` routes a fetch through `index-pack` instead of `unpack-objects`. The fetched commit lands in a packfile an already-open go-git repository never indexes, so reads of it report "object not found" (tracked as ENCLI-378).
+
+A helper that exists to read a real `~/.gitconfig` — `useAutoConfigLoader`, `pointHomeAt` — must **unset** `GIT_CONFIG_GLOBAL` rather than empty it: set, it replaces every standard path; empty, it disables global config entirely. `t.Setenv(key, "")` followed by `os.Unsetenv(key)` registers the restore and still leaves the variable absent.
 
 ### Config/Cache/Keyring Isolation in Tests
 
