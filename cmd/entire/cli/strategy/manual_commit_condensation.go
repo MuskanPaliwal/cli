@@ -1491,28 +1491,38 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 	if fullTranscript != "" {
 		data.Transcript = []byte(fullTranscript)
 		data.FullTranscriptLines = countTranscriptItems(agentType, fullTranscript)
-		// Read prompts from shadow branch tree (source of truth after SaveStep)
-		promptSource := "shadow prompt.txt"
-		if file, fileErr := tree.File(metadataDir + "/" + paths.PromptFileName); fileErr == nil {
-			if content, contentErr := file.Contents(); contentErr == nil && content != "" {
-				data.Prompts = splitPromptContent(content)
-			}
-		}
-		// Filesystem fallback (written at turn start, covers mid-turn commits)
-		if len(data.Prompts) == 0 {
-			promptSource = "filesystem prompt.txt"
-			data.Prompts = readPromptsFromFilesystem(ctx, sessionID)
-		}
-		// Late-flush fallback: re-extract from the transcript bytes being
-		// checkpointed when prompt.txt is still empty (e.g. Antigravity writes
-		// the transcript after the Stop hook, so the TurnEnd backfill saw an
-		// empty file).
-		if len(data.Prompts) == 0 {
-			promptSource = "transcript"
-			data.Prompts = resolveCondensationPrompts(ctx, ag, data.Transcript, liveTranscriptPath, checkpointTranscriptStart)
-		}
-		logCondensationPrompts(ctx, sessionID, promptSource, len(data.Prompts), checkpointTranscriptStart)
 	}
+
+	// Prompt resolution sits OUTSIDE the transcript gate: no rung below needs
+	// transcript content to answer. The shadow tree's prompt.txt and the
+	// filesystem copy are both written independently of it, and
+	// resolveCondensationPrompts falls back to reading the transcript path when
+	// the bytes are empty. Gating them recorded a checkpoint with NO prompt from
+	// any source whenever a LateTranscriptWriter (Antigravity) committed while
+	// its transcript was still the empty placeholder SaveStep checkpointed — a
+	// routine mid-turn state for it — and took logCondensationPrompts down with
+	// it, so the breadcrumb was absent exactly when it was needed. The
+	// live-transcript sibling already resolves prompts this way.
+	promptSource := "shadow prompt.txt"
+	if file, fileErr := tree.File(metadataDir + "/" + paths.PromptFileName); fileErr == nil {
+		if content, contentErr := file.Contents(); contentErr == nil && content != "" {
+			data.Prompts = splitPromptContent(content)
+		}
+	}
+	// Filesystem fallback (written at turn start, covers mid-turn commits)
+	if len(data.Prompts) == 0 {
+		promptSource = "filesystem prompt.txt"
+		data.Prompts = readPromptsFromFilesystem(ctx, sessionID)
+	}
+	// Late-flush fallback: re-extract from the transcript bytes being
+	// checkpointed when prompt.txt is still empty (e.g. Antigravity writes
+	// the transcript after the Stop hook, so the TurnEnd backfill saw an
+	// empty file).
+	if len(data.Prompts) == 0 {
+		promptSource = "transcript"
+		data.Prompts = resolveCondensationPrompts(ctx, ag, data.Transcript, liveTranscriptPath, checkpointTranscriptStart)
+	}
+	logCondensationPrompts(ctx, sessionID, promptSource, len(data.Prompts), checkpointTranscriptStart)
 
 	// Use tracked files from session state (not all files in tree)
 	data.FilesTouched = filesTouched
