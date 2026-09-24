@@ -370,6 +370,9 @@ func TestShadowStrategy_ListAllSessionStates_CleansUpStaleSessions(t *testing.T)
 	if !kept["idle-unknown-owner"] {
 		t.Error("idle session with no recorded owner must be kept until it goes stale")
 	}
+	if !kept["legacy-empty-phase"] {
+		t.Error("legacy empty-phase session normalizes to IDLE and must be kept until it goes stale")
+	}
 	if !kept["idle-dead-owner"] {
 		t.Error("idle session whose owner exited must be kept for exited-owner finalization")
 	}
