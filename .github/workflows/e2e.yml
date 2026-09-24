@@ -11,6 +11,7 @@ on:
           - ''
           - claude-code
           - opencode
+          - antigravity
           - factoryai-droid
           - cursor-cli
           - copilot-cli
@@ -52,7 +53,14 @@ jobs:
           if [ -n "$input" ]; then
             echo "agents=[\"$input\"]" >> "$GITHUB_OUTPUT"
           else
-            echo 'agents=["claude-code","opencode","factoryai-droid","cursor-cli","copilot-cli","roger-roger","codex"]' >> "$GITHUB_OUTPUT"
+            # antigravity runs in agy's Gemini API-key mode (the
+            # GEMINI_API_KEY repo secret, no account session). agy < 1.1.25 loaded
+            # .agents/hooks.json on that route but never executed the hooks
+            # (google-antigravity/antigravity-cli#893); the install step above
+            # always fetches the latest release, which has executed them since
+            # 1.1.25. With the optional ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON
+            # secret the leg runs on ADC instead.
+            echo 'agents=["claude-code","opencode","factoryai-droid","cursor-cli","copilot-cli","roger-roger","codex","antigravity"]' >> "$GITHUB_OUTPUT"
           fi
 
   e2e-tests:
@@ -93,6 +101,32 @@ jobs:
           case "${{ matrix.agent }}" in
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
+            antigravity)
+              # Deliberately NOT pinned, because pinning agy does not work.
+              # agy self-updates IN PLACE — the updater replaces the executable
+              # at its own path, which in CI is the file installed here — and
+              # it spawns that updater on essentially every launch, ~0.4s in,
+              # with auth not gating it. Its only brake is a 15-minute check
+              # keyed on state a fresh CI home never has. So a pinned tarball
+              # governs only the FIRST agy spawn of the job, and the harness
+              # spawns agy once per prompt (e2e/agents/antigravity.go), so
+              # everything after prompt one runs whatever the updater fetched.
+              # Measured on Windows 11 ARM64: 1.2.7 installed, one headless
+              # prompt, 1.2.9 at the same path afterwards. agy offers no way
+              # out — no flag, no settings key, no env var.
+              #
+              # The consequence, stated rather than implied: this job's agy
+              # version floats, so a third-party agy regression CAN redden PRs
+              # that never touched Antigravity (see #893). That exposure was
+              # always real; the pin that used to sit here only read like
+              # protection. Closing it needs the updater actually blocked —
+              # an unwritable install path, or no egress for this step — and
+              # neither is tested yet.
+              #
+              # nightly-e2e.yml also tracks latest, but for its own reason:
+              # that job exists to report agy drift.
+              curl -fsSL https://antigravity.google/cli/install.sh | bash
+              ;;
             codex)       npm install -g @openai/codex ;;
             cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
@@ -108,6 +142,23 @@ jobs:
           echo "Verifying roger-roger binaries on PATH..."
           command -v roger-roger
           command -v entire-agent-roger-roger
+
+      - name: Configure Antigravity ADC
+        if: matrix.agent == 'antigravity'
+        env:
+          ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          set -euo pipefail
+          # ADC is optional since agy 1.1.13: without the secret the harness runs
+          # agy in Gemini API-key mode (the GEMINI_API_KEY repo secret).
+          if [ -z "${ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON:-}" ]; then
+            echo "No ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON secret; Antigravity E2E uses GEMINI_API_KEY (agy API-key mode)"
+            exit 0
+          fi
+          creds="$RUNNER_TEMP/antigravity-google-credentials.json"
+          install -m 600 /dev/null "$creds"
+          printf '%s' "$ANTIGRAVITY_GOOGLE_APPLICATION_CREDENTIALS_JSON" > "$creds"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$creds" >> "$GITHUB_ENV"
 
       - name: Bootstrap agent
         if: matrix.agent != 'roger-roger'
@@ -162,9 +213,9 @@ jobs:
           retention-days: 7
 
   e2e-windows:
-    # Windows covers the two agents e2e-windows.yml can install. An unset agent
+    # Windows covers the agents e2e-windows.yml can install. An unset agent
     # (the push path) means claude-code, as before.
-    if: inputs.agent == '' || inputs.agent == 'claude-code' || inputs.agent == 'factoryai-droid'
+    if: inputs.agent == '' || inputs.agent == 'claude-code' || inputs.agent == 'factoryai-droid' || inputs.agent == 'antigravity'
     uses: ./.github/workflows/e2e-windows.yml
     permissions:
       contents: read

@@ -138,6 +138,21 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	}
 
 	entire.Enable(t, dir, agent.EntireAgent())
+	if preparer, ok := agent.(agents.RepoPreparer); ok {
+		if err := preparer.PrepareRepo(dir); err != nil {
+			t.Fatalf("prepare repo for %s: %v", agent.Name(), err)
+		}
+	}
+	// Registered after the repo's own RemoveAll and before artifact capture
+	// (t.Cleanup runs last-in first-out), so agent state beside the repo is
+	// still there when artifacts are collected and gone when the test ends.
+	if cleaner, ok := agent.(agents.RepoCleaner); ok && !keepRepos {
+		t.Cleanup(func() {
+			if err := cleaner.CleanupRepo(dir); err != nil {
+				t.Logf("cleanup agent state for %s: %v", agent.Name(), err)
+			}
+		})
+	}
 	if agent.Name() == "factoryai-droid" {
 		if err := configureDroidRepoSettings(dir); err != nil {
 			t.Fatalf("configure droid repo settings: %v", err)
@@ -471,7 +486,7 @@ func (s *RepoState) RunPrompt(t *testing.T, ctx context.Context, prompt string, 
 	s.logPromptResult(out)
 
 	if err != nil && s.Agent.IsTransientError(out, err) {
-		errMsg := fmt.Sprintf("transient API error (stderr: %s)", strings.TrimSpace(out.Stderr))
+		errMsg := fmt.Sprintf("transient API error: %v (stderr: %s)", err, strings.TrimSpace(out.Stderr))
 		t.Logf("%s — restarting scenario", errMsg)
 		fmt.Fprintf(s.ConsoleLog, "> [transient] %s — restarting scenario\n", errMsg)
 		panic(errScenarioRestart{msg: errMsg})
