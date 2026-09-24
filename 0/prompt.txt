@@ -1,0 +1,41 @@
+https://github.com/entireio/cli/pull/2370 we have got a review comment here. let's understand the bug and fix it. use subagents so we don't spend too much tokens
+
+---
+
+before doing any fixes, tell me what you are going to do? and what is the bug
+
+---
+
+the comment itsekf prpose a solution?
+
+---
+
+so tell me what is happening here? what bug we fixed and what new bug it caused?
+
+---
+
+wait i didn't understand any of this. explain in simple terms.
+
+---
+
+okay so in real terms what's happening?
+
+---
+
+you keep that address in a separate config file linked from .git/config. ohh so this is possible that people keep the fork linked to config somewhere else? what is the scenario here?
+
+---
+
+that's because entire only reads .git/config and not any other config in user's file right?
+
+---
+
+okay but that file can have other configs too but entire is local first so we should not be worried about anything right?
+
+---
+
+okay go on
+
+---
+
+we have an integartion test for this right?

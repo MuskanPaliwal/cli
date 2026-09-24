@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.3-nightly.202609230619.4e2e839c2",
+  "checkpoint_id": "01M39NPY3D7VYE65CZAJW5X33S",
+  "strategy": "manual-commit",
+  "branch": "fix-checkpoint-push-remote-election-2360",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "cmd/entire/cli/integration_test/checkpoint_sync_remote_test.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote_test.go",
+    "cmd/entire/cli/strategy/git_remote_cache.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 172198,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15784960,
+    "output_tokens": 40552,
+    "api_call_count": 150,
+    "subagent_tokens": {
+      "input_tokens": 94477,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 1481600,
+      "output_tokens": 7692,
+      "api_call_count": 31
+    },
+    "subagent_tokens_complete": true
+  }
+}

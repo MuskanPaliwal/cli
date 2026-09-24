@@ -1,0 +1,138 @@
+{
+  "cli_version": "0.11.3-nightly.202609230619.4e2e839c2",
+  "checkpoint_id": "01M39NPY3D7VYE65CZAJW5X33S",
+  "session_id": "01a0d2d5-620b-7700-8863-013aeaf11a2e",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-24T12:19:44.099426Z",
+  "branch": "fix-checkpoint-push-remote-election-2360",
+  "checkpoints_count": 10,
+  "save_step_count": 10,
+  "files_touched": [
+    "cmd/entire/cli/integration_test/checkpoint_sync_remote_test.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote.go",
+    "cmd/entire/cli/strategy/checkpoint_sync_remote_test.go",
+    "cmd/entire/cli/strategy/git_remote_cache.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-sol",
+  "turn_id": "fc69d0ae2ac4",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 172198,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15784960,
+    "output_tokens": 40552,
+    "api_call_count": 150,
+    "subagent_tokens": {
+      "input_tokens": 94477,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 1481600,
+      "output_tokens": 7692,
+      "api_call_count": 31
+    },
+    "subagent_tokens_complete": true
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-24T12:19:44.025221Z",
+    "agent_lines": 31,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9,
+    "total_committed": 31,
+    "total_lines_changed": 48,
+    "agent_percentage": 81.25,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 37,
+      "user_lines_removed": 9,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cmd/entire/cli/strategy/checkpoint_sync_remote.go": 6,
+        "cmd/entire/cli/strategy/checkpoint_sync_remote_test.go": 28,
+        "cmd/entire/cli/strategy/git_remote_cache.go": 3
+      },
+      "user_removed_per_file": {
+        "cmd/entire/cli/strategy/checkpoint_sync_remote.go": 6,
+        "cmd/entire/cli/strategy/git_remote_cache.go": 3
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 37,
+      "agent_lines_removed": 9
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 77,
+      "agent_lines_removed": 17
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 77,
+      "agent_lines_removed": 17
+    }
+  ]
+}
