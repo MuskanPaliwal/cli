@@ -1,0 +1,1 @@
+https://github.com/entireio/cli/pull/2370 we have got a review comment here. let's understand the bug and fix it. use subagents so we don't spend too much tokens
