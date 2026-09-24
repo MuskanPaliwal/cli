@@ -1235,12 +1235,12 @@ func TestRepoClone_UnreachableClusterIsNotTreatedAsAbsent(t *testing.T) {
 	}
 }
 
-// TestRepoClone_PickerRendersOnTheTerminal pins selectPlacement's output
-// routing. Without a terminal seam the path is untestable — CanPromptInteractively()
-// is false under go test, so the form is never constructed and the routing
-// could be deleted with every other test still green. So it forces
-// interactivity, hands the picker a fake terminal, and asserts the prompt
-// landed there rather than on the command's own streams.
+// TestRepoClone_PickerRendersOnTheTerminal pins that the placement picker
+// reaches a terminal. Without the seam the path is untestable —
+// CanPromptInteractively() is false under go test, so the form is never
+// constructed and the routing could be deleted with every other test still
+// green. So it forces interactivity, hands runPromptForm a fake terminal, and
+// asserts the prompt landed there rather than on the command's own streams.
 //
 // Not parallel: sets process-global env and replaces two package-level seams.
 func TestRepoClone_PickerRendersOnTheTerminal(t *testing.T) {
@@ -1267,11 +1267,11 @@ func TestRepoClone_PickerRendersOnTheTerminal(t *testing.T) {
 
 	// Hosts are offered case-folded and sorted, so 1 = eu-west, 2 = us-east.
 	var terminal bytes.Buffer
-	prevTerm := openPlacementPromptTerminal
-	openPlacementPromptTerminal = func() (placementPromptTerminal, error) {
-		return placementPromptTerminal{in: strings.NewReader("2\n"), out: &terminal}, nil
+	prevTerm := openPromptTerminal
+	openPromptTerminal = func() (promptTerminal, error) {
+		return promptTerminal{in: strings.NewReader("2\n"), out: &terminal}, nil
 	}
-	t.Cleanup(func() { openPlacementPromptTerminal = prevTerm })
+	t.Cleanup(func() { openPromptTerminal = prevTerm })
 
 	got, err := resolveCloneURLAgainst(t, srv.URL, "")
 	require.NoError(t, err)
