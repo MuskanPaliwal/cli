@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.11.3-nightly.202609230619.4e2e839c2",
+  "checkpoint_id": "01M39D3SBJPPH6QPHT056MBZRW",
+  "session_id": "01a0d2cd-374f-7802-a1b9-20852c1c8edb",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-24T09:49:27.079247Z",
+  "branch": "fix-checkpoint-push-remote-election-2360",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "agent": "Codex",
+  "model": "gpt-6-sol",
+  "turn_id": "30692f38a316",
+  "checkpoint_transcript_start": 32,
+  "transcript_lines_at_start": 32,
+  "compact_transcript_start": 3,
+  "token_usage": {
+    "input_tokens": 2120,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 166272,
+    "output_tokens": 829,
+    "api_call_count": 5,
+    "subagent_tokens_complete": false
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
