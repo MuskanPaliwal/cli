@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.3-nightly.202609230619.4e2e839c2",
+  "checkpoint_id": "01M3R8WCWDG3PSNY9FKR3MN8T9",
+  "strategy": "manual-commit",
+  "branch": "fix-checkpoint-metadata-followups",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "cmd/entire/cli/hooks_git_cmd.go",
+    "cmd/entire/cli/strategy/manual_commit_opf_rewrite.go",
+    "cmd/entire/cli/strategy/manual_commit_push.go",
+    "cmd/entire/cli/strategy/metadata_push_fallback_test.go",
+    "cmd/entire/cli/strategy/metadata_push_reconcile.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 244445,
+    "cache_read_tokens": 5740454,
+    "output_tokens": 37426,
+    "api_call_count": 59,
+    "subagent_tokens": {
+      "input_tokens": 62,
+      "cache_creation_tokens": 184658,
+      "cache_read_tokens": 1467697,
+      "output_tokens": 1989,
+      "api_call_count": 31
+    }
+  }
+}
