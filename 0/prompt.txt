@@ -1,0 +1,36 @@
+/commit
+
+---
+
+yupp
+
+---
+
+push the changes
+
+---
+
+<pasted_content id="d4ea">
+sorry, more :slightly_smiling_face:
+
+Fix before merge
+
+
+1. Remove review-01.md. Commit 42949362b7 adds an AI reviewer's notes at the repo root. They're also out of date: they describe the first version of the PR (builtinOnlyCapability, "nine files, all in agent/", 22 entries). The fix is to drop that commit..
+2. The guard doesn't check package agent itself on Windows (capability_assertion_guard_test.go:90). I confirmed this one. productionGoFiles converts each path with filepath.FromSlash, so on Windows rel is cmd\entire\cli\agent\foo.go. agentImportName then compares it with the slash prefix "cmd/entire/cli/agent/", the comparison fails, and it returns "-". Every unqualified assertion inside package agent is skipped. The test still passes because setup.go's TestOnly assertion keeps the checked count above zero. This only matters where the unit tests run on Windows, but it's a one-line fix: compare against filepath.ToSlash(rel), or keep rel slash-separated until the file is opened..
+
+Worth fixing
+
+3. A broken untracked Go file anywhere in the checkout fails this package's tests. The guard lists --cached --others files and calls t.Fatalf on any parse error. A half-written scratch.go somewhere unrelated would make go test ./cmd/entire/cli/agent/ fail. Either list only --cached files or skip files that don't parse.
+4. The DeclaredCaps doc is wrong about ProtectedFilesProvider (capabilities.go:24/40). The doc says the listed capabilities "intentionally have no external-protocol declaration". But ProtectedFilesProvider is on that list, and the protocol does carry it (protected_files in the external agent's info response). The PR's own AsProtectedFilesProvider comment says so. Reword it to "no DeclaredCaps field".
+</pasted_content id="d4ea">
+
+ why do you push the md file?
+
+---
+
+force-with-lease
+
+---
+
+go
