@@ -1,0 +1,11 @@
+yupp
+
+---
+
+<task-notification>
+<task-id>bekdl83bk</task-id>
+<tool-use-id>toolu_01VUbotSBKgVN5FApV73nt6q</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/029fb8af-2ed0-41ae-bfe6-2829511d0e0d/tasks/bekdl83bk.output</output-file>
+<status>completed</status>
+<summary>Background command "Run review and cli tests, format, lint" completed (exit code 0)</summary>
+</task-notification>
