@@ -1,0 +1,18 @@
+{
+  "tool_use_id": "toolu_01L41TcQVApUgZHL7JcqAtp4",
+  "agent_id": "a06d727724ae8929a",
+  "subagent_type": "general-purpose",
+  "task_description": "Reviewer checking PR 2028",
+  "files": [
+    "review-01.md"
+  ],
+  "token_usage": {
+    "input_tokens": 194,
+    "cache_creation_tokens": 112710,
+    "cache_read_tokens": 507622,
+    "output_tokens": 4072,
+    "api_call_count": 7
+  },
+  "started_at": "2026-10-13T18:18:36.731392+05:30",
+  "completed_at": "2026-10-13T18:21:37.017389+05:30"
+}
