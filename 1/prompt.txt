@@ -1,0 +1,25 @@
+post it
+
+---
+
+<pasted_content id="3df7">
+File: cmd/entire/cli/agent/capability_assertion_guard_test.go:462 · Severity: low
+
+productionGoFiles makes its own git ls-files call for a source-scanning guard. The repo rule exists to stop exactly that: CLAUDE.md:87 says "Source-scanning guards use testutil.GitGrepGuard". docs/development/testing.md:249 explains why. Every guard used to make its own git call, and each was missing a different protection: untracked files, colour/quoting from user config, or GIT_DIR/GIT_WORK_TREE from hooks. One of those was missing from three guards.
+
+Today productionGoFiles has all of them (--others, -z, GuardGitEnv(), *.go, fail on zero). But it is a second hand-written guard call that has to stay in step with GitGrepGuard by hand. The 15-line exception added at testing.md:280 is there only to describe and justify it.
+
+Not grepping is correct here, because the guard parses whole files. The file discovery belongs in testutil, though:
+
+- Move productionGoFiles into cmd/entire/cli/testutil/gitgrep.go as GuardGoFiles(t, repoRoot) []string, next to GitGrepGuard. Keep GuardGitEnv(), --cached --others --exclude-standard -z, the *.go pathspec and the empty-result t.Fatal. Have the guard call it.
+- Change CLAUDE.md:87 to "Source-scanning guards discover files through testutil's guard helpers (GitGrepGuard, GuardGoFiles)".
+- Change testing.md:249 to cover both helpers, and replace the paragraph at testing.md:280 with one sentence: "Guards that parse files instead of grepping them list them with testutil.GuardGoFiles."
+
+Then all git file discovery for guards lives in one file, and no exception to the rule is needed.
+</pasted_content id="3df7">
+
+ fix this
+
+---
+
+yupp
