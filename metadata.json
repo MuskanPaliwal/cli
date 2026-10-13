@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4TY861YWPFPKP006EVR2YYN",
   "strategy": "manual-commit",
   "branch": "fix-declared-caps-builtins",
-  "checkpoints_count": 5,
+  "checkpoints_count": 6,
   "files_touched": [
     "cmd/entire/cli/agent/capabilities.go",
     "cmd/entire/cli/agent/capability_assertion_guard_test.go",
@@ -16,14 +16,21 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 72,
-    "cache_creation_tokens": 81777,
-    "cache_read_tokens": 2700785,
-    "output_tokens": 28875,
-    "api_call_count": 34,
+    "input_tokens": 102,
+    "cache_creation_tokens": 141269,
+    "cache_read_tokens": 3756532,
+    "output_tokens": 38151,
+    "api_call_count": 49,
     "subagent_tokens": {
       "input_tokens": 20,
       "cache_creation_tokens": 72283,
