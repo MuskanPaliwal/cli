@@ -1,0 +1,150 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4TP52199NTR5TF4VPZVD91E",
+  "session_id": "72e55fb3-201d-4a09-af9e-1f9cb186da2d",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-13T13:10:13.757195Z",
+  "branch": "fix-declared-caps-builtins",
+  "checkpoints_count": 12,
+  "save_step_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/agent/architecture_test.go",
+    "cmd/entire/cli/agent/capabilities.go",
+    "cmd/entire/cli/agent/capabilities_test.go",
+    "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "cmd/entire/cli/agent/hook_config_file.go",
+    "cmd/entire/cli/agent/inject.go",
+    "cmd/entire/cli/agent/registry.go",
+    "cmd/entire/cli/agent/session_store.go",
+    "cmd/entire/cli/review/picker.go",
+    "cmd/entire/cli/strategy/manual_commit_pending.go",
+    "cmd/entire/cli/strategy/restore_logs_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "b701b602a664",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 176,
+    "cache_creation_tokens": 184425,
+    "cache_read_tokens": 12177503,
+    "output_tokens": 73590,
+    "api_call_count": 84
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-review-2026-10-13T12:30:54.906596Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "8de2a2932129",
+      "timestamp": "2026-10-13T12:30:54.906596Z",
+      "native": {
+        "command": "/review"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-run-playbook-2026-10-13T12:32:28.235675Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "run-playbook"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "807dd1e00fe5",
+      "timestamp": "2026-10-13T12:32:28.235675Z",
+      "native": {
+        "command": "/run-playbook"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/run-playbook",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-review-2026-10-13T12:33:18.838992Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "14ca8f772983",
+      "timestamp": "2026-10-13T12:33:18.838992Z",
+      "native": {
+        "command": "/review"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-review-2026-10-13T12:34:38.176291Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "2dcd2cfa5e80",
+      "timestamp": "2026-10-13T12:34:38.176291Z",
+      "native": {
+        "command": "/review"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-blast-radius-2026-10-13T12:35:35.331516Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "blast-radius"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "b4838d2271eb",
+      "timestamp": "2026-10-13T12:35:35.331516Z",
+      "native": {
+        "command": "/blast-radius"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/blast-radius",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 12
+  }
+}

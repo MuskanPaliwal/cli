@@ -3,8 +3,12 @@
   "checkpoint_id": "01M4TP52199NTR5TF4VPZVD91E",
   "strategy": "manual-commit",
   "branch": "fix-declared-caps-builtins",
-  "checkpoints_count": 7,
+  "checkpoints_count": 19,
   "files_touched": [
+    "cmd/entire/cli/agent/architecture_test.go",
+    "cmd/entire/cli/agent/capabilities.go",
+    "cmd/entire/cli/agent/capabilities_test.go",
+    "cmd/entire/cli/agent/capability_assertion_guard_test.go",
     "cmd/entire/cli/agent/hook_config_file.go",
     "cmd/entire/cli/agent/inject.go",
     "cmd/entire/cli/agent/registry.go",
@@ -20,13 +24,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 134,
-    "cache_creation_tokens": 115907,
-    "cache_read_tokens": 7159847,
-    "output_tokens": 35841,
-    "api_call_count": 66
+    "input_tokens": 310,
+    "cache_creation_tokens": 300332,
+    "cache_read_tokens": 19337350,
+    "output_tokens": 109431,
+    "api_call_count": 150
   }
 }

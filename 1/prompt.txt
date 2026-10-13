@@ -1,0 +1,77 @@
+https://github.com/entireio/cli/pull/2028 review this pr
+
+---
+
+/review
+
+---
+
+/run-playbook
+
+---
+
+/review with-history
+
+---
+
+/review maintainability
+
+---
+
+/blast-radius
+
+---
+
+not needed. what is the final decision?
+
+---
+
+can you check if entire has a review skill?
+
+---
+
+sync the origin wiwth upstream
+
+---
+
+because a teammate found so many bugs.
+
+---
+
+<pasted_content id="a523">
+normally I would post it on a trail, but since there isn't one yet:
+
+1. The guard can't see capabilities that callers type-assert directly. TestDeclaredCapsBuiltinListMatchesCapabilityHelpers builds its list from As* helpers only. Optional interfaces used through inline type assertions never get checked: SkillDiscoverer (review/picker.go:836,1146), RestoredSessionPathResolver (manual_commit_pending.go:391), SessionLocator, FileWatcher and others. So the documented list in agent/capabilities.go:19 can still go stale, which is the drift the PR set out to stop.
+
+• Fix: give those interfaces As* helpers, or have the test list every type X interface in the package against the doc list plus the DeclaredCaps fields..
+2. One call site skips the declaration check. strategy/manual_commit_pending.go:473 does sessionAgent.(agent.PromptExtractor) instead of calling agent.AsPromptExtractor. External agents always implement ExtractPrompts, so an external agent with transcript_analyzer: false still has its prompts extracted on restore. This bug was already there before the PR, but it's the kind of thing the guard should catch.
+
+• Fix: switch it to AsPromptExtractor, and add a testutil.GitGrepGuard against inline .(agent.<Capability>) assertions outside package agent..
+3. Comments now say the opposite of the code.
+
+• inject.go:45 says "Context injection is built-in only", but the helper uses builtinCapability, which accepts external agents. The new inject_test even checks that one is accepted. AsHookFreshness has the same problem. Now that builtinOnlyCapability exists, "built-in only" reads as "refuses external agents", which isn't true here. Either switch these to builtinOnlyCapability or reword the comments..
+• The CapabilityDeclarer doc at capabilities.go:4 still says an agent must "both implement the optional interface AND declare the capability". That's no longer true for the 22 capabilities that go through builtinCapability..
+4. The guard doesn't tell the two built-in resolvers apart. It puts builtinCapability and builtinOnlyCapability helpers in one set. If someone changes AsOutOfBandTokenSource or AsLateTranscriptWriter to plain builtinCapability, external agents that implement the interface get accepted and the guard still passes. Only the separate unit test would catch it, and these are the security-relevant cases. Fix: mark the built-in-only entries in the doc list and check the marker against the resolver.
+</pasted_content id="a523">
+
+---
+
+go with the full fix
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>b5iierafs</task-id>
+<tool-use-id>toolu_01TUMxEZyfRhqGMwnHbCE6yc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/72e55fb3-201d-4a09-af9e-1f9cb186da2d/tasks/b5iierafs.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full pre-commit check" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+commit it and draft the PR body
