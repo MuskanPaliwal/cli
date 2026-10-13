@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4V0A5FF2V8P4WQVCH0TWZHD",
+  "strategy": "manual-commit",
+  "branch": "fix-auth-lock-dir-isolation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/auth/refresh_test.go",
+    "cmd/entire/cli/integration_test/auth_lock_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 62419,
+    "cache_read_tokens": 1508540,
+    "output_tokens": 11776,
+    "api_call_count": 21
+  }
+}
