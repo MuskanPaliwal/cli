@@ -1,0 +1,118 @@
+can you review again? pr #2028
+
+---
+
+no cover the latest commit for reviw
+
+---
+
+<task-notification>
+<task-id>ae880531dd1d4ff45</task-id>
+<tool-use-id>toolu_01Ao4iCLar8s8eDSbkgykVTH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/d0e04134-63c8-45ff-affa-885939712d27/tasks/ae880531dd1d4ff45.output</output-file>
+<status>killed</status>
+<summary>Agent "/code-review 2028" was stopped by Claude</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+</task-notification>
+
+---
+
+review it again?
+
+---
+
+<task-notification>
+<task-id>a6dfeb18e854207cf</task-id>
+<tool-use-id>toolu_01EukZ21PbBFKzT45kGW69rn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/d0e04134-63c8-45ff-affa-885939712d27/tasks/a6dfeb18e854207cf.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review fix-declared-caps-builtins (local br…" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 9 issues in `fix-declared-caps-builtins` at f81d54109. None is a crash. The most serious ones are ways the new capability guard can miss a direct type assertion that it is supposed to catch.
+
+The guard and the architecture tests pass locally; the guard takes 0.23s over 737 production Go files. The detection gaps in findings 1 and 2 come from reading the code. I did not prove them with a planted file, because that would have meant adding a file to the worktree.
+
+```json
+[
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 177,
+    "summary": "addDecls only records top-level type declarations, so a capability interface declared or aliased inside a function body is never resolved and the assertion goes unflagged.",
+    "failure_scenario": "func f(ag agent.Agent) { type hooks interface{ InstallHooks(context.Context, bool) (int, error) }; h, _ := ag.(hooks) }. reach() takes the *ast.Ident case and calls reachDecls(file.dir, \"hooks\"), finds nothing, and the guard passes. The DeclaredCaps Hooks gate is bypassed for external agents."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 200,
+    "summary": "reach() does not handle generic instantiations (*ast.IndexExpr / *ast.IndexListExpr) or dot-imported repository packages, so capability interfaces reached through either one are missed.",
+    "failure_scenario": "type capOf[T any] interface{ ListModels(context.Context) ([]agent.ModelInfo, error) } followed by ag.(capOf[int]) falls through the switch to the not-found return. Likewise, `import . \".../agent/external\"` makes newSourceFile store the key \".\", so an unqualified ident naming a type from that package is looked up in the wrong directory and never found."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 214,
+    "summary": "Interface literals and cross-package interfaces are matched by method name alone, ignoring signature and receiver, and the guard has no allowlist, so an unrelated non-agent assertion that shares a capability method name fails the build.",
+    "failure_scenario": "A provider client package defines `type lister interface{ ListModels(context.Context) ([]Model, error) }` and asserts an HTTP client to it. capabilityMethods maps ListModels to ModelLister, so the guard reports a t.Errorf telling the developer to call AsModelLister. The value is not an agent, and the only way out is renaming the method."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 110,
+    "summary": "This breaks the repo CLAUDE.md rule \"Source-scanning guards use `testutil.GitGrepGuard`, restrict pathspecs to Go files, and fail on zero matches.\" The guard bypasses GitGrepGuard and only fails when zero importing files are found, not on zero matches.",
+    "failure_scenario": "CLAUDE.md (cli/fix-declared-caps-builtins/CLAUDE.md, Test safety) still states the rule unconditionally. The exception is only recorded in docs/development/testing.md. Also, if assertedTypes stopped returning anything (for example a broken ast.Inspect case), importingFiles would stay above 0 and the guard would pass while detecting nothing."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 46,
+    "summary": "Altitude: about 450 lines of hand-rolled AST type resolution (aliases, defined types, cross-package decls, method-name matching) only approximate go/types, which is why findings 1-3 exist.",
+    "failure_scenario": "Each new syntactic form (local types, generics, dot imports, embedded struct promotion) needs another special case in reach(). Type-checking with the standard library's go/types and importer.ForCompiler(fset, \"source\", nil), then checking types.Identical / types.Implements against the capability interfaces, would resolve every form exactly with no name heuristics."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 419,
+    "summary": "agentPackageDecls copies discoverCapabilityHelpers' parser.ParseDir(findAgentDir) scan with the same _test.go filter and nolint, and documentedBuiltinCapabilities parses capabilities.go a third time.",
+    "failure_scenario": "Three tests parse the same package independently with copy-pasted setup. If the filter or the build-tag reasoning changes in one place, the other copies drift. A single shared parseAgentPackage(t) helper returning the files would serve all three."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capabilities.go",
+    "line": 105,
+    "summary": "nonDeclarerCapability takes an Agent while builtinCapability was widened to SessionLocator, so the two resolvers that are meant to differ only in refusing declarers have different input contracts.",
+    "failure_scenario": "A future SessionLocator-only capability that must refuse declarers cannot use nonDeclarerCapability without a signature change. Its CapabilityDeclarer check would then also run on bare locators. Both resolvers should take the same parameter type."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_pending.go",
+    "line": 473,
+    "summary": "restoredPromptPreview now goes through the declaredCapability gate, so the restore prompt preview disappears for external agents that implement ExtractPrompts but do not declare transcript_analyzer. This is a user-visible behavior change.",
+    "failure_scenario": "The external adapter always implements ExtractPrompts. A plugin that returns prompts but leaves transcript_analyzer false used to show a preview after `entire` restore-logs and now shows nothing. Intentional per the new test, but it should be called out in the PR and changelog."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capabilities_test.go",
+    "line": 666,
+    "summary": "The comment \"implements the capabilities that callers used to reach by inline type assertion\" records implementation history in a source comment.",
+    "failure_scenario": "This breaks ~/hub/AGENTS.md: \"Never put agent names, task names or IDs, ticket IDs, phase labels, session notes, implementation chronology, or review-process metadata in source comments\". Once merged, the comment describes code that no longer exists."
+  }
+]
+```</result>
+<usage><subagent_tokens>86128</subagent_tokens><tool_uses>11</tool_uses><duration_ms>154415</duration_ms></usage>
+</task-notification>
+
+---
+
+no you don't always have to follow general.md
+
+---
+
+1 and 2 we will do  and skip 3 and 7-9 too but what about 4-6 ? how important are they?
+
+---
+
+yupp and add a note for follow up in a seperate pr
+
+---
+
+give me the pr link:
+
+---
+
+commit and push it
+
+---
+
+yupp
