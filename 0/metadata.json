@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4TZGBQQ87ZKVFW8EEPAG3M8",
+  "session_id": "f89d48c6-e96e-40fc-863c-7c9dfc00907a",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-13T15:53:40.868364Z",
+  "branch": "fix-declared-caps-builtins",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "docs/development/testing.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "d51181cccb3f",
+  "checkpoint_transcript_start": 122,
+  "transcript_lines_at_start": 122,
+  "compact_transcript_start": 16,
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 18634,
+    "cache_read_tokens": 1515770,
+    "output_tokens": 15362,
+    "api_call_count": 15
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}

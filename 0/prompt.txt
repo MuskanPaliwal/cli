@@ -1,0 +1,19 @@
+fix the findings
+
+---
+
+how long?
+
+---
+
+<task-notification>
+<task-id>b5zetoid1</task-id>
+<tool-use-id>toolu_01NDJLQXHqr6siPJkuUTcS9x</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/f89d48c6-e96e-40fc-863c-7c9dfc00907a/tasks/b5zetoid1.output</output-file>
+<status>completed</status>
+<summary>Background command "Run mise check" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+commit it and draft the PR description update
