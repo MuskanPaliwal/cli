@@ -1,0 +1,85 @@
+can you review it again? PR #2028
+
+---
+
+<task-notification>
+<task-id>a728391619a671ef7</task-id>
+<tool-use-id>toolu_01YEPDExiequNVt5zunK6MYj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/c76a6259-4ed1-4a1a-8b02-8b2408f36d3a/tasks/a728391619a671ef7.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2028" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 7 findings for PR 2028, fewer than the 5–10 target would allow. None of them is a production runtime bug: the helper migrations keep behavior the same for built-in agents, and the focused agent tests pass. The issues are mostly gaps in the new parser-based guard and its docs.
+
+- **Intended behavior change:** in `restoredPromptPreview`, external agents that implement `ExtractPrompts` but don't declare `transcript_analyzer` no longer get a prompt preview. This matches the PR's goal, but reviewers should know about it.
+
+```json
+[
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 78,
+    "summary": "The guard's `checked == 0` stale-detection can never fire, because the allowlisted `ag.(CapabilityDeclarer)` assertions inside package agent itself always add to `checked`.",
+    "failure_scenario": "If cross-package detection breaks (for example `agentImportName` stops matching the `agent` qualifier, or the selector branch of `agentInterfaceName` regresses), every `x.(agent.SkillDiscoverer)` outside the package goes unchecked. `checked` is still at least 2 from capabilities.go:78/110, so the test passes silently. Count only non-allowlisted or out-of-package matches, or require at least one cross-package match, so the 'detection has gone stale' fatal can actually fire."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 157,
+    "summary": "`assertedTypes`/`agentInterfaceName` only recognize named package-agent interfaces, so an anonymous or locally declared interface assertion still skips the DeclaredCaps gate.",
+    "failure_scenario": "Code that writes `ag.(interface{ ExtractPrompts(string,int) ([]string, error) })`, or declares `type promptExtractor interface{...}` locally and asserts to it, calls an external agent's undeclared capability. The guard reports nothing, which is exactly the bypass the PR says it closes."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 75,
+    "summary": "The error tells the developer to `call As%s`, but some flagged interfaces have no helper: `FileWatcher` is a package-agent interface with no `AsFileWatcher` and is not in `nonCapabilityInterfaces`.",
+    "failure_scenario": "Someone adds `ag.(agent.FileWatcher)`. The guard says 'call AsFileWatcher so its DeclaredCaps gate applies', but no such helper or DeclaredCaps field exists. The developer has to invent a helper and update the DeclaredCaps doc list, or allowlist it, with no guidance."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capability_assertion_guard_test.go",
+    "line": 58,
+    "summary": "Files that fail to parse are skipped with `t.Logf`, so a tracked file that is missing or unreadable in the working tree is silently excluded from the guard.",
+    "failure_scenario": "`git ls-files --cached` lists a file that is deleted, sparse-excluded or unreadable locally. `ParseFile` fails, the file is logged and skipped, and the guard passes without checking it. The comment's claim that an unparsable file cannot compile only covers syntax errors, not I/O errors. Fail on non-syntax errors, or at least on tracked files."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capabilities.go",
+    "line": 93,
+    "summary": "`builtinCapability`'s parameter was widened from `Agent` to `SessionLocator` just so one helper (`AsSessionFileCandidatesProvider`) can accept a store's locator. That is a special case pushed into the shared resolver.",
+    "failure_scenario": "Any SessionLocator value that is not an Agent can now resolve every builtin capability, and the doc's claim that 'unrelated values are rejected at compile time' is weaker than before. A simpler fit is to keep `builtinCapability(ag Agent)` and have `SessionStore` hold or assert its `Agent`, or give the one SessionLocator helper its own explicit body."
+  },
+  {
+    "file": "cmd/entire/cli/agent/capabilities.go",
+    "line": 105,
+    "summary": "`nonDeclarerCapability` asserts `ag` twice: once through `builtinCapability` and again for CapabilityDeclarer.",
+    "failure_scenario": "This is minor redundancy. Checking `if _, d := ag.(CapabilityDeclarer); d { return zero, false }` first, then delegating to `builtinCapability`, is shorter, avoids building `t` only to discard it, and reads in policy order (refuse first, then resolve)."
+  },
+  {
+    "file": "docs/development/testing.md",
+    "line": 280,
+    "summary": "The docs say the parser guard 'fails when it checks no assertions' as protection equivalent to GitGrepGuard's zero-match check, but because of the always-nonzero in-package count (first finding) that protection is not real.",
+    "failure_scenario": "Readers trust the documented stale-detection and take the guard as proof that no external code type-asserts capabilities. The real zero-check protection is missing, so the docs overstate the guarantee."
+  }
+]
+```</result>
+<usage><subagent_tokens>74150</subagent_tokens><tool_uses>9</tool_uses><duration_ms>98548</duration_ms></usage>
+</task-notification>
+
+---
+
+nice. fix it
+
+---
+
+do the 4-6 too
+
+---
+
+okay
+
+---
+
+<task-notification>
+<task-id>bia8x65ak</task-id>
+<tool-use-id>toolu_01BNCYoVSGvf4tebVJaBUegu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-declared-caps-builtins/c76a6259-4ed1-4a1a-8b02-8b2408f36d3a/tasks/bia8x65ak.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full pre-commit check" completed (exit code 0)</summary>
+</task-notification>
