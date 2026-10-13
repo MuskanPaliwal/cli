@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4TZCCGFH94AN9B78ZC2RHC2",
+  "session_id": "df2079c1-152c-47f1-a5f6-04f6d9637ee1",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-13T15:51:30.529721Z",
+  "branch": "fix-claude-hook-launch-timeout",
+  "checkpoints_count": 7,
+  "save_step_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/agent/agent.go",
+    "cmd/entire/cli/agent/claudecode/hooks.go",
+    "cmd/entire/cli/agent/claudecode/hooks_test.go",
+    "cmd/entire/cli/agent/claudecode/types.go",
+    "cmd/entire/cli/gitrepo/status.go",
+    "cmd/entire/cli/setup.go",
+    "cmd/entire/cli/setup_prune_report_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "7f9b9fbc340a",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 124138,
+    "cache_read_tokens": 8458284,
+    "output_tokens": 49041,
+    "api_call_count": 77
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}

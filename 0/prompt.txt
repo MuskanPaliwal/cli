@@ -1,0 +1,67 @@
+can you review it again? pr #1237
+
+---
+
+<task-notification>
+<task-id>bh1qf1wjt</task-id>
+<tool-use-id>toolu_01B6FbwRfdPRGheTzjNCEwGe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-hook-launch-timeout/df2079c1-152c-47f1-a5f6-04f6d9637ee1/tasks/bh1qf1wjt.output</output-file>
+<status>failed</status>
+<summary>Background command "Check status budget and turn-start call path" failed with exit code 144</summary>
+</task-notification>
+
+---
+
+fix them
+
+---
+
+yupp
+
+---
+
+<task-notification>
+<task-id>bx9yjg471</task-id>
+<tool-use-id>toolu_01KJ56pdMwUck1iPk6nD1eyW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-hook-launch-timeout/df2079c1-152c-47f1-a5f6-04f6d9637ee1/tasks/bx9yjg471.output</output-file>
+<status>completed</status>
+<summary>Background command "Run format, lint, and all CI tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blbfzda9j</task-id>
+<tool-use-id>toolu_01Um8vicSZczi5fDRSChWVyo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-hook-launch-timeout/df2079c1-152c-47f1-a5f6-04f6d9637ee1/tasks/blbfzda9j.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run full check after lint fix" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yupp
+
+---
+
+<task-notification>
+<task-id>b0obr7lsy</task-id>
+<tool-use-id>toolu_011bF8S2dosmPc6xCFKfYd2Z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-hook-launch-timeout/df2079c1-152c-47f1-a5f6-04f6d9637ee1/tasks/b0obr7lsy.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun full check before committing" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yupp
+
+---
+
+<task-notification>
+<task-id>bggpddxs2</task-id>
+<tool-use-id>toolu_016jinubeshKakYHd8qV2S9k</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-hook-launch-timeout/df2079c1-152c-47f1-a5f6-04f6d9637ee1/tasks/bggpddxs2.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun cli and strategy packages with longer timeout" completed (exit code 0)</summary>
+</task-notification>
