@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4TQHPXAQTF9XT8M53D2RXQZ",
+  "session_id": "bbdda06e-425e-4a9a-afa8-42231fa6b887",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-13T13:34:36.475088Z",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/review/findings.go",
+    "cmd/entire/cli/review/posttrail_test.go",
+    "cmd/entire/cli/review/verdict.go",
+    "cmd/entire/cli/review_bridge.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5-1",
+  "turn_id": "3fdd7abb1a6b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 452,
+    "cache_creation_tokens": 55567,
+    "cache_read_tokens": 1136156,
+    "output_tokens": 14951,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}

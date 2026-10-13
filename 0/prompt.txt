@@ -1,0 +1,24 @@
+got this review on this pr 2549: 
+
+<pasted_content id="8957">
+Request changes on PR #2549 at 3586cb566. Two new findings:
+
+1. [P2] Conditional approvals can silently discard feedback — verdict.go:64 (cmd/entire/cli/review/verdict.go:64)
+   approve if retry.go:42 releases the lock on error. is classified as clean because if is absent from the qualifier blacklist. provided and with suggestions also reproduce this. Posting is skipped with “Nothing to report.” Treat unknown qualifications conservatively instead of assuming every unlisted phrase means approval without findings.
+2. [P2] A final approval can erase preceding findings — verdict.go:39 (cmd/entire/cli/review/verdict.go:39)
+   An actionable - [low] file:line … bullet followed by approve is classified as clean. Earlier non-verdict lines are forgotten, so their findings never reach the existing extraction logic. Preserve actionable content before accepting the trailing approval.
+
+Verification: Existing posting and bridge tests pass. Temporary reproductions covering five inputs across three posting paths fail on this PR and pass with the base posting implementation. No paid agent tests ran. Upstream PR checks pass; separate fork CI failures remain undiagnosed.
+
+Prior feedback: Copilot provided no review because of its quota. Trail #12 flags clean approvals followed by prose; that matches the PR’s documented conservative fallback and is separate from these findings.
+
+Simplify: All four passes found no worthwhile cleanup. No repository files changed; temporary probes were removed.
+</pasted_content id="8957">
+
+---
+
+yupp go on
+
+---
+
+commit it
