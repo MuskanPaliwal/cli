@@ -1,0 +1,20 @@
+<pasted_content id="d4ea">
+1. The new inline-assertion guard misses renamed imports (capability_assertion_guard_test.go:47). It only matches the literal agent. prefix. cli/transcript.go already imports the package as agentpkg, and e2e/testutil/session_paths.go as cliagent. Adding ag.(agentpkg.PromptExtractor) in transcript.go would pass the guard and bring back the exact bug this PR fixed. Fix: read each file's import name for .../cli/agent, or use go/ast instead of matching text..
+2. The same guard checks one line at a time. In a type switch whose case list continues onto a second line (case agent.Agent,\n\tagent.TokenCalculator:), the second line isn't checked. This is less likely to happen than #1..
+3. builtinCapability now takes any (capabilities.go:88). This was widened for the single caller AsSessionFileCandidatesProvider, but it takes away the compile-time check from every resolver. Passing a *SessionStore or a string by mistake would compile and just return false. Fix: use SessionLocator as the parameter type instead. Agent already has everything SessionLocator requires, so every existing caller still compiles..
+4. The AsSkillDiscoverer comment is wrong (capabilities.go:177). It says discovery "only feeds the review skill picker", so a declaration check isn't needed. But VerifyConfiguredSkillsInstalled (review/picker.go:1146) also uses it to fail config validation. Either correct the comment or reconsider whether it should require a declaration..
+</pasted_content id="d4ea">
+
+ lets fix these
+
+---
+
+yupp fix all of them
+
+---
+
+Commit and push the changes
+
+---
+
+go
