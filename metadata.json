@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X75DA57CMZJQZQDPV4M6R2",
+  "strategy": "manual-commit",
+  "branch": "resolve-pr-2330-conflicts",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "CLAUDE.md",
+    "cmd/entire/cli/integration_test/redo_commit_index_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_redo.go",
+    "cmd/entire/cli/strategy/manual_commit_redo_test.go",
+    "cmd/entire/cli/strategy/staged_files_test.go",
+    "docs/architecture/sessions-and-checkpoints.md",
+    "docs/development/git-safety.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1950,
+    "cache_read_tokens": 297014,
+    "output_tokens": 1427,
+    "api_call_count": 2
+  }
+}

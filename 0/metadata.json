@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X75DA57CMZJQZQDPV4M6R2",
+  "session_id": "b4c9be62-6a47-4b07-b012-5e3ab095ae64",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T12:46:00.937428Z",
+  "branch": "resolve-pr-2330-conflicts",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "CLAUDE.md",
+    "cmd/entire/cli/integration_test/redo_commit_index_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_redo.go",
+    "cmd/entire/cli/strategy/manual_commit_redo_test.go",
+    "cmd/entire/cli/strategy/staged_files_test.go",
+    "docs/architecture/sessions-and-checkpoints.md",
+    "docs/development/git-safety.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "2e6508f37e53",
+  "checkpoint_transcript_start": 474,
+  "transcript_lines_at_start": 474,
+  "compact_transcript_start": 63,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1950,
+    "cache_read_tokens": 297014,
+    "output_tokens": 1427,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 5
+  }
+}
