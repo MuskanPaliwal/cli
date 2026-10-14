@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X90DY84MVBCFFGGK3F519J",
+  "strategy": "manual-commit",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/review/cmd.go",
+    "cmd/entire/cli/review/dump.go",
+    "cmd/entire/cli/review/fix.go",
+    "cmd/entire/cli/review/manifest.go",
+    "cmd/entire/cli/review/manifest_test.go",
+    "cmd/entire/cli/review/synthesis_prompt.go",
+    "cmd/entire/cli/review/synthesis_prompt_test.go",
+    "cmd/entire/cli/review/synthesis_sink.go",
+    "cmd/entire/cli/review/trail_report.go",
+    "cmd/entire/cli/review/trail_report_test.go",
+    "cmd/entire/cli/review/tui_detail.go",
+    "cmd/entire/cli/review/tui_model.go",
+    "cmd/entire/cli/review/tui_sink.go",
+    "cmd/entire/cli/review/tui_sink_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 123686,
+    "cache_read_tokens": 6129063,
+    "output_tokens": 37601,
+    "api_call_count": 59
+  }
+}

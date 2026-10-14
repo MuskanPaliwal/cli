@@ -1,0 +1,21 @@
+can you find the file out of scope.md and verify the deferred items are out of scope?
+
+---
+
+then we should fix 4 and rest can go in comment on the pr
+
+---
+
+but there's already a comment for out-of scope items right? check that
+
+---
+
+make sure none of them are fixed in this
+
+---
+
+yupp
+
+---
+
+commit and push
