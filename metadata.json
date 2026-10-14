@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4WF8MGE3K3J9R0KCTJ9T9PT",
+  "strategy": "manual-commit",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/agent/pi/reviewer.go",
+    "cmd/entire/cli/agent/pi/reviewer_test.go",
+    "cmd/entire/cli/review/cmd.go",
+    "cmd/entire/cli/review/dump.go",
+    "cmd/entire/cli/review/export_test.go",
+    "cmd/entire/cli/review/findings.go",
+    "cmd/entire/cli/review/fix.go",
+    "cmd/entire/cli/review/posttrail_test.go",
+    "cmd/entire/cli/review/prompt.go",
+    "cmd/entire/cli/review/prompt_test.go",
+    "cmd/entire/cli/review/synthesis_prompt.go",
+    "cmd/entire/cli/review/synthesis_prompt_test.go",
+    "cmd/entire/cli/review/synthesis_sink.go",
+    "cmd/entire/cli/review/trail_report.go",
+    "cmd/entire/cli/review/trail_report_test.go",
+    "cmd/entire/cli/review/types/reviewer.go",
+    "cmd/entire/cli/review/verdict.go",
+    "cmd/entire/cli/review_bridge.go",
+    "cmd/entire/cli/review_bridge_test.go",
+    "docs/architecture/review-command.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 13109,
+    "cache_read_tokens": 2934279,
+    "output_tokens": 5751,
+    "api_call_count": 13,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
