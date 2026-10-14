@@ -1,0 +1,41 @@
+what is the context here?
+
+---
+
+why not use entire checkpoints?
+
+---
+
+Can you keep this PR in sync with Upstream and review this PR?
+
+---
+
+no keep the or in sync with upstream
+
+---
+
+a
+
+---
+
+<task-notification>
+<task-id>b83s1di49</task-id>
+<tool-use-id>toolu_01VGP9rdFBFLWca7kY6hEiBq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-hook-git-context/b4c9be62-6a47-4b07-b012-5e3ab095ae64/tasks/b83s1di49.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full repository check" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwiz5cmuj</task-id>
+<tool-use-id>toolu_01DvvMk35f1qyJQNnjpi6hGE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-hook-git-context/b4c9be62-6a47-4b07-b012-5e3ab095ae64/tasks/bwiz5cmuj.output</output-file>
+<status>completed</status>
+<summary>Background command "Format, then run all CI tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yupp
