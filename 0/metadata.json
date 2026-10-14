@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4WBGYRAV7NFSHBSSS9A6D32",
+  "session_id": "6851112e-ce8f-4c96-b47a-02f3671a7f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T04:42:59.328254Z",
+  "branch": "fix-auth-lock-dir-isolation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/auth/refresh.go",
+    "e2e/tests/main_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "6dddc4d804fc",
+  "checkpoint_transcript_start": 399,
+  "transcript_lines_at_start": 399,
+  "compact_transcript_start": 65,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 7585,
+    "cache_read_tokens": 674348,
+    "output_tokens": 4671,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 12
+  }
+}
