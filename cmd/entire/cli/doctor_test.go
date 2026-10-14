@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,9 +13,9 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/antigravity"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/entiredir"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
@@ -22,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/worktreedir"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -45,41 +47,8 @@ func newTestCmd(t *testing.T) (*cobra.Command, *bytes.Buffer) {
 // testBaseCommit is a fake commit hash used across classifySession tests.
 const testBaseCommit = "abcdef1234567890abcdef1234567890abcdef12"
 
-// createShadowBranchRef creates a shadow branch reference in the repo for
-// the given base commit and worktree ID. Uses an empty tree commit.
-func createShadowBranchRef(t *testing.T, repo *git.Repository, baseCommit, worktreeID string) {
-	t.Helper()
-
-	// Create empty tree
-	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
-	treeObj := repo.Storer.NewEncodedObject()
-	require.NoError(t, emptyTree.Encode(treeObj))
-	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
-	require.NoError(t, err)
-
-	// Create commit
-	commitObj := &object.Commit{
-		Author:    object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
-		Committer: object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
-		Message:   "shadow checkpoint",
-		TreeHash:  treeHash,
-	}
-	enc := repo.Storer.NewEncodedObject()
-	require.NoError(t, commitObj.Encode(enc))
-	commitHash, err := repo.Storer.SetEncodedObject(enc)
-	require.NoError(t, err)
-
-	// Create branch reference
-	branchName := checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID)
-	refName := plumbing.NewBranchReferenceName(branchName)
-	ref := plumbing.NewHashReference(refName, commitHash)
-	require.NoError(t, repo.Storer.SetReference(ref))
-}
-
 func TestClassifySession_ActiveStale_NilInteractionTime(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID:           "test-active-nil-time",
@@ -89,18 +58,15 @@ func TestClassifySession_ActiveStale_NilInteractionTime(t *testing.T) {
 		LastInteractionTime: nil,
 	}
 
-	result := classifySession(state, repo, time.Now())
+	result := classifySession(state, time.Now())
 
 	require.NotNil(t, result, "active session with nil LastInteractionTime should be stuck")
 	assert.Contains(t, result.Reason, "active, started")
 	assert.Equal(t, 3, result.CheckpointCount)
-	assert.False(t, result.HasShadowBranch)
 }
 
 func TestClassifySession_ActiveStale_OldInteractionTime(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	twoHoursAgo := time.Now().Add(-2 * time.Hour)
 	state := &strategy.SessionState{
@@ -113,7 +79,7 @@ func TestClassifySession_ActiveStale_OldInteractionTime(t *testing.T) {
 	}
 
 	now := time.Now()
-	result := classifySession(state, repo, now)
+	result := classifySession(state, now)
 
 	require.NotNil(t, result, "active session with old interaction time should be stuck")
 	assert.Contains(t, result.Reason, "active, last interaction")
@@ -122,9 +88,7 @@ func TestClassifySession_ActiveStale_OldInteractionTime(t *testing.T) {
 }
 
 func TestClassifySession_ActiveRecent_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	state := &strategy.SessionState{
@@ -135,106 +99,72 @@ func TestClassifySession_ActiveRecent_Healthy(t *testing.T) {
 		LastInteractionTime: &fiveMinutesAgo,
 	}
 
-	result := classifySession(state, repo, time.Now())
+	result := classifySession(state, time.Now())
 	assert.Nil(t, result, "active session with recent interaction should be healthy")
 }
 
 func TestClassifySession_EndedWithUncondensedData(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	baseCommit := testBaseCommit
-	createShadowBranchRef(t, repo, baseCommit, "")
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID:    "test-ended-uncondensed",
-		BaseCommit:   baseCommit,
+		BaseCommit:   testBaseCommit,
 		Phase:        session.PhaseEnded,
 		StepCount:    3,
 		FilesTouched: []string{"main.go"},
 	}
 
-	result := classifySession(state, repo, time.Now())
+	result := classifySession(state, time.Now())
 
-	require.NotNil(t, result, "ended session with checkpoints and shadow branch should be stuck")
+	require.NotNil(t, result, "ended session with uncondensed steps should be stuck")
 	assert.Equal(t, "ended with uncondensed checkpoint data", result.Reason)
-	assert.True(t, result.HasShadowBranch)
 	assert.Equal(t, 3, result.CheckpointCount)
 	assert.Equal(t, 1, result.FilesTouchedCount)
 }
 
-func TestClassifySession_EndedNoShadowBranch_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	state := &strategy.SessionState{
-		SessionID:  "test-ended-no-shadow",
-		BaseCommit: testBaseCommit,
-		Phase:      session.PhaseEnded,
-		StepCount:  3,
-	}
-
-	result := classifySession(state, repo, time.Now())
-	assert.Nil(t, result, "ended session without shadow branch should be healthy")
-}
-
-// An ENDED record-bearing session has condensable task content that never
-// lives on the shadow branch, so branch absence must not classify it healthy.
-func TestClassifySession_EndedRecordsOnlyNoShadowBranch_Stuck(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+// An ENDED record-bearing session with no steps has condensable task content.
+func TestClassifySession_EndedRecordsOnly_Stuck(t *testing.T) {
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID: "test-ended-records-only", BaseCommit: testBaseCommit, Phase: session.PhaseEnded,
 		TaskRecords: []session.TaskRecord{{ToolUseID: "toolu_1", StartedAt: time.Now(), CompletedAt: time.Now()}},
 	}
 
-	result := classifySession(state, repo, time.Now())
-	require.NotNil(t, result, "ended record-bearing session must be reported even without a shadow branch")
+	result := classifySession(state, time.Now())
+	require.NotNil(t, result, "ended record-bearing session must be reported")
 	assert.Equal(t, "ended with uncondensed checkpoint data", result.Reason)
 	assert.Equal(t, 1, result.CheckpointCount)
 }
 
 // FullyCondensed + leftover live record (pre-fix state or failed sweep capture) is healthy: everything worth keeping is materialized.
 func TestClassifySession_EndedFullyCondensedLeftoverRecord_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID: "test-ended-condensed-leftover", BaseCommit: testBaseCommit, Phase: session.PhaseEnded,
 		FullyCondensed: true, TaskRecords: []session.TaskRecord{{ToolUseID: "toolu_left", StartedAt: time.Now()}},
 	}
-	assert.Nil(t, classifySession(state, repo, time.Now()),
+	assert.Nil(t, classifySession(state, time.Now()),
 		"a FullyCondensed ended session must not be re-flagged for a leftover live record")
 }
 
 func TestClassifySession_EndedZeroStepCount_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	baseCommit := "1234567890abcdef1234567890abcdef12345678"
-	createShadowBranchRef(t, repo, baseCommit, "")
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID:  "test-ended-zero-steps",
-		BaseCommit: baseCommit,
+		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
 		Phase:      session.PhaseEnded,
 		StepCount:  0,
 	}
 
-	result := classifySession(state, repo, time.Now())
-	assert.Nil(t, result, "ended session with zero steps should be healthy even with shadow branch")
+	result := classifySession(state, time.Now())
+	assert.Nil(t, result, "ended session with no pending work should be healthy")
 }
 
 func TestClassifySession_IdlePhase_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID:  "test-idle",
@@ -243,14 +173,12 @@ func TestClassifySession_IdlePhase_Healthy(t *testing.T) {
 		StepCount:  1,
 	}
 
-	result := classifySession(state, repo, time.Now())
+	result := classifySession(state, time.Now())
 	assert.Nil(t, result, "IDLE session should be healthy")
 }
 
 func TestClassifySession_EmptyPhase_Healthy(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	state := &strategy.SessionState{
 		SessionID:  "test-empty-phase",
@@ -259,14 +187,12 @@ func TestClassifySession_EmptyPhase_Healthy(t *testing.T) {
 		StepCount:  1,
 	}
 
-	result := classifySession(state, repo, time.Now())
+	result := classifySession(state, time.Now())
 	assert.Nil(t, result, "empty phase (backward compat) should be healthy")
 }
 
 func TestClassifySession_StalenessThresholdBoundary(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
+	t.Parallel()
 
 	now := time.Now()
 
@@ -280,7 +206,7 @@ func TestClassifySession_StalenessThresholdBoundary(t *testing.T) {
 		LastInteractionTime: &justOverThreshold,
 	}
 
-	result := classifySession(state, repo, now)
+	result := classifySession(state, now)
 	require.NotNil(t, result, "session just over staleness threshold should be stuck")
 
 	// Just under the threshold — should be healthy
@@ -293,57 +219,8 @@ func TestClassifySession_StalenessThresholdBoundary(t *testing.T) {
 		LastInteractionTime: &justUnderThreshold,
 	}
 
-	result2 := classifySession(state2, repo, now)
+	result2 := classifySession(state2, now)
 	assert.Nil(t, result2, "session just under staleness threshold should be healthy")
-}
-
-func TestClassifySession_ActiveWithShadowBranch(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	baseCommit := testBaseCommit
-	createShadowBranchRef(t, repo, baseCommit, "")
-
-	state := &strategy.SessionState{
-		SessionID:           "test-active-shadow",
-		BaseCommit:          baseCommit,
-		Phase:               session.PhaseActive,
-		StepCount:           2,
-		LastInteractionTime: nil,
-	}
-
-	result := classifySession(state, repo, time.Now())
-
-	require.NotNil(t, result)
-	assert.True(t, result.HasShadowBranch, "should detect existing shadow branch")
-	assert.NotEmpty(t, result.ShadowBranch)
-}
-
-func TestClassifySession_WorktreeIDInShadowBranch(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-
-	baseCommit := testBaseCommit
-	worktreeID := "my-worktree"
-	createShadowBranchRef(t, repo, baseCommit, worktreeID)
-
-	state := &strategy.SessionState{
-		SessionID:    "test-worktree-shadow",
-		BaseCommit:   baseCommit,
-		WorktreeID:   worktreeID,
-		Phase:        session.PhaseEnded,
-		StepCount:    1,
-		FilesTouched: []string{"a.go"},
-	}
-
-	result := classifySession(state, repo, time.Now())
-
-	require.NotNil(t, result, "ended session with worktree shadow branch should be stuck")
-	assert.True(t, result.HasShadowBranch)
-	expectedBranch := checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID)
-	assert.Equal(t, expectedBranch, result.ShadowBranch)
 }
 
 // Distinct parentless commits have no common ancestor.
@@ -541,7 +418,7 @@ func TestRunSessionsFix_NonInteractive_HintsForceInsteadOfPrompting(t *testing.T
 	assert.Contains(t, output, "Found 2 stuck session(s):")
 	assert.Contains(t, output, "  Session: 2026-08-17-doctor-no-tty")
 	assert.Contains(t, output, "  Session: 2026-08-17-doctor-no-tty-2")
-	// No shadow branch exists, so --force would discard — the hint must say so.
+	// No pending work exists, so --force would discard — the hint must say so.
 	assert.Contains(t, output, "  Fix: discard (no condensable checkpoint data).")
 	assert.Contains(t, output, "entire doctor --force")
 	assert.NotContains(t, output, "Discarded session")
@@ -599,9 +476,6 @@ func TestRunSessionsFix_NonInteractive_TaskContentHintMatchesForceCondense(t *te
 func TestRunSessionsFix_HandlerLogsStayOffTheTerminal(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-	createShadowBranchRef(t, repo, testBaseCommit, "")
 
 	// Already ended, so never a candidate for the exited-owner sweep, but stuck
 	// with uncondensed data — which sends --force down the condensing path, and
@@ -875,46 +749,43 @@ func writeCodexHooksForDiagnosticTest(t *testing.T, root, contents string) {
 }
 
 // TestCheckCodexHookTrust_OKWhenAllTrusted prints "✓ Codex hook trust: OK"
-// when every event declared in hooks.json has a matching state entry.
+// when every event declared in hooks.json has a matching state entry, whether
+// Codex wrote the keys as TOML basic strings (Unix) or literal strings
+// (Windows, where the path contains backslashes).
 func TestCheckCodexHookTrust_OKWhenAllTrusted(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	t.Chdir(dir)
+	for _, style := range []struct {
+		name   string
+		header func(key string) string
+	}{
+		{"double-quoted", func(key string) string {
+			return `[hooks.state."` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(key) + `"]`
+		}},
+		{"single-quoted", func(key string) string { return `[hooks.state.'` + key + `']` }},
+	} {
+		t.Run(style.name, func(t *testing.T) {
+			dir := setupGitRepoForPhaseTest(t)
+			t.Chdir(dir)
 
-	codexDir := filepath.Join(dir, ".codex")
-	require.NoError(t, os.MkdirAll(codexDir, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(canonicalCodexHooksJSON()), 0o600))
+			codexDir := filepath.Join(dir, ".codex")
+			require.NoError(t, os.MkdirAll(codexDir, 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(canonicalCodexHooksJSON()), 0o600))
 
-	hooksPath := resolvedHooksPath(t, dir)
-	codexHome := filepath.Join(t.TempDir(), "codex-home")
-	require.NoError(t, os.MkdirAll(codexHome, 0o750))
-	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
-trusted_hash = "sha256:aaa"
+			hooksPath := resolvedHooksPath(t, dir)
+			codexHome := filepath.Join(t.TempDir(), "codex-home")
+			require.NoError(t, os.MkdirAll(codexHome, 0o750))
+			var configTOML strings.Builder
+			for _, ev := range []string{"session_start", "session_end", "user_prompt_submit", "stop", "post_tool_use", "subagent_start", "subagent_stop"} {
+				configTOML.WriteString(style.header(hooksPath+":"+ev+":0:0") + "\ntrusted_hash = \"sha256:aaa\"\n\n")
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML.String()), 0o600))
+			t.Setenv("CODEX_HOME", codexHome)
 
-[hooks.state."` + hooksPath + `:session_end:0:0"]
-trusted_hash = "sha256:eee"
-
-[hooks.state."` + hooksPath + `:user_prompt_submit:0:0"]
-trusted_hash = "sha256:bbb"
-
-[hooks.state."` + hooksPath + `:stop:0:0"]
-trusted_hash = "sha256:ccc"
-
-[hooks.state."` + hooksPath + `:post_tool_use:0:0"]
-trusted_hash = "sha256:ddd"
-
-[hooks.state."` + hooksPath + `:subagent_start:0:0"]
-trusted_hash = "sha256:eee"
-
-[hooks.state."` + hooksPath + `:subagent_stop:0:0"]
-trusted_hash = "sha256:fff"
-`
-	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
-	t.Setenv("CODEX_HOME", codexHome)
-
-	cmd, stdout := newTestCmd(t)
-	checkCodexHookTrust(cmd)
-	require.Contains(t, stdout.String(), "✓ Codex hooks: INSTALLED")
-	require.Contains(t, stdout.String(), "✓ Codex hook approval records: PRESENT")
+			cmd, stdout := newTestCmd(t)
+			checkCodexHookTrust(cmd)
+			require.Contains(t, stdout.String(), "✓ Codex hooks: INSTALLED")
+			require.Contains(t, stdout.String(), "✓ Codex hook approval records: PRESENT")
+		})
+	}
 }
 
 // TestCheckCodexHookTrust_ListsMissingEvents prints the gap list when a
@@ -932,16 +803,16 @@ func TestCheckCodexHookTrust_ListsMissingEvents(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), "codex-home")
 	require.NoError(t, os.MkdirAll(codexHome, 0o750))
 	// Trust all but one — PostToolUse is the gap.
-	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
+	configTOML := `[hooks.state.'` + hooksPath + `:session_start:0:0']
 trusted_hash = "sha256:aaa"
 
-[hooks.state."` + hooksPath + `:session_end:0:0"]
+[hooks.state.'` + hooksPath + `:session_end:0:0']
 trusted_hash = "sha256:eee"
 
-[hooks.state."` + hooksPath + `:user_prompt_submit:0:0"]
+[hooks.state.'` + hooksPath + `:user_prompt_submit:0:0']
 trusted_hash = "sha256:bbb"
 
-[hooks.state."` + hooksPath + `:stop:0:0"]
+[hooks.state.'` + hooksPath + `:stop:0:0']
 trusted_hash = "sha256:ccc"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
@@ -1278,7 +1149,7 @@ func TestCheckHookDrift_ClaudeCodeWarnsWhenOutdated(t *testing.T) {
 	dir := setupGitRepoForPhaseTest(t)
 	t.Chdir(dir)
 
-	claudeDir := filepath.Join(dir, ".claude")
+	claudeDir := filepath.Join(dir, claudeDirName)
 	require.NoError(t, os.MkdirAll(claudeDir, 0o750))
 	stale := `{
   "hooks": {
@@ -1324,13 +1195,13 @@ func TestCheckCodexHookTrust_FlagsStaleHooksFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(codexHome, 0o750))
 	// Trust the three legacy events so the trust check itself stays quiet —
 	// only the stale-file finding should fire.
-	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
+	configTOML := `[hooks.state.'` + hooksPath + `:session_start:0:0']
 trusted_hash = "sha256:aaa"
 
-[hooks.state."` + hooksPath + `:user_prompt_submit:0:0"]
+[hooks.state.'` + hooksPath + `:user_prompt_submit:0:0']
 trusted_hash = "sha256:bbb"
 
-[hooks.state."` + hooksPath + `:stop:0:0"]
+[hooks.state.'` + hooksPath + `:stop:0:0']
 trusted_hash = "sha256:ccc"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
@@ -1347,6 +1218,102 @@ trusted_hash = "sha256:ccc"
 	// Trust stays quiet: every event the stale file actually declares is trusted,
 	// so only the out-of-date finding should fire.
 	require.NotContains(t, out, "Codex hook trust: REVIEW NEEDED")
+}
+
+// antigravityHooksJSON returns a minimal .agents/hooks.json declaring the
+// Entire PreInvocation hook, enough for AreHooksInstalled to report true.
+func antigravityHooksJSON() string {
+	return `{"entire":{"PreInvocation":[{"type":"command","command":"entire hooks antigravity pre-invocation"}]}}`
+}
+
+// stubAgyOnPath prepends a directory containing a fake executable `agy` to
+// PATH so the doctor check's binary-presence guard passes deterministically.
+func stubAgyOnPath(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "agy")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestCheckAntigravityTitleTee_SilentWhenAgyNotInstalled stays quiet for
+// developers who don't use agy at all: .agents/hooks.json is committable, so
+// a teammate's checkout can have Antigravity hooks "installed" on a machine
+// with no agy binary — warning there (and suggesting a repair that writes
+// agy's global settings) is a false positive.
+func TestCheckAntigravityTitleTee_SilentWhenAgyNotInstalled(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	agentsDir := filepath.Join(dir, ".agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "hooks.json"),
+		[]byte(antigravityHooksJSON()), 0o600))
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", filepath.Join(t.TempDir(), "agy"))
+	t.Setenv("PATH", t.TempDir()) // no agy binary anywhere on PATH
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityTitleTee(cmd)
+	require.NotContains(t, stdout.String(), "Antigravity title-tee")
+}
+
+// TestCheckAntigravityTitleTee_SilentWhenHooksNotInstalled stays quiet when
+// the repo has no Antigravity hooks — nothing to check.
+func TestCheckAntigravityTitleTee_SilentWhenHooksNotInstalled(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", filepath.Join(t.TempDir(), "agy"))
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityTitleTee(cmd)
+	require.NotContains(t, stdout.String(), "Antigravity title-tee")
+}
+
+// TestCheckAntigravityTitleTee_OKWhenConfigured reports OK when hooks are
+// installed and agy's title slot routes through the title-tee shim.
+func TestCheckAntigravityTitleTee_OKWhenConfigured(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	stubAgyOnPath(t)
+
+	agentsDir := filepath.Join(dir, ".agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "hooks.json"),
+		[]byte(antigravityHooksJSON()), 0o600))
+
+	cfgDir := filepath.Join(t.TempDir(), "agy")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "settings.json"),
+		[]byte(`{"title":{"type":"command","command":"entire hooks antigravity title-tee"}}`), 0o600))
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", cfgDir)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityTitleTee(cmd)
+	require.Contains(t, stdout.String(), "✓ Antigravity title-tee: OK")
+}
+
+// TestCheckAntigravityTitleTee_WarnsWhenNotConfigured surfaces the missing
+// token-usage surface when hooks are installed but the title slot is unclaimed.
+func TestCheckAntigravityTitleTee_WarnsWhenNotConfigured(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	stubAgyOnPath(t)
+
+	agentsDir := filepath.Join(dir, ".agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "hooks.json"),
+		[]byte(antigravityHooksJSON()), 0o600))
+
+	// Empty agy config dir — no title slot claimed.
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", filepath.Join(t.TempDir(), "agy"))
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityTitleTee(cmd)
+
+	out := stdout.String()
+	require.Contains(t, out, "Antigravity title-tee: NOT CONFIGURED")
+	require.Contains(t, out, "token counts")
+	require.Contains(t, out, "entire agent add antigravity")
 }
 
 // TestConfirmDoctorFix_CancelledContext verifies that a cancelled command
@@ -1478,6 +1445,90 @@ func TestCheckDisconnectedMetadata_Aligned_StaysQuiet(t *testing.T) {
 	assert.NotContains(t, output, "DIVERGED")
 }
 
+// stubAgyHooksProbeOnPath installs a fake agy that answers `--version` with
+// version and `-p /hooks` with a JSON envelope listing hooksSource as an
+// enabled "entire" entry (or no hooks when hooksSource is empty).
+func stubAgyHooksProbeOnPath(t *testing.T, version, hooksSource string) {
+	t.Helper()
+	binDir := t.TempDir()
+	hooks := "[]"
+	if hooksSource != "" {
+		hooks = `[{"name":"entire","enabled":true,"source":"` + hooksSource + `"}]`
+	}
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  --version) echo '" + version + "' ;;\n" +
+		"  -p) printf '%s' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"hooks\",\"data\":{\"hooks\":" + hooks + "}}}' ;;\n" +
+		"  *) exit 0 ;;\n" +
+		"esac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "agy"), []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func writeAntigravityHooksForDoctor(t *testing.T, dir string) string {
+	t.Helper()
+	agentsDir := filepath.Join(dir, ".agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o750))
+	hooksPath := filepath.Join(agentsDir, "hooks.json")
+	require.NoError(t, os.WriteFile(hooksPath, []byte(antigravityHooksJSON()), 0o600))
+	return hooksPath
+}
+
+func TestCheckAntigravityHooksLoaded_OKWhenAgyListsWorkspaceHooks(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
+	hooksPath := writeAntigravityHooksForDoctor(t, dir)
+	stubAgyHooksProbeOnPath(t, "1.1.22", hooksPath)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "✓ Antigravity hooks: LOADED by agy")
+}
+
+func TestCheckAntigravityHooksLoaded_WarnsWhenAgyDoesNotLoadThem(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
+	writeAntigravityHooksForDoctor(t, dir)
+	stubAgyHooksProbeOnPath(t, "1.1.22", "")
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "Antigravity hooks: NOT LOADED by agy")
+	require.Contains(t, stdout.String(), "--add-dir")
+}
+
+// TestCheckAntigravityHooksLoaded_SkipsOldAgy pins the quota guard: before
+// 1.1.12, `agy -p "/hooks"` is a real model turn, so doctor must not run it.
+func TestCheckAntigravityHooksLoaded_SkipsOldAgy(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
+	hooksPath := writeAntigravityHooksForDoctor(t, dir)
+	stubAgyHooksProbeOnPath(t, "1.1.1", hooksPath)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "NOT VERIFIED")
+	require.Contains(t, stdout.String(), "agy update")
+	require.NotContains(t, stdout.String(), "LOADED by agy")
+}
+
+func TestCheckAntigravityHooksLoaded_SilentWithoutHooksOrAgy(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv("PATH", t.TempDir())
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Empty(t, stdout.String())
+
+	writeAntigravityHooksForDoctor(t, dir) // hooks present but no agy on PATH
+	checkAntigravityHooksLoaded(cmd)
+	require.Empty(t, stdout.String())
+}
+
 // A symlinked agent directory arrives by clone and is invisible everywhere else:
 // enable refuses to write through it, then HookConfigFile.Exists() reports the
 // config as absent, so status says hooks are missing without saying why and
@@ -1490,7 +1541,7 @@ func TestCheckAgentDirSymlinks_ReportsSymlinkedAgentDir(t *testing.T) {
 	t.Cleanup(osroot.ResetShared)
 
 	elsewhere := t.TempDir()
-	if err := os.Symlink(elsewhere, filepath.Join(dir, ".claude")); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(dir, claudeDirName)); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1512,8 +1563,8 @@ func TestCheckAgentDirSymlinks_ReportsSymlinkedScaffoldParent(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 	t.Cleanup(osroot.ResetShared)
 
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o750))
-	if err := os.Symlink(t.TempDir(), filepath.Join(dir, ".claude", "skills")); err != nil {
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName), 0o750))
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, claudeDirName, "skills")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1566,8 +1617,8 @@ func TestCheckAgentDirSymlinks_ReportsSymlinkedConfigFile(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 	t.Cleanup(osroot.ResetShared)
 
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o750))
-	if err := os.Symlink(filepath.Join(t.TempDir(), "settings.json"), filepath.Join(dir, ".claude", "settings.json")); err != nil {
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName), 0o750))
+	if err := os.Symlink(filepath.Join(t.TempDir(), "settings.json"), filepath.Join(dir, claudeDirName, "settings.json")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1599,7 +1650,7 @@ func TestCheckAgentDirSymlinks_NamesTheOutermostLinkOnce(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 	t.Cleanup(osroot.ResetShared)
 
-	if err := os.Symlink(t.TempDir(), filepath.Join(dir, ".claude")); err != nil {
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, claudeDirName)); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
@@ -1623,7 +1674,7 @@ func TestCheckAgentDirSymlinks_ReportsAnUnreadableComponent(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 	t.Cleanup(osroot.ResetShared)
 
-	claude := filepath.Join(dir, ".claude")
+	claude := filepath.Join(dir, claudeDirName)
 	require.NoError(t, os.MkdirAll(filepath.Join(claude, "skills"), 0o750))
 	require.NoError(t, os.Chmod(claude, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(claude, 0o750) }) //nolint:errcheck // best-effort restore so t.TempDir can clean up
@@ -1668,9 +1719,9 @@ func TestCheckAgentDirSymlinks_SilentWhenClean(t *testing.T) {
 	})
 
 	t.Run("real directories and a user's own link inside one", func(t *testing.T) {
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude", "skills"), 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}"), 0o600))
-		if err := os.Symlink(t.TempDir(), filepath.Join(dir, ".claude", "skills", "my-own")); err != nil {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, claudeDirName, "skills"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, claudeDirName, "settings.json"), []byte("{}"), 0o600))
+		if err := os.Symlink(t.TempDir(), filepath.Join(dir, claudeDirName, "skills", "my-own")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
 
@@ -1679,4 +1730,344 @@ func TestCheckAgentDirSymlinks_SilentWhenClean(t *testing.T) {
 		assert.Empty(t, stdout.String(),
 			"a shared skill symlinked into place is a real setup and none of Entire's business")
 	})
+}
+
+// TestScanForSymlinkedComponent_RegularFileWhereDirectoryBelongs pins the split
+// between BROKEN and NOT READABLE. A regular file at `.claude` used to arrive
+// here as componentScanUnreadable, so doctor answered "check the ownership and
+// permissions" for a condition only replacing the path fixes — the else-branch
+// pattern the .entire scan separates two error values to avoid.
+func TestScanForSymlinkedComponent_RegularFileWhereDirectoryBelongs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, claudeDirName), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// No osroot.ResetShared here, unlike the t.Chdir tests below: the registry
+	// is process-global and closing it mid-run breaks any test running in
+	// parallel — it took out readCapped's, which opens a root of its own. A
+	// registry entry for a unique temp dir needs no cleanup.
+	root, err := worktreedir.OpenAt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	name, outcome := scanForSymlinkedComponent(root, claudeDirName+"/settings.json")
+	if outcome != componentScanWrongType {
+		t.Errorf("outcome = %v, want componentScanWrongType", outcome)
+	}
+	if name != claudeDirName {
+		t.Errorf("name = %q, want %s — the component to replace, not the leaf", name, claudeDirName)
+	}
+}
+
+// TestCheckAgentDirSymlinks_ReportsWrongTypedComponent checks the remedy the
+// user actually reads, not just the classification.
+func TestCheckAgentDirSymlinks_ReportsWrongTypedComponent(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	t.Cleanup(osroot.ResetShared)
+
+	if err := os.WriteFile(filepath.Join(dir, claudeDirName), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, stdout := newTestCmd(t)
+	checkAgentDirSymlinks(cmd)
+
+	got := stdout.String()
+	if !strings.Contains(got, "BROKEN") {
+		t.Errorf("output should report BROKEN, got:\n%s", got)
+	}
+	if !strings.Contains(got, "replace each path above with a real directory") {
+		t.Errorf("output should name the replace remedy, got:\n%s", got)
+	}
+	if strings.Contains(got, "ownership and permissions") {
+		t.Errorf("output must not offer the permissions remedy for a wrong-typed path, got:\n%s", got)
+	}
+}
+
+// TestAgentSymlinkCheckPaths_CoversLegacySubagentDir keeps .claude/agents/ in
+// the scan. removeLegacySearchSubagent deletes through it with
+// osroot.LstatNoSymlinks, which refuses a symlinked parent, so a link there is
+// refused at enable and has to be diagnosable. .codex/agents was only ever
+// covered as a side effect of the agent-help template living under it.
+func TestAgentSymlinkCheckPaths_CoversLegacySubagentDir(t *testing.T) {
+	t.Parallel()
+
+	candidates := agentSymlinkCheckPaths()
+	var found bool
+	for _, c := range candidates {
+		if strings.HasPrefix(c, ".claude/agents/") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no candidate under .claude/agents/; got %v", candidates)
+	}
+}
+
+// A real directory is traversable and reports clean, so the allowlist has not
+// become a blanket rejection.
+func TestScanForSymlinkedComponent_DirectoryIsClean(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, claudeDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := worktreedir.OpenAt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if name, outcome := scanForSymlinkedComponent(root, claudeDirName+"/settings.json"); outcome != componentScanClean {
+		t.Errorf("outcome = %v (%q), want componentScanClean", outcome, name)
+	}
+}
+
+// TestComponentHasExpectedShape pins each mode combination at both positions,
+// including the Windows shapes that must not be rejected: a bare
+// fs.ModeIrregular is how Go reports a directory junction, and
+// ModeDir|ModeIrregular a cloud placeholder directory.
+func TestComponentHasExpectedShape(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		mode                fs.FileMode
+		wantLeaf, wantInner bool
+	}{
+		{mode: fs.ModeDir, wantLeaf: false, wantInner: true},
+		{mode: fs.ModeIrregular, wantLeaf: true, wantInner: false},
+		{mode: fs.ModeDir | fs.ModeIrregular, wantLeaf: false, wantInner: true},
+		{mode: 0, wantLeaf: true, wantInner: false},
+		{mode: fs.ModeNamedPipe, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeSocket, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeDevice, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeDevice | fs.ModeCharDevice, wantLeaf: false, wantInner: false},
+		{mode: fs.ModeSymlink, wantLeaf: false, wantInner: false},
+	} {
+		if got := componentHasExpectedShape(tc.mode, true); got != tc.wantLeaf {
+			t.Errorf("componentHasExpectedShape(%v, leaf) = %v, want %v", tc.mode, got, tc.wantLeaf)
+		}
+		if got := componentHasExpectedShape(tc.mode, false); got != tc.wantInner {
+			t.Errorf("componentHasExpectedShape(%v, inner) = %v, want %v", tc.mode, got, tc.wantInner)
+		}
+	}
+}
+
+// A symlinked hooks directory stops installation, and nothing else says so:
+// every other command reports the hooks as absent. Naming core.hooksPath in the
+// remedy matters because git, not Entire, chose the path.
+func TestCheckGitHookSymlinks_ReportsSymlinkedHooksDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	realHooks := filepath.Join(dir, "real-hooks")
+	require.NoError(t, os.MkdirAll(realHooks, 0o750))
+	link := filepath.Join(dir, "linked-hooks")
+	if err := os.Symlink(realHooks, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	testutil.RunGit(t, dir, "config", "core.hooksPath", link)
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Git hooks directory: SYMLINK")
+	assert.Contains(t, output, realHooks, "the report must say where the link points")
+	assert.Contains(t, output, "core.hooksPath", "and how to point git at the target instead")
+}
+
+// A symlinked hook file is not an error — Entire backs it up and chains to it —
+// but the user should hear that the path they set up is no longer what git runs
+// first.
+func TestCheckGitHookSymlinks_ReportsSymlinkedHookFile(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	testutil.RunGit(t, dir, "config", "core.hooksPath", hooksDir)
+
+	elsewhere := filepath.Join(t.TempDir(), "shared-pre-push")
+	require.NoError(t, os.WriteFile(elsewhere, []byte("#!/bin/sh\n"), 0o700))
+	if err := os.Symlink(elsewhere, filepath.Join(hooksDir, "pre-push")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	output := stdout.String()
+	assert.Contains(t, output, "Git hooks: SYMLINKS PRESENT")
+	assert.Contains(t, output, elsewhere)
+	assert.Contains(t, output, strategy.GitHookBackupSuffix, "the note must name where the link will end up")
+}
+
+// The common case must stay silent: a doctor section that fires on every healthy
+// repo is one users learn to scroll past.
+func TestCheckGitHookSymlinks_SilentOnAPlainHooksDirectory(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	strategy.ClearHooksDirCache()
+	t.Cleanup(strategy.ClearHooksDirCache)
+
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o750))
+	testutil.RunGit(t, dir, "config", "core.hooksPath", hooksDir)
+
+	cmd, stdout := newTestCmd(t)
+	checkGitHookSymlinks(cmd)
+
+	assert.Empty(t, stdout.String())
+}
+
+// A vouched link is followed, so the components BENEATH it are the ones that can
+// still block an install. Stopping the scan at the vouched link reported the one
+// path that is fine and said nothing about the one that is not: scaffold
+// installation follows `.claude` and then refuses `.claude/skills`, so the user
+// saw a failed install and a doctor naming only the allowed link.
+func TestCheckAgentDirSymlinks_ScansBeneathAVouchedLink(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	t.Cleanup(osroot.ResetShared)
+	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs("", nil) })
+
+	dest := t.TempDir()
+	if err := os.Symlink(dest, filepath.Join(dir, claudeDirName)); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(dest, "skills")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	// git rev-parse --show-toplevel (what checkAgentDirSymlinks reads) resolves
+	// symlinks, so on macOS the vouch must be keyed on the resolved path.
+	vouchRoot, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	agent.SetVouchedSymlinkedDirs(vouchRoot, []string{claudeDirName})
+
+	cmd, stdout := newTestCmd(t)
+	checkAgentDirSymlinks(cmd)
+	got := stdout.String()
+
+	assert.Contains(t, got, "FOLLOWING SYMLINKS", "the vouched link is still reported as followed")
+	assert.Contains(t, got, claudeDirName+"/skills",
+		"the nested link that actually blocks installation must be reported too")
+	assert.Contains(t, got, "SYMLINKS PRESENT", "and reported as a fault, not as allowed")
+}
+
+// The common vouched case stays quiet about everything except the link it is
+// following: a clean tree beneath a vouched directory is not a finding.
+func TestCheckAgentDirSymlinks_VouchedLinkWithCleanTargetReportsOnlyTheLink(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+	t.Cleanup(osroot.ResetShared)
+	t.Cleanup(func() { agent.SetVouchedSymlinkedDirs("", nil) })
+
+	dest := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dest, "skills"), 0o750))
+	if err := os.Symlink(dest, filepath.Join(dir, claudeDirName)); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	// git rev-parse --show-toplevel (what checkAgentDirSymlinks reads) resolves
+	// symlinks, so on macOS the vouch must be keyed on the resolved path.
+	vouchRoot, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	agent.SetVouchedSymlinkedDirs(vouchRoot, []string{claudeDirName})
+
+	cmd, stdout := newTestCmd(t)
+	checkAgentDirSymlinks(cmd)
+	got := stdout.String()
+
+	assert.Contains(t, got, "FOLLOWING SYMLINKS")
+	assert.NotContains(t, got, "SYMLINKS PRESENT", "a clean target is not a fault")
+	assert.NotContains(t, got, "NOT READABLE")
+}
+
+// The `/hooks` probe spends quota on at least one platform (agy 1.2.7 on
+// Windows ran a full model turn for it), so a default doctor run must not
+// invoke it at all — only ENTIRE_ANTIGRAVITY_DOCTOR_PROBE=1 does.
+func TestCheckAntigravityHooksLoaded_ProbeIsOptIn(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	writeAntigravityHooksForDoctor(t, dir)
+	marker := filepath.Join(t.TempDir(), "probe-ran")
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  --version) echo '1.2.7' ;;\n" +
+		"  -p) : > '" + marker + "'; printf '%s' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"hooks\",\"data\":{\"hooks\":[]}}}' ;;\n" +
+		"  *) exit 0 ;;\n" +
+		"esac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "agy"), []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(antigravity.DoctorProbeEnv, "")
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("doctor ran `agy -p /hooks` without the opt-in (stat err = %v)", err)
+	}
+	require.NotContains(t, stdout.String(), "LOADED by agy")
+	require.NotContains(t, stdout.String(), "NOT VERIFIED")
+}
+
+// The zero-cost check that replaces the probe by default: an installed entry
+// that is not what this host needs (here a bare command with no wrapper at all)
+// is reported with the reinstall remedy, and a freshly installed one is not.
+func TestCheckAntigravityHooksLoaded_ReportsAnEntryStaleForThisHost(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_ANTIGRAVITY_CONFIG_DIR", t.TempDir())
+	stubAgyOnPath(t)
+	writeAntigravityHooksForDoctor(t, dir)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "Antigravity hooks: STALE FOR THIS HOST")
+	require.Contains(t, stdout.String(), "entire agent add antigravity")
+
+	// A current install is silent.
+	_, err := (&antigravity.AntigravityAgent{}).InstallHooks(cmd.Context(), true)
+	require.NoError(t, err)
+	cmd, stdout = newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.NotContains(t, stdout.String(), "STALE FOR THIS HOST")
+}
+
+// A version string semver cannot parse is not "too old": the agy may be newer
+// than the requirement, so the advice must not be `agy update`.
+func TestCheckAntigravityHooksLoaded_UnparseableVersionSkipsProbeWithoutUpgradeAdvice(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+	t.Setenv(antigravity.DoctorProbeEnv, "1")
+	hooksPath := writeAntigravityHooksForDoctor(t, dir)
+	stubAgyHooksProbeOnPath(t, "Antigravity CLI build 2026.09", hooksPath)
+
+	cmd, stdout := newTestCmd(t)
+	checkAntigravityHooksLoaded(cmd)
+	require.Contains(t, stdout.String(), "could not determine the agy version")
+	require.NotContains(t, stdout.String(), "agy update")
+	require.NotContains(t, stdout.String(), "LOADED by agy")
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -161,63 +162,27 @@ func TestState_NormalizeAfterLoad(t *testing.T) {
 		assert.Equal(t, 200, state.CheckpointTranscriptStart)
 		assert.Equal(t, 0, state.TranscriptLinesAtStart)
 	})
-
-	t.Run("heals_stale_divergence_flag_when_attribution_aligned", func(t *testing.T) {
-		t.Parallel()
-		// DivergenceNoticeShown is only meaningful while attribution is diverged.
-		// A state file carrying notice=true with base==attribution must self-heal on load —
-		// otherwise a legitimate future divergence would be suppressed by the stale flag.
-		state := &State{
-			BaseCommit:            "aaaaaaa",
-			AttributionBaseCommit: "aaaaaaa",
-			DivergenceNoticeShown: true,
-		}
-		state.NormalizeAfterLoad(context.Background())
-		assert.False(t, state.DivergenceNoticeShown,
-			"DivergenceNoticeShown must be cleared when AttributionBaseCommit == BaseCommit")
-	})
-
-	t.Run("heals_stale_divergence_flag_when_attribution_empty", func(t *testing.T) {
-		t.Parallel()
-		// Empty AttributionBaseCommit gets backfilled to BaseCommit below; once aligned,
-		// the flag is meaningless and must clear.
-		state := &State{
-			BaseCommit:            "bbbbbbb",
-			AttributionBaseCommit: "",
-			DivergenceNoticeShown: true,
-		}
-		state.NormalizeAfterLoad(context.Background())
-		assert.False(t, state.DivergenceNoticeShown,
-			"DivergenceNoticeShown must be cleared when AttributionBaseCommit is empty/backfilled")
-	})
-
-	t.Run("preserves_divergence_flag_when_actually_diverged", func(t *testing.T) {
-		t.Parallel()
-		state := &State{
-			BaseCommit:            "cccccc1",
-			AttributionBaseCommit: "cccccc0",
-			DivergenceNoticeShown: true,
-		}
-		state.NormalizeAfterLoad(context.Background())
-		assert.True(t, state.DivergenceNoticeShown,
-			"DivergenceNoticeShown must be preserved when attribution is genuinely diverged")
-	})
 }
 
-func TestState_RealignAttributionBase_ClearsDivergenceFlag(t *testing.T) {
+// TestState_LegacyAttributionKeysIgnored pins that state files written before
+// line attribution was removed still load, and that saving drops the keys.
+func TestState_LegacyAttributionKeysIgnored(t *testing.T) {
 	t.Parallel()
 
-	state := &State{
-		BaseCommit:            "ccccccc",
-		AttributionBaseCommit: "aaaaaaa",
-		DivergenceNoticeShown: true,
-	}
-	state.RealignAttributionBase("ccccccc")
+	legacy := `{"session_id":"s1","base_commit":"aaaaaaa","checkpoint_count":2,` +
+		`"attribution_base_commit":"bbbbbbb","divergence_notice_shown":true,` +
+		`"prompt_attributions":[{"checkpoint_number":1,"user_lines_added":3}],` +
+		`"pending_prompt_attribution":{"checkpoint_number":2},"last_checkpoint_commit_hash":"ccccccc"}`
+	var state State
+	require.NoError(t, json.Unmarshal([]byte(legacy), &state))
+	assert.Equal(t, "aaaaaaa", state.BaseCommit)
+	assert.Equal(t, 2, state.StepCount)
 
-	assert.Equal(t, "ccccccc", state.AttributionBaseCommit,
-		"AttributionBaseCommit must be updated to the new base")
-	assert.False(t, state.DivergenceNoticeShown,
-		"DivergenceNoticeShown must be cleared whenever attribution is realigned")
+	out, err := json.Marshal(&state)
+	require.NoError(t, err)
+	for _, key := range []string{"attribution_base_commit", "divergence_notice_shown", "prompt_attributions", "pending_prompt_attribution", "last_checkpoint_commit_hash"} {
+		assert.NotContains(t, string(out), key)
+	}
 }
 
 func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
@@ -226,28 +191,45 @@ func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 		json     string
 		wantCTS  int // CheckpointTranscriptStart
 		wantStep int // StepCount
+		wantTok  int // TokenStart; older state counted tokens from CheckpointTranscriptStart
 	}{
 		{
 			name:     "migrates old condensed_transcript_lines",
 			json:     `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
 			wantCTS:  42,
 			wantStep: 5,
+			wantTok:  42,
 		},
 		{
 			name:    "migrates old transcript_lines_at_start",
 			json:    `{"session_id":"s1","transcript_lines_at_start":75}`,
 			wantCTS: 75,
+			wantTok: 75,
 		},
 		{
 			name:    "preserves new field over old",
 			json:    `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
 			wantCTS: 50,
+			wantTok: 50,
 		},
 		{
 			name:     "handles clean new format",
 			json:     `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
 			wantCTS:  25,
 			wantStep: 3,
+			wantTok:  25,
+		},
+		{
+			name:    "keeps token offset ahead of a carry-forward window",
+			json:    `{"session_id":"s1","checkpoint_transcript_start":0,"token_transcript_start":40}`,
+			wantCTS: 0,
+			wantTok: 40,
+		},
+		{
+			name:    "keeps an explicit zero token offset",
+			json:    `{"session_id":"s1","checkpoint_transcript_start":30,"token_transcript_start":0}`,
+			wantCTS: 30,
+			wantTok: 0,
 		},
 	}
 
@@ -259,6 +241,8 @@ func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 
 			assert.Equal(t, tt.wantCTS, state.CheckpointTranscriptStart)
 			assert.Equal(t, tt.wantStep, state.StepCount)
+			assert.Equal(t, tt.wantTok, state.TokenStart())
+			require.NotNil(t, state.TokenTranscriptStart, "the token offset is persisted after load")
 			assert.Equal(t, 0, state.CondensedTranscriptLines, "deprecated field should be cleared")
 			assert.Equal(t, 0, state.TranscriptLinesAtStart, "deprecated field should be cleared")
 		})
@@ -495,6 +479,43 @@ func TestStateStore_List_DeletesStaleSession(t *testing.T) {
 	// Active session file should still exist
 	_, err = os.Stat(filepath.Join(stateDir, "active-session.json"))
 	assert.NoError(t, err, "active session file should still exist")
+}
+
+// ListReadOnly is the passive read: `entire status` must be able to report
+// what exists without observation changing it. List keeps its cleanup
+// contract — doctor and the sweeper still rely on it.
+func TestStateStore_ListReadOnly_ReturnsStaleWithoutDeleting(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "entire-sessions")
+	require.NoError(t, os.MkdirAll(stateDir, 0o750))
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+
+	staleInteracted := time.Now().Add(-2 * 7 * 24 * time.Hour)
+	stale := &State{
+		SessionID:           "stale-session",
+		BaseCommit:          "def456",
+		StartedAt:           time.Now().Add(-3 * 7 * 24 * time.Hour),
+		LastInteractionTime: &staleInteracted,
+	}
+	require.NoError(t, store.Save(ctx, stale))
+	stalePath := filepath.Join(stateDir, "stale-session.json")
+
+	states, err := store.ListReadOnly(ctx)
+	require.NoError(t, err)
+	require.Len(t, states, 1, "ListReadOnly must report the stale session")
+	assert.Equal(t, "stale-session", states[0].SessionID)
+
+	_, err = os.Stat(stalePath)
+	require.NoError(t, err, "ListReadOnly must not delete the stale session file")
+
+	// The mutating read still cleans up, so doctor/sweeper are unaffected.
+	states, err = store.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, states)
+	_, err = os.Stat(stalePath)
+	assert.True(t, os.IsNotExist(err), "List must still delete stale sessions")
 }
 
 func TestStateStore_Load_TraversalResistant(t *testing.T) {
@@ -875,6 +896,7 @@ func TestState_TaskRecords_RoundTrip(t *testing.T) {
 				SubagentType:           "code-reviewer",
 				TaskDescription:        "Review the diff",
 				DeclaredTranscriptPath: "/tmp/agent-a123.jsonl",
+				TranscriptUnavailable:  true,
 				Files:                  []string{"foo.go", "bar.go"},
 				TokenUsage:             &agent.TokenUsage{InputTokens: 100, OutputTokens: 50},
 				CompletedAt:            completedAt,
@@ -904,6 +926,7 @@ func TestState_TaskRecords_RoundTrip(t *testing.T) {
 	assert.Equal(t, "code-reviewer", record.SubagentType)
 	assert.Equal(t, "Review the diff", record.TaskDescription)
 	assert.Equal(t, "/tmp/agent-a123.jsonl", record.DeclaredTranscriptPath)
+	assert.True(t, record.TranscriptUnavailable)
 	assert.Equal(t, []string{"foo.go", "bar.go"}, record.Files)
 	require.NotNil(t, record.TokenUsage)
 	assert.Equal(t, 100, record.TokenUsage.InputTokens)
@@ -967,6 +990,45 @@ func TestState_TaskRecordAccessors(t *testing.T) {
 
 		// Nil (not a panic) on a ToolUseID with no record.
 		assert.Nil(t, s.FindTaskRecord("does-not-exist"))
+	})
+
+	// Claude Code's SubagentStop payload carries agent_id but no tool_use_id,
+	// so the stop handler can only find the launch record by its AgentID.
+	t.Run("find by agent id", func(t *testing.T) {
+		t.Parallel()
+		s := &State{TaskRecords: []TaskRecord{
+			{ToolUseID: "toolu_1", SubagentType: "reviewer"},
+			{ToolUseID: "toolu_2", AgentID: "a2", SubagentType: "dev"},
+		}}
+
+		got := s.FindTaskRecordByAgentID("a2")
+		require.NotNil(t, got)
+		assert.Equal(t, "toolu_2", got.ToolUseID)
+
+		assert.Nil(t, s.FindTaskRecordByAgentID("does-not-exist"))
+		// An empty AgentID must not match a record that never learned one.
+		assert.Nil(t, s.FindTaskRecordByAgentID(""))
+	})
+
+	// Should two records share an agent ID before condensation, the stop must
+	// find the live one, not the completed one.
+	t.Run("find by agent id prefers the live record", func(t *testing.T) {
+		t.Parallel()
+		s := &State{TaskRecords: []TaskRecord{
+			{ToolUseID: "toolu_first", AgentID: "a1", CompletedAt: time.Now()},
+			{ToolUseID: "toolu_second", AgentID: "a1"},
+		}}
+
+		got := s.FindTaskRecordByAgentID("a1")
+		require.NotNil(t, got)
+		assert.Equal(t, "toolu_second", got.ToolUseID)
+
+		// With no live record left, a redelivered stop still finds the
+		// completed one, so the exactly-once guard can skip it.
+		s.TaskRecords[1].CompletedAt = time.Now()
+		got = s.FindTaskRecordByAgentID("a1")
+		require.NotNil(t, got)
+		assert.Equal(t, "toolu_first", got.ToolUseID)
 	})
 
 	t.Run("remove", func(t *testing.T) {
@@ -1050,4 +1112,265 @@ func TestState_LiveTaskRecords(t *testing.T) {
 	assert.Equal(t, "toolu_live", live[0].ToolUseID)
 
 	assert.Empty(t, (&State{}).LiveTaskRecords())
+}
+
+func TestState_SubagentInventoryLedger(t *testing.T) {
+	t.Parallel()
+
+	stopFirst := &State{}
+	if !stopFirst.RecordSubagentStop("child-stop-first", "turn-stop-first") {
+		t.Fatal("stop-before-start observation must be recorded")
+	}
+	record := stopFirst.FindTaskRecord("child-stop-first")
+	require.NotNil(t, record, "a stop-before-start observation must preserve pending task content")
+	assert.Equal(t, "child-stop-first", record.AgentID)
+	assert.True(t, stopFirst.HasTaskContent())
+	startedAt := time.Now().UTC()
+	assert.False(t, stopFirst.EnsureTaskRecord(TaskRecord{
+		ToolUseID:       "child-stop-first",
+		AgentID:         "child-stop-first",
+		StartedAt:       startedAt,
+		SubagentType:    "default",
+		TaskDescription: "late start metadata",
+	}), "the late start must enrich, not replace, the pending record")
+	assert.Equal(t, startedAt, record.StartedAt)
+	assert.Equal(t, "default", record.SubagentType)
+	assert.Equal(t, "late start metadata", record.TaskDescription)
+
+	complete := true
+	state := &State{
+		TokenUsage:           &agent.TokenUsage{InputTokens: 5, SubagentTokens: &agent.TokenUsage{InputTokens: 3}, SubagentTokensComplete: &complete},
+		CheckpointTokenUsage: &agent.TokenUsage{OutputTokens: 2, SubagentTokens: &agent.TokenUsage{OutputTokens: 1}, SubagentTokensComplete: &complete},
+	}
+	if !state.RegisterSubagent("child-1", "turn-1") {
+		t.Fatal("first child observation must be recorded")
+	}
+	assert.Equal(t, uint64(1), state.SubagentLedgerVersion)
+	assertIncompleteSubagentUsage(t, state)
+
+	// A later exact extraction may have refreshed both aggregates. Duplicate
+	// observations and path-only enrichment must preserve that fresh coverage.
+	refreshedComplete := true
+	state.TokenUsage.SubagentTokens = &agent.TokenUsage{InputTokens: 21}
+	state.TokenUsage.SubagentTokensComplete = &refreshedComplete
+	state.CheckpointTokenUsage.SubagentTokens = &agent.TokenUsage{OutputTokens: 13}
+	state.CheckpointTokenUsage.SubagentTokensComplete = &refreshedComplete
+	versionBeforeDuplicate := state.SubagentLedgerVersion
+	if state.RegisterSubagent("child-1", "turn-1") {
+		t.Fatal("duplicate agent/turn observation must be a true no-op")
+	}
+	assert.Equal(t, versionBeforeDuplicate, state.SubagentLedgerVersion)
+	assertCompleteSubagentUsage(t, state, 21, 13)
+	versionBeforePathEnrichment := state.SubagentLedgerVersion
+	assert.True(t, state.UpdateSubagentTranscriptPaths("child-1", "/tmp/declared.jsonl", "/tmp/resolved.jsonl"))
+	assert.Equal(t, versionBeforePathEnrichment, state.SubagentLedgerVersion, "path enrichment must not churn the ledger generation")
+	assertCompleteSubagentUsage(t, state, 21, 13)
+
+	if !state.RecordSubagentStop("child-1", "turn-2") {
+		t.Fatal("stop-first new turn must be recorded")
+	}
+	assert.Equal(t, uint64(2), state.SubagentLedgerVersion)
+	assertIncompleteSubagentUsage(t, state)
+	entry := state.FindSubagentInventory("child-1")
+	require.NotNil(t, entry)
+	require.Contains(t, entry.ObservedTurnIDs, "turn-2")
+	require.NotContains(t, entry.FinalizedTurnIDs, "turn-2")
+
+	// A stop retry must leave already-calculated token coverage intact.
+	stopRefreshComplete := true
+	state.TokenUsage.SubagentTokens = &agent.TokenUsage{InputTokens: 34}
+	state.TokenUsage.SubagentTokensComplete = &stopRefreshComplete
+	state.CheckpointTokenUsage.SubagentTokens = &agent.TokenUsage{OutputTokens: 21}
+	state.CheckpointTokenUsage.SubagentTokensComplete = &stopRefreshComplete
+	versionBeforeStopRefresh := state.SubagentLedgerVersion
+	assert.False(t, state.RecordSubagentStop("child-1", "turn-2"), "duplicate stop must be a no-op")
+	assert.Equal(t, versionBeforeStopRefresh, state.SubagentLedgerVersion)
+	assertCompleteSubagentUsage(t, state, 34, 21)
+
+	state.RecordSubagentStop("child-1", "turn-3")
+	require.Contains(t, entry.ObservedTurnIDs, "turn-3", "several pending turns must coexist")
+	if !state.FinalizeSubagentTurn("child-1", "turn-2") {
+		t.Fatal("pending turn must finalize")
+	}
+	assert.Contains(t, entry.FinalizedTurnIDs, "turn-2")
+	if state.FinalizeSubagentTurn("child-1", "turn-2") {
+		t.Fatal("finalized turn must be exactly once")
+	}
+}
+
+func assertIncompleteSubagentUsage(t *testing.T, state *State) {
+	t.Helper()
+	for _, usage := range []*agent.TokenUsage{state.TokenUsage, state.CheckpointTokenUsage} {
+		require.NotNil(t, usage)
+		assert.Nil(t, usage.SubagentTokens)
+		require.NotNil(t, usage.SubagentTokensComplete)
+		assert.False(t, *usage.SubagentTokensComplete)
+	}
+}
+
+func assertCompleteSubagentUsage(t *testing.T, state *State, sessionInput, checkpointOutput int) {
+	t.Helper()
+	assert.Equal(t, &agent.TokenUsage{InputTokens: sessionInput}, state.TokenUsage.SubagentTokens)
+	assert.Equal(t, &agent.TokenUsage{OutputTokens: checkpointOutput}, state.CheckpointTokenUsage.SubagentTokens)
+	assert.True(t, *state.TokenUsage.SubagentTokensComplete)
+	assert.True(t, *state.CheckpointTokenUsage.SubagentTokensComplete)
+}
+
+func TestState_SubagentInventoryRoundTripAndTaskRecordRecovery(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC().Truncate(time.Second)
+	complete := true
+	state := State{
+		AgentType:                      agent.AgentTypeCodex,
+		SubagentInventoryComplete:      &complete,
+		SubagentTokensBaselineComplete: &complete,
+		SubagentLedgerVersion:          7,
+		SubagentInventory: []SubagentInventoryEntry{{
+			AgentID:                "child-1",
+			DeclaredTranscriptPath: "/tmp/child.jsonl",
+			ResolvedTranscriptPath: "/tmp/resolved.jsonl",
+			ObservedTurnIDs:        []string{"turn-1"},
+			FinalizedTurnIDs:       []string{"turn-0"},
+		}},
+	}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	var got State
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.NotNil(t, got.SubagentInventoryComplete)
+	assert.True(t, *got.SubagentInventoryComplete)
+	require.NotNil(t, got.SubagentTokensBaselineComplete)
+	assert.True(t, *got.SubagentTokensBaselineComplete)
+	assert.Equal(t, uint64(7), got.SubagentLedgerVersion)
+	assert.Equal(t, state.SubagentInventory, got.SubagentInventory)
+
+	materialized := TaskRecord{ToolUseID: "child-1", AgentID: "child-1", StartedAt: now, CompletedAt: now}
+	got.AddTaskRecord(materialized)
+	assert.False(t, got.EnsureTaskRecord(TaskRecord{ToolUseID: "child-1", AgentID: "child-1", StartedAt: now.Add(time.Minute)}), "unmaterialized record must not be replaced")
+	assert.True(t, got.TaskRecords[0].CompletedAt.Equal(now))
+	got.RemoveTaskRecord("child-1")
+	assert.True(t, got.EnsureTaskRecord(TaskRecord{ToolUseID: "child-1", AgentID: "child-1", StartedAt: now.Add(time.Minute)}), "follow-up must recreate a materialized record")
+}
+
+func TestState_NormalizeAfterLoad_CodexInventoryMigration(t *testing.T) {
+	t.Parallel()
+	legacy := &State{
+		AgentType:            agent.AgentTypeCodex,
+		TokenUsage:           &agent.TokenUsage{SubagentTokens: &agent.TokenUsage{InputTokens: 4}},
+		CheckpointTokenUsage: &agent.TokenUsage{SubagentTokens: &agent.TokenUsage{InputTokens: 2}},
+		TaskRecords:          []TaskRecord{{AgentID: "child-1"}},
+	}
+	legacy.NormalizeAfterLoad(context.Background())
+	require.NotNil(t, legacy.SubagentInventoryComplete)
+	assert.False(t, *legacy.SubagentInventoryComplete)
+	require.NotNil(t, legacy.SubagentTokensBaselineComplete)
+	assert.False(t, *legacy.SubagentTokensBaselineComplete)
+	assertIncompleteSubagentUsage(t, legacy)
+	require.Len(t, legacy.SubagentInventory, 1)
+	assert.Equal(t, "child-1", legacy.SubagentInventory[0].AgentID)
+
+	nonCodex := &State{AgentType: agent.AgentTypeClaudeCode}
+	nonCodex.NormalizeAfterLoad(context.Background())
+	assert.Nil(t, nonCodex.SubagentInventoryComplete)
+	assert.Nil(t, nonCodex.SubagentTokensBaselineComplete)
+
+	explicitComplete := true
+	explicit := &State{AgentType: agent.AgentTypeCodex, SubagentInventoryComplete: &explicitComplete, SubagentTokensBaselineComplete: &explicitComplete, TokenUsage: &agent.TokenUsage{SubagentTokens: &agent.TokenUsage{InputTokens: 9}}}
+	explicit.NormalizeAfterLoad(context.Background())
+	assert.True(t, *explicit.SubagentInventoryComplete)
+	assert.NotNil(t, explicit.TokenUsage.SubagentTokens, "an explicit state must not be migrated again")
+}
+
+func TestState_RebaselineSubagentTokensPreservesTriState(t *testing.T) {
+	t.Parallel()
+	complete := true
+	incomplete := false
+
+	exactEmpty := &State{TokenUsage: &agent.TokenUsage{SubagentTokensComplete: &complete}}
+	exactEmpty.RebaselineSubagentTokens()
+	require.NotNil(t, exactEmpty.SubagentTokensBaselineComplete)
+	assert.True(t, *exactEmpty.SubagentTokensBaselineComplete)
+	assert.Nil(t, exactEmpty.SubagentTokensBaseline)
+
+	unknown := &State{TokenUsage: &agent.TokenUsage{SubagentTokens: &agent.TokenUsage{InputTokens: 9}, SubagentTokensComplete: &incomplete}}
+	unknown.RebaselineSubagentTokens()
+	require.NotNil(t, unknown.SubagentTokensBaselineComplete)
+	assert.False(t, *unknown.SubagentTokensBaselineComplete)
+	assert.Nil(t, unknown.SubagentTokensBaseline)
+}
+
+func TestState_AdvanceDisplayWindowKeepsTokenOffset(t *testing.T) {
+	t.Parallel()
+	unset := State{CheckpointTranscriptStart: 8}
+	unset.AdvanceDisplayWindow(12)
+	assert.Equal(t, 12, unset.CheckpointTranscriptStart)
+	assert.Equal(t, 8, unset.TokenStart(), "an unset token offset must not follow the display window")
+
+	set := State{CheckpointTranscriptStart: 0}
+	set.SetTokenStart(8)
+	set.AdvanceDisplayWindow(12)
+	assert.Equal(t, 8, set.TokenStart())
+}
+
+func TestState_AdvanceCheckpointWindowNeverMovesTokenOffsetBack(t *testing.T) {
+	t.Parallel()
+	advanced := State{}
+	advanced.AdvanceCheckpointWindow(12)
+	assert.Equal(t, 12, advanced.CheckpointTranscriptStart)
+	assert.Equal(t, 12, advanced.TokenStart())
+
+	// A condensation that could not read the transcript reports 0 lines.
+	unreadable := State{CheckpointTranscriptStart: 12}
+	unreadable.SetTokenStart(12)
+	unreadable.AdvanceCheckpointWindow(0)
+	assert.Equal(t, 0, unreadable.CheckpointTranscriptStart)
+	assert.Equal(t, 12, unreadable.TokenStart(), "tokens already counted must not be counted again")
+}
+
+func TestState_SetTokenStartDoesNotShareAcrossCopies(t *testing.T) {
+	t.Parallel()
+	source := State{}
+	source.SetTokenStart(10)
+	copied := source
+	copied.SetTokenStart(20)
+	assert.Equal(t, 10, source.TokenStart())
+	assert.Equal(t, 20, copied.TokenStart())
+}
+
+func TestState_RebaselineSubagentTokensPreservesLegacyNilUsage(t *testing.T) {
+	t.Parallel()
+	for _, agentType := range []types.AgentType{agent.AgentTypeClaudeCode, agent.AgentTypeFactoryAIDroid} {
+		t.Run(string(agentType), func(t *testing.T) {
+			t.Parallel()
+			state := &State{AgentType: agentType, SubagentTokensBaseline: &agent.TokenUsage{InputTokens: 7}}
+			state.RebaselineSubagentTokens()
+			require.Equal(t, &agent.TokenUsage{InputTokens: 7}, state.SubagentTokensBaseline)
+			require.Nil(t, state.SubagentTokensBaselineComplete)
+		})
+	}
+}
+
+func TestState_HasPendingWork(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		state State
+		want  bool
+	}{
+		{name: "empty", state: State{}, want: false},
+		{name: "turn-end step", state: State{StepCount: 1}, want: true},
+		{name: "files awaiting a commit", state: State{FilesTouched: []string{"a.go"}}, want: true},
+		{name: "task record", state: State{TaskRecords: []TaskRecord{{ToolUseID: "toolu_1"}}}, want: true},
+		// FullyCondensed is the caller's concern (see HasPendingWork's doc).
+		{name: "fully condensed with nothing left", state: State{FullyCondensed: true}, want: false},
+		{name: "fully condensed with an in-flight record", state: State{FullyCondensed: true, TaskRecords: []TaskRecord{{ToolUseID: "toolu_1"}}}, want: true},
+		{name: "condensed checkpoint id alone", state: State{LastCheckpointID: id.MustCheckpointID("abc123def456")}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.state.HasPendingWork())
+		})
+	}
 }

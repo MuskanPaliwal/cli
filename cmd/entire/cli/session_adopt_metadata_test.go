@@ -62,7 +62,7 @@ func TestBuildAdoptedStateUsesBareBackedWorktreeMetadata(t *testing.T) {
 	testutil.RunGit(t, tmp, "--git-dir", storage, "worktree", "add", "-b", "target", linked)
 	t.Chdir(linked)
 
-	state, _, err := buildAdoptedSessionState(context.Background(), &session.State{SessionID: "bare-adoption"})
+	state, _, err := buildAdoptedSessionState(context.Background(), &session.State{SessionID: "bare-adoption"}, adoptAgentHome{}, "")
 	require.NoError(t, err)
 	require.Equal(t, "target", state.WorktreeID)
 	require.Equal(t, testutil.GetHeadHash(t, seed), state.BaseCommit)

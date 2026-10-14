@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
-	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -27,13 +27,14 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/palette"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
+	"github.com/entireio/cli/cmd/entire/cli/transcript/geminilegacy"
+	"github.com/entireio/cli/cmd/entire/cli/tuiutil"
 	"github.com/entireio/cli/redact"
 
 	"charm.land/lipgloss/v2"
@@ -47,12 +48,11 @@ import (
 )
 
 const (
-	pagerEnvVar       = "PAGER"
-	lessEnvVar        = "LESS"
-	lessPagerName     = "less"
-	lessRawControlEnv = "LESS=-R"
-	windowsGOOS       = "windows"
-	darwinGOOS        = "darwin"
+	pagerEnvVar   = "PAGER"
+	lessEnvVar    = "LESS"
+	lessPagerName = "less"
+	windowsGOOS   = "windows"
+	darwinGOOS    = "darwin"
 )
 
 var generateTranscriptSummary = summarize.GenerateFromTranscript
@@ -79,12 +79,6 @@ func resolveSummaryTimeout(ctx context.Context, flagSeconds int) time.Duration {
 	}
 	return 0
 }
-
-// errCannotGenerateTemporaryCheckpoint is returned by runExplainCheckpoint when
-// --generate is requested for a target that does not match any committed
-// checkpoint. runExplainAuto uses errors.Is to detect this case and fall back
-// to resolving the target as a git commit ref.
-var errCannotGenerateTemporaryCheckpoint = errors.New("cannot generate summary for temporary checkpoint")
 
 type explainCheckpointLookup struct {
 	repo      *git.Repository
@@ -220,6 +214,9 @@ type associatedCommit struct {
 	Author   string
 	Email    string
 	Date     time.Time
+	// RecordedLink: listed from the checkpoint's recorded links, not found by
+	// its trailer; unverified (see recordedLinkNote).
+	RecordedLink bool
 }
 
 func newExplainCmd() *cobra.Command {
@@ -235,6 +232,7 @@ func newExplainCmd() *cobra.Command {
 	var searchAllFlag bool
 	var jsonFlag bool
 	var transcriptFlag bool
+	var taskFlag string
 	var repoFlag string
 	var insecureHTTPFlag bool
 	var summaryTimeoutSecondsFlag int
@@ -258,12 +256,15 @@ Viewing specific items:
   entire checkpoint explain --commit <ref>        Force interpretation as commit ref
 
 Checkpoints in another repo:
-  entire checkpoint explain <id> --repo owner/name
+  entire checkpoint explain <id-or-sha> --repo gh/owner/name
+  entire checkpoint explain <id-or-sha> --repo et/project/repo
                  Explain a checkpoint owned by another repository — the
                  drill-down for a cross-repo 'entire search' hit. Reads it from
                  that repo's Entire API; nothing is written to this repo.
-                 Needs a full checkpoint ID (positional or --checkpoint) and a
-                 checkpoint that has been pushed.
+                 Needs ` + explainRepoTargetShapes + `
+                 (positional, --checkpoint, or --commit) and a checkpoint that
+                 has been pushed. A commit SHA is resolved to its checkpoint
+                 by that repo's Entire API, so prefixes cannot be used here.
 
 Filtering the list view:
   --session      Filter checkpoints by session ID (or prefix)
@@ -276,7 +277,8 @@ Output verbosity levels (when explaining a specific item):
 
 Machine-readable export modes (additive surface for external consumers):
   --json           Metadata-only JSON. Lists checkpoints when no target is given;
-                   emits a single checkpoint envelope when a target is supplied.
+                   emits a single checkpoint envelope when a target is supplied,
+                   including its subagent task records under "tasks".
                    Transcript bytes are NEVER embedded in the JSON envelope.
   --transcript     Stream stored checkpoint transcript bytes (JSONL) to stdout
                    for the selected session. Same bytes as --raw-transcript
@@ -284,12 +286,18 @@ Machine-readable export modes (additive surface for external consumers):
   --session-index  Pick a session within a multi-session checkpoint (0-based).
                    Defaults to the latest session. Only meaningful with
                    --transcript or --raw-transcript.
+  --task           With --transcript, stream a subagent's stored transcript
+                   instead, selected by tool_use_id or agent_id (as listed
+                   under "tasks" in --json).
   --limit          Cap the number of checkpoints returned by the list view.
                    Defaults to 100. When the cap is hit, a stderr note
                    says how many were skipped. Only meaningful with --json.
 
 Summary generation:
-  --generate    Generate an AI summary for the checkpoint
+  --generate    Generate an AI summary for the checkpoint. This is the only
+                part of this command that writes: it stores the summary on the
+                checkpoint and spends tokens with the configured summary
+                provider. Every other mode only reads.
   --force       Regenerate even if a summary already exists (requires --generate)
 
 Performance options:
@@ -331,6 +339,7 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 				rawTranscript:         rawTranscriptFlag,
 				transcript:            transcriptFlag,
 				json:                  jsonFlag,
+				task:                  taskFlag,
 				sessionIndex:          sessionIndex,
 				listLimit:             listLimit,
 				summaryTimeoutSeconds: summaryTimeoutSecondsFlag,
@@ -344,10 +353,6 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 			// (commit walks, prefix matching, blob prefetch) applies to a repo
 			// that isn't checked out here.
 			if repoFlag != "" {
-				target := positional
-				if target == "" {
-					target = checkpointFlag
-				}
 				if !explainRepoTargetsCurrentRepo(cmd.Context(), repoFlag) {
 					// Past flag parsing every failure is a runtime one
 					// (network, auth, missing checkpoint), not a usage
@@ -355,10 +360,13 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 					cmd.SilenceUsage = true
 					return runCrossRepoExplain(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), crossRepoExplainOptions{
 						repoFlag:      repoFlag,
-						target:        target,
+						target:        positional,
+						checkpointID:  checkpointFlag,
+						commitSHA:     commitFlag,
 						json:          jsonFlag,
 						transcript:    transcriptFlag,
 						rawTranscript: rawTranscriptFlag,
+						task:          taskFlag,
 						sessionIndex:  crossRepoExplainSessionIndex(cmd.Flags().Changed("session-index"), sessionIndex),
 						verbose:       !shortFlag,
 						full:          fullFlag,
@@ -385,6 +393,7 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 					transcript:     transcriptFlag,
 					rawTranscript:  rawTranscriptFlag,
 					sessionIndex:   sessionIndex,
+					task:           taskFlag,
 					listLimit:      listLimit,
 				})
 			}
@@ -406,20 +415,26 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 	cmd.Flags().BoolVar(&forceFlag, "force", false, "Regenerate summary even if one already exists (requires --generate)")
 	cmd.Flags().BoolVar(&searchAllFlag, "search-all", false, "Search all commits (no branch/depth limit, may be slow)")
 	cmd.Flags().BoolVar(&jsonFlag, "json", false, "Output metadata as JSON (no transcript bytes)")
-	cmd.Flags().BoolVar(&transcriptFlag, "transcript", false, "Stream stored checkpoint transcript bytes to stdout")
+	cmd.Flags().BoolVar(&transcriptFlag, "transcript", false, "Stream stored checkpoint transcript bytes to stdout (a session's, or a subagent's with --task)")
 	cmd.Flags().IntVar(&sessionIndex, "session-index", -1, "Session index within a multi-session checkpoint (0-based, defaults to latest)")
+	cmd.Flags().StringVar(&taskFlag, "task", "", "Subagent task (tool_use_id or agent_id) whose stored transcript --transcript streams")
 	cmd.Flags().IntVar(&listLimit, "limit", 0, "Cap the list view at N checkpoints (default: 100). Only meaningful with --json.")
-	cmd.Flags().StringVar(&repoFlag, "repo", "", "Explain a checkpoint owned by another repo (owner/name or gh/owner/name), read from that repo's Entire API")
+	cmd.Flags().StringVar(&repoFlag, "repo", "", "Explain a checkpoint owned by another repo ("+explainRepoFlagShapes+"), read from that repo's Entire API")
 	cmd.Flags().BoolVar(&insecureHTTPFlag, "insecure-http-auth", false, "Allow plain-HTTP auth for --repo (local dev only)")
 	cmd.Flags().IntVar(&summaryTimeoutSecondsFlag, "summary-timeout-seconds", 0, "Hard deadline in seconds for --generate summary generation; overrides summary_timeout_seconds setting. 0 = use setting; if setting is also unset or 0, no automatic deadline applies.")
 
 	// Verbosity / transcript output modes are mutually exclusive
 	cmd.MarkFlagsMutuallyExclusive("short", "full", "raw-transcript", "transcript", "json")
-	// --repo reads another repo over HTTP: --commit resolves against local
-	// history, --session filters the local list view, --search-all walks local
-	// commits, and --generate would write a summary the foreign repo never
-	// sees.
-	cmd.MarkFlagsMutuallyExclusive("repo", "commit")
+	// --task replaces the session as the transcript's source.
+	cmd.MarkFlagsMutuallyExclusive("task", "session-index")
+	// --repo reads another repo over HTTP: --session filters the local list
+	// view, --search-all walks local commits, and --generate would write a
+	// summary the foreign repo never sees. --commit is allowed: a full SHA
+	// resolves through the foreign repo's cell instead of local history.
+	// Two explicit targets are rejected before any dispatch: the cross-repo
+	// path does not reach runExplain's runtime check, and picking one would
+	// silently explain a checkpoint the caller did not name.
+	cmd.MarkFlagsMutuallyExclusive("commit", "checkpoint")
 	cmd.MarkFlagsMutuallyExclusive("repo", "session")
 	cmd.MarkFlagsMutuallyExclusive("repo", "generate")
 	cmd.MarkFlagsMutuallyExclusive("repo", "search-all")
@@ -436,7 +451,7 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 // combination rules, so validateExplainFlagCombinations can enforce them
 // outside the already-large newExplainCmd closure.
 type explainFlagValues struct {
-	checkpoint, commit, repo                         string
+	checkpoint, commit, repo, task                   string
 	generate, force, rawTranscript, transcript, json bool
 	sessionIndex, listLimit, summaryTimeoutSeconds   int
 }
@@ -455,10 +470,10 @@ func validateExplainFlagCombinations(cmd *cobra.Command, v explainFlagValues, po
 	if v.force && !v.generate {
 		return errors.New("--force requires --generate flag")
 	}
-	// --repo needs a specific checkpoint: there is no local history to resolve a
-	// commit ref or an ID prefix against.
-	if v.repo != "" && positional == "" && v.checkpoint == "" {
-		return errors.New("--repo requires a checkpoint ID (positional or --checkpoint/-c)")
+	// --repo needs a specific target: there is no local list view to fall
+	// back to in another repo.
+	if v.repo != "" && !hasCheckpointTarget {
+		return errors.New("--repo requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
 	}
 	if cmd.Flags().Changed("insecure-http-auth") && v.repo == "" {
 		return errors.New("--insecure-http-auth only applies with --repo")
@@ -468,6 +483,14 @@ func validateExplainFlagCombinations(cmd *cobra.Command, v explainFlagValues, po
 	}
 	if v.transcript && !hasCheckpointTarget {
 		return errors.New("--transcript requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
+	}
+	if cmd.Flags().Changed("task") {
+		if !v.transcript {
+			return errors.New("--task only applies with --transcript")
+		}
+		if v.task == "" {
+			return errors.New("--task requires a tool_use_id or agent_id")
+		}
 	}
 	if cmd.Flags().Changed("session-index") {
 		if !v.transcript && !v.rawTranscript {
@@ -533,7 +556,7 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 }
 
 // explainTargetNotFoundError reports that the requested checkpoint target
-// matched no committed or temporary checkpoint. It unwraps to
+// matched no committed checkpoint. It unwraps to
 // checkpoint.ErrCheckpointNotFound so callers' errors.Is contracts keep
 // working, while runExplainAuto can distinguish this resolution miss from a
 // failure AFTER a successful match that happens to wrap the same sentinel
@@ -557,9 +580,9 @@ func shouldFallBackToCommitResolution(err error) bool {
 }
 
 // runExplainAuto resolves a positional target as either a checkpoint ID
-// (or prefix) or a git commit ref. Ordering: checkpoint path first (which
-// also handles shadow-branch temp checkpoints), falling back to commit
-// resolution only on the target-miss error (explainTargetNotFoundError).
+// (or prefix) or a git commit ref. Ordering: checkpoint path first, falling
+// back to commit resolution only on the target-miss error
+// (explainTargetNotFoundError).
 // --generate runs an ambiguity pre-check to avoid writing a summary to the
 // wrong checkpoint on short-prefix collisions.
 func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool, summaryTimeoutSeconds int) error {
@@ -578,15 +601,12 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 	if checkpointErr == nil {
 		return nil
 	}
-	// Fall back to commit resolution ONLY when nothing (committed or temp)
-	// matched the target. Errors from steps AFTER a successful match — even
-	// ones wrapping checkpoint.ErrCheckpointNotFound, like a summary backfill
-	// failing against a backend missing the checkpoint — surface verbatim;
-	// falling back would misreport them as "no checkpoint or commit found"
-	// for a target that DID resolve. errCannotGenerateTemporaryCheckpoint
-	// likewise signals we matched a temp checkpoint but --generate is
-	// unsupported for it; a commit fallback there would produce a misleading
-	// "no trailer" error for the shadow-branch commit.
+	// Fall back to commit resolution ONLY when no checkpoint matched the
+	// target. Errors from steps AFTER a successful match — even ones wrapping
+	// checkpoint.ErrCheckpointNotFound, like a summary backfill failing
+	// against a backend missing the checkpoint — surface verbatim; falling
+	// back would misreport them as "no checkpoint or commit found" for a
+	// target that DID resolve.
 	if !shouldFallBackToCommitResolution(checkpointErr) {
 		return checkpointErr
 	}
@@ -615,6 +635,16 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 		return fmt.Errorf("failed to get commit %s: %w", abbreviateCommitHash(lookup.repo, hash), commitErr)
 	}
 	cpID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
+	linkVia := "its Entire-Checkpoint trailer"
+	if !hasCheckpoint {
+		// A commit linked by `entire session attach --commit` carries no
+		// trailer; its checkpoint names it instead. Most recent wins.
+		if linked := checkpoint.CheckpointsLinkedToWithStubs(ctx, lookup.store, lookup.committed, hash.String(), commit.Committer.When); len(linked) > 0 {
+			cpID, hasCheckpoint = linked[0], true
+			linkVia = "a link recorded by entire session attach"
+			fmt.Fprintf(errW, "Note: commit %s has no Entire-Checkpoint trailer; checkpoint %s names it in a link recorded by entire session attach. The CLI can't verify who recorded the link: anyone who can push checkpoints can name any commit.\n", abbreviateCommitHash(lookup.repo, hash), cpID)
+		}
+	}
 	if !hasCheckpoint {
 		// Side-effect modes must error — silently succeeding would leave
 		// scripts unable to distinguish "done" from "didn't happen".
@@ -629,9 +659,7 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 		slog.String("commit", abbreviateCommitHash(lookup.repo, hash)),
 		slog.String("checkpoint_id", cpID.String()))
 	if err := runExplainCheckpointWithLookup(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll, lookup, nil, summaryTimeoutSeconds); err != nil {
-		// The user typed a commit, not this checkpoint ID — without the
-		// trailer linkage the error reads as if they asked for an unknown ID.
-		return fmt.Errorf("commit %s references checkpoint %s via its Entire-Checkpoint trailer: %w", abbreviateCommitHash(lookup.repo, hash), cpID, err)
+		return trailerCheckpointError(ctx, lookup.repo, hash, cpID, linkVia, err)
 	}
 	return nil
 }
@@ -677,9 +705,8 @@ func runExplainAutoAmbiguityGuard(ctx context.Context, target string, lookup *ex
 	return nil
 }
 
-// runExplainCheckpoint explains a specific checkpoint.
-// Supports both committed checkpoints (by checkpoint ID) and temporary checkpoints (by git SHA).
-// First tries to match committed checkpoints, then falls back to temporary checkpoints.
+// runExplainCheckpoint explains a committed checkpoint, by checkpoint ID or
+// prefix.
 // When generate is true, generates an AI summary for the checkpoint.
 // When force is true, regenerates even if a summary already exists.
 // When rawTranscript is true, outputs only the raw transcript file (JSONL format).
@@ -718,40 +745,13 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	var fullCheckpointID id.CheckpointID
 	switch len(matches) {
 	case 0:
-		// Check temp checkpoints BEFORE returning errCannotGenerateTemporaryCheckpoint
-		// so runExplainAuto can distinguish:
-		//   - target matched a real temp checkpoint (sentinel returned, no fallback)
-		//   - target matched nothing (explainTargetNotFoundError, safe to fall back to commit)
-		// Previously the --generate path bailed before checking temp checkpoints,
-		// which made runExplainAuto fall back to commit resolution for temp
-		// checkpoint SHAs and produce a misleading "no trailer" error.
-		//
-		// --generate and --raw-transcript are mutually exclusive at the flag
-		// layer, so rawTranscript is always false when generate is true; the
-		// direct-to-w write path inside explainTemporaryCheckpoint is not
-		// reachable here and won't leak partial output on error.
-		tempStores, openErr := checkpoint.Open(ctx, lookup.repo, checkpoint.OpenOptions{ReadRemotes: strategy.CheckpointReadRemotes(ctx)})
-		if openErr != nil {
-			return fmt.Errorf("open checkpoint store: %w", openErr)
-		}
-		output, found, tempErr := explainTemporaryCheckpoint(ctx, w, errW, lookup.repo, tempStores.Ephemeral(), checkpointIDPrefix, verbose, full, rawTranscript)
-		if tempErr != nil {
-			return tempErr
-		}
-		if found {
-			if generate {
-				return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
-			}
-			outputExplainContent(w, output, noPager)
-			return nil
-		}
 		return &explainTargetNotFoundError{target: checkpointIDPrefix}
 	case 1:
 		fullCheckpointID = matches[0]
 	default:
 		// Ambiguous prefix: render styled failure block, return SilentError so
-		// main.go does not double-print. Matches the temporary-side and
-		// commit-side ambiguity paths.
+		// main.go does not double-print. Matches the commit-side ambiguity
+		// path.
 		ambig := buildAmbiguousCheckpointMatches(matches, lookup.committed)
 		renderAmbiguousPrefixFailure(errW, checkpointIDPrefix, "committed checkpoints", ambig)
 		return NewSilentError(fmt.Errorf("%w: %s matches %d checkpoints", errAmbiguousCommitPrefix, checkpointIDPrefix, len(matches)))
@@ -794,10 +794,6 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	// Handle summary generation — uses raw transcript. Imported history was
 	// already rejected above, before the content load.
 	if generate {
-		if err := ensureCheckpointPolicyAllowsCheckpointData(ctx, lookup.repo); err != nil {
-			stopLoad(false)
-			return err
-		}
 		stopLoad(false) // generation prints its own progress to w/errW
 		// RefFetcher: the summary backfill's absence probe fetches a ref that
 		// exists remotely but not locally (written/migrated on another
@@ -847,6 +843,9 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
 	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
+	if summary != nil {
+		associatedCommits = withLinkedCommits(lookup.repo, associatedCommits, summary.LinkedCommits)
+	}
 
 	// Derive author from the first associated commit (the user who made the commit).
 	// Fall back to the committed checkpoint store for checkpoints
@@ -1036,7 +1035,7 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store che
 	if content.Metadata.Summary != nil && !force {
 		return renderExplainFailure(errW, "Summary already exists", []explainRow{
 			{Label: "id", Value: checkpointID.String()},
-			{Label: "try", Value: fmt.Sprintf("entire checkpoint explain --generate --force %s", checkpointID)},
+			{Label: explainLabelTry, Value: fmt.Sprintf("entire checkpoint explain --generate --force %s", checkpointID)},
 		}, fmt.Errorf("checkpoint %s already has a summary", checkpointID))
 	}
 
@@ -1252,37 +1251,39 @@ func formatCheckpointSummaryError(err error, attempt *summaryAttempt) (string, [
 	var claudeErr *claudecode.ClaudeError
 	switch {
 	case errors.As(err, &claudeErr):
-		switch claudeErr.Kind { //nolint:exhaustive // ClaudeErrorUnknown handled by default
+		switch claudeErr.Kind {
 		case claudecode.ClaudeErrorAuth:
 			label := "Claude authentication failed"
 			rows := []explainRow{
-				{Label: "try", Value: "run `claude login` and retry"},
+				{Label: explainLabelTry, Value: "run `claude login` and retry"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude authentication failed%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005: Claude is a proper noun
 		case claudecode.ClaudeErrorRateLimit:
 			label := "Claude rejected the summary request due to rate limits or quota"
 			rows := []explainRow{
-				{Label: "try", Value: "wait and retry"},
+				{Label: explainLabelTry, Value: "wait and retry"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude rejected the summary request due to rate limits or quota%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorConfig:
 			label := "Claude rejected the summary request"
 			rows := []explainRow{
-				{Label: "try", Value: "check your Claude CLI config and selected model"},
+				{Label: explainLabelTry, Value: "check your Claude CLI config and selected model"},
 			}
 			if claudeErr.Message != "" {
-				rows = append([]explainRow{{Label: "message", Value: claudeErr.Message}}, rows...)
+				rows = append([]explainRow{{Label: explainLabelMessage, Value: claudeErr.Message}}, rows...)
 			}
 			return label, rows, fmt.Errorf("Claude rejected the summary request%s", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorCLIMissing:
 			label := "Claude CLI is not installed or not on PATH"
 			return label, nil, errors.New("Claude CLI is not installed or not on PATH") //nolint:staticcheck // ST1005
+		case claudecode.ClaudeErrorUnknown:
+			fallthrough
 		default:
 			label := "Claude failed to generate the summary"
 			suffix := formatClaudeErrorSuffix(claudeErr)
@@ -1355,33 +1356,33 @@ func timeoutDiagnostic(_ error, attempt *summaryAttempt) (string, []explainRow) 
 		case attempt.phasesReached[agent.PhaseDone]:
 			label = "model finished but the result was not delivered in time"
 			rows = []explainRow{
-				{Label: "cause", Value: "the deadline fired while the finished result was being read"},
-				{Label: "try", Value: "raise --summary-timeout-seconds and retry"},
+				{Label: explainLabelCause, Value: "the deadline fired while the finished result was being read"},
+				{Label: explainLabelTry, Value: "raise --summary-timeout-seconds and retry"},
 			}
 		case attempt.phasesReached[agent.PhaseGenerating], attempt.phasesReached[agent.PhaseFirstToken]:
 			label = "model responded but did not finish"
 			rows = []explainRow{
-				{Label: "cause", Value: "transcript may be too large for the chosen cap, or model is slow"},
-				{Label: "try", Value: "raise --summary-timeout-seconds or pick a faster model"},
+				{Label: explainLabelCause, Value: "transcript may be too large for the chosen cap, or model is slow"},
+				{Label: explainLabelTry, Value: "raise --summary-timeout-seconds or pick a faster model"},
 			}
 		case attempt.phasesReached[agent.PhaseConnecting]:
 			label = "provider sent request but received no response"
 			rows = []explainRow{
-				{Label: "cause", Value: "network/firewall, provider API degraded, or auth check stuck"},
-				{Label: "try", Value: "check connectivity to the provider, then retry"},
+				{Label: explainLabelCause, Value: "network/firewall, provider API degraded, or auth check stuck"},
+				{Label: explainLabelTry, Value: "check connectivity to the provider, then retry"},
 			}
 		default:
 			label = "provider never sent its request"
 			rows = []explainRow{
-				{Label: "cause", Value: "the provider CLI may be stalled before subprocess startup"},
-				{Label: "try", Value: tryRunCLI},
+				{Label: explainLabelCause, Value: "the provider CLI may be stalled before subprocess startup"},
+				{Label: explainLabelTry, Value: tryRunCLI},
 			}
 		}
 		// attempt.streaming is set eagerly when a streaming-capable provider
 		// is selected, so a provider that stalls before its first event lands
 		// here — surface the captured stderr rather than dropping it.
 		if stderr != "" {
-			rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+			rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 		}
 		return prefix + label, rows
 	}
@@ -1390,21 +1391,21 @@ func timeoutDiagnostic(_ error, attempt *summaryAttempt) (string, []explainRow) 
 
 	if stdoutBytes == 0 {
 		rows := []explainRow{
-			{Label: "cause", Value: "provider CLI produced no output (likely network/auth/CLI path issue)"},
-			{Label: "try", Value: tryRunCLI},
+			{Label: explainLabelCause, Value: "provider CLI produced no output (likely network/auth/CLI path issue)"},
+			{Label: explainLabelTry, Value: tryRunCLI},
 		}
 		if stderr != "" {
-			rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+			rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 		}
 		return prefix + "provider produced no output", rows
 	}
 
 	rows := []explainRow{
-		{Label: "cause", Value: "provider was generating output but did not finish before cap"},
-		{Label: "try", Value: "raise --summary-timeout-seconds"},
+		{Label: explainLabelCause, Value: "provider was generating output but did not finish before cap"},
+		{Label: explainLabelTry, Value: "raise --summary-timeout-seconds"},
 	}
 	if stderr != "" {
-		rows = append(rows, explainRow{Label: "stderr", Value: stderr})
+		rows = append(rows, explainRow{Label: explainLabelStderr, Value: stderr})
 	}
 	return prefix + "provider was generating output when killed", rows
 }
@@ -1629,155 +1630,45 @@ func (s *summaryProgressWriter) updateLine(line string) {
 	s.lastLine = line
 }
 
-// explainTemporaryCheckpoint finds and formats a temporary checkpoint by shadow commit hash prefix.
-// Returns the formatted output, whether the checkpoint was found, and an
-// optional error. When err is non-nil, the function has already rendered a
-// styled failure block to errW; the caller should wrap and return as
-// SilentError without printing again.
-// Searches ALL shadow branches, not just the one for current HEAD, to find checkpoints
-// created from different base commits (e.g., if HEAD advanced since session start).
-// The writer w is used for raw transcript output to bypass the pager.
-func explainTemporaryCheckpoint(ctx context.Context, w, errW io.Writer, repo *git.Repository, store checkpoint.EphemeralStore, shaPrefix string, verbose, full, rawTranscript bool) (string, bool, error) {
-	// List temporary checkpoints from ALL shadow branches
-	// This ensures we find checkpoints even if HEAD has advanced since the session started
-	tempCheckpoints, err := store.ListAllCheckpoints(ctx, "", branchCheckpointsLimit)
-	if err != nil {
-		logging.Debug(ctx, "explain: listing temporary checkpoints failed; treating as no temp match",
-			slog.String("error", err.Error()))
-		return "", false, nil
+// recordedLinkSuffix marks a commit listed from a recorded link.
+func recordedLinkSuffix(c associatedCommit) string {
+	if c.RecordedLink {
+		return " (recorded link, unverified)"
 	}
+	return ""
+}
 
-	// Find checkpoints matching the SHA prefix - check for ambiguity
-	var matches []checkpoint.EphemeralCheckpointInfo
-	for _, tc := range tempCheckpoints {
-		if strings.HasPrefix(tc.CommitHash.String(), shaPrefix) {
-			matches = append(matches, tc)
+func newAssociatedCommit(c *object.Commit) associatedCommit {
+	fullSHA := c.Hash.String()
+	shortSHA := fullSHA
+	if len(fullSHA) >= 7 {
+		shortSHA = fullSHA[:7]
+	}
+	return associatedCommit{
+		SHA:      fullSHA,
+		ShortSHA: shortSHA,
+		Message:  strings.Split(c.Message, "\n")[0],
+		Author:   c.Author.Name,
+		Email:    c.Author.Email,
+		Date:     c.Author.When,
+	}
+}
+
+// withLinkedCommits adds the commits a checkpoint records links to (`entire
+// session attach` on a pushed commit), which carry no trailer for
+// getAssociatedCommits to find. A linked commit not in this clone is skipped.
+func withLinkedCommits(repo *git.Repository, commits []associatedCommit, links []checkpoint.LinkedCommit) []associatedCommit {
+	for _, link := range links {
+		if slices.ContainsFunc(commits, func(c associatedCommit) bool { return c.SHA == link.SHA }) {
+			continue
+		}
+		if c, err := repo.CommitObject(plumbing.NewHash(link.SHA)); err == nil {
+			linked := newAssociatedCommit(c)
+			linked.RecordedLink = true
+			commits = append(commits, linked)
 		}
 	}
-
-	if len(matches) == 0 {
-		return "", false, nil
-	}
-
-	if len(matches) > 1 {
-		// Multiple matches: render styled failure block, return SilentError.
-		ambiguous := make([]ambiguousMatch, 0, len(matches))
-		for _, m := range matches {
-			shortID := m.CommitHash.String()
-			if len(shortID) > 7 {
-				shortID = shortID[:7]
-			}
-			ambiguous = append(ambiguous, ambiguousMatch{
-				ShortID:   shortID,
-				Timestamp: m.Timestamp,
-				SessionID: m.SessionID,
-			})
-		}
-		renderAmbiguousPrefixFailure(errW, shaPrefix, "temporary checkpoints", ambiguous)
-		return "", false, NewSilentError(fmt.Errorf("%w: %s matches %d temporary checkpoints", errAmbiguousCommitPrefix, shaPrefix, len(matches)))
-	}
-
-	tc := matches[0]
-
-	// Get shadow commit and tree to read metadata
-	shadowCommit, commitErr := repo.CommitObject(tc.CommitHash)
-	if commitErr != nil {
-		// The prefix DID match this temp checkpoint; record why it still
-		// reads as not-found (pruned/gc'd shadow objects, IO errors).
-		logging.Debug(ctx, "explain: temp checkpoint matched but shadow commit unreadable; treating as not-found",
-			slog.String("commit", tc.CommitHash.String()),
-			slog.String("error", commitErr.Error()))
-		return "", false, nil
-	}
-
-	shadowTree, treeErr := shadowCommit.Tree()
-	if treeErr != nil {
-		logging.Debug(ctx, "explain: temp checkpoint matched but shadow tree unreadable; treating as not-found",
-			slog.String("commit", tc.CommitHash.String()),
-			slog.String("error", treeErr.Error()))
-		return "", false, nil
-	}
-
-	// Read agent type from shadow branch metadata (stored during checkpoint creation)
-	agentType := strategy.ReadAgentTypeFromTree(shadowTree, tc.MetadataDir)
-
-	// Handle raw transcript output
-	if rawTranscript {
-		transcriptBytes, transcriptErr := store.GetTranscriptFromCommit(ctx, tc.CommitHash, tc.MetadataDir, agentType)
-		if transcriptErr != nil || len(transcriptBytes) == 0 {
-			shortID := tc.CommitHash.String()[:7]
-			return "", false, renderExplainFailure(errW, "Checkpoint has no transcript", []explainRow{
-				{Label: "id", Value: shortID},
-			}, fmt.Errorf("checkpoint %s has no transcript", shortID))
-		}
-		// Write directly to writer (no pager, no formatting) - matches committed checkpoint behavior
-		if _, writeErr := fmt.Fprint(w, string(transcriptBytes)); writeErr != nil {
-			return "", false, fmt.Errorf("failed to write transcript: %w", writeErr)
-		}
-		return "", true, nil
-	}
-
-	// Read prompts from shadow branch
-	sessionPrompt := strategy.ReadSessionPromptFromTree(shadowTree, tc.MetadataDir)
-
-	// Build output similar to formatCheckpointOutput but for temporary
-	var sb strings.Builder
-	shortID := tc.CommitHash.String()[:7]
-	styles := newStatusStyles(w)
-
-	label := fmt.Sprintf("Checkpoint %s [temporary]", shortID)
-	rows := []explainRow{
-		{Label: "session", Value: tc.SessionID},
-		{Label: "created", Value: tc.Timestamp.Format("2006-01-02 15:04:05")},
-	}
-	sb.WriteString(styles.renderIdentity(label, "", rows))
-
-	intent := extractIntent(nil, sessionPrompt)
-	hint := "Not generated. Temporary checkpoints can be summarized after commit. Run `entire checkpoint explain --generate` on the resulting commit."
-	sb.WriteString(renderExplainBody(w, buildNoSummaryMarkdown(intent, nil, hint)))
-
-	// Transcript section: full shows entire session, verbose shows checkpoint scope
-	// For temporary checkpoints, load transcript and compute scope from parent commit
-	var fullTranscript []byte
-	var scopedTranscript []byte
-	if full || verbose {
-		fullTranscript, _ = store.GetTranscriptFromCommit(ctx, tc.CommitHash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
-
-		if verbose && len(fullTranscript) > 0 {
-			// Compute scoped transcript by finding where parent's transcript ended
-			// Each shadow branch commit has the full transcript up to that point,
-			// so we diff against parent to get just this checkpoint's activity
-			scopedTranscript = fullTranscript // Default to full if no parent
-			if shadowCommit.NumParents() > 0 {
-				if parent, parentErr := shadowCommit.Parent(0); parentErr == nil {
-					parentTranscript, _ := store.GetTranscriptFromCommit(ctx, parent.Hash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
-					if len(parentTranscript) > 0 {
-						parentOffset := transcriptOffset(parentTranscript, agentType)
-						scopedTranscript = scopeTranscriptForCheckpoint(fullTranscript, parentOffset, agentType)
-					}
-				}
-			}
-		}
-	}
-	if verbose || full {
-		label := "Transcript (checkpoint scope)"
-		if full {
-			label = "Transcript (full session)"
-		}
-		sb.WriteString("\n")
-		sb.WriteString(styles.sectionRule(label, styles.width))
-		sb.WriteString("\n")
-		// External-agent transcripts are stored in native format; compact
-		// the one being rendered so it displays.
-		if full && len(fullTranscript) > 0 {
-			fullTranscript = maybeCompactExternalTranscript(ctx, fullTranscript, agentType)
-		} else if verbose && len(scopedTranscript) > 0 {
-			scopedTranscript = maybeCompactExternalTranscript(ctx, scopedTranscript, agentType)
-		}
-	}
-	appendTranscriptSection(&sb, verbose, full, fullTranscript, scopedTranscript, sessionPrompt, agentType)
-
-	return sb.String(), true, nil
+	return commits
 }
 
 // getAssociatedCommits finds git commits that reference the given checkpoint ID.
@@ -1794,19 +1685,7 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 	targetID := checkpointID.String()
 
 	collectCommit := func(c *object.Commit) {
-		fullSHA := c.Hash.String()
-		shortSHA := fullSHA
-		if len(fullSHA) >= 7 {
-			shortSHA = fullSHA[:7]
-		}
-		commits = append(commits, associatedCommit{
-			SHA:      fullSHA,
-			ShortSHA: shortSHA,
-			Message:  strings.Split(c.Message, "\n")[0],
-			Author:   c.Author.Name,
-			Email:    c.Author.Email,
-			Date:     c.Author.When,
-		})
+		commits = append(commits, newAssociatedCommit(c))
 	}
 
 	if searchAll {
@@ -1861,11 +1740,11 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 // scopeTranscriptForCheckpoint slices a transcript to include only the portion
 // relevant to a specific checkpoint, starting from the given offset.
 // For Claude Code (JSONL), the offset is a line number and we slice by line.
-// For Gemini (single JSON blob), the offset is a message index and we slice by message.
+// For historical Gemini CLI checkpoints (single JSON blob), the offset is a message index and we slice by message.
 func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentType types.AgentType) []byte {
 	switch agentType {
 	case agent.AgentTypeGemini:
-		scoped, err := geminicli.SliceFromMessage(fullTranscript, startOffset)
+		scoped, err := geminilegacy.SliceFromMessage(fullTranscript, startOffset)
 		if err != nil {
 			return nil
 		}
@@ -1930,7 +1809,7 @@ func extractIntent(scopedPrompts []string, fallbackPrompts string) string {
 // have an AI summary. It mirrors the `## Intent` / `## Summary` / `## Files`
 // shape of the generated case so the brand markdown renderer can take the same
 // path. The italic *summary* paragraph is the affordance pointing the user at
-// `--generate` (or, for temporary checkpoints, at committing first).
+// `--generate`.
 func buildNoSummaryMarkdown(intent string, files []string, summaryHint string) string {
 	var sb strings.Builder
 
@@ -1954,7 +1833,7 @@ func buildNoSummaryMarkdown(intent string, files []string, summaryHint string) s
 }
 
 // ambiguousMatch describes one match in an ambiguous-prefix failure.
-// SessionID is optional and only set for temporary-checkpoint matches.
+// SessionID is optional.
 type ambiguousMatch struct {
 	ShortID   string
 	Timestamp time.Time
@@ -1962,7 +1841,7 @@ type ambiguousMatch struct {
 }
 
 // renderAmbiguousPrefixFailure prints a styled failure block describing an
-// ambiguous prefix. kind is a noun phrase like "commits" or "temporary
+// ambiguous prefix. kind is a noun phrase like "commits" or "committed
 // checkpoints" used in the "matches N <kind>" header row.
 func renderAmbiguousPrefixFailure(errW io.Writer, prefix, kind string, matches []ambiguousMatch) {
 	styles := newStatusStyles(errW)
@@ -2040,9 +1919,17 @@ func buildAmbiguousCheckpointMatches(ids []id.CheckpointID, committed []checkpoi
 }
 
 // renderExplainBody routes a markdown body through the brand renderer when
-// the writer supports color, and returns the markdown source verbatim
-// otherwise. Single point of policy for every explain body section.
+// the writer supports color, and returns the markdown source otherwise.
+// Single point of policy for every explain body section.
+//
+// The body is built from stored checkpoint content (AI summaries, extracted
+// prompts, file lists), which is agent and user influenced, so it passes
+// through the shared terminal sanitizer here regardless of path: the
+// non-color return would otherwise hand raw escape sequences to the
+// terminal, and sanitizing before the markdown renderer means its output
+// cannot re-carry them either.
 func renderExplainBody(w io.Writer, md string) string {
+	md = tuiutil.SanitizeTerminalText(md)
 	if !shouldUseColor(w) {
 		return md
 	}
@@ -2086,17 +1973,10 @@ func formatCheckpointOutput(ctx context.Context, summary *checkpoint.CheckpointS
 		if verbose || full {
 			md += buildFilesMarkdown(meta.FilesTouched)
 		}
-		if shouldUseColor(w) {
-			rendered, err := defaultRenderTerminalMarkdown(w, md)
-			if err != nil {
-				logging.Debug(context.Background(), "explain markdown render failed", slog.String("error", err.Error()))
-				sb.WriteString(md)
-			} else {
-				sb.WriteString(rendered)
-			}
-		} else {
-			sb.WriteString(md)
-		}
+		// renderExplainBody rather than an inline color branch: it is the single
+		// point of policy for explain bodies, including the terminal sanitizer
+		// the stored (agent-authored) summary must pass through.
+		sb.WriteString(renderExplainBody(w, md))
 	} else {
 		intent := extractIntent(scopedPrompts, content.Prompts)
 
@@ -2159,12 +2039,12 @@ func appendTranscriptSection(sb *strings.Builder, verbose, full bool, fullTransc
 }
 
 // formatTranscriptBytes formats transcript bytes into a human-readable string.
-// It parses the transcript (JSONL for Claude, JSON for Gemini) and formats it using the condensed format.
+// It parses the transcript (JSONL for Claude, JSON for historical Gemini CLI checkpoints) and formats it using the condensed format.
 // The fallback is used for backwards compatibility when transcript parsing fails or is empty.
 func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType types.AgentType) string {
 	if len(transcriptBytes) == 0 {
 		if fallback != "" {
-			return fallback + "\n"
+			return tuiutil.SanitizeTerminalText(fallback) + "\n"
 		}
 		return "  (none)\n"
 	}
@@ -2176,9 +2056,19 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 	}
 	if err != nil || len(condensed) == 0 {
 		if fallback != "" {
-			return fallback + "\n"
+			return tuiutil.SanitizeTerminalText(fallback) + "\n"
 		}
 		return "  (failed to parse transcript)\n"
+	}
+
+	// Transcript content is agent and user influenced, so it goes through the
+	// shared terminal sanitizer at this display boundary. The sanitization is
+	// deliberately not inside FormatCondensedTranscript, which also builds LLM
+	// prompt input where mutation is unwanted.
+	for i := range condensed {
+		condensed[i].Content = tuiutil.SanitizeTerminalText(condensed[i].Content)
+		condensed[i].ToolName = tuiutil.SanitizeTerminalText(condensed[i].ToolName)
+		condensed[i].ToolDetail = tuiutil.SanitizeTerminalText(condensed[i].ToolDetail)
 	}
 
 	input := summarize.Input{Transcript: condensed}
@@ -2274,12 +2164,12 @@ func formatCheckpointHeader(
 		writeRow("commits", "(none on this branch)")
 	case len(commits) == 1:
 		c := commits[0]
-		writeRow("commits", fmt.Sprintf("%s %s", c.ShortSHA, c.Message))
+		writeRow("commits", fmt.Sprintf("%s %s%s", c.ShortSHA, c.Message, recordedLinkSuffix(c)))
 	default:
 		writeRow("commits", fmt.Sprintf("(%d)", len(commits)))
 		for _, c := range commits {
-			fmt.Fprintf(&sb, "           %s %s %s\n",
-				c.ShortSHA, c.Date.Format("2006-01-02"), c.Message)
+			fmt.Fprintf(&sb, "           %s %s %s%s\n",
+				c.ShortSHA, c.Date.Format("2006-01-02"), c.Message, recordedLinkSuffix(c))
 		}
 	}
 
@@ -2393,20 +2283,6 @@ const commitScanLimit = 500
 // errStopIteration is used to stop commit iteration early
 var errStopIteration = errors.New("stop iteration")
 
-// getCurrentWorktreeHash returns the hashed worktree ID for the current working directory.
-// This is used to filter shadow branches to only those belonging to this worktree.
-func getCurrentWorktreeHash(ctx context.Context) string {
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return ""
-	}
-	worktreeID, err := paths.GetWorktreeID(repoRoot)
-	if err != nil {
-		return ""
-	}
-	return checkpoint.HashWorktreeID(worktreeID)
-}
-
 // computeReachableFromMain returns a set of commit hashes on the main/default branch's first-parent chain.
 // On the default branch itself, returns an empty map (no filtering needed).
 // Only first-parent commits are included — commits from side branches merged into main are excluded,
@@ -2489,10 +2365,10 @@ func walkFirstParentCommits(ctx context.Context, repo *git.Repository, from plum
 // Behavior:
 //   - On feature branches: only show checkpoints unique to this branch (not in main)
 //   - On default branch (main/master): show all checkpoints in history (up to limit)
-//   - Includes both committed checkpoints (entire/checkpoints/v1) and temporary checkpoints (shadow branches)
+//   - Includes commit-linked checkpoints (entire/checkpoints/v1) and imported ones
 //
-// The second return value is true when either the live (commit-linked +
-// temporary) or imported budget hit `limit`, i.e. older checkpoints were
+// The second return value is true when either the live (commit-linked) or
+// imported budget hit `limit`, i.e. older checkpoints were
 // dropped. This is the authoritative truncation signal: the budgets are
 // applied here, so callers cannot reconstruct it from the returned length
 // (the two budgets are independent, so the slice can hold up to 2*limit
@@ -2548,7 +2424,7 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		return nil, false, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	// Check if we're on the default branch (needed for getReachableTemporaryCheckpoints)
+	// Check if we're on the default branch (decides how history is walked)
 	isOnDefault, _ := strategy.IsOnDefaultBranch(repo)
 
 	var points []strategy.PendingCheckpoint
@@ -2633,13 +2509,9 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		return nil, false, fmt.Errorf("error iterating commits: %w", err)
 	}
 
-	// Get temporary checkpoints from ALL shadow branches whose base commit is reachable from HEAD.
-	tempPoints := getReachableTemporaryCheckpoints(ctx, repo, stores.Ephemeral(), head.Hash(), isOnDefault, limit)
-	points = append(points, tempPoints...)
-
 	truncated := false
 
-	// Sort live points (commit-linked + temporary) and apply the limit FIRST, so
+	// Sort live (commit-linked) points and apply the limit FIRST, so
 	// a large historical import can't evict recent commit-linked checkpoints.
 	sort.Slice(points, func(i, j int) bool {
 		return points[i].Date.After(points[j].Date)
@@ -2782,107 +2654,6 @@ func readLatestCommittedSessionPrompt(ctx context.Context, store checkpoint.Sess
 	return ""
 }
 
-// getReachableTemporaryCheckpoints returns temporary checkpoints from shadow branches
-// whose base commit is reachable from the given HEAD hash and that belong to this worktree.
-// For default branches, all shadow branches for this worktree are included.
-// For feature branches, only shadow branches whose base commit is in HEAD's history are included.
-func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository, store checkpoint.EphemeralStore, headHash plumbing.Hash, isOnDefault bool, limit int) []strategy.PendingCheckpoint {
-	var points []strategy.PendingCheckpoint
-
-	// Compute current worktree's hash for filtering shadow branches
-	currentWorktreeHash := getCurrentWorktreeHash(ctx)
-
-	shadowBranches, _ := store.List(ctx) //nolint:errcheck // Best-effort
-	for _, sb := range shadowBranches {
-		// Filter by worktree: only show shadow branches belonging to this worktree.
-		// Skip filtering if currentWorktreeHash is empty (error computing it) to avoid
-		// accidentally filtering out ALL shadow branches.
-		_, branchWorktreeHash, parsed := checkpoint.ParseShadowBranchName(sb.BranchName)
-		if currentWorktreeHash != "" && parsed && branchWorktreeHash != "" && branchWorktreeHash != currentWorktreeHash {
-			continue
-		}
-
-		// Check if this shadow branch's base commit is reachable from current HEAD
-		if !isShadowBranchReachable(ctx, repo, sb.BaseCommit, headHash, isOnDefault) {
-			continue
-		}
-
-		// List checkpoints from this shadow branch
-		tempCheckpoints, _ := store.ListCheckpointsForBranch(ctx, sb.BranchName, "", limit) //nolint:errcheck // Best-effort
-		for _, tc := range tempCheckpoints {
-			point := convertTemporaryCheckpoint(repo, tc)
-			if point != nil {
-				points = append(points, *point)
-			}
-		}
-	}
-
-	return points
-}
-
-// isShadowBranchReachable checks if a shadow branch's base commit is reachable from HEAD.
-// For default branches, all shadow branches are considered reachable.
-// For feature branches, we check if any commit with the base commit prefix is in HEAD's history.
-func isShadowBranchReachable(ctx context.Context, repo *git.Repository, baseCommit string, headHash plumbing.Hash, isOnDefault bool) bool {
-	// For default branch: all shadow branches are potentially relevant
-	if isOnDefault {
-		return true
-	}
-
-	// Check if base commit hash prefix matches any commit in HEAD's first-parent chain
-	found := false
-	_ = walkFirstParentCommits(ctx, repo, headHash, commitScanLimit, func(c *object.Commit) error { //nolint:errcheck // Best-effort
-		if strings.HasPrefix(c.Hash.String(), baseCommit) {
-			found = true
-			return errStopIteration
-		}
-		return nil
-	})
-
-	return found
-}
-
-// convertTemporaryCheckpoint converts a EphemeralCheckpointInfo to a PendingCheckpoint.
-// Returns nil if the checkpoint should be skipped (no tree changes or can't be read).
-//
-// Filtering uses hasAnyChanges (O(1) tree hash comparison) rather than a full
-// O(files) diff. This means metadata-only checkpoints (.entire/ changes without
-// code changes) are kept — only true no-ops (identical tree as parent) are dropped.
-// This trade-off is intentional for list-view performance.
-func convertTemporaryCheckpoint(repo *git.Repository, tc checkpoint.EphemeralCheckpointInfo) *strategy.PendingCheckpoint {
-	shadowCommit, commitErr := repo.CommitObject(tc.CommitHash)
-	if commitErr != nil {
-		return nil
-	}
-
-	// Skip no-op commits where the tree is identical to the parent's.
-	// Note: this keeps metadata-only changes (e.g. transcript updates in .entire/)
-	// since those produce a different tree hash. See hasAnyChanges godoc.
-	if !hasAnyChanges(shadowCommit) {
-		return nil
-	}
-
-	// Read session prompt from the shadow branch commit's tree (not from entire/checkpoints/v1)
-	// Temporary checkpoints store their metadata in the shadow branch, not in entire/checkpoints/v1
-	var sessionPrompt string
-	shadowTree, treeErr := shadowCommit.Tree()
-	if treeErr == nil {
-		sessionPrompt = strategy.ReadSessionPromptFromTree(shadowTree, tc.MetadataDir)
-	}
-
-	return &strategy.PendingCheckpoint{
-		ID:               tc.CommitHash.String(),
-		Message:          tc.Message,
-		MetadataDir:      tc.MetadataDir,
-		Date:             tc.Timestamp,
-		IsTaskCheckpoint: tc.IsTaskCheckpoint,
-		ToolUseID:        tc.ToolUseID,
-		SessionID:        tc.SessionID,
-		SessionPrompt:    sessionPrompt,
-		IsLogsOnly:       false, // Temporary checkpoints can be fully rewound
-	}
-}
-
 // runExplainBranchWithFilter shows checkpoints on the current branch, optionally filtered by session.
 // This is strategy-agnostic - it queries checkpoints directly.
 func runExplainBranchWithFilter(ctx context.Context, w, errW io.Writer, noPager bool, sessionFilter string) error {
@@ -3004,7 +2775,30 @@ func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, 
 
 	// Delegate to checkpoint detail view, forwarding the full flag set so
 	// --generate / --raw-transcript / --force work via --commit as well.
-	return runExplainCheckpoint(ctx, w, errW, checkpointID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll, summaryTimeoutSeconds)
+	if err := runExplainCheckpoint(ctx, w, errW, checkpointID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll, summaryTimeoutSeconds); err != nil {
+		return trailerCheckpointError(ctx, repo, hash, checkpointID, "its Entire-Checkpoint trailer", err)
+	}
+	return nil
+}
+
+// trailerCheckpointError attributes a checkpoint failure to the commit whose
+// Entire-Checkpoint trailer named it. Commits keep their trailers when
+// `entire checkpoint delete` removes a checkpoint, so a miss on an ID this
+// clone deleted says so; any other miss stays a plain not-found.
+func trailerCheckpointError(ctx context.Context, repo *git.Repository, hash plumbing.Hash, cpID id.CheckpointID, linkVia string, err error) error {
+	if errors.Is(err, checkpoint.ErrCheckpointNotFound) && shouldFallBackToCommitResolution(err) && deletedFromThisClone(ctx, cpID) {
+		return fmt.Errorf("commit %s references checkpoint %s via %s: %w (deleted with `entire checkpoint delete`)", abbreviateCommitHash(repo, hash), cpID, linkVia, checkpoint.ErrCheckpointNotFound)
+	}
+	// The user typed a commit, not this checkpoint ID — without the trailer
+	// linkage the error reads as if they asked for an unknown ID.
+	return fmt.Errorf("commit %s references checkpoint %s via %s: %w", abbreviateCommitHash(repo, hash), cpID, linkVia, err)
+}
+
+// deletedFromThisClone reports whether cpID is on the local deleted list. An
+// unreadable list answers no: the hint is informational.
+func deletedFromThisClone(ctx context.Context, cpID id.CheckpointID) bool {
+	deleted, err := checkpoint.LoadDeletedCheckpoints(ctx)
+	return err == nil && deleted.Contains(cpID)
 }
 
 // pagerLookupEnv is overridable for tests so pager env-gate behavior can be
@@ -3071,7 +2865,7 @@ func outputWithPager(w io.Writer, content string) {
 	// Check if we're writing to stdout and it's a terminal
 	if f, ok := w.(*os.File); ok && f == os.Stdout && interactive.IsTerminalWriter(w) {
 		// Get terminal height
-		_, height, err := term.GetSize(int(f.Fd())) //nolint:gosec // G115: same as above
+		_, height, err := term.GetSize(int(f.Fd()))
 		if err != nil {
 			height = 24 // Default fallback
 		}
@@ -3141,16 +2935,16 @@ func formatBranchCheckpoints(w io.Writer, branchName string, points []strategy.P
 		{Label: "branch", Value: branchName},
 	}
 	if sessionFilter != "" {
-		branchRows = append(branchRows, explainRow{Label: "session", Value: sessionFilter})
+		branchRows = append(branchRows, explainRow{Label: explainLabelSession, Value: sessionFilter})
 	}
-	branchRows = append(branchRows, explainRow{Label: "checkpoints", Value: strconv.Itoa(len(groups))})
+	branchRows = append(branchRows, explainRow{Label: explainLabelCheckpoints, Value: strconv.Itoa(len(groups))})
 
 	sb.WriteString(styles.metadataRows(branchRows))
 	sb.WriteString("\n")
 
 	if len(groups) == 0 {
 		sb.WriteString("No checkpoints found on this branch.\n")
-		sb.WriteString("Checkpoints will appear here after you save changes during an agent session.\n")
+		sb.WriteString("Checkpoints appear here after you commit agent work. Run `entire checkpoint list --pending` to see what the next checkpoint will contain.\n")
 		return sb.String()
 	}
 
@@ -3167,7 +2961,6 @@ func formatBranchCheckpoints(w io.Writer, branchName string, points []strategy.P
 type checkpointGroup struct {
 	checkpointID string
 	prompt       string
-	isTemporary  bool // true if any commit is not logs-only (can be rewound)
 	isTask       bool // true if this is a task checkpoint
 	imported     bool // true for read-only imported (commit-less) checkpoints
 	commits      []commitEntry
@@ -3195,12 +2988,8 @@ func groupByCheckpointID(points []strategy.PendingCheckpoint) []checkpointGroup 
 		// Determine the checkpoint ID to use for grouping
 		cpID := point.CheckpointID.String()
 		if cpID == "" {
-			// Temporary checkpoints: group by session ID to preserve per-session prompts
-			// Use session ID prefix for readability (format: YYYY-MM-DD-uuid)
+			// No checkpoint ID: group by session ID to preserve per-session prompts
 			cpID = point.SessionID
-			if cpID == "" {
-				cpID = "temporary" // Fallback if no session ID
-			}
 		}
 
 		group, exists := groupMap[cpID]
@@ -3208,7 +2997,6 @@ func groupByCheckpointID(points []strategy.PendingCheckpoint) []checkpointGroup 
 			group = &checkpointGroup{
 				checkpointID: cpID,
 				prompt:       point.SessionPrompt,
-				isTemporary:  !point.IsLogsOnly,
 				isTask:       point.IsTaskCheckpoint,
 				imported:     point.Imported,
 			}
@@ -3228,10 +3016,7 @@ func groupByCheckpointID(points []strategy.PendingCheckpoint) []checkpointGroup 
 			message: point.Message,
 		})
 
-		// Update flags - if any commit is temporary/task, the group is too
-		if !point.IsLogsOnly {
-			group.isTemporary = true
-		}
+		// Update flags - if any commit is a task, the group is too
 		if point.IsTaskCheckpoint {
 			group.isTask = true
 		}
@@ -3278,13 +3063,10 @@ func formatCheckpointGroup(sb *strings.Builder, group checkpointGroup, styles st
 	// in full (front-truncating a ULID drops its entropy tail and won't resolve).
 	cpID := id.CheckpointID(group.checkpointID).DisplayShort()
 
-	// Indicators (Task / temporary). Skip [temporary] when cpID already says so.
+	// Indicators (Task / imported).
 	var indicators []string
 	if group.isTask {
 		indicators = append(indicators, "[Task]")
-	}
-	if group.isTemporary && cpID != "temporary" {
-		indicators = append(indicators, "[temporary]")
 	}
 	if group.imported {
 		indicators = append(indicators, "[imported]")
@@ -3307,7 +3089,7 @@ func formatCheckpointGroup(sb *strings.Builder, group checkpointGroup, styles st
 		promptText = styles.render(styles.dim, promptText)
 	}
 
-	// Build suffix: "[Task]  [temporary]  <prompt>" with two-space separators.
+	// Build suffix: "[Task]  [imported]  <prompt>" with two-space separators.
 	parts := append([]string{}, indicators...)
 	parts = append(parts, promptText)
 	suffix := strings.Join(parts, "  ")
@@ -3320,38 +3102,6 @@ func formatCheckpointGroup(sb *strings.Builder, group checkpointGroup, styles st
 		message := strategy.TruncateDescription(commit.message, maxMessageDisplayLength)
 		fmt.Fprintf(sb, "  %s (%s) %s\n", dateTimeStr, commit.gitSHA, message)
 	}
-}
-
-// countLines counts the number of lines in a byte slice.
-// For JSONL content (where each line ends with \n), this returns the line count.
-// Empty content returns 0.
-func countLines(content []byte) int {
-	if len(content) == 0 {
-		return 0
-	}
-	count := 0
-	for _, b := range content {
-		if b == '\n' {
-			count++
-		}
-	}
-	return count
-}
-
-// transcriptOffset returns the appropriate offset for scoping a transcript.
-// For Claude Code (JSONL), this is the line count. For Gemini (JSON), this is the message count.
-func transcriptOffset(transcriptBytes []byte, agentType types.AgentType) int {
-	switch agentType {
-	case agent.AgentTypeGemini:
-		t, err := geminicli.ParseTranscript(transcriptBytes)
-		if err != nil {
-			return 0
-		}
-		return len(t.Messages)
-	case agent.AgentTypeClaudeCode, agent.AgentTypeOpenCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeUnknown:
-		return countLines(transcriptBytes)
-	}
-	return countLines(transcriptBytes)
 }
 
 // hasAnyChanges compares

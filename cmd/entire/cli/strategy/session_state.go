@@ -66,16 +66,6 @@ func sessionLockDeadlineFromContext(ctx context.Context) (time.Time, bool) {
 // Session state management functions shared across all strategies.
 // SessionState is stored in .git/entire-sessions/{session_id}.json
 
-// getSessionStateDir returns the path to the session state directory.
-// This is stored in the git common dir so it's shared across all worktrees.
-func getSessionStateDir(ctx context.Context) (string, error) {
-	commonDir, err := GetGitCommonDir(ctx)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(commonDir, session.SessionStateDirName), nil
-}
-
 // openSessionStateRoot creates the session state directory if needed and returns
 // an os.Root scoped to it. Hint/marker files are named from the (already
 // validated) session ID; routing their writes through os.Root makes escaping
@@ -173,28 +163,16 @@ func ListSessionStates(ctx context.Context) ([]*SessionState, error) {
 	return states, nil
 }
 
-// FindMostRecentSession returns the session ID of the most recently interacted session
-// (by LastInteractionTime) in the current worktree. Returns empty string if no sessions exist.
-// Scoping to the current worktree prevents cross-worktree pollution in log routing.
-// Falls back to unfiltered search if the worktree path can't be determined.
-func FindMostRecentSession(ctx context.Context) string {
-	states, err := ListSessionStates(ctx)
-	if err != nil || len(states) == 0 {
-		return ""
-	}
-
-	// Scope to current worktree to prevent cross-worktree pollution.
-	if filtered := sessionStatesForCurrentWorktree(ctx, states); len(filtered) > 0 {
-		states = filtered
-		// If no sessions match the worktree, fall back to all sessions.
-	}
-
-	return mostRecentSessionID(states)
-}
-
 // FindMostRecentSessionInCurrentWorktree returns the most recently interacted
-// session from the current worktree only. Unlike FindMostRecentSession, it does
-// not fall back to sessions from other worktrees.
+// session from the current worktree only, never falling back to another
+// worktree's.
+//
+// This is the whole of what it does, deliberately. Anything asking "which
+// session is running me" must go through strategy.ResolveCallerSession, which
+// identifies the caller first and reports which tier answered; a bare
+// most-recent lookup cannot tell "mine" from "whichever moved last", and
+// worktrees share one session store, so guessing there returns an unrelated
+// session that looks exactly like a real answer.
 func FindMostRecentSessionInCurrentWorktree(ctx context.Context) string {
 	states, err := ListSessionStates(ctx)
 	if err != nil || len(states) == 0 {
@@ -290,15 +268,12 @@ func TransitionAndLog(goCtx context.Context, state *SessionState, event session.
 //
 // Why a separate file instead of SessionState?
 //
-// SessionState requires BaseCommit (used for shadow branch naming, checkpoint
+// SessionState requires BaseCommit (used for commit linking, checkpoint
 // writing, doctor classification, etc.) and is only created during TurnStart
 // when the git repo is fully inspected. Some agents report the model on earlier
 // hooks that fire as separate CLI processes before TurnStart:
 //
 //   - Claude Code sends "model" on SessionStart (before any TurnStart)
-//   - Gemini CLI sends "llm_request.model" on BeforeModel (after TurnStart,
-//     so handleLifecycleModelUpdate writes to SessionState directly when it
-//     exists and only falls back to this hint file otherwise)
 //
 // The hint is read by handleLifecycleTurnStart/TurnEnd when event.Model is
 // empty, passed to InitializeSession, and persisted in state.ModelName. After
@@ -535,8 +510,8 @@ func goroutineID() int64 {
 // inner load/save, so all mutations are flushed by the outermost call.
 //
 // fn may hold the lock for slow operations — PostCommit's callback, for
-// example, runs CondenseSession (shadow-branch tree builds, transcript
-// compaction) inside the gate. That's deliberate: PostToolUse must not slip
+// example, runs CondenseSession (transcript redaction and compaction,
+// checkpoint tree builds) inside the gate. That's deliberate: PostToolUse must not slip
 // in mid-condense and revert CheckpointTranscriptStart or files_touched.
 // A concurrent PostToolUse on the same session waits for the commit to
 // finish.
@@ -828,11 +803,12 @@ func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, 
 		return nil
 	}
 	err := MutateSessionState(ctx, sessionID, func(state *SessionState) error {
-		merged := mergeFilesTouched(state.FilesTouched, modified, added, deleted)
-		if slices.Equal(merged, state.FilesTouched) {
+		before := slices.Clone(state.FilesTouched)
+		hashesBefore := len(state.TouchedFileHashes)
+		MergeUnhashedFilesTouched(state, modified, added, deleted)
+		if slices.Equal(before, state.FilesTouched) && hashesBefore == len(state.TouchedFileHashes) {
 			return ErrMutationSkip
 		}
-		state.FilesTouched = merged
 		return nil
 	})
 	if errors.Is(err, ErrStateNotFound) {
@@ -1044,4 +1020,23 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 	// sentinels and session IDs aren't reused, so leaving them in place is
 	// harmless. Bulk cleanup happens via RemoveAll on uninstall.
 	return nil
+}
+
+// AccumulateSessionTokenUsage adds a token-usage delta to both the
+// session-cumulative total and the checkpoint-scoped accumulator, mirroring
+// SaveStep's accounting (manual_commit_git.go). It exists for turns that end
+// with no uncommitted changes — e.g. Antigravity committing all its work
+// mid-turn, its normal flow — where the TurnEnd handler skips SaveStep
+// entirely but the turn's out-of-band token delta must still be recorded so
+// the next condensation (or `entire status`) attributes it. A nil or empty
+// delta is a no-op.
+func AccumulateSessionTokenUsage(ctx context.Context, sessionID string, delta *agent.TokenUsage) error {
+	if delta == nil {
+		return nil
+	}
+	return MutateSessionState(ctx, sessionID, func(state *SessionState) error {
+		state.TokenUsage = accumulateTokenUsage(state.TokenUsage, delta)
+		state.CheckpointTokenUsage = accumulateTokenUsage(state.CheckpointTokenUsage, delta)
+		return nil
+	})
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
+	"github.com/entireio/cli/internal/entireclient/userdirs"
 	"github.com/gofrs/flock"
 )
 
@@ -28,9 +29,7 @@ type ClusterCache map[string]*ClusterEntry
 
 // ClusterEntry holds cached data for a single cluster.
 type ClusterEntry struct {
-	Nodes          []string              `json:"nodes"`
-	NodesExpiresAt time.Time             `json:"nodes_expires_at"`
-	Repos          map[string]*RepoEntry `json:"repos,omitempty"`
+	Repos map[string]*RepoEntry `json:"repos,omitempty"`
 }
 
 // RepoEntry caches the hosting nodes for a single repository.
@@ -71,6 +70,12 @@ func writeCacheNoLock(f cacheFile, cache ClusterCache) error {
 // withCacheFileLock ensures cacheDir exists, takes the exclusive flock for
 // the named cache file, and runs fn with the file's path.
 func withCacheFileLock(cacheDir, fileName string, fn func(cacheFile) error) error {
+	// Before the MkdirAll, for the reason contexts.FilePath gives: cacheFile.root
+	// refuses a relative directory, but only at the read, by which point this
+	// has already created ./<value> and dropped a .lock in it.
+	if err := userdirs.RequireAbsoluteOverride("cache dir", cacheDir); err != nil {
+		return err //nolint:wrapcheck // the error already names the directory and its value
+	}
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
@@ -168,12 +173,14 @@ type cacheFile struct {
 func (f cacheFile) path() string { return filepath.Join(f.dir, f.name) }
 
 // root opens f.dir and returns f's name inside it.
+// A relative f.dir is refused rather than absolutized, for the reason
+// contexts.configRoot gives: it comes from $XDG_CACHE_HOME, and resolving it
+// against the working directory names a different cache in every process.
 func (f cacheFile) root() (*os.Root, string, error) {
-	abs, err := filepath.Abs(f.dir)
-	if err != nil {
-		return nil, "", fmt.Errorf("resolve cache dir: %w", err)
+	if err := userdirs.RequireAbsoluteOverride("cache dir", f.dir); err != nil {
+		return nil, "", err //nolint:wrapcheck // the error already names the directory and its value
 	}
-	root, err := osroot.Shared(abs)
+	root, err := osroot.Shared(f.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Unwrapped so readCacheBytes can classify a cold cache.
@@ -219,27 +226,6 @@ func writeCacheBytesAtomic(f cacheFile, data []byte) error {
 	return nil
 }
 
-// GetClusterNodes returns the cached cluster nodes. The second return value
-// indicates whether the cache entry is fresh (not expired).
-func (c ClusterCache) GetClusterNodes(cluster string) ([]string, bool) {
-	entry := c[cluster]
-	if entry == nil || len(entry.Nodes) == 0 {
-		return nil, false
-	}
-	return entry.Nodes, time.Now().Before(entry.NodesExpiresAt)
-}
-
-// SetClusterNodes stores cluster nodes with the given TTL.
-func (c ClusterCache) SetClusterNodes(cluster string, nodes []string, ttl time.Duration) {
-	entry := c[cluster]
-	if entry == nil {
-		entry = &ClusterEntry{}
-		c[cluster] = entry
-	}
-	entry.Nodes = nodes
-	entry.NodesExpiresAt = time.Now().Add(ttl)
-}
-
 // GetRepoNodes returns cached hosting nodes for a repo. The second return
 // value indicates freshness.
 func (c ClusterCache) GetRepoNodes(cluster, repoPath string) ([]string, bool) {
@@ -275,9 +261,4 @@ func (c ClusterCache) InvalidateRepo(cluster, repoPath string) {
 	if entry := c[cluster]; entry != nil && entry.Repos != nil {
 		delete(entry.Repos, repoPath)
 	}
-}
-
-// InvalidateCluster removes all cached data for a cluster.
-func (c ClusterCache) InvalidateCluster(cluster string) {
-	delete(c, cluster)
 }

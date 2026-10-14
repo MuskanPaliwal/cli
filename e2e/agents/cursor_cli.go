@@ -103,9 +103,9 @@ func (a *CursorCLI) RunPrompt(ctx context.Context, dir string, prompt string, op
 		o(cfg)
 	}
 
-	timeout := 90 * time.Second
-	if cfg.PromptTimeout > 0 {
-		timeout = cfg.PromptTimeout
+	timeout, err := promptTimeout(90*time.Second, cfg)
+	if err != nil {
+		return Output{}, err
 	}
 
 	displayCmd := a.Binary() + " --force --workspace " + dir + " (interactive prompt: " + prompt + ")"
@@ -240,8 +240,7 @@ func (a *CursorCLI) startInteractiveSession(dir string) (*TmuxSession, error) {
 	args = append(args, bin, "--force", "--workspace", dir)
 
 	name := fmt.Sprintf("cursor-cli-test-%d", time.Now().UnixNano())
-	unset := []string{"CI"}
-	s, err := NewTmuxSession(name, dir, unset, args[0], args[1:]...)
+	s, err := NewTmuxSession(name, dir, nil, args[0], args[1:]...)
 	if err != nil {
 		_ = os.RemoveAll(configDir)
 		return nil, err

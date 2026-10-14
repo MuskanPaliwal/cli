@@ -2,10 +2,13 @@ package copilotcli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -83,6 +86,78 @@ func TestExtractModifiedFilesFromEvents(t *testing.T) {
 	})
 }
 
+func TestExtractSubagentEvidence_ConcurrentChildrenStayDisjoint(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstAgent  = "406b3f9d-707d-497b-95e4-8879cb34dfef"
+		secondAgent = "4f7e5668-1189-4ed6-95c2-2fa3f30a511e"
+		firstTask   = "toolu_01WQPHjHsYsR4tbaDa7FuLn6"
+		secondTask  = "toolu_01PTijiEhCKVraGkEwH52FQC"
+	)
+	content := strings.Join([]string{
+		`{"type":"subagent.started","agentId":"` + secondAgent + `","data":{"toolCallId":"` + secondTask + `"}}`,
+		`{"type":"subagent.started","agentId":"` + firstAgent + `","data":{"toolCallId":"` + firstTask + `"}}`,
+		`{"type":"tool.execution_complete","agentId":"` + secondAgent + `","data":{"parentToolCallId":"` + secondTask + `","toolTelemetry":{"restrictedProperties":{"filePaths":"[\"/repo/second.txt\"]"}}}}`,
+		`{"type":"tool.execution_complete","agentId":"` + firstAgent + `","data":{"parentToolCallId":"` + firstTask + `","toolTelemetry":{"restrictedProperties":{"filePaths":"[\"/repo/first.txt\"]"}}}}`,
+	}, "\n")
+	events, err := parseEventsFromBytes([]byte(content))
+	require.NoError(t, err)
+
+	first, ok := extractSubagentEvidence(events, firstAgent, "")
+	require.True(t, ok)
+	require.Equal(t, firstTask, first.ToolUseID)
+	require.Equal(t, []string{"/repo/first.txt"}, first.Files)
+
+	second, ok := extractSubagentEvidence(events, secondAgent, "")
+	require.True(t, ok)
+	require.Equal(t, secondTask, second.ToolUseID)
+	require.Equal(t, []string{"/repo/second.txt"}, second.Files)
+}
+
+func TestExtractSubagentEvidence_RequiresUniqueStartedIdentity(t *testing.T) {
+	t.Parallel()
+
+	const child = "24d8773a-06e8-435c-9257-8ccb89a54f33"
+	for _, content := range []string{
+		`{"type":"tool.execution_complete","agentId":"` + child + `","data":{"parentToolCallId":"toolu_orphan"}}`,
+		`{"type":"subagent.started","agentId":"` + child + `","data":{"toolCallId":"toolu_one"}}` + "\n" +
+			`{"type":"subagent.started","agentId":"` + child + `","data":{"toolCallId":"toolu_two"}}`,
+	} {
+		events, err := parseEventsFromBytes([]byte(content))
+		require.NoError(t, err)
+		_, ok := extractSubagentEvidence(events, child, "")
+		require.False(t, ok)
+	}
+}
+
+func TestExtractSubagentEvidence_LegacyNameFallback(t *testing.T) {
+	t.Parallel()
+
+	const agentName = "entire-e2e-subagent"
+	events, err := parseEventsFromBytes([]byte(strings.Join([]string{
+		`{"type":"subagent.started","agentId":"toolu_previous","data":{"toolCallId":"toolu_previous","agentName":"` + agentName + `"}}`,
+		`{"type":"subagent.completed","agentId":"toolu_previous","data":{"toolCallId":"toolu_previous","agentName":"` + agentName + `"}}`,
+		`{"type":"subagent.started","agentId":"toolu_current","data":{"toolCallId":"toolu_current","agentName":"` + agentName + `","agentDescription":"Create docs/red.md"}}`,
+		`{"type":"tool.execution_complete","agentId":"toolu_current","data":{"parentToolCallId":"toolu_current"}}`,
+	}, "\n")))
+	require.NoError(t, err)
+
+	evidence, ok := extractSubagentEvidence(events, "", agentName)
+	require.True(t, ok)
+	require.Equal(t, "toolu_current", evidence.AgentID)
+	require.Equal(t, "toolu_current", evidence.ToolUseID)
+	require.Equal(t, "Create docs/red.md", evidence.TaskDescription)
+
+	events = append(events, copilotEvent{
+		Type:    eventTypeSubagentStarted,
+		AgentID: "toolu_concurrent",
+		Data:    json.RawMessage(`{"toolCallId":"toolu_concurrent","agentName":"` + agentName + `"}`),
+	})
+	_, ok = extractSubagentEvidence(events, "", agentName)
+	require.False(t, ok, "same-name concurrent children must fail closed")
+}
+
 func TestExtractPromptsFromEvents(t *testing.T) {
 	t.Parallel()
 
@@ -102,18 +177,6 @@ func TestExtractPromptsFromEvents(t *testing.T) {
 		}
 		if prompts[1] != "now delete it" {
 			t.Errorf("expected second prompt 'now delete it', got %q", prompts[1])
-		}
-	})
-}
-
-func TestExtractSummaryFromEvents(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty events returns empty string", func(t *testing.T) {
-		t.Parallel()
-		summary := extractSummaryFromEvents(nil)
-		if summary != "" {
-			t.Errorf("expected empty summary, got %q", summary)
 		}
 	})
 }
@@ -190,7 +253,7 @@ func TestExtractModifiedFilesFromOffset(t *testing.T) {
 		ag := &CopilotCLIAgent{}
 		path := writeTestJSONL(t, testJSONLLines)
 
-		files, pos, err := ag.ExtractModifiedFilesFromOffset(path, 0)
+		files, pos, err := ag.ExtractModifiedFilesFromOffset(context.Background(), path, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -212,7 +275,7 @@ func TestExtractModifiedFilesFromOffset(t *testing.T) {
 
 		// Offset 5 means skip first 5 lines (tool.execution_complete is line 5)
 		// so only lines 6 and 7 remain (assistant.message and assistant.turn_end)
-		files, pos, err := ag.ExtractModifiedFilesFromOffset(path, 5)
+		files, pos, err := ag.ExtractModifiedFilesFromOffset(context.Background(), path, 5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -228,7 +291,7 @@ func TestExtractModifiedFilesFromOffset(t *testing.T) {
 		t.Parallel()
 		ag := &CopilotCLIAgent{}
 
-		files, pos, err := ag.ExtractModifiedFilesFromOffset("", 0)
+		files, pos, err := ag.ExtractModifiedFilesFromOffset(context.Background(), "", 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -273,37 +336,6 @@ func TestExtractPrompts(t *testing.T) {
 	})
 }
 
-func TestExtractSummary(t *testing.T) {
-	t.Parallel()
-	ag := &CopilotCLIAgent{}
-	path := writeTestJSONL(t, testJSONLLines)
-
-	summary, err := ag.ExtractSummary(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if summary != "Created hello.txt." {
-		t.Errorf("expected 'Created hello.txt.', got %q", summary)
-	}
-}
-
-func TestExtractSummary_EmptyTranscript(t *testing.T) {
-	t.Parallel()
-	ag := &CopilotCLIAgent{}
-	lines := []string{
-		`{"type":"session.start","data":{"sessionId":"abc123"},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
-	}
-	path := writeTestJSONL(t, lines)
-
-	summary, err := ag.ExtractSummary(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if summary != "" {
-		t.Errorf("expected empty summary, got %q", summary)
-	}
-}
-
 func TestParseEventsFromBytes_MalformedLines(t *testing.T) {
 	t.Parallel()
 	lines := []string{
@@ -321,23 +353,6 @@ func TestParseEventsFromBytes_MalformedLines(t *testing.T) {
 	}
 	if events[1].Type != eventTypeUserMessage {
 		t.Errorf("expected second event type %q, got %q", eventTypeUserMessage, events[1].Type)
-	}
-}
-
-func TestExtractSummary_SkipsEmptyContentAssistantMessages(t *testing.T) {
-	t.Parallel()
-	// Simulates -p (headless) mode where assistant.message has content: ""
-	// and tool requests but no text. Summary should fall back to the earlier
-	// assistant message that has text.
-	lines := []string{
-		`{"type":"assistant.message","data":{"content":"I'll create that file.","toolRequests":[{"toolCallId":"tc1"}]},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
-		`{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"tc2"}]},"id":"2","timestamp":"2026-03-03T00:00:01Z","parentId":""}`,
-	}
-	content := strings.Join(lines, "\n") + "\n"
-	events, _ := parseEventsFromBytes([]byte(content)) //nolint:errcheck // test input is always valid
-	summary := extractSummaryFromEvents(events)
-	if summary != "I'll create that file." {
-		t.Errorf("expected summary from earlier message, got %q", summary)
 	}
 }
 

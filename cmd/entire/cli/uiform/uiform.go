@@ -4,9 +4,6 @@
 package uiform
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
 
 	"charm.land/huh/v2"
@@ -21,6 +18,16 @@ import (
 func IsAccessibleMode() bool {
 	return os.Getenv("ACCESSIBLE") != ""
 }
+
+// SelectOptionIndent is the blank prefix huh reserves for a select's cursor,
+// so text put above the options (a column header in the field description)
+// lines up with the option text instead of with the cursor.
+//
+// It is the width of the SelectSelector string, "> ", which Theme inherits
+// from ThemeBase16 and recolors without changing. A caller that overrides the
+// selector string needs its own indent. TestSelectOptionIndentMatchesSelector
+// pins the two together.
+const SelectOptionIndent = "  "
 
 // Theme returns Entire's standard huh theme: base16 (ANSI 0–15) colors so
 // form prompts respect the user's terminal palette and stay consistent with
@@ -93,24 +100,4 @@ func New(groups ...*huh.Group) *huh.Form {
 func SingleLineMultiSelectHeight(optionCount int) int {
 	const headerRows = 3
 	return optionCount + headerRows
-}
-
-// PromptYN renders a Confirm form with the standard theme/accessibility
-// behavior and returns the user's answer. On user cancellation (Ctrl+C or
-// context.Canceled) returns (false, nil) so callers treat it as a "no";
-// on real form errors the error is returned wrapped.
-func PromptYN(ctx context.Context, question string, def bool) (bool, error) {
-	answer := def
-	form := New(huh.NewGroup(
-		huh.NewConfirm().
-			Title(question).
-			Value(&answer),
-	))
-	if err := form.RunWithContext(ctx); err != nil {
-		if errors.Is(err, huh.ErrUserAborted) || errors.Is(err, context.Canceled) {
-			return false, nil
-		}
-		return false, fmt.Errorf("confirm form: %w", err)
-	}
-	return answer, nil
 }

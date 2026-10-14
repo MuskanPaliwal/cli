@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,10 +60,6 @@ func TestCacheRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
 	cache := make(ClusterCache)
-	cache.SetClusterNodes("rc.partial.to", []string{
-		"https://node1.rc.partial.to",
-		"https://node2.rc.partial.to",
-	}, 24*time.Hour)
 	cache.SetRepoNodes("rc.partial.to", "alice/repo", []string{
 		"https://node1.rc.partial.to",
 	}, 24*time.Hour)
@@ -79,14 +76,6 @@ func TestCacheRoundTrip(t *testing.T) {
 		t.Fatalf("LoadCache: %v", err)
 	}
 
-	nodes, fresh := loaded.GetClusterNodes("rc.partial.to")
-	if !fresh {
-		t.Fatal("expected cluster nodes to be fresh")
-	}
-	if len(nodes) != 2 {
-		t.Fatalf("got %d cluster nodes, want 2", len(nodes))
-	}
-
 	repoNodes, fresh := loaded.GetRepoNodes("rc.partial.to", "alice/repo")
 	if !fresh {
 		t.Fatal("expected repo nodes to be fresh")
@@ -98,15 +87,9 @@ func TestCacheRoundTrip(t *testing.T) {
 
 func TestCacheExpiry(t *testing.T) {
 	cache := make(ClusterCache)
-	cache.SetClusterNodes("x.com", []string{"https://n1.x.com"}, -1*time.Second)
 	cache.SetRepoNodes("x.com", "a/b", []string{"https://n1.x.com"}, -1*time.Second)
 
-	_, fresh := cache.GetClusterNodes("x.com")
-	if fresh {
-		t.Error("expected expired cluster nodes")
-	}
-
-	_, fresh = cache.GetRepoNodes("x.com", "a/b")
+	_, fresh := cache.GetRepoNodes("x.com", "a/b")
 	if fresh {
 		t.Error("expected expired repo nodes")
 	}
@@ -115,12 +98,7 @@ func TestCacheExpiry(t *testing.T) {
 func TestCacheMiss(t *testing.T) {
 	cache := make(ClusterCache)
 
-	nodes, fresh := cache.GetClusterNodes("nope.com")
-	if fresh || nodes != nil {
-		t.Error("expected miss for unknown cluster")
-	}
-
-	nodes, fresh = cache.GetRepoNodes("nope.com", "a/b")
+	nodes, fresh := cache.GetRepoNodes("nope.com", "a/b")
 	if fresh || nodes != nil {
 		t.Error("expected miss for unknown repo")
 	}
@@ -128,8 +106,8 @@ func TestCacheMiss(t *testing.T) {
 
 func TestCacheInvalidation(t *testing.T) {
 	cache := make(ClusterCache)
-	cache.SetClusterNodes("x.com", []string{"https://n1.x.com"}, 24*time.Hour)
 	cache.SetRepoNodes("x.com", "a/b", []string{"https://n1.x.com"}, 24*time.Hour)
+	cache.SetRepoNodes("x.com", "c/d", []string{"https://n1.x.com"}, 24*time.Hour)
 
 	cache.InvalidateRepo("x.com", "a/b")
 	_, fresh := cache.GetRepoNodes("x.com", "a/b")
@@ -137,15 +115,9 @@ func TestCacheInvalidation(t *testing.T) {
 		t.Error("repo should be invalidated")
 	}
 
-	_, fresh = cache.GetClusterNodes("x.com")
+	_, fresh = cache.GetRepoNodes("x.com", "c/d")
 	if !fresh {
-		t.Error("cluster nodes should still be fresh")
-	}
-
-	cache.InvalidateCluster("x.com")
-	_, fresh = cache.GetClusterNodes("x.com")
-	if fresh {
-		t.Error("cluster should be invalidated")
+		t.Error("sibling repo should still be fresh")
 	}
 }
 
@@ -175,5 +147,65 @@ func TestLoadCacheCorruptFile(t *testing.T) {
 	}
 	if len(cache) != 0 {
 		t.Fatal("expected empty cache from corrupt file")
+	}
+}
+
+// The refusal has to land before withCacheFileLock's MkdirAll and before the
+// flock file is created. cacheFile.root refuses a relative directory too, but
+// only at the read, by which point ./<value> exists with a .lock inside it.
+//
+// Both entry points are covered: ModifyCache goes through withCacheFileLock,
+// while LoadCache deliberately bypasses it (an unlocked read) and has to reach
+// the same verdict by its own route. All three cache files (nodes.json,
+// cluster_cores.json, api_discovery.json) funnel through these two helpers.
+func TestCacheEntryPointsRefuseRelativeDirWithoutSideEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(dir string) error
+	}{
+		{"LoadCache", func(d string) error { _, err := LoadCache(d); return err }},
+		{"ModifyCache", func(d string) error {
+			return ModifyCache(d, func(ClusterCache) error { return nil })
+		}},
+		{"ModifyClusterCores", func(d string) error {
+			return ModifyClusterCores(d, func(ClusterCoresCache) error { return nil })
+		}},
+		{"ModifyAPICores", func(d string) error {
+			return ModifyAPICores(d, func(ClusterCoresCache) error { return nil })
+		}},
+		{"LoadClusterCores", func(d string) error { _, err := LoadClusterCores(d); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+
+			err := tc.call("relative-cache")
+			if err == nil {
+				t.Fatalf("%s(relative) = nil error, want a rejected override", tc.name)
+			}
+			if !strings.Contains(err.Error(), "absolute") {
+				t.Errorf("%s error = %q, want it to name the absolute-path requirement", tc.name, err)
+			}
+
+			entries, readErr := os.ReadDir(cwd)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, e := range entries {
+				t.Errorf("%s left %q behind in the working directory", tc.name, e.Name())
+			}
+		})
+	}
+}
+
+// The resolver's own home-failure fallback stays usable; see the matching test
+// in the contexts package.
+func TestModifyCache_AcceptsTheResolversOwnFallback(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	dir := filepath.Join(cwd, ".cache", "entire")
+	if err := ModifyCache(dir, func(ClusterCache) error { return nil }); err != nil {
+		t.Fatalf("ModifyCache(%q) = %v, want the resolver's own fallback honored", dir, err)
 	}
 }

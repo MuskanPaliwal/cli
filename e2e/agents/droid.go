@@ -149,13 +149,19 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 		model = defaultDroidModel
 	}
 
+	ctx, cancel, err := boundPrompt(ctx, 0, cfg)
+	if err != nil {
+		return Output{}, err
+	}
+	defer cancel()
+
 	args := []string{"exec", "--skip-permissions-unsafe", "--model", model, prompt}
 	displayArgs := []string{"exec", "--skip-permissions-unsafe", "--model", model, fmt.Sprintf("%q", prompt)}
 
 	cmd := exec.CommandContext(ctx, d.Binary(), args...)
 	cmd.Dir = dir
 	cmd.Stdin = nil
-	cmd.Env = filterEnv(os.Environ(), "ENTIRE_TEST_TTY", "CI", "GITHUB_ACTIONS")
+	cmd.Env = agentEnv(os.Environ())
 	setupProcessGroup(cmd)
 	cmd.WaitDelay = 5 * time.Second
 
@@ -163,7 +169,7 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		exitErr := &exec.ExitError{}
@@ -186,7 +192,7 @@ func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("droid-test-%d", time.Now().UnixNano())
 	// Unset CI and GITHUB_ACTIONS so Droid doesn't enter single-turn/headless
 	// mode — it checks these vars and skips interactive input after the first turn.
-	s, err := NewTmuxSession(name, dir, []string{"CI", "GITHUB_ACTIONS", "ENTIRE_TEST_TTY"}, d.Binary())
+	s, err := NewTmuxSession(name, dir, nil, d.Binary())
 	if err != nil {
 		return nil, err
 	}

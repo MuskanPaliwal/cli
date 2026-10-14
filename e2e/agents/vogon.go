@@ -40,14 +40,28 @@ func (v *Vogon) Bootstrap() error { return nil }
 func (v *Vogon) IsTransientError(_ Output, _ error) bool { return false }
 
 func (v *Vogon) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
+	cfg := &runConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	// No default: the canary answers in seconds, so a ceiling of our own would
+	// only ever misfire. It still honors an explicit one — a hung fake agent is
+	// the reason someone reaches for E2E_TIMEOUT on the canary leg.
+	ctx, cancel, err := boundPrompt(ctx, 0, cfg)
+	if err != nil {
+		return Output{}, err
+	}
+	defer cancel()
+
 	args := []string{"-p", prompt}
 	displayArgs := []string{"-p", fmt.Sprintf("%q", prompt)}
-	env := filterEnv(os.Environ(), "ENTIRE_TEST_TTY")
+	env := agentEnv(os.Environ())
 	homeDir, err := vogonHomeDir(dir)
 	if err != nil {
 		return Output{}, err
 	}
-	env = append(env, "HOME="+homeDir)
+	env = append(env, HomeEnv(homeDir)...)
 	return v.run(ctx, dir, args, displayArgs, env)
 }
 
@@ -57,7 +71,7 @@ func (v *Vogon) StartSession(_ context.Context, dir string) (Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, "env", "HOME="+homeDir, v.Binary())
+	s, err := NewTmuxSession(name, dir, nil, "env", "HOME="+homeDir, v.Binary())
 	if err != nil {
 		return nil, err
 	}
@@ -88,14 +102,14 @@ func (v *Vogon) WriteSessionTranscript(ctx context.Context, dir string, extraEnv
 		"--user-prompt", fmt.Sprintf("%q", userPrompt),
 		"--assistant-message", fmt.Sprintf("%q", assistantMessage),
 	}
-	env := filterEnv(os.Environ(), "ENTIRE_TEST_TTY")
+	env := agentEnv(os.Environ())
 	env = append(env, extraEnv...)
 	if !hasEnvVar(extraEnv, "HOME") {
 		homeDir, err := vogonHomeDir(dir)
 		if err != nil {
 			return Output{}, err
 		}
-		env = append(env, "HOME="+homeDir)
+		env = append(env, HomeEnv(homeDir)...)
 	}
 	return v.run(ctx, dir, args, displayArgs, env)
 }
@@ -138,6 +152,13 @@ func vogonHomeDir(dir string) (string, error) {
 		return "", fmt.Errorf("create vogon home %s: %w", homeDir, err)
 	}
 	return homeDir, nil
+}
+
+// HomeEnv points both of the variables os.UserHomeDir reads at dir: HOME on
+// Unix, USERPROFILE on Windows. Setting HOME alone leaves a Windows Vogon (and
+// Entire's vogon agent) writing to the real profile.
+func HomeEnv(dir string) []string {
+	return []string{"HOME=" + dir, "USERPROFILE=" + dir}
 }
 
 func hasEnvVar(env []string, key string) bool {

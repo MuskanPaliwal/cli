@@ -1,0 +1,53 @@
+package cli
+
+// Command and verb names that more than one file spells. Cobra takes these as
+// plain strings, so without a name here a rename means finding every `Use:`,
+// alias and hard-coded command path by hand.
+const (
+	cmdAgent      = "agent"
+	cmdCheckpoint = "checkpoint"
+	cmdCreate     = "create"
+	cmdCreateName = "create <name>"
+	cmdList       = "list"
+	cmdListRepo   = "list <repo>"
+	cmdGrant      = "grant"
+	cmdOrg        = "org"
+	cmdRepo       = "repo"
+	cmdReview     = "review"
+	cmdSession    = "session"
+	cmdStatus     = "status"
+	cmdTokens     = "tokens"
+	cmdTrail      = "trail"
+
+	// Plural aliases, kept beside the names they alias.
+	cmdCheckpointsAlias = "checkpoints"
+	cmdSessionsAlias    = "sessions"
+)
+
+// Column headers shared by the control-plane tables: org, project and repo,
+// plus their grant subtrees and repo's mirror subtree, print several of the
+// same columns.
+const (
+	colHeaderBranch   = "BRANCH"
+	colHeaderCloneURL = "CLONE URL"
+	colHeaderCluster  = "CLUSTER"
+	colHeaderGrantee  = "GRANTEE"
+	colHeaderName     = "NAME"
+	colHeaderProject  = "PROJECT"
+	colHeaderRegion   = "REGION"
+	colHeaderRepo     = "REPO"
+	colHeaderRole     = "ROLE"
+	colHeaderSource   = "SOURCE"
+	colHeaderStatus   = "STATUS"
+	colHeaderTitle    = "TITLE"
+	colHeaderType     = "TYPE"
+)
+
+// Display nouns selected by a count. Spelled here rather than inline because
+// several commands phrase the same "N thing(s)" line.
+const (
+	nounCheckpoint  = "checkpoint"
+	nounCheckpoints = "checkpoints"
+	nounSession     = "session"
+	nounSessions    = "sessions"
+)

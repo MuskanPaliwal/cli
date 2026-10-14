@@ -42,12 +42,25 @@ func (r *RogerRoger) IsTransientError(_ Output, _ error) bool { return false }
 func (r *RogerRoger) IsExternalAgent() bool { return true }
 
 func (r *RogerRoger) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
+	cfg := &runConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	// No default, same reasoning as vogon: a local stub needs no ceiling of
+	// ours, but an explicitly requested one must still apply.
+	ctx, cancel, err := boundPrompt(ctx, 0, cfg)
+	if err != nil {
+		return Output{}, err
+	}
+	defer cancel()
+
 	// roger-roger reads prompts from stdin line by line.
 	// An empty line causes the REPL to exit gracefully.
 	cmd := exec.CommandContext(ctx, r.Binary())
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt + "\n\n")
-	cmd.Env = filterEnv(os.Environ(), "ENTIRE_TEST_TTY")
+	cmd.Env = agentEnv(os.Environ())
 	setupProcessGroup(cmd)
 	cmd.WaitDelay = 5 * time.Second
 
@@ -55,7 +68,7 @@ func (r *RogerRoger) RunPrompt(ctx context.Context, dir string, prompt string, o
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		exitErr := &exec.ExitError{}
@@ -76,7 +89,7 @@ func (r *RogerRoger) RunPrompt(ctx context.Context, dir string, prompt string, o
 
 func (r *RogerRoger) StartSession(_ context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("rr-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, r.Binary())
+	s, err := NewTmuxSession(name, dir, nil, r.Binary())
 	if err != nil {
 		return nil, err
 	}

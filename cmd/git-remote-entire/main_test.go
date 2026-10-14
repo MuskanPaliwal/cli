@@ -5,16 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
-	"github.com/entireio/cli/internal/entireclient/httputil"
 )
 
 func TestInfoFlagText(t *testing.T) {
@@ -90,6 +89,94 @@ func TestParseProtocolVersion(t *testing.T) {
 	}
 }
 
+// fakeEnv builds a LookupEnv stand-in; nil means the variable is unset.
+func fakeEnv(vars map[string]string) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		v, ok := vars[key]
+		return v, ok
+	}
+}
+
+func TestResolveHTTPUserAgent(t *testing.T) {
+	t.Parallel()
+	const def = "git-remote-entire/1.2.3"
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr string
+	}{
+		{"unset_keeps_default", nil, def, ""},
+		{"set_replaces_verbatim", map[string]string{"GIT_HTTP_USER_AGENT": "git-remote-entire/abc1234 entire-runners/0.1.0"}, "git-remote-entire/abc1234 entire-runners/0.1.0", ""},
+		{"set_any_shape", map[string]string{"GIT_HTTP_USER_AGENT": "Mozilla/4.0"}, "Mozilla/4.0", ""},
+		{"empty_sends_nothing", map[string]string{"GIT_HTTP_USER_AGENT": ""}, "", ""},
+		{"other_vars_ignored", map[string]string{"HTTP_USER_AGENT": "x/1"}, def, ""},
+		{"crlf_names_the_variable", map[string]string{"GIT_HTTP_USER_AGENT": "x/1\r\nX-Injected: y"}, "", "GIT_HTTP_USER_AGENT holds an invalid header character"},
+		{"nul_names_the_variable", map[string]string{"GIT_HTTP_USER_AGENT": "x/1\x00"}, "", "GIT_HTTP_USER_AGENT holds an invalid header character"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveHTTPUserAgent(def, fakeEnv(tc.env))
+			if got != tc.want {
+				t.Errorf("resolveHTTPUserAgent(%v) = %q, want %q", tc.env, got, tc.want)
+			}
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("unexpected error: %v", err)
+			case tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr):
+				t.Errorf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Uses the auth-path client run() ships and checks what the server
+// receives: the override verbatim, or no header at all for "".
+func TestHTTPUserAgent_ReachesServer(t *testing.T) {
+	t.Parallel()
+	const def = "git-remote-entire/1.2.3"
+	tests := []struct {
+		name string
+		env  map[string]string
+		want []string // nil means no User-Agent header at all
+	}{
+		{"default", nil, []string{def}},
+		{"override", map[string]string{"GIT_HTTP_USER_AGENT": "git-remote-entire/test entire-runners/0.1.0"}, []string{"git-remote-entire/test entire-runners/0.1.0"}},
+		{"empty", map[string]string{"GIT_HTTP_USER_AGENT": ""}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Values("User-Agent")
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(server.Close)
+
+			ua, err := resolveHTTPUserAgent(def, fakeEnv(tc.env))
+			if err != nil {
+				t.Fatalf("resolveHTTPUserAgent: %v", err)
+			}
+			client := newAuthHTTPClient(false, ua)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/.well-known/entire-cluster.json", nil)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			_ = resp.Body.Close()
+
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("server saw User-Agent %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGitActionFromRequest(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -113,61 +200,6 @@ func TestGitActionFromRequest(t *testing.T) {
 			req := httptest.NewRequestWithContext(context.Background(), tc.method, "https://host"+tc.path+"?"+tc.query, nil)
 			if got := gitActionFromRequest(req); got != tc.want {
 				t.Fatalf("gitActionFromRequest(%s %s?%s) = %q, want %q", tc.method, tc.path, tc.query, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestFatalMessage(t *testing.T) {
-	t.Parallel()
-	parsedURL := &url.URL{Scheme: "entire", Host: "aws-us-east-2.entire.io", Path: "/et/paul/dogbark"}
-	wrongCluster := &httputil.OAuthError{
-		Status:      http.StatusBadRequest,
-		Code:        "invalid_target",
-		Description: `audience host "aws-us-east-2.entire.io" does not host this repo; it lives on "aws-eu-central-1.entire.io" — re-target the request there`,
-		Body:        "{...}",
-	}
-	tests := []struct {
-		name        string
-		err         error
-		contains    []string
-		notContains []string
-	}{
-		{
-			name: "wrong cluster names correct host and URL",
-			// Wrapped to mirror production: the OAuthError surfaces buried under
-			// several fmt.Errorf layers, so errors.As must dig it out.
-			err: fmt.Errorf("stateless-connect v2 info/refs: fetching info/refs from entry domain: repo-scoped token exchange: oauth token exchange: %w", wrongCluster),
-			contains: []string{
-				"aws-eu-central-1.entire.io",
-				"git clone entire://aws-eu-central-1.entire.io/et/paul/dogbark",
-			},
-			notContains: []string{"HTTP 400", "invalid_target"},
-		},
-		{
-			name:     "invalid_target without lives-on hint falls back",
-			err:      &httputil.OAuthError{Status: http.StatusBadRequest, Code: "invalid_target", Description: "no servable mirror", Body: "HTTP 400: no servable mirror"},
-			contains: []string{"fatal:", "no servable mirror"},
-		},
-		{
-			name:     "unrelated error falls back verbatim",
-			err:      errors.New("connection refused"),
-			contains: []string{"fatal: connection refused"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := fatalMessage(tc.err, parsedURL)
-			for _, sub := range tc.contains {
-				if !strings.Contains(got, sub) {
-					t.Errorf("fatalMessage() = %q, missing %q", got, sub)
-				}
-			}
-			for _, sub := range tc.notContains {
-				if strings.Contains(got, sub) {
-					t.Errorf("fatalMessage() = %q, should not contain %q", got, sub)
-				}
 			}
 		})
 	}

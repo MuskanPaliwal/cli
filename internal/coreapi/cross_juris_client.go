@@ -8,9 +8,10 @@ import (
 
 	"github.com/entireio/auth-go/crossjuris"
 
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/internal/entireclient/httpclient"
-	"github.com/entireio/cli/internal/entireclient/httputil"
+	"github.com/entireio/cli/internal/entireclient/netcause"
 )
 
 // newCrossJurisHTTPClient builds the *http.Client the control-plane
@@ -28,7 +29,10 @@ func newCrossJurisHTTPClient(coreURL string) (*http.Client, error) {
 	// not over it. That transport sends requests it builds itself — the
 	// RFC 8693 exchange and the federation manifest fetch, both straight
 	// to its base — and those bypass anything wrapped outside it.
-	base := versioninfo.WrapTransport(httpclient.NewTransport(false))
+	//
+	// netcause sits at the very base for the same reason: a sandboxed or
+	// firewalled dial from any of those requests names its cause.
+	base := netcause.Transport(versioninfo.WrapTransport(httpclient.NewTransport(false)))
 	rt, err := newCrossJurisRoundTripper(base, isLoopbackHTTP(coreURL))
 	if err != nil {
 		return nil, err
@@ -42,7 +46,7 @@ func newCrossJurisHTTPClient(coreURL string) (*http.Client, error) {
 func newCrossJurisRoundTripper(base http.RoundTripper, allowInsecureHTTP bool) (http.RoundTripper, error) {
 	inner, err := crossjuris.New(crossjuris.Config{
 		Base:              base,
-		ClientID:          httputil.OAuthClientID,
+		ClientID:          auth.OAuthClientID,
 		AllowInsecureHTTP: allowInsecureHTTP,
 		Logf:              debugf,
 	})

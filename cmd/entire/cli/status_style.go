@@ -76,7 +76,7 @@ func shouldUseColor(w io.Writer) bool {
 func getTerminalWidth(w io.Writer) int {
 	// Try the output writer first
 	if f, ok := w.(*os.File); ok {
-		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 { //nolint:gosec // G115: uintptr->int is safe for fd
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
 			return min(width, 80)
 		}
 	}
@@ -86,7 +86,7 @@ func getTerminalWidth(w io.Writer) int {
 		if f == nil {
 			continue
 		}
-		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 { //nolint:gosec // G115: uintptr->int is safe for fd
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
 			return min(width, 80)
 		}
 	}
@@ -119,6 +119,16 @@ func totalTokens(tu *agent.TokenUsage) int {
 	return total
 }
 
+// Row labels reused across the explain output's diagnostic tables.
+const (
+	explainLabelCause       = "cause"
+	explainLabelCheckpoints = "checkpoints"
+	explainLabelMessage     = "message"
+	explainLabelSession     = "session"
+	explainLabelStderr      = "stderr"
+	explainLabelTry         = "try"
+)
+
 // explainRow is one entry in a metadata block: dim label + plain value.
 type explainRow struct {
 	Label string
@@ -128,8 +138,7 @@ type explainRow struct {
 // identityBullet renders "● <label> <id>\n". Bullet is the brand accent
 // (magenta) when color is enabled; ID is also the accent to mirror the existing
 // checkpoint header. When
-// id is empty (e.g., temporary checkpoints append "[temporary]" to the label
-// instead of using an id slot), the trailing space + id is suppressed.
+// id is empty, the trailing space + id is suppressed.
 func (s statusStyles) identityBullet(label, id string) string {
 	if id == "" {
 		if !s.colorEnabled {
