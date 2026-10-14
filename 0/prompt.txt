@@ -1,0 +1,115 @@
+can you review it? PR #2549
+
+---
+
+<task-notification>
+<task-id>ab10ef38c78a47d8c</task-id>
+<tool-use-id>toolu_014bRY1BEpC8Ug2ZNcbGHGf9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/4b7d424f-1763-419b-9427-5b2ed70f5da9/tasks/ab10ef38c78a47d8c.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2549" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "cmd/entire/cli/review/dump.go",
+    "line": 193,
+    "summary": "joinAssistantText only puts a newline between AssistantText events when one of them is not a Delta, so streamed deltas from separate Pi messages or retry attempts get concatenated with no separator.",
+    "failure_scenario": "Pi streams message 1 as 'I'll read the diff.' then runs a tool call (a ToolCall event, which does not reset prevDelta). It then streams message 2 as 'request changes — ...\\n{json}'. The joined text is 'I'll read the diff.request changes — ...'. The verdict no longer starts a line, so proseReportsFindings misses 'request changes'. A contradictory empty comments array is then suppressed instead of posted, and the dumped narrative shows messages run together. After an auto_retry, the failed attempt's partial deltas are also glued onto the retry's first line."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 167,
+    "summary": "proseReportsFindings only checks bare prefixes. Labeled verdicts and feedback labels slip through, so an empty comments array is accepted as clean and nothing is posted.",
+    "failure_scenario": "Judge output is '**Verdict:** request changes — retry ignores ctx\\n{\"summary\":\"...\",\"comments\":[]}'. After TrimLeft the line starts with 'verdict:', so no prefix matches and the post is skipped. The same happens for 'Nits: rename x', 'Issues: ...' and '[p1] ...'. This is the very case commit e2df2bb5d handled with startsWithFeedbackLabel, and this rewrite dropped that handling."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 148,
+    "summary": "decodeTrailComments rejects the whole comments array when any single entry has a blank body. The old code skipped blank entries. The structured findings are then thrown away and only the stripped prose is posted.",
+    "failure_scenario": "A reviewer reports three good JSON comments plus one with body ''. ok=false, so trailReportFor falls back to combinedReviewNarratives. That function uses splitTrailJSON's prose, which already has the JSON removed. If the prose held only the verdict line, the three findings are lost and one generic 'verdict' finding is posted. In judgeTrailReport with prose=='' the raw JSON text is posted as the finding body instead."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 92,
+    "summary": "When the judge returns zero comments, every reviewer's high-severity comment is re-posted. This overrides the judge's deliberate filtering and posts duplicates without dedup.",
+    "failure_scenario": "Two reviewers each flag the same [high] at retry.go:42, and the judge drops it as unsupported (comments:[]). Two identical high findings are posted to the trail. A false positive the judge was told to drop still gets posted. If the judge instead returns one [low] comment, all reviewer highs are silently dropped, which is inconsistent behavior."
+  },
+  {
+    "file": "cmd/entire/cli/review/cmd.go",
+    "line": 1644,
+    "summary": "combinedReviewNarratives removes any trailing JSON object from the prose even when ok=false (it is not a valid contract). stripTrailJSON only removes it when ok=true, so the two paths disagree.",
+    "failure_scenario": "A reviewer ignores the contract and ends its finding with a quoted JSON config snippet, e.g. a package.json object, as evidence. The fallback prose posted to the trail silently loses that snippet, while the local dump still shows it."
+  },
+  {
+    "file": "cmd/entire/cli/review/synthesis_prompt.go",
+    "line": 67,
+    "summary": "The judge prompt embeds each reviewer's raw narrative including its JSON contract line, so every finding is sent to the judge twice (once as a bullet, once as JSON).",
+    "failure_scenario": "In trail mode with N reviewers, the judge prompt grows by each reviewer's full JSON duplicate. That wastes tokens and gives the judge an extra 'output format' sample inside untrusted data. stripTrailJSON(narrative) should be applied here, as dump.go does."
+  },
+  {
+    "file": "cmd/entire/cli/agent/pi/reviewer.go",
+    "line": 90,
+    "summary": "Altitude: adding a shared Delta flag to AssistantText and special-casing joinAssistantText patches a Pi-only fragmentation problem in shared infrastructure.",
+    "failure_scenario": "The parser already tracks message IDs and has the full text at message_end. Accumulating deltas per message and emitting a single AssistantText there would keep message boundaries (fixing finding 1). It would also avoid a cross-package flag that the TUI (tui_detail.go and tui_model.go still render each delta as its own block or preview) and any future consumer must each learn to honor."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 183,
+    "summary": "isListItem and isHighTrailSeverity re-implement logic that already exists in review_bridge.go (topLevelBulletText's bullet and numbered-item detection, normalizeReviewTrailSeverity's p0/p1/critical mapping).",
+    "failure_scenario": "Two copies of the bullet and severity grammars can drift. For example, normalizeReviewTrailSeverity handles 'nit'/'nits'/'p3' and strips '(){}:*_', but isHighTrailSeverity and proseReportsFindings do not. So posting and the clean-check disagree on what counts as a finding."
+  },
+  {
+    "file": "cmd/entire/cli/review/cmd.go",
+    "line": 1609,
+    "summary": "The skip message shows internal contract jargon to the user, e.g. 'Nothing to report (reviewer JSON: 0 comments from 1 reviewer(s))'.",
+    "failure_scenario": "Users in trail mode see wording about the internal JSON contract and '(s)' pluralization in normal CLI output. That conflicts with the repo's user-output conventions and leaks implementation detail, where a plain 'no findings' line would do."
+  }
+]
+```</result>
+<usage><subagent_tokens>88347</subagent_tokens><tool_uses>16</tool_uses><duration_ms>153283</duration_ms></usage>
+</task-notification>
+
+---
+
+verify the findings and then we decide what to fix
+
+---
+
+but it does have some out of scope things right?
+
+---
+
+anyways, we fix the findings
+
+---
+
+we also need to maake sure we don't fix out of scope things in this pr
+
+---
+
+yupp
+
+---
+
+<task-notification>
+<task-id>btr10h4ts</task-id>
+<tool-use-id>toolu_01DKoBLhffdm9yVtz1R3DAw2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/4b7d424f-1763-419b-9427-5b2ed70f5da9/tasks/btr10h4ts.output</output-file>
+<status>completed</status>
+<summary>Background command "Rewrite posting decision and rerun the tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bygp85iu3</task-id>
+<tool-use-id>toolu_01BZHKabj651wfsu7GStmser</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/4b7d424f-1763-419b-9427-5b2ed70f5da9/tasks/bygp85iu3.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full format, lint and CI test suite" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yupp

@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4WHHZMDTX7F060GG58DRDZJ",
+  "session_id": "4b7d424f-1763-419b-9427-5b2ed70f5da9",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T06:28:23.16123Z",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 8,
+  "save_step_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/agent/pi/reviewer.go",
+    "cmd/entire/cli/agent/pi/reviewer_test.go",
+    "cmd/entire/cli/review/cmd.go",
+    "cmd/entire/cli/review/dump.go",
+    "cmd/entire/cli/review/synthesis_prompt.go",
+    "cmd/entire/cli/review/synthesis_prompt_test.go",
+    "cmd/entire/cli/review/trail_report.go",
+    "cmd/entire/cli/review/trail_report_test.go",
+    "cmd/entire/cli/review/types/reviewer.go",
+    "docs/architecture/review-command.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "b29ca2803d8e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 109355,
+    "cache_read_tokens": 3529981,
+    "output_tokens": 34519,
+    "api_call_count": 37,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 85328,
+      "cache_read_tokens": 1117360,
+      "output_tokens": 3617,
+      "api_call_count": 17
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_014bRY1BEpC8Ug2ZNcbGHGf9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b29ca2803d8e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 29,
+        "end": 30,
+        "entry_ids": [
+          "c37a787f-ea5f-460f-aa40-6f10c7924fc3"
+        ],
+        "tool_use_id": "toolu_014bRY1BEpC8Ug2ZNcbGHGf9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014bRY1BEpC8Ug2ZNcbGHGf9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  }
+}
