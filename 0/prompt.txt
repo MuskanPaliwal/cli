@@ -1,0 +1,80 @@
+why tests are failing?
+
+---
+
+we can re run the test
+
+---
+
+the pr description is updated?
+
+---
+
+<task-notification>
+<task-id>b3a3i86fx</task-id>
+<tool-use-id>toolu_015wjg6EhuYETJUEjaX8L5oy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/08185bf9-348c-46b6-9ca0-9d19b53a414a/tasks/b3a3i86fx.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun full check and summarize failures" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+So maybe we can post a comment on this PR for the follow up and also wait for 2769 to merge maybe.
+
+---
+
+Yeah, we should commit and push the changes.
+
+---
+
+Can you delete the comment? Who's the author? Why would you post it without asking?
+
+---
+
+Now let's draft the comment and maybe we should comment it on their PR. What should be the comment? First we'll draft it.2
+
+---
+
+what 2769pr does and how can we write the comment in a more humanly way like
+
+---
+
+But what do you think the 2769 should also fix that test only PR should also cover the failing test that we are having or the test that is failing here is out of scope for that
+
+---
+
+/unslop
+
+---
+
+post it on #2769
+
+---
+
+Now, art PR is up to date with the latest changes and description is updated? and there is no comment or dogs related issues like stale dogs, stale comments or wrong comments
+
+---
+
+We should pull main and appear like upstream main
+
+---
+
+<pasted_content id="5c54">
+One stale comment this PR causes, in gitdir/gitdir.go:145:
+
+// Callers acting on a repo passed as an argument (agent import, session adopt)
+// must use this rather than CommonDir: ...
+
+After this PR, neither agent import nor session adopt calls CommonDirForWorktree. Agent import now goes through the new resolver, and adopt runs its own git check. The only remaining caller is review/manifest.go, so the example list in parentheses is now wrong.
+
+Proposed fix: drop the parenthetical so the line reads "Callers acting on a repo passed as an argument must use this rather than CommonDir:". The rest of the comment, about why the argument-based form exists, stays true. Removing the list also means it can't go stale again. It's a comment-only change, but it adds a fourth production file to the PR.
+
+Already on main, not caused by this PR: GetGitCommonDir's comment in session/state.go says it "stays as the name 19 call sites already import", but there are only 4 non-test call sites, both here and on main. Since it isn't this PR's change, I'd leave it out of scope, though it's a one-word fix if you'd rather include it.
+
+Should I make the gitdir.go fix, commit, and push? Any comment or description change needs your separate approval first.
+</pasted_content id="5c54">
+
+---
+
+yupp do 1
