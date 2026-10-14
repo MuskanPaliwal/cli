@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4WEQA6X0YFD16XX93XQF6BG",
+  "strategy": "manual-commit",
+  "branch": "fix-claude-hook-launch-timeout",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/agent/claudecode/hooks.go",
+    "cmd/entire/cli/agent/claudecode/hooks_test.go",
+    "cmd/entire/cli/agent/claudecode/types.go",
+    "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/status.go",
+    "cmd/entire/cli/status_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 108244,
+    "cache_read_tokens": 5125657,
+    "output_tokens": 26165,
+    "api_call_count": 50,
+    "subagent_tokens": {
+      "input_tokens": 26,
+      "cache_creation_tokens": 81347,
+      "cache_read_tokens": 804635,
+      "output_tokens": 2784,
+      "api_call_count": 13
+    }
+  }
+}
