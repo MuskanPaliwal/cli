@@ -1,0 +1,82 @@
+can you add this into go learnings in obsidian?
+
+---
+
+and in entire too
+
+---
+
+<pasted_content id="0a24">
+Why a production knob is risky. The lock exists so that two entire processes don't refresh the same login at the same time. If the refresh token rotates, the process that loses the race is left holding a dead token. The lock only works if every process sharing a credential resolves the same directory. With ENTIRE_AUTH_LOCK_DIR honored in production, a value set in one shell but not another (or in an agent's environment but not your terminal) splits the lock without any error. I can't think of a production need it serves: the PR doesn't name one, and the only motivation is test isolation.
+
+Simpler fix: use the cache directory the CLI already has. userdirs.CacheDirChecked() (internal/entireclient/userdirs/userdirs.go:107) resolves the per-user cache directory, and it already does everything this PR adds by hand:
+- It honors XDG_CACHE_HOME on every OS, including macOS. This is the gap from #2201: os.UserCacheDir() ignores that variable on macOS, but every harness already sets it.
+- It falls back to the testdirs directory under go test.
+- It rejects a relative value through the same RequireAbsoluteOverride check.
+
+So tokenManagerLockDir() could become:
+
+dir, err := userdirs.CacheDirChecked()
+if err != nil {
+    return "", fmt.Errorf("resolve auth lock directory: %w", err)
+}
+return filepath.Join(dir, "auth-locks"), nil
+
+That removes the env var, the TestMain lines in four harnesses, and the edits to CLAUDE.md and testing.md. Spawned binaries are then isolated through XDG_CACHE_HOME, which the harnesses already set. It also follows the repo rule in CLAUDE.md that per-user cache resolution belongs only to userdirs. The PR currently adds a second resolver beside it.
+
+What changes for users. The lock file moves out of auth-go's default directory into Entire's own cache:
+
+┌───────────────────────────┬──────────────────────────┬───────────────────────────────────┐
+│                           │      Lock dir today      │          Lock dir after           │
+├───────────────────────────┼──────────────────────────┼───────────────────────────────────┤
+│ macOS                     │ ~/Library/Caches/auth-go │ ~/.cache/entire/auth-locks        │
+├───────────────────────────┼──────────────────────────┼───────────────────────────────────┤
+│ Linux, XDG_CACHE_HOME set │ $XDG_CACHE_HOME/auth-go  │ $XDG_CACHE_HOME/entire/auth-locks │
+└───────────────────────────┴──────────────────────────┴───────────────────────────────────┘
+
+The only cost is during an upgrade. An old and a new binary refreshing at the same moment would hold different locks and not wait for each other. That is a one-time, narrow window, and the worst case is one re-login.
+
+The PR's integration test would mostly carry over. The set, empty and unset modes would become "XDG_CACHE_HOME set" and "XDG_CACHE_HOME unset". The main assertion stays the same: exactly one lock file in the expected directory, and nothing under Library/Caches/auth-go.
+
+If the author wants to keep an explicit variable anyway, the fallback is to rename it ENTIRE_TEST_AUTH_LOCK_DIR. That matches the existing ENTIRE_TEST_AUTH_STORE_FILE and ENTIRE_TEST_CURSOR_CHATS_DIR, and signals that it's not a supported setting. I'd still prefer the userdirs route.
+</pasted_content id="0a24">
+
+ how is it different than what we decided?
+
+---
+
+yes go ahead, switch to the userdirs route and also help me write a reply their
+
+---
+
+Thanks, you're right, and I've switched to the userdirs route in <sha>.
+
+I had weighed moving the lock as the bigger risk, but looking at it again the upgrade window is narrow: `entire` and `git-remote-entire` ship together, hooks run whatever `entire` is on PATH, and it takes two refreshes in that same window to matter, with one re-login as the worst case. A permanent production knob that can split the lock silently is worse. /uns
+
+---
+
+Thanks, you're right, and I've switched to the userdirs route in <sha>.
+
+I had weighed moving the lock as the bigger risk, but looking at it again the upgrade window is narrow: `entire` and `git-remote-entire` ship together, hooks run whatever `entire` is on PATH, and it takes two refreshes in that same window to matter, with one re-login as the worst case. A permanent production knob that can split the lock silently is worse. /unslop
+
+---
+
+/unslop
+
+---
+
+make it short
+
+---
+
+yes go ahead, commit push and update the pr
+
+---
+
+<task-notification>
+<task-id>bzbcbstqh</task-id>
+<tool-use-id>toolu_01W1vcsEB3AUohCvzaUgS9p9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-auth-lock-dir-isolation/cdb5525b-fd55-4af1-8fa1-cef14894294f/tasks/bzbcbstqh.output</output-file>
+<status>completed</status>
+<summary>Background command "mise run check &gt; /private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-auth-lock-dir-isolation/cdb5525b-fd55-4af1-8fa1-cef14894294f/scratchpad/check2.log 2&gt;&amp;1; echo exit=$?; grep -E -- '--- FAIL|lint:go\] [0-9]+ issues|\.go:[0-9]+:[0-9]+:' /private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-auth-lock-dir-isolation/cdb5525b-fd55-4af1-8fa1-cef14894294f/scratchpad/check2.log | head" completed (exit code 0)</summary>
+</task-notification>
