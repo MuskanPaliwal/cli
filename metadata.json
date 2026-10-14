@@ -3,11 +3,13 @@
   "checkpoint_id": "01M4WCWVVQS94FPTS8F8PX8FGS",
   "strategy": "manual-commit",
   "branch": "fix-claude-hook-launch-timeout",
-  "checkpoints_count": 6,
+  "checkpoints_count": 20,
   "files_touched": [
     "cmd/entire/cli/agent/claudecode/hooks.go",
     "cmd/entire/cli/agent/claudecode/hooks_test.go",
     "cmd/entire/cli/agent/claudecode/types.go",
+    "cmd/entire/cli/doctor.go",
+    "cmd/entire/cli/doctor_test.go",
     "cmd/entire/cli/gitrepo/status.go"
   ],
   "sessions": [
@@ -17,20 +19,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 24,
-    "cache_creation_tokens": 5419,
-    "cache_read_tokens": 1802032,
-    "output_tokens": 6679,
-    "api_call_count": 12,
+    "input_tokens": 196,
+    "cache_creation_tokens": 166935,
+    "cache_read_tokens": 12584837,
+    "output_tokens": 71509,
+    "api_call_count": 95,
     "subagent_tokens": {
-      "input_tokens": 0,
-      "cache_creation_tokens": 0,
-      "cache_read_tokens": 0,
-      "output_tokens": 0,
-      "api_call_count": 0
+      "input_tokens": 72,
+      "cache_creation_tokens": 203004,
+      "cache_read_tokens": 2604427,
+      "output_tokens": 6369,
+      "api_call_count": 36
     }
   }
 }
