@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X789CH3XGK8PYK7ZSH7FNH",
+  "strategy": "manual-commit",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/turn_end_deadline_test.go",
+    "docs/development/checkpoint-implementation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 9148,
+    "cache_read_tokens": 813170,
+    "output_tokens": 5126,
+    "api_call_count": 5
+  }
+}

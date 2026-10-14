@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X789CH3XGK8PYK7ZSH7FNH",
+  "session_id": "c32144c5-49dc-47f5-aa09-91339b12b412",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T12:47:35.204601Z",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/turn_end_deadline_test.go",
+    "docs/development/checkpoint-implementation.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "a6df73656ac0",
+  "checkpoint_transcript_start": 466,
+  "transcript_lines_at_start": 466,
+  "compact_transcript_start": 60,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 9148,
+    "cache_read_tokens": 813170,
+    "output_tokens": 5126,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 5
+  }
+}
