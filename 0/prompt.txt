@@ -1,0 +1,114 @@
+can you review it again? PR #2549
+
+---
+
+<task-notification>
+<task-id>ab283d5285e82f6a9</task-id>
+<tool-use-id>toolu_01XNgPNaM6k5kWAMriX9Dn7E</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/db1e96a0-ca40-4f66-8ae7-2ae252cccd88/tasks/ab283d5285e82f6a9.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2549" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 10 candidate findings in PR 2549. As instructed, none were verified (dedup only), and they are ranked most-severe first.
+
+- **Correctness (1–7):** the new parser and trail-posting code can still post a clean review as a trail finding (#2, #3, #4), drop review text (#1, #5), or degrade or misdisplay output (#6, #7).
+- **Cleanup (8):** one dead branch.
+- **Conventions (9):** a new top-level test is missing `t.Parallel()`, which the repo `CLAUDE.md` requires.
+- **Cut for the cap:** an efficiency candidate. `splitTrailJSON` runs again in every consumer and in local mode too.
+
+```json
+[
+  {
+    "file": "cmd/entire/cli/agent/pi/reviewer.go",
+    "line": 107,
+    "summary": "The message_end fallback still decides whether to drop text by the message-ID map, even though the new comment says Pi message IDs can be empty; with empty IDs, every message after the first streamed one counts as already streamed.",
+    "failure_scenario": "Pi streams an early message with ID \"\" (messageIDsWithTextDelta[\"\"] gets set), then sends its final report without text deltas, also with ID \"\". At message_end, sawDelta is true, so the report and its trail JSON line are never emitted. finalMessageText is empty, the contract fails, and the trail posts the earlier narration instead. Tracking a per-message 'saw delta' flag (already available as inMessage) would fix this."
+  },
+  {
+    "file": "cmd/entire/cli/agent/pi/reviewer.go",
+    "line": 95,
+    "summary": "Delta stays true across content-block boundaries inside one Pi message, so separate text blocks are glued together with no separator.",
+    "failure_scenario": "One assistant message holds a text block 'approve: no issues', then a thinking block, then a text block with the JSON line. joinAssistantText produces 'approve: no issues{\"summary\":...}' on one line. splitTrailJSON finds no line starting with '{', ok=false, and the clean verdict is posted to the trail as a finding."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 80,
+    "summary": "finalMessageText keeps only the text after the last ToolCall, so any tool call made after the report (a TodoWrite, a final check) empties the final message and the contract reads as missing.",
+    "failure_scenario": "Claude writes 'approve' plus {\"summary\":..,\"comments\":[]} and then makes one more tool call. finalMessageText returns \"\", splitTrailJSON returns ok=false, and trailReportFor posts combinedReviewNarratives. The clean verdict is posted to the trail as a whole-change finding, which is the regression this PR sets out to fix."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 58,
+    "summary": "In the judge path, if the reply is only trailing JSON with no summary and an invalid comments field, prose falls back to the raw verdict, so raw JSON is posted as the finding body.",
+    "failure_scenario": "The judge replies {\"comments\":\"none\"} (or a summary-less object without a comments array). splitTrailJSON returns prose=\"\" and ok=false, prose becomes the verdict, and the trail gets a whole-change finding whose body is the raw JSON. That contradicts the doc comment, which says JSON is never posted as finding text."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 108,
+    "summary": "splitTrailJSON strips any trailing JSON object from prose, even one that is not the contract, and the fallback posting paths use that stripped prose (trailReportFor on !ok, and combinedReviewNarratives, which ignores ok).",
+    "failure_scenario": "A reviewer's last finding ends with a fenced ```json {\"timeout\": 0}``` snippet showing the bad config, and there is no contract line. The snippet and its fence opener are removed before posting, so the trail finding loses its evidence, and an unclosed fence can remain in the body."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 69,
+    "summary": "Without a judge, if any one reviewer fails the contract, every reviewer's valid structured comments are thrown away and the full narratives of all reviewers are posted as prose.",
+    "failure_scenario": "The judge times out and two reviewers ran. Reviewer A returns valid comments with file and line locations; reviewer B omits the JSON line. The trail gets bullet-split prose for both, including A's exploration narration bullets ('I'll check:\\n- retry.go'), and A's precise locations and severities are lost."
+  },
+  {
+    "file": "cmd/entire/cli/review/tui_detail.go",
+    "line": 30,
+    "summary": "The TUI detail view ignores the new AssistantText.Delta flag and does not strip the trail JSON, so Pi output still shows one streamed fragment per line and trail runs show the raw contract line.",
+    "failure_scenario": "A Pi review in a TTY: the drill-in detail view renders each token fragment on its own line (buildEventLines calls eventLines per event), and in trail mode the machine-read JSON line appears to the user, unlike DumpSink and SynthesisSink, which now hide it."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 158,
+    "summary": "proseReportsFindings only recognizes a verdict when it is written 'Verdict:' with a colon, so common variants that contradict an empty comments array go unnoticed and the finding is silently dropped.",
+    "failure_scenario": "The judge writes 'Verdict - request changes: the retry loop never terminates' (or 'Verdict — request changes') with \"comments\":[]. The 'verdict:' prefix doesn't match, no other prefix matches, post=false, and nothing reaches the trail despite a request-changes verdict."
+  },
+  {
+    "file": "cmd/entire/cli/review_bridge.go",
+    "line": 63,
+    "summary": "The len(inputs)==0 'Nothing to report' branch in postReviewToTrail is now unreachable.",
+    "failure_scenario": "reviewTrailFindingInputs now always returns at least one input when Comments is non-empty or Prose is non-blank, and the guard above already rejects the empty case. The dead branch duplicates the message in maybePostReviewToTrail and suggests a third outcome that cannot happen."
+  },
+  {
+    "file": "cmd/entire/cli/review_bridge_test.go",
+    "line": 112,
+    "summary": "The new top-level test TestReviewTrailFindingInputsMapsStructuredComments does not call t.Parallel().",
+    "failure_scenario": "Violates /Users/muskanpaliwal/Work/open-source/entire/cli/fix-claude-review-stream-parser/CLAUDE.md: 'Every top-level test and subtest calls `t.Parallel()` unless it changes process-global state'. The test touches no global state."
+  }
+]
+```</result>
+<usage><subagent_tokens>110221</subagent_tokens><tool_uses>21</tool_uses><duration_ms>266817</duration_ms></usage>
+</task-notification>
+
+---
+
+okay fix the issues
+
+---
+
+no why each fix needs a test? if it's extremely necessory only then write code
+
+---
+
+no why each fix needs a test? if it's extremely necessory only then write test
+
+---
+
+so what is the status?
+
+---
+
+run the full check and commit and push
+
+---
+
+<task-notification>
+<task-id>b05y9i2ms</task-id>
+<tool-use-id>toolu_017jP8xnZcH74gfgQTJXBywa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/db1e96a0-ca40-4f66-8ae7-2ae252cccd88/tasks/b05y9i2ms.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full format, lint, and CI test suite" completed (exit code 0)</summary>
+</task-notification>

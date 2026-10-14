@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X2BS8TRQ4D20WVEDE2Y0KX",
+  "strategy": "manual-commit",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/agent/pi/reviewer.go",
+    "cmd/entire/cli/review/cmd.go",
+    "cmd/entire/cli/review/trail_report.go",
+    "cmd/entire/cli/review/tui_detail.go",
+    "cmd/entire/cli/review_bridge.go",
+    "cmd/entire/cli/review_bridge_test.go",
+    "docs/architecture/review-command.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 83397,
+    "cache_read_tokens": 3509899,
+    "output_tokens": 22589,
+    "api_call_count": 41,
+    "subagent_tokens": {
+      "input_tokens": 42,
+      "cache_creation_tokens": 106495,
+      "cache_read_tokens": 1614137,
+      "output_tokens": 3882,
+      "api_call_count": 21
+    }
+  }
+}
