@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X8H5085N6527PBH3HV9JK2",
+  "session_id": "c0741628-3734-4c8b-b70e-45b6d454dc6c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T13:09:54.541513Z",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "bc5a98eb66cc",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 64624,
+    "cache_read_tokens": 1453398,
+    "output_tokens": 10952,
+    "api_call_count": 21,
+    "subagent_tokens": {
+      "input_tokens": 36,
+      "cache_creation_tokens": 102297,
+      "cache_read_tokens": 1311279,
+      "output_tokens": 2729,
+      "api_call_count": 18
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_018235WLNwtN9ss6D88bWWNk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bc5a98eb66cc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 46,
+        "end": 47,
+        "entry_ids": [
+          "1f4f4e50-061f-4a2c-9e0c-f4ffd5bd3157"
+        ],
+        "tool_use_id": "toolu_018235WLNwtN9ss6D88bWWNk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_018235WLNwtN9ss6D88bWWNk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  }
+}

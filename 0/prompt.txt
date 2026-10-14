@@ -1,0 +1,87 @@
+can you review this pr again? PR #2180
+
+---
+
+<task-notification>
+<task-id>a54857b42b5e60d10</task-id>
+<tool-use-id>toolu_018235WLNwtN9ss6D88bWWNk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-turn-checkpoint-finalize-deadline-2148/c0741628-3734-4c8b-b70e-45b6d454dc6c/tasks/a54857b42b5e60d10.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2188" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 9 possible problems in PR 2188 and none look like a crash. I checked the diff against `upstream/main`, not the local `main`. The local `main` is out of date, so diffing against it would wrongly pull in changes that are already upstream, such as the `HookTimeoutRepairer` hook-timeout repair.
+
+The most serious one: once the time limit passes, the remaining writes to mirror stores fail without any warning in `entire status`. As the brief asked, I did not run a separate check on each finding, so some may turn out to be false positives. I did not run the tests.
+
+```json
+[
+  {
+    "file": "cmd/entire/cli/checkpoint/fanout.go",
+    "line": 80,
+    "summary": "Under the finalize deadline, a mirror write that fails because the deadline passed is only logged and Write returns nil, so the checkpoint counts as finalized and no capture degradation is recorded.",
+    "failure_scenario": "A fanout store has one primary and one mirror. The deadline passes while the primary write is running but after it succeeds. mirror.Write(ctx) then fails with context.DeadlineExceeded, which fanoutStore.Write logs as 'mirror write failed' and swallows. finalizeTurnCheckpointWrites counts the checkpoint as done, CaptureDegradedAt is never set, and the mirror keeps the provisional transcript for good with nothing in `entire status`."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "line": 3474,
+    "summary": "The deadline is measured from process start, so slow local turn-end work before finalize (git status, SaveStep, transcript redaction) can use up the whole budget and every checkpoint is abandoned before any network call, even for an agent with no host timeout.",
+    "failure_scenario": "OpenCode applies no hook timeout and falls back to 24s. In a large repo with a long transcript, DetectFileChanges, SaveStep and redaction take 25s. finalize reaches networkCtx.Err() != nil, calls abandonInterruptedFinalize, and all turn checkpoints keep their provisional transcripts for good. Before this change they would have been finalized, because no host would have killed the hook."
+  },
+  {
+    "file": "cmd/entire/cli/agent/claudecode/turn_end_budget.go",
+    "line": 13,
+    "summary": "The Claude Code budget assumes the 120s timeout the current CLI installs, but Stop hooks written by older CLIs have no timeout, and the host default then applies until `entire doctor` repairs them.",
+    "failure_scenario": "A user enabled Entire with an older CLI and never ran doctor, so the Stop hook has no timeout field. If their Claude Code's default hook timeout is under 110s, finalize keeps waiting on a slow remote past the host kill. That is exactly the session-state loss this PR is meant to prevent, because the budget comes from a constant instead of the installed config."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "line": 3491,
+    "summary": "precomputeTranscriptBlobsForFinalize runs with logCtx, which has no deadline, and its result is not checked against the deadline, so the expensive precompute still runs when the deadline expired during checkpoint.Open. The commit says precompute is skipped past the deadline.",
+    "failure_scenario": "checkpoint.Open succeeds just before the deadline. Precompute then hashes and writes the full redacted transcript's blobs, which can take seconds for a large transcript, and eats into the headroom kept for saving session state. Then finalizeTurnCheckpointWrites sees ctx.Err() at index 0 and abandons every checkpoint, so all of that work is wasted and the state save may miss the host timeout."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "line": 3339,
+    "summary": "When the deadline has already passed (or TurnEndBudget is 0, documented as 'skip finalize'), finalize still reads, sanitizes, externalizes and redacts the full transcript before finding the deadline at the network step.",
+    "failure_scenario": "Pi (8s budget) on a turn whose earlier work already took 9s: finalize still reads and redacts the full transcript and extracts sidecar images, then abandons at line 3474. That spends the 2s headroom meant for the session-state save and the host kills the hook. Checking `!deadline.IsZero() &amp;&amp; time.Now().After(deadline)` before the expensive local preparation would avoid this."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go",
+    "line": 180,
+    "summary": "The deadline_expires_mid_loop case uses a real 1-second deadline that also covers transcript reading, redaction and the store open, so it depends on how fast the machine is.",
+    "failure_scenario": "On a loaded CI runner, local preparation plus the first fetch and write take more than 1s. The deadline passes before checkpoint.Open, so fetches is 0 and finalized is 0, and the case fails with fetches 2 != 0 and finalized 1 != 0. A controllable clock or a fetch-driven cancel, as cancelOnSecond does, would make it deterministic."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "line": 3541,
+    "summary": "A real store.Write failure that happens when the deadline also expires is counted as an interruption, so it is dropped from errCount and reported as degradation instead of an error.",
+    "failure_scenario": "A write fails for a non-network reason (for example a corrupt object or a permission error) just as the deadline passes. ctx.Err() != nil sends it down the interruption path, so the 'failed to update checkpoint' warning with the real error is never logged. The real failure is lost, and the user only sees 'capture degraded' in status."
+  },
+  {
+    "file": "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "line": 3487,
+    "summary": "This bug predates the PR, but the PR touches the function and leaves it in place: a checkpoint.Open failure not caused by the context returns 1 and leaves TurnCheckpointIDs set. Every other abandon path in the function clears the IDs, and the new docs say only the late-transcript and degraded-scanner exits keep them.",
+    "failure_scenario": "A store-open failure (for example a settings or backend resolution error) leaves the IDs in state. A repeated Stop in the same turn retries and fails again with the same error. Meanwhile CaptureDegradedAt is not set, so status shows nothing while the checkpoints stay provisional."
+  },
+  {
+    "file": "cmd/entire/cli/agent/codex/turn_end_budget.go",
+    "line": 13,
+    "summary": "Six nearly identical turn_end_budget.go files and six matching *_test.go files repeat the same one-liner `TurnEndBudgetWithin(&lt;hookTimeout&gt;)`. One declared hook-timeout value with a single table test would do the same job.",
+    "failure_scenario": "Each new agent needs another copied method file and test file. The six per-agent tests assert the same three properties a single table-driven test in agent/turn_end_budget_test.go already could, which is about 250 lines of duplication to maintain and a likely `mise run dup` hit."
+  }
+]
+```</result>
+<usage><subagent_tokens>104885</subagent_tokens><tool_uses>17</tool_uses><duration_ms>150105</duration_ms></usage>
+</task-notification>
+
+---
+
+yupp
+
+---
+
+and 4 too
+
+---
+
+approve
