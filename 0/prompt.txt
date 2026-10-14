@@ -1,0 +1,29 @@
+push the changes
+
+---
+
+update pr descriptiom
+
+---
+
+yupp
+
+---
+
+no is this the correct pr description?
+
+---
+
+<pasted_content id="3ff2">
+1. The description is out of date again.
+   - It says session-start gets 10s, but the code sets 30s (commit 5aee889ba4).
+   - It says the repair "rewrites only the hooks block" and that "permissions": {} is tested. The code now writes through writeClaudeSettingsFile, so an empty "permissions": {} is deleted. The test uses a non-empty allow list, so that case isn't covered. Either the description or the behaviour should change; dropping {} the way enable does is fine if the description says so.
+2. Doctor still tells people to run entire enable --force. entire status now sends users to entire doctor because --force rebuilds every Entire hook and loses the user's own timeouts and fields; the new comment in status.go says so. But for anything doctor doesn't repair, such as missing matchers or an old command shape, checkHookDrift still prints "Run entire enable --force". A plain entire enable already fixes both of those, because installHookEntries adds missing hooks and removes old-shape ones without --force. The message should say entire enable.
+3. Long comment line in gitrepo/status.go. The rewritten comment has one line that runs well past the file's wrap width ("…after the agent gave up. 20s is chosen as far beyond any healthy"). Purely cosmetic.
+</pasted_content id="3ff2">
+
+ as per this
+
+---
+
+verify the entire enable claim and first update the description, commit and push
