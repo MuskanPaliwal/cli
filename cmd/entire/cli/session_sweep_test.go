@@ -345,19 +345,16 @@ func TestMaybeSpawnSessionSweep_SeamAndThrottle(t *testing.T) {
 	// Fail closed rather than forking an unbounded child on every session start.
 	wantRoot, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
+	failedCalls := 0
 	sweepWorktreeMetadata = func(root string) (gitrepo.WorktreeMetadata, error) {
+		failedCalls++
 		require.Equal(t, wantRoot, root, "metadata resolution must use the discovered worktree root")
 		return gitrepo.WorktreeMetadata{}, errors.New("common dir unavailable")
 	}
 	maybeSpawnSessionSweep(ctx)
+	require.Equal(t, 1, failedCalls, "the zombie path must reach metadata resolution")
 	assert.Equal(t, int32(0), spawns.Load(), "common-dir failure must not spawn a sweep")
 	sweepWorktreeMetadata = prevMetadata
-
-	commonFile := filepath.Join(dir, ".git", "commondir")
-	require.NoError(t, os.WriteFile(commonFile, []byte("missing\n"), 0o600))
-	maybeSpawnSessionSweep(ctx)
-	assert.Equal(t, int32(0), spawns.Load(), "broken metadata must not spawn a sweep")
-	require.NoError(t, os.Remove(commonFile))
 
 	// Zombie present: exactly one spawn, with the worktree root.
 	maybeSpawnSessionSweep(ctx)

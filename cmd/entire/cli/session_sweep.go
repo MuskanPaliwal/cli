@@ -240,7 +240,7 @@ func maybeSpawnSessionSweep(ctx context.Context) {
 	}
 	metadata, err := sweepWorktreeMetadata(root)
 	if err != nil {
-		logging.Debug(logCtx, "skipping sweep spawn: could not resolve git common dir",
+		logging.Debug(logCtx, "skipping sweep spawn: could not resolve worktree metadata",
 			slog.String("error", err.Error()))
 		return
 	}
