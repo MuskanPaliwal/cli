@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018fiHGYDjpTXnESY6zgNCEL",
+  "agent_id": "a8cdacd67efa34da6",
+  "subagent_type": "reviewer",
+  "task_description": "Principal engineer design review",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 69747,
+    "cache_read_tokens": 496534,
+    "output_tokens": 349,
+    "api_call_count": 10
+  },
+  "started_at": "2026-10-14T10:37:06.849873+05:30",
+  "completed_at": "2026-10-14T10:38:34.439102+05:30"
+}

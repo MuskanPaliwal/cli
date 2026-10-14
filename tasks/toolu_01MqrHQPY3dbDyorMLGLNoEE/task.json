@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MqrHQPY3dbDyorMLGLNoEE",
+  "agent_id": "aae9a2e66e593cefe",
+  "subagent_type": "reviewer",
+  "task_description": "Go idiom and regression review",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 87406,
+    "cache_read_tokens": 1250842,
+    "output_tokens": 725,
+    "api_call_count": 19
+  },
+  "started_at": "2026-10-14T10:37:06.855247+05:30",
+  "completed_at": "2026-10-14T10:39:28.972119+05:30"
+}
