@@ -1,0 +1,185 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4WZZMVDVRRQAKSPF84SWMG6",
+  "session_id": "067f6dbb-28cd-4b6c-bc52-091ec7fdb799",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T10:40:30.496279Z",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 10,
+  "save_step_count": 3,
+  "files_touched": [
+    "cmd/entire/cli/review/fix.go",
+    "cmd/entire/cli/review/trail_report.go",
+    "cmd/entire/cli/review/trail_report_test.go",
+    "docs/architecture/review-command.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5-1",
+  "turn_id": "dfbf5c969fc4",
+  "checkpoint_transcript_start": 427,
+  "transcript_lines_at_start": 427,
+  "compact_transcript_start": 49,
+  "token_usage": {
+    "input_tokens": 1050,
+    "cache_creation_tokens": 544718,
+    "cache_read_tokens": 6829562,
+    "output_tokens": 42754,
+    "api_call_count": 41
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-review-2026-10-13T13:37:57.348524Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "98d201332190",
+      "timestamp": "2026-10-13T13:37:57.348524Z",
+      "native": {
+        "command": "/review"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-commit-2026-10-13T14:18:28.827204Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "commit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ef9829998f07",
+      "timestamp": "2026-10-13T14:18:28.827204Z",
+      "native": {
+        "command": "/commit"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/commit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01WYWxSStxwEj9VfxJqRtvXa",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ef9829998f07",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "eb1f72c1-b705-47e2-88d6-5217e913ff95"
+        ],
+        "tool_use_id": "toolu_01WYWxSStxwEj9VfxJqRtvXa"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WYWxSStxwEj9VfxJqRtvXa"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0142bt543X9XizL4DxXcxYPo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "commit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ef9829998f07",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 372,
+        "end": 373,
+        "entry_ids": [
+          "c3bc40d9-2252-4558-b892-5823c2c8b5a6"
+        ],
+        "tool_use_id": "toolu_0142bt543X9XizL4DxXcxYPo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0142bt543X9XizL4DxXcxYPo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: commit",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-push-branch-2026-10-13T14:49:58.763003Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "push-branch"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "e3b618c75761",
+      "timestamp": "2026-10-13T14:49:58.763003Z",
+      "native": {
+        "command": "/push-branch"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/push-branch",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-commit-2026-10-14T10:40:22.55006Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "commit"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "dfbf5c969fc4",
+      "timestamp": "2026-10-14T10:40:22.55006Z",
+      "native": {
+        "command": "/commit"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/commit",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 17
+  }
+}

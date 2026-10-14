@@ -1,0 +1,54 @@
+/push-branch
+
+---
+
+skill the trail findings
+
+---
+
+give me the pr link and update pr description too
+
+---
+
+<pasted_content id="77b5">
+1. Narration bullets turn a clean single-reviewer run back into findings (real; reproduced)
+
+trailReportFor (review/trail_report.go, the no-judge branch) runs proseReportsFindings over joinAssistantText(run.Buffer). That text is everything the agent said during the whole run, not just its final report:
+- Claude Code emits one AssistantText per text block in every assistant turn (agent/claudecode/reviewer.go:126).
+- Codex emits an AssistantText for every agent_message, including the preamble messages before tool calls.
+
+So exploratory narration like "I'll check the changed files:\n- retry.go\n- retry_test.go", followed by a clean approve and "comments":[], still gets posted. The probe on the PR branch confirmed it:
+
+called=true prose="## claude-code\n\nI'll check the changed files:\n- retry.go\n- retry_test.go\napprove — no actionable findings"
+
+The bullet split then posts retry.go and retry_test.go as two separate findings. Single-reviewer trail mode always takes this path, because there is no judge. The judge path is mostly safe because the judge is a single provider call with no narration.
+
+Suggested fix: only check the reviewer's final message for contradictions, meaning the AssistantText events after the last ToolCall in the buffer. That is the text the output format actually governs. When contradicting, keep posting the full narration as today. Add a test with narration bullets before a tool call and a clean verdict after it.
+
+2. Minor
+
+- The TUI detail view still shows the JSON line. tui_detail.go:30 renders raw AssistantText, so the PR description's "hidden wherever results are shown" isn't quite true. It's cosmetic; either strip it there too or narrow the wording.
+- A JSON-only judge reply with a bad comments value posts raw JSON. For example {"summary":"…","comments":null}. splitTrailJSON parses the line, so the prose comes back empty, and trailReportFor then falls back to prose = verdict. The whole JSON line becomes the finding body, which contradicts the doc line "with any trailing JSON removed". This is rare, but a whole-change finding saying "Review verdict: (no text)" would be better than raw JSON.
+</pasted_content id="77b5">
+
+---
+
+cool let's implement it
+
+---
+
+<task-notification>
+<task-id>b4m3gl7mv</task-id>
+<tool-use-id>toolu_01H9Qu5sppbKdU6zXvNwoAvm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/067f6dbb-28cd-4b6c-bc52-091ec7fdb799/tasks/b4m3gl7mv.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full pre-commit check (format, lint, all CI tests)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+commit it and update the pr description
+
+---
+
+/commit
