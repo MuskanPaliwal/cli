@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X70BFCP0FFQTJ20Y7V0DVX",
+  "session_id": "c32144c5-49dc-47f5-aa09-91339b12b412",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-14T12:43:14.313653Z",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/agent/agent.go",
+    "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "6cd6bbdc516b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 125199,
+    "cache_read_tokens": 5574205,
+    "output_tokens": 33520,
+    "api_call_count": 50
+  },
+  "session_metrics": {
+    "turn_count": 3
+  }
+}
