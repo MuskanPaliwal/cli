@@ -1,0 +1,109 @@
+Can you review the PR2549 again?
+
+---
+
+<task-notification>
+<task-id>a813cd9d24305b42d</task-id>
+<tool-use-id>toolu_01UPVNKeKUaQk9LeA9sPw76x</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/c03c7ba7-3903-4574-8b6d-e1be721bb495/tasks/a813cd9d24305b42d.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2549" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found 9 issues in PR #2549, listed most severe first. I made no edits. As the review asked, nothing was double-checked after the initial pass, so some of these may be false positives.
+
+The first one is a real bug: a reviewer that replies with only a malformed JSON line, and no summary or other text, makes trail posting fail with a confusing error. The next three concern what gets posted. Some findings can be dropped, exploration notes can become findings, and some reports with findings get treated as clean. The rest are cleanup and design suggestions.
+
+```json
+[
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 78,
+    "summary": "trailReportFor can return post=true with no comments and empty prose, so postReviewToTrail fails with \"no review output to post\" instead of saying nothing was posted.",
+    "failure_scenario": "A single reviewer (or every reviewer when no judge runs) outputs only `{\"comments\":null}` or `{\"summary\":\"\",\"comments\":\"none\"}`. splitTrailJSON returns prose=\"\" and ok=false, so the run goes into `unstructured`. combinedReviewNarratives then calls splitTrailJSON on the same JSON-only text, gets \"\" and skips the run, leaving Prose empty. post is still true (len(unstructured)&gt;0), and the user sees \"Could not post the review to the trail: no review output to post\". The judge path has the same gap at line 61 when the fallback narratives are also JSON-only."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 65,
+    "summary": "When a reviewer's JSON line has comments, only those comments are posted and the prose bullets are dropped, even when the prose lists more findings. This breaks the code's own rule that a misbehaving model should cost an extra finding, not a lost one.",
+    "failure_scenario": "The judge (line 65) or a reviewer (line 75) writes three `- [high] ...` bullets but puts only one comment in the JSON line. ok is true and len(comments)&gt;0, so TrailReport{Comments: comments} is posted with no Prose. Two real high-severity findings never reach the trail. The contradiction check only runs when the comments array is empty."
+  },
+  {
+    "file": "cmd/entire/cli/review/cmd.go",
+    "line": 1640,
+    "summary": "When a reviewer's report contradicts its empty comments array, the fallback posts its whole event buffer, not the report text reportText found. Exploration bullets become findings, and the JSON line can be posted raw.",
+    "failure_scenario": "A reviewer narrates \"I'll check:\\n- retry.go\\n- auth.go\", makes tool calls, writes \"- [high] foo.go:3 bug\" plus `{\"comments\":[]}`, then runs one more tool call and prints a short closing line. reportText finds the report by its JSON line and sees the contradiction, so the run is marked unstructured. combinedReviewNarratives then splits the full joinAssistantText output, where the JSON is no longer last, so splitTrailJSON leaves it in. The trail gets \"- retry.go\" and \"- auth.go\" as findings and the raw JSON inside the prose."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 191,
+    "summary": "proseReportsFindings misses common ways of reporting problems, so a report with findings plus `\"comments\":[]` is treated as clean and nothing is posted.",
+    "failure_scenario": "Missed shapes: a verdict such as \"Verdict: needs changes\" or \"Blocking: ...\"; a \"Findings:\" or \"Problems:\" label followed by paragraphs; `• foo.go:3 bug` (unicode bullet); `### High` with no trailing separator; \"**High** foo.go:3\". In each case the model reports a defect but returns an empty comments array, proseReportsFindings returns false, and the run prints \"Nothing to report\". This loses findings, the outcome the fail-open design is meant to prevent."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 179,
+    "summary": "stripTrailJSON runs in every display and judge-prompt path, even when trail mode is off. A reviewer's real trailing JSON evidence that has a \"comments\" array is silently removed.",
+    "failure_scenario": "In local mode (TrailFindingsJSON=false), a reviewer of an API change ends its report by quoting a payload such as `{\"summary\":\"x\",\"comments\":[{\"body\":\"y\"}]}`. DumpSink (dump.go:77/82), the TUI detail view (tui_detail.go:70), the manifest preview and the synthesis prompt (synthesis_prompt.go:67) all drop it. The judge never sees that evidence. Only strip when the run asked for the contract."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 191,
+    "summary": "Design: whether a review is clean is decided by matching keywords in the prose, not by the structured contract the PR introduces.",
+    "failure_scenario": "Each new wording a model uses (\"needs work\", \"LGTM but\", heading-style severities) needs another special case in proseReportsFindings or startsWithSeverityMarker. Each mismatch either posts clean verdicts (the bug this PR fixes) or hides findings. Adding an explicit verdict field to the JSON line, e.g. `\"verdict\":\"approve|approve_with_nits|request_changes\"`, and checking it against the comments count would fix this at the root."
+  },
+  {
+    "file": "cmd/entire/cli/review/trail_report.go",
+    "line": 219,
+    "summary": "startsWithSeverityMarker and isListItem duplicate severity and bullet detection that review_bridge.go already has (normalizeReviewTrailSeverity, inferReviewTrailSeverity, splitReviewVerdictFindings).",
+    "failure_scenario": "There are now three separate severity lists. The clean-check list includes \"nit\" and \"p0\" to \"p3\"; inferReviewTrailSeverity uses \"[nit]\", \"nit:\" and \"critical\". Bullet detection exists both here and in splitReviewVerdictFindings. If they drift, the clean check and the bullet split disagree: prose judged as having findings gets split into zero bullets and posted as one \"verdict\" blob, or the reverse."
+  },
+  {
+    "file": "cmd/entire/cli/review/cmd.go",
+    "line": 1349,
+    "summary": "Every worker reviewer is given the JSON instructions in trail mode, even when a judge will run. The judge prompt removes their JSON lines, and the judge's own JSON line alone decides what is posted.",
+    "failure_scenario": "In a 3-reviewer profile with a judge, each reviewer spends extra prompt and output tokens on a JSON line nobody reads. It is only used if synthesis fails. Set TrailFindingsJSON on workers only when no synthesis provider is configured, or document that it exists as a fallback."
+  },
+  {
+    "file": "cmd/entire/cli/review/tui_detail.go",
+    "line": 70,
+    "summary": "buildEventLines runs stripTrailJSON on every text block each time the detail view refreshes, which happens on every streamed Pi delta. The work grows quadratically over a long run.",
+    "failure_scenario": "refreshDetailContent calls buildEventLines over the whole buffer for each new event. Pi now emits many small delta events, and each rebuild re-joins all text and runs a backward JSON scan of up to 200 lines over each block. On a long Pi review with the detail view open, CPU use grows with the square of the event count. Caching the stripped text per finished block, or stripping only the last block, avoids this."
+  }
+]
+```</result>
+<usage><subagent_tokens>100967</subagent_tokens><tool_uses>16</tool_uses><duration_ms>224531</duration_ms></usage>
+</task-notification>
+
+---
+
+can you verify the findings?
+
+---
+
+is there anything which is out of scope?
+
+---
+
+we will do all 1, 3, 4, 2 and 7
+
+---
+
+and keep a note of out of scope things
+
+---
+
+yupp
+
+---
+
+<task-notification>
+<task-id>b2lk5h0gi</task-id>
+<tool-use-id>toolu_01YAJGGe3JZoR24BUrVAGgkS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-claude-review-stream-parser/c03c7ba7-3903-4574-8b6d-e1be721bb495/tasks/b2lk5h0gi.output</output-file>
+<status>completed</status>
+<summary>Background command "Run integration, canary, and full unit tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yupp, commit and push
