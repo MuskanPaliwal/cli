@@ -38,7 +38,6 @@ var ErrNotFound = keyring.ErrNotFound
 // at "entire-core:<base-url>" regardless of which CLI wrote it. Two CLIs
 // sharing this prefix on the same machine read each other's writes.
 const (
-	ClusterKeyringPrefix      = "entire:"              // entiredb cluster-issued tokens
 	CoreKeyringPrefix         = "entire-core:"         // entire-core control-plane tokens
 	JurisdictionKeyringPrefix = "entire-jurisdiction:" // jurisdiction (data-plane) access tokens
 )
@@ -140,8 +139,8 @@ func FileBackendPath() string {
 //
 // The config-directory case is checked here rather than being left to the root
 // that opens it, because there is no such root: fileStore.dir anchors on
-// filepath.Dir of this path (one of the two places CLAUDE.md permits that, since
-// PathEnvVar names a file the caller chose) and reaches it through
+// filepath.Dir of this path (an exception in docs/development/filesystem-safety.md,
+// since PathEnvVar names a file the caller chose) and reaches it through
 // filepath.Abs. That Abs is exactly the laundering the contexts and discovery
 // roots stopped doing. Without a check here, ENTIRE_CONFIG_DIR=foo silently put
 // bearer tokens at ./foo/tokens.json, which for a CLI run from a repository
@@ -208,10 +207,12 @@ func Delete(service, user string) error {
 type keyringStore struct{}
 
 func (keyringStore) Get(service, user string) (string, error) {
-	// keyring.ErrNotFound propagates unchanged; only a timeout wraps.
-	return callKeyringWithTimeout("get", func() (string, error) {
+	// keyring.ErrNotFound propagates unchanged unless the keyring could not
+	// be searched at all; only a timeout wraps.
+	val, err := callKeyringWithTimeout("get", func() (string, error) {
 		return keyring.Get(service, user)
 	})
+	return checkNotFound(val, err, keyringReachable)
 }
 
 func (keyringStore) Set(service, user, password string) error {

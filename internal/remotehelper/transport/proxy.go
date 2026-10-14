@@ -52,9 +52,8 @@ type Config struct {
 	OnUnauthorized func()
 	// UserAgent is stamped on every outbound HTTP request so the
 	// server can attribute git smart-HTTP traffic to the remote
-	// helper. Empty disables the wrapper, in which case the request
-	// carries Go's default ("Go-http-client/1.1") — useful for tests
-	// that don't care about identity. Production callers set it.
+	// helper. Empty sends no User-Agent header at all, which is what
+	// git does for GIT_HTTP_USER_AGENT="" — never Go's default.
 	UserAgent string
 }
 
@@ -135,9 +134,7 @@ func New(cfg Config) *Proxy {
 		if cfg.OnUnauthorized != nil {
 			rt = &unauthorizedObserver{next: rt, fn: cfg.OnUnauthorized}
 		}
-		if cfg.UserAgent != "" {
-			rt = &httpclient.UserAgentTransport{Next: rt, UA: cfg.UserAgent}
-		}
+		rt = &httpclient.UserAgentTransport{Next: rt, UA: cfg.UserAgent}
 		return rt
 	}
 	p.client = &http.Client{
@@ -441,6 +438,16 @@ func (p *Proxy) doWithFailover(ctx context.Context, makeSuffix string, method st
 			}
 		}
 
+		// A node refusing for lack of disk is up: try the next replica, but
+		// do not mark it failed, which would purge the persisted replica set
+		// on every push while the node stays full.
+		if resp.StatusCode == http.StatusInsufficientStorage {
+			msg := readErrorMessage(resp)
+			debuglog.Printf("node %s returned HTTP 507: %s", node, msg)
+			lastErr = HTTPErrorMessage(resp.StatusCode, msg, p.ErrorBaseURL())
+			continue
+		}
+
 		if shouldFailover(resp.StatusCode) {
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // best-effort body read for error message
 			_ = resp.Body.Close()
@@ -464,6 +471,10 @@ func (p *Proxy) doWithFailover(ctx context.Context, makeSuffix string, method st
 		return resp, nil
 	}
 
+	var storage *InsufficientStorageError
+	if errors.As(lastErr, &storage) {
+		return nil, lastErr
+	}
 	return nil, fmt.Errorf("all %d nodes failed, last error: %w", len(nodes), lastErr)
 }
 

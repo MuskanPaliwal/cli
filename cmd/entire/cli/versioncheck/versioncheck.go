@@ -85,13 +85,6 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 	}
 }
 
-// globalConfigDirPath returns the CLI's global config directory. Resolution
-// lives in userdirs.Config — the single implementation shared by all
-// config-dir consumers (contexts.json, the file token store, this cache).
-func globalConfigDirPath() string {
-	return userdirs.Config()
-}
-
 // ensureGlobalConfigDir creates the global config directory if it doesn't exist.
 //
 // It goes through userdirs.ConfigRoot, whose create path is
@@ -423,13 +416,6 @@ func UpdateCommandForCurrentBinary(currentVersion string) string {
 	}
 	return fallbackInstallCommand(execPath, currentVersion)
 }
-
-// UpdateCommandShell names the shell UpdateCommandForCurrentBinary's command
-// has to run in, or "" when any shell will do. Callers that print the command
-// instead of running it need it: the Windows commands are PowerShell
-// one-liners, and pasting one into cmd.exe or bash either fails or, in bash's
-// case, expands part of the command before PowerShell sees it.
-func UpdateCommandShell() string { return updateCommandShell }
 
 // printNotification prints the version update notification to the user.
 func printNotification(w io.Writer, current, latest string) {

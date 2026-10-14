@@ -22,6 +22,7 @@ var (
 	_ agent.SubagentSessionResolver = (*FactoryAIDroidAgent)(nil)
 	_ agent.HookResponseWriter      = (*FactoryAIDroidAgent)(nil)
 	_ agent.PromptExtractor         = (*FactoryAIDroidAgent)(nil)
+	_ agent.TaskTranscriptMatcher   = (*FactoryAIDroidAgent)(nil)
 )
 
 // WriteHookResponse outputs the hook response as plain text to stdout.
@@ -88,7 +89,7 @@ func (f *FactoryAIDroidAgent) GetTranscriptPosition(path string) (int, error) {
 }
 
 // ExtractModifiedFilesFromOffset extracts files modified since a given line offset.
-func (f *FactoryAIDroidAgent) ExtractModifiedFilesFromOffset(path string, startOffset int) ([]string, int, error) {
+func (f *FactoryAIDroidAgent) ExtractModifiedFilesFromOffset(_ context.Context, path string, startOffset int) ([]string, int, error) {
 	lines, currentPos, err := ParseDroidTranscript(path, startOffset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to parse transcript: %w", err)
@@ -117,34 +118,6 @@ func (f *FactoryAIDroidAgent) ExtractPrompts(sessionRef string, fromOffset int) 
 		}
 	}
 	return prompts, nil
-}
-
-// ExtractSummary extracts the last assistant message as a session summary.
-func (f *FactoryAIDroidAgent) ExtractSummary(sessionRef string) (string, error) {
-	data, err := os.ReadFile(sessionRef) //nolint:gosec // Path comes from agent hook input
-	if err != nil {
-		return "", fmt.Errorf("failed to read transcript: %w", err)
-	}
-	lines, _, err := ParseDroidTranscriptFromBytes(data, 0)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse transcript: %w", err)
-	}
-
-	for i := len(lines) - 1; i >= 0; i-- {
-		if lines[i].Type != transcript.TypeAssistant {
-			continue
-		}
-		var msg transcript.AssistantMessage
-		if err := json.Unmarshal(lines[i].Message, &msg); err != nil {
-			continue
-		}
-		for _, block := range msg.Content {
-			if block.Type == transcript.ContentTypeText && block.Text != "" {
-				return block.Text, nil
-			}
-		}
-	}
-	return "", nil
 }
 
 // --- TokenCalculator ---

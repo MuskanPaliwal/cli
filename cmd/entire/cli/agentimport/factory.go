@@ -26,13 +26,14 @@ func (factoryImporter) Name() string { return string(agent.AgentNameFactoryAIDro
 func (factoryImporter) AgentType() types.AgentType { return agent.AgentTypeFactoryAIDroid }
 
 // Discover returns Factory transcript files for the repo modified within the
-// lookback window.
+// lookback window whose session_start cwd is inside repoRoot (see
+// recordedCwdIn).
 func (factoryImporter) Discover(repoRoot, overridePath string, now time.Time, sessionFilter []string) ([]SessionFile, error) {
 	dir, err := resolveDir(repoRoot, overridePath, "factory", (&factoryaidroid.FactoryAIDroidAgent{}).GetSessionDir)
 	if err != nil {
 		return nil, err
 	}
-	return discoverSessionFiles(dir, now, sessionFilter, jsonlSessionResolver(".jsonl", identitySessionID))
+	return discoverSessionFiles(dir, now, sessionFilter, jsonlSessionResolver(identitySessionID), recordedCwdIn(repoRoot))
 }
 
 // SplitTurns produces one Turn per user-prompt envelope, bounded by the next.
@@ -42,7 +43,7 @@ func (factoryImporter) Discover(repoRoot, overridePath string, now time.Time, se
 // from the session's adjacent settings file. Droid
 // envelopes carry no per-message timestamp (the agent stamps events with
 // time.Now() at hook time), so every turn falls back to the transcript file's
-// modtime — the same fallback the Gemini importer uses.
+// modtime — the same fallback the Cursor importer uses.
 func (factoryImporter) SplitTurns(sf SessionFile, full []byte) ([]Turn, error) {
 	subagentsDir := paths.SubagentsDir(filepath.Dir(sf.Path), sf.SessionID)
 	model := factoryaidroid.ExtractModelFromTranscript(context.Background(), sf.Path)
@@ -66,7 +67,7 @@ func (factoryImporter) SplitTurns(sf SessionFile, full []byte) ([]Turn, error) {
 				return nil, nil
 			}
 			prompt, _ := factoryPromptText(rawLines[start])
-			return &Turn{UUID: env.ID, Prompt: prompt, Model: model, CreatedAt: createdAt, Tokens: tokens}, nil
+			return &Turn{UUID: env.ID, Prompt: prompt, Model: model, CreatedAt: createdAt, CreatedAtFromModTime: true, Tokens: tokens}, nil
 		})
 }
 
