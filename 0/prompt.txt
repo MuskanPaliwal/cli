@@ -1,0 +1,41 @@
+draft an update
+
+---
+
+yupp
+
+---
+
+why do i have to do manually?
+
+---
+
+now edit it
+
+---
+
+<pasted_content id="e64f">
+4 nits:
+
+Nits:
+
+1. Wrong comment in integration_test/setup_test.go: it now says auth-go locks live under ~/.cache/entire. They live in os.UserCacheDir()/auth-go, which on macOS is ~/Library/Caches/auth-go, the very path this PR exists to avoid. Something like "and the auth-go lock dir (ENTIRE_AUTH_LOCK_DIR)" would be accurate..
+2. Token format typed by hand in auth_lock_test.go:57-59: the fake expired JWT is built inline, and the stored value spells out the file store's internal token|expiry format as "|0". Two cleaner options:.
+• Let fakeLoginJWT (login_test.go:33) take an expiry and reuse it..
+• Write the | with tokenstore.TokenExpirationSeparator instead of a literal..
+
+   As written, a change to the store format would break this test with an error that doesn't point at the format.
+
+1. Test copies auth-go's naming: the lock file name is recomputed by hand from auth-go's scheme. If auth-go renames its lock file, the test fails with "refresh did not create its lock", which looks like an isolation failure. A comment already points at auth-go; asserting "exactly one *.lock in wantDir" would avoid depending on the scheme entirely..
+2. Undocumented production variable: ENTIRE_AUTH_LOCK_DIR now also works in production but is only documented as a test variable. That's fine if it's meant to be internal; the README section that covers ENTIRE_TOKEN_STORE_PATH would be the place to mention it if not..
+</pasted_content id="e64f">
+
+ lets fix this
+
+---
+
+yupp
+
+---
+
+yupp
