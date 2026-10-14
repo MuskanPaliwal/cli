@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01AMFGAZJaCb83EfUTwX6Y4v",
+  "agent_id": "a325fa823ac21a751",
+  "subagent_type": "general-purpose",
+  "task_description": "Research Copilot+Pi hook timeouts",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 99370,
+    "cache_read_tokens": 387752,
+    "output_tokens": 193,
+    "api_call_count": 5
+  },
+  "started_at": "2026-10-14T16:23:02.02257+05:30",
+  "completed_at": "2026-10-14T16:23:30.490301+05:30"
+}

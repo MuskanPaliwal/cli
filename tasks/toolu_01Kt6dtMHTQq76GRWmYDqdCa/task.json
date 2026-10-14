@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Kt6dtMHTQq76GRWmYDqdCa",
+  "agent_id": "afce5313c23bb51b5",
+  "subagent_type": "general-purpose",
+  "task_description": "Research Droid+OpenCode hook timeouts",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 103308,
+    "cache_read_tokens": 1496548,
+    "output_tokens": 362,
+    "api_call_count": 16
+  },
+  "started_at": "2026-10-14T16:23:02.019448+05:30",
+  "completed_at": "2026-10-14T16:24:23.63386+05:30"
+}

@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4X26AHSD70GXQT6VXNAZT3N",
+  "strategy": "manual-commit",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "cmd/entire/cli/agent/agent.go",
+    "cmd/entire/cli/agent/antigravity/turn_end_budget.go",
+    "cmd/entire/cli/agent/antigravity/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/capabilities.go",
+    "cmd/entire/cli/agent/claudecode/turn_end_budget.go",
+    "cmd/entire/cli/agent/claudecode/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/codex/turn_end_budget.go",
+    "cmd/entire/cli/agent/codex/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/copilotcli/turn_end_budget.go",
+    "cmd/entire/cli/agent/copilotcli/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/factoryaidroid/turn_end_budget.go",
+    "cmd/entire/cli/agent/factoryaidroid/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/pi/turn_end_budget.go",
+    "cmd/entire/cli/agent/pi/turn_end_budget_test.go",
+    "cmd/entire/cli/agent/turn_end_budget_test.go",
+    "cmd/entire/cli/lifecycle.go",
+    "cmd/entire/cli/strategy/manual_commit.go",
+    "cmd/entire/cli/strategy/manual_commit_finalize_deadline_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/phase_postcommit_test.go",
+    "cmd/entire/cli/strategy/session_condensable_content_test.go",
+    "cmd/entire/cli/turn_end_deadline_test.go",
+    "docs/development/checkpoint-implementation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 228,
+    "cache_creation_tokens": 404642,
+    "cache_read_tokens": 23311098,
+    "output_tokens": 91476,
+    "api_call_count": 113,
+    "subagent_tokens": {
+      "input_tokens": 62,
+      "cache_creation_tokens": 305627,
+      "cache_read_tokens": 2768605,
+      "output_tokens": 1064,
+      "api_call_count": 31
+    }
+  }
+}

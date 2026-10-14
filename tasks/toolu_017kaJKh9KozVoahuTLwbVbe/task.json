@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017kaJKh9KozVoahuTLwbVbe",
+  "agent_id": "a97861097c4ef9302",
+  "subagent_type": "general-purpose",
+  "task_description": "Research Gemini+Cursor hook timeouts",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 102949,
+    "cache_read_tokens": 884305,
+    "output_tokens": 509,
+    "api_call_count": 10
+  },
+  "started_at": "2026-10-14T16:23:02.019009+05:30",
+  "completed_at": "2026-10-14T16:25:13.128039+05:30"
+}
