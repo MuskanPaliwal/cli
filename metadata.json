@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4Z916Y9A0BMADKXPHMXBX1H",
+  "strategy": "manual-commit",
+  "branch": "fix-turn-checkpoint-finalize-deadline-2148",
+  "checkpoints_count": 8,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 355435,
+    "cache_read_tokens": 3571841,
+    "output_tokens": 6575,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 380067,
+      "cache_read_tokens": 2037969,
+      "output_tokens": 1239,
+      "api_call_count": 30
+    }
+  }
+}

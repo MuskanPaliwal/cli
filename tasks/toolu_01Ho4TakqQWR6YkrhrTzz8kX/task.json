@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Ho4TakqQWR6YkrhrTzz8kX",
+  "agent_id": "ad829cd62575b21c5",
+  "subagent_type": "reviewer",
+  "task_description": "Review round 6 of PR 2188",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 380067,
+    "cache_read_tokens": 2037969,
+    "output_tokens": 1239,
+    "api_call_count": 30
+  },
+  "started_at": "2026-10-15T01:24:14.776016+05:30",
+  "completed_at": "2026-10-15T09:44:09.586638+05:30"
+}
