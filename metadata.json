@@ -3,7 +3,7 @@
   "checkpoint_id": "01M4ZJ0MBKKFCEYSP4S8384BAJ",
   "strategy": "manual-commit",
   "branch": "fix-claude-review-stream-parser",
-  "checkpoints_count": 57,
+  "checkpoints_count": 58,
   "files_touched": [
     "cmd/entire/cli/review/trail_report.go",
     "cmd/entire/cli/review/trail_report_test.go"
@@ -22,13 +22,20 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 654,
-    "cache_creation_tokens": 876490,
-    "cache_read_tokens": 61723236,
-    "output_tokens": 248497,
-    "api_call_count": 289
+    "input_tokens": 696,
+    "cache_creation_tokens": 973000,
+    "cache_read_tokens": 63786123,
+    "output_tokens": 265622,
+    "api_call_count": 310
   }
 }
