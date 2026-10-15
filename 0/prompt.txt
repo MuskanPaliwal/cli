@@ -1,0 +1,19 @@
+can you review this and make sure there are no findings left?
+
+---
+
+Go ahead: fast-forward to the PR head, fix findings 1–6 as proposed with the failing test first, skip 7, then re-review.
+
+---
+
+<task-notification>
+<task-id>b5du94kvd</task-id>
+<tool-use-id>toolu_01AJ8CCw7UxWHQf9iQB5qPr3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-hook-git-context/1bd2f033-44ad-4f83-a3b0-aee208519e95/tasks/b5du94kvd.output</output-file>
+<status>completed</status>
+<summary>Background command "Run mise run check (format, lint, all CI tests)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Commit with that exact message. Don't push yet; draft the updated PR description for me first.
