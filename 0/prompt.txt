@@ -1,0 +1,95 @@
+can you review this pr? PR #2285
+
+---
+
+<task-notification>
+<task-id>abf6faec34ed7970d</task-id>
+<tool-use-id>toolu_0121PGwfM3ahzzfBG9B3sfku</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/a9a0cae9-34e2-4ba7-b747-3cc221d51c2f/tasks/abf6faec34ed7970d.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 2285" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1113,
+    "summary": "NewStateStore no longer honors GIT_DIR/GIT_WORK_TREE layouts. paths.WorktreeRoot uses the env-selected work tree, but ResolveWorktreeMetadata then looks only for &lt;root&gt;/.git and ignores GIT_DIR/GIT_COMMON_DIR.",
+    "failure_scenario": "A user with a separated git dir (a dotfiles bare repo through `git --git-dir=~/.cfg --work-tree=~`, or yadm/vcsh) runs any hook. WorktreeRoot returns ~. ~/.git does not exist, so the call returns ErrWorktreeMetadataNotFound and every NewStateStore call fails. The old `git rev-parse --git-common-dir` path returned ~/.cfg and worked. maybeSpawnSessionSweep fails closed the same way, so zombie sessions are never swept there."
+  },
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1113,
+    "summary": "Session state and its lock now resolve the common dir differently. State data comes from a filesystem read of the worktree's .git, while stateLockForSession (strategy/session_state.go:849), redactCacheDir and other GetGitCommonDir callers still use gitdir.CommonDir, which honors env.",
+    "failure_scenario": "A hook or user exports GIT_DIR or GIT_COMMON_DIR pointing at another repo while the worktree has its own .git. State files go to &lt;worktree&gt;/.git/entire-sessions, but the flock in .../entire-session-locks is taken in the env-selected common dir. Concurrent writers then hold different locks over the same state file, which allows lost updates. Cleanup and the redact cache also operate on a different repo than the one holding the state."
+  },
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1113,
+    "summary": "NewStateStore now requires a work tree, so it fails when run from a bare repository directory. `git rev-parse --git-common-dir` used to succeed there.",
+    "failure_scenario": "With cwd set to the `.bare` directory of a bare-clone-plus-worktrees layout, or inside a .git dir as some hooks and tools do, `git rev-parse --show-toplevel` fails with 'must be run in a work tree'. Any command or hook that builds the session state store there now errors where it previously resolved the shared common dir."
+  },
+  {
+    "file": "cmd/entire/cli/session_adopt.go",
+    "line": 649,
+    "summary": "Adoption now computes WorktreeID with gitrepo.ResolveWorktreeMetadata, while hooks still record and compare it with paths.GetWorktreeID (strategy/manual_commit_session.go:452 and :652, codex/hook_root.go:90). The two algorithms disagree on some layouts.",
+    "failure_scenario": "Consider a linked worktree of a bare repo not named .git or .bare (the new test's `storage/worktrees/target`). Adoption stamps WorktreeID=\"target\", but paths.GetWorktreeID returns an error for the same worktree, so later hook-side matching and reconciliation treat it differently. In the other direction, a worktree whose registration dir is reached through a symlink gets an ID from the string parse in GetWorktreeID but an error from the new resolver. bestEffortAdoptWorktreeID then returns \"\", and sessionBelongsToSourceWorktree falls back to path comparison, which mismatches the stored state.WorktreeID."
+  },
+  {
+    "file": "cmd/entire/cli/session_adopt.go",
+    "line": 576,
+    "summary": "bestEffortAdoptWorktreeID turns every resolver error into \"\", including the new stricter validations (missing commondir target, registration not an immediate child). sessionBelongsToSourceWorktree then silently switches from ID matching to path matching.",
+    "failure_scenario": "Take a source worktree whose metadata now fails strict validation but that git still accepts (for example a symlinked worktrees/ registration). Sessions recorded with WorktreeID=\"x\" and a WorktreePath under a different spelling (a symlinked path) no longer match. `entire session adopt --from` then reports 'no recent active sessions found' even though GetWorktreeID would have matched by ID."
+  },
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1126,
+    "summary": "NewStateStoreForWorktree keeps a ctx parameter it no longer uses (`_ context.Context`). The empty-root check also now duplicates the one in ResolveWorktreeMetadata.",
+    "failure_scenario": "Every caller still threads ctx through a parameter that does nothing, and there are two empty-root guards with different error messages. Simpler form: drop the parameter (or keep it only if cancellation will matter) and rely on the resolver's single guard."
+  },
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1130,
+    "summary": "NewStateStore lost its per-cwd cache. Each call now repeats roughly 8 to 10 uncached filesystem syscalls (Abs, Stat, Lstat, Open/Read of the .git and commondir pointers, EvalSymlinks, SameFile Stats).",
+    "failure_scenario": "Hooks build the state store many times per invocation. gitdir.CommonDir used to return a cached string after the first call, and every call now re-walks the metadata. This is cheap per call but repeated on a hot path. Cache the WorktreeMetadata keyed by root, or build the store once per hook."
+  },
+  {
+    "file": "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "line": 41,
+    "summary": "The guard ledger still allowlists session_adopt.go:stateStoreForWorktree's `--git-common-dir` and `--show-toplevel` subprocesses with the reason 'in the session split', but this PR is the session split and leaves them in place.",
+    "failure_scenario": "The ledger reason says these entries will be removed in this split, yet they remain allowlisted with no updated justification. The new TestAdoptStoreRequiresGitRepositoryValidation shows they are now intentionally permanent, so the stale reason misleads future migrations. It also lets adopt keep resolving the source store's common dir by a different mechanism than NewStateStore uses for the target."
+  },
+  {
+    "file": "cmd/entire/cli/session/state.go",
+    "line": 1110,
+    "summary": "The fix is too shallow. Only the session state store moved to filesystem metadata resolution, while gitdir.CommonDir stays the source for locks, settings, deleted_list, trail cache and cleanup in the same session lifecycle.",
+    "failure_scenario": "Running two common-dir resolvers with different env semantics in one hook is the root of the split-brain in the lock/state finding above. A safer step is to switch stateLockForSession, and the other session-adjacent GetGitCommonDir callers, in the same change, or route all of them through one resolver."
+  }
+]
+```</result>
+<usage><subagent_tokens>88731</subagent_tokens><tool_uses>15</tool_uses><duration_ms>173025</duration_ms></usage>
+</task-notification>
+
+---
+
+fix the 1 and 2 3 4
+
+---
+
+continue
+
+---
+
+A and first for 3
+
+---
+
+what did we change?
+
+---
+
+draft the updated PR description
+
+---
+
+commit and push

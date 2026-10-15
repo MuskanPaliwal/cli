@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4Z5MG5EYF2DVEZS82V1DDJG",
+  "strategy": "manual-commit",
+  "branch": "refactor-session-metadata-resolution",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/session/metadata_resolution_test.go",
+    "cmd/entire/cli/session/state.go",
+    "cmd/entire/cli/session_adopt.go",
+    "cmd/entire/cli/strategy/session_state_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 151396,
+    "cache_read_tokens": 3468050,
+    "output_tokens": 27433,
+    "api_call_count": 38,
+    "subagent_tokens": {
+      "input_tokens": 32,
+      "cache_creation_tokens": 86254,
+      "cache_read_tokens": 1014918,
+      "output_tokens": 2623,
+      "api_call_count": 16
+    }
+  }
+}
