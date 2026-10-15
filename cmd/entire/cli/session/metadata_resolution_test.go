@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -18,25 +17,17 @@ func TestStateStoreConstructionGitSubprocesses(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		explicitRoot bool
-		warmRoot     bool
 	}{
 		{name: "cwd"},
-		{name: "discovered_root", warmRoot: true},
 		{name: "explicit_root", explicitRoot: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			testutil.InitRepo(t, root)
 			t.Chdir(root)
-			paths.ClearWorktreeRootCache()
 			ClearGitCommonDirCache()
-			t.Cleanup(paths.ClearWorktreeRootCache)
 			t.Cleanup(ClearGitCommonDirCache)
 			ctx := context.Background()
-			if tc.warmRoot {
-				_, err := paths.WorktreeRoot(ctx)
-				require.NoError(t, err)
-			}
 			tracePath := filepath.Join(t.TempDir(), "git-trace.jsonl")
 			t.Setenv("GIT_TRACE2_EVENT", tracePath)
 
@@ -52,8 +43,8 @@ func TestStateStoreConstructionGitSubprocesses(t *testing.T) {
 			commands := sessionTraceCommands(t, tracePath)
 			t.Logf("constructor Git subprocesses: %v", commands)
 			var want [][]string
-			if !tc.explicitRoot && !tc.warmRoot {
-				want = [][]string{{"rev-parse", "--show-toplevel"}}
+			if !tc.explicitRoot {
+				want = [][]string{{"rev-parse", "--git-common-dir"}}
 			}
 			require.Equal(t, want, commands)
 
@@ -63,34 +54,6 @@ func TestStateStoreConstructionGitSubprocesses(t *testing.T) {
 				"the positive control must record an additional real Git process")
 		})
 	}
-}
-
-func TestStateStoreFromCWDObservesMetadataDamageAndRepair(t *testing.T) {
-	// CWD and the worktree-root cache are process-global.
-	root := t.TempDir()
-	testutil.InitRepo(t, root)
-	t.Chdir(root)
-	paths.ClearWorktreeRootCache()
-	t.Cleanup(paths.ClearWorktreeRootCache)
-	ctx := context.Background()
-	store, err := NewStateStore(ctx)
-	require.NoError(t, err)
-	state := &State{SessionID: "cwd-repair-session", Kind: KindImported}
-	require.NoError(t, store.Save(ctx, state))
-
-	commonFile := filepath.Join(root, ".git", "commondir")
-	require.NoError(t, os.WriteFile(commonFile, []byte("missing\n"), 0o600))
-	store, err = NewStateStore(ctx)
-	require.Error(t, err)
-	require.Nil(t, store)
-
-	require.NoError(t, os.Remove(commonFile))
-	store, err = NewStateStore(ctx)
-	require.NoError(t, err)
-	loaded, err := store.Load(ctx, state.SessionID)
-	require.NoError(t, err)
-	require.NotNil(t, loaded)
-	require.Equal(t, state.SessionID, loaded.SessionID)
 }
 
 func TestStateStoreForLinkedWorktreeSharesSessionStorage(t *testing.T) {

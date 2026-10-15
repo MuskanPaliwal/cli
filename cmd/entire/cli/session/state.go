@@ -20,7 +20,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/proclive"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
@@ -1109,12 +1108,19 @@ func (s *StateStore) name(file string) string {
 
 // NewStateStore creates a new state store.
 // Uses the git common dir to store session state (shared across worktrees).
+//
+// It resolves through gitdir.CommonDir, the same resolver the strategy's
+// per-session state lock uses, so exported GIT_DIR selectors cannot place the
+// state and its lock in different repositories.
 func NewStateStore(ctx context.Context) (*StateStore, error) {
-	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	commonDir, err := gitdir.CommonDir(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("resolve worktree root for session state: %w", err)
+		return nil, fmt.Errorf("failed to get git common dir: %w", err)
 	}
-	return NewStateStoreForWorktree(ctx, worktreeRoot)
+	if err := ensureTestIsolatedStateDir(commonDir); err != nil {
+		return nil, err
+	}
+	return newStateStoreAt(commonDir), nil
 }
 
 // NewStateStoreForWorktree returns the state store for the repository at

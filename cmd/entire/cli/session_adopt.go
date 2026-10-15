@@ -646,6 +646,10 @@ func buildAdoptedSessionState(ctx context.Context, source *session.State, home a
 	if err != nil {
 		return nil, adoptChanges{}, fmt.Errorf("resolve current worktree root: %w", err)
 	}
+	// Hook paths still derive WorktreeID with paths.GetWorktreeID, which only
+	// recognizes registrations under .git/ or .bare/. Both yield the same ID for
+	// main and linked worktrees in those layouts; only this resolver also
+	// accepts a bare repository with any other name.
 	metadata, err := gitrepo.ResolveWorktreeMetadata(worktreeRoot)
 	if err != nil {
 		return nil, adoptChanges{}, fmt.Errorf("resolve current worktree ID: %w", err)

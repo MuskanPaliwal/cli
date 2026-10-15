@@ -34,7 +34,7 @@ func TestGitMetadataTraversalHasCanonicalOwner(t *testing.T) {
 	allowedMetadataQueries := map[guardMetadataQuery]string{
 		{source: "dispatch/mode_local.go:resolveRepoRoots", flag: "--show-toplevel"}:                    "local dispatch resolves explicit repository candidates",
 		{source: "dispatch_wizard.go:resolveGitTopLevel", flag: "--show-toplevel"}:                      "dispatch discovery resolves explicit repository candidates",
-		{source: "gitdir/gitdir.go:CommonDir", flag: "--git-common-dir"}:                                "strategy, session locks, and remaining GetGitCommonDir callers migrate in the strategy-and-hooks split",
+		{source: "gitdir/gitdir.go:CommonDir", flag: "--git-common-dir"}:                                "strategy, session locks, the CWD session store, and remaining GetGitCommonDir callers migrate together in the strategy-and-hooks split",
 		{source: "gitdir/gitdir.go:CommonDirForWorktree", flag: "--git-common-dir"}:                     "the review manifest migrates with the remaining consumers",
 		{source: "paths/paths.go:resolveWorktreeRoot", flag: "--show-toplevel"}:                         "worktree-root discovery remains separate from explicit-root metadata resolution",
 		{source: "session_adopt.go:stateStoreForWorktree", flag: "--git-common-dir"}:                    "adoption validates an arbitrary source repository in the session split",
