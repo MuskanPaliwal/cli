@@ -1,0 +1,79 @@
+yes resolve it
+
+---
+
+push the changes, and draft a reply
+
+---
+
+/unslop and make it short
+
+---
+
+are there any new findings?  any gaps? edge cases?
+
+---
+
+what assumptions we made here? and are there any out of scope things we left? if so let me know
+
+---
+
+draft a pr comment for this
+
+---
+
+fix the bug and commit and puhs
+
+---
+
+fix the bug and commit and push
+
+---
+
+what is Delta btw?
+
+---
+
+this pr has a follow up comment too. take a look and see if that is still valid
+
+---
+
+update the reply draft with the latest fix
+
+---
+
+no need to post it anywhere
+
+---
+
+```
+1. A # comment inside a code block cuts the finding short (regression vs main)
+
+isMarkdownHeading (review_bridge.go, added in e5ea5e1090) treats any unindented line starting with #  as a heading. The splitter doesn't know when it's inside a ```
+code block, so a Python, shell or YAML comment in a quoted snippet ends the finding. This only applies when the review is posted as text rather than through the JSON line. Models often leave a code block under a bullet unindented:
+
+* [high] [config.py:3](http://config.py:3) — timeout default is 0; requests hang; use 30
+```python
+# default timeout
+TIMEOUT = 0```
+
+* This branch: the finding is posted as …use 30\n```python. The snippet is cut off and the code block is never closed, so it renders wrong.
+* main: the whole snippet stays inside the finding.
+
+Fix: have splitReviewVerdictFindings track whether it is inside a code block, toggling on lines that start with
+```. Inside one, append lines to the current finding without checking for headings, bullets or severity markers. That also fixes an older bug where unindented - old line lines from a quoted diff split findings.
+
+2. Exploration notes come back when the JSON line is alone (side effect of the fix)
+
+If the reviewer's final message is only {"summary":"No issues","comments":[]}, the new code (bab48095c5) pulls in the text before the last tool call. When that text is exploration rather than a report, it brings back the bug from my first review. My probe used notes like "I'll check the changed files:\n- retry.go\n- retry_test.go", then a tool call, then the JSON line alone:
+
+called=true prose="## codex\n\nI'll check the changed files:\n- retry.go\n- retry_test.go"
+
+The clean review is posted, with each bullet as a finding. This is the cautious direction, and it only happens when the reviewer skips the verdict line the prompt asks for. It is still the exact case this PR set out to fix.
+
+Fix: for the borrowed earlier text, only count strong signals as a contradiction: severity markers and a request changes / approve with nits verdict. Ignore plain list items there. fix these two
+```
+
+---
+
+write a draft message saying item 1 was already fixed
