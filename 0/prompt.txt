@@ -1,0 +1,33 @@
+yes resolve it
+
+---
+
+push the changes, and draft a reply
+
+---
+
+/unslop and make it short
+
+---
+
+are there any new findings?  any gaps? edge cases?
+
+---
+
+what assumptions we made here? and are there any out of scope things we left? if so let me know
+
+---
+
+draft a pr comment for this
+
+---
+
+fix the bug and commit and puhs
+
+---
+
+fix the bug and commit and push
+
+---
+
+what is Delta btw?
