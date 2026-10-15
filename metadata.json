@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M4ZCNSNFCS9F8VFHM421PCEH",
+  "strategy": "manual-commit",
+  "branch": "fix-claude-review-stream-parser",
+  "checkpoints_count": 54,
+  "files_touched": [
+    "cmd/entire/cli/review_bridge.go",
+    "cmd/entire/cli/review_bridge_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 474,
+    "cache_creation_tokens": 637589,
+    "cache_read_tokens": 50240194,
+    "output_tokens": 191222,
+    "api_call_count": 200,
+    "subagent_tokens": {
+      "input_tokens": 238,
+      "cache_creation_tokens": 1314991,
+      "cache_read_tokens": 8937024,
+      "output_tokens": 4463,
+      "api_call_count": 107
+    }
+  }
+}
