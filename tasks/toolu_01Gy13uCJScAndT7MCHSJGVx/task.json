@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Gy13uCJScAndT7MCHSJGVx",
+  "agent_id": "a82cb637f04634c6f",
+  "subagent_type": "general-purpose",
+  "task_description": "Regressions review",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 98302,
+    "cache_read_tokens": 1412745,
+    "output_tokens": 2863,
+    "api_call_count": 19
+  },
+  "started_at": "2026-10-15T13:49:37.549441+05:30",
+  "completed_at": "2026-10-15T13:59:10.527646+05:30"
+}

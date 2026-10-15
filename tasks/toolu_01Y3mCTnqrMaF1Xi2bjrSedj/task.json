@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Y3mCTnqrMaF1Xi2bjrSedj",
+  "agent_id": "a1df8486237f111a2",
+  "subagent_type": "general-purpose",
+  "task_description": "Principal engineer + API review",
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 136641,
+    "cache_read_tokens": 3129949,
+    "output_tokens": 296,
+    "api_call_count": 33
+  },
+  "started_at": "2026-10-15T13:49:37.545739+05:30",
+  "completed_at": "2026-10-15T13:54:54.528062+05:30"
+}

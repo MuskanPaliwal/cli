@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01D2pZCLYHBtcspsZA1eE5tx",
+  "agent_id": "a77ad029fdce6201c",
+  "subagent_type": "general-purpose",
+  "task_description": "Security engineer review",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 84382,
+    "cache_read_tokens": 905404,
+    "output_tokens": 1090,
+    "api_call_count": 14
+  },
+  "started_at": "2026-10-15T13:49:37.548897+05:30",
+  "completed_at": "2026-10-15T13:51:14.833813+05:30"
+}

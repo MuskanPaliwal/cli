@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JGYruA6vFJ28p9w4NhTLXU",
+  "agent_id": "a48e0ba8c4e77df7b",
+  "subagent_type": "general-purpose",
+  "task_description": "Idiomatic Go review",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 91938,
+    "cache_read_tokens": 1080120,
+    "output_tokens": 342,
+    "api_call_count": 15
+  },
+  "started_at": "2026-10-15T13:49:37.554036+05:30",
+  "completed_at": "2026-10-15T13:51:48.756059+05:30"
+}
