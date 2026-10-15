@@ -1,0 +1,44 @@
+can you review it again? PR 2549 also make sure we maintain the scope, if need arises use /simpl
+
+---
+
+can you review it again? PR 2549 also make sure we maintain the scope, if need arises use /simplify in a subagent. i am actually willing to understand what we actually changed, i want it scoped
+
+---
+
+yeah we need to keep it scoped, let's go on with 1. uncommitted changes has what? and what is heading-grouping commit?
+
+---
+
+yupp but this should maintain the fixes we did for this review: 
+
+<pasted_content id="4d8c">
+1. Grouped ### High headings become findings of their own (regression)
+
+StartsWithSeverityMarker is now shared with the bullet splitter in review_bridge.go, and it is broader than the old check:
+- It strips a leading #.
+- It accepts a severity word with nothing after it.
+
+So when a reply falls back to posting its text and groups findings under severity headings, each heading becomes its own finding. The prompt forbids that layout, but models produce it.
+
+request changes
+### High
+- retry.go:42 — loop ignores ctx
+### Low
+- docs typo in README.md:3
+
+- This branch posts 4 findings: ### High, retry.go:42 …, ### Low, docs typo ….
+- main posts 2 findings: the ### Low line is glued onto the first one, which isn't great either, but there are no findings that are just a heading.
+
+Fix: have the splitter skip a line that is only a severity marker. Better still, apply its severity to the bullets below it. The broader check is fine inside markedFindingCount and proseReportsFindings; the regression only comes from sharing it with the splitter.
+
+2. Findings before a tool call go unchecked if the JSON line is in its own segment (minor)
+
+reportText takes only the last segment that ends with the JSON line. Take a reviewer that writes its verdict and findings, then calls a tool (for example TodoWrite), then writes the JSON line on its own with "comments":[]. The cross-check then only reads the JSON's summary, and the run is treated as clean.
+
+My probe confirmed it: request changes plus a [high] bullet, then a tool call, then an empty JSON line, gives "Nothing to report". This needs the model to contradict itself, so it's low probability. It is still exactly the case the "unless the text says otherwise" check exists to catch. Fix: when the final segment is only the JSON line, also include the segment before it.
+</pasted_content id="4d8c">
+
+---
+
+yupp
