@@ -1,0 +1,31 @@
+can you check if the pr is good to go?
+
+---
+
+Go ahead: keep the sweep on session.GetGitCommonDir, drop the sweep part of this PR, and update the PR description to match. Show me the brief first.
+
+---
+
+wait reverting is the only option?
+
+---
+
+we have strategy lock migration too in some pr can you check? and if this is so then what is the current fix and we can also note it down for a follow up
+
+---
+
+Go ahead with the sweep revert in #2285 as briefed, then add that exact note to #2305's description. Show me the updated #2285 description before publishing it.
+
+---
+
+<task-notification>
+<task-id>bly99je6u</task-id>
+<tool-use-id>toolu_01DAvmU6Px6L52bACFvuJMiK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/700e8b16-5ef9-42d0-a9f6-5f00985b07be/tasks/bly99je6u.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full pre-commit check suite" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Commit with that exact message, push, then publish that exact #2285 description.

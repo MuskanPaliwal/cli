@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M51BD3D7ZEKAW95QMGKRVQT3",
+  "strategy": "manual-commit",
+  "branch": "refactor-session-metadata-resolution",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/session_sweep.go",
+    "cmd/entire/cli/session_sweep_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 194629,
+    "cache_read_tokens": 6761017,
+    "output_tokens": 45512,
+    "api_call_count": 52
+  }
+}
