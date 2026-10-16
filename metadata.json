@@ -1,0 +1,16 @@
+{
+  "cli_version": "0.11.5-nightly.202610130630.4203b3d42",
+  "checkpoint_id": "01M523X2E7VBCM8S8QNMG49ZG9",
+  "strategy": "manual-commit",
+  "branch": "refactor-session-metadata-resolution",
+  "checkpoints_count": 54,
+  "files_touched": [
+    "docs/architecture/review-command.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "prompt": ""
+    }
+  ]
+}
