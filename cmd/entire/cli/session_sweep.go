@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/execx"
-	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -173,10 +172,10 @@ func countSweepableZombies(states []*session.State, now time.Time) int {
 // spawnDetachedSessionSweepProcess.
 var sweepSpawn = spawnDetachedSessionSweepProcess
 
-// sweepWorktreeMetadata is the repository-scope seam used by
+// sweepGitCommonDir is the repository-scope seam used by
 // maybeSpawnSessionSweep. Swapped in tests to prove a throttle-key failure
 // fails closed without depending on a malformed repository fixture.
-var sweepWorktreeMetadata = gitrepo.ResolveWorktreeMetadata
+var sweepGitCommonDir = session.GetGitCommonDir
 
 // spawnDetachedSessionSweepProcess starts `entire __sweep_sessions` as a
 // detached child so the sweep's repo work can't add latency to the
@@ -224,6 +223,12 @@ func maybeSpawnSessionSweep(ctx context.Context) {
 			slog.String("error", err.Error()))
 		return
 	}
+	commonDir, err := sweepGitCommonDir(ctx)
+	if err != nil {
+		logging.Debug(logCtx, "skipping sweep spawn: could not resolve git common dir",
+			slog.String("error", err.Error()))
+		return
+	}
 	// Zombie discovery deliberately precedes the throttle check. The shared
 	// marker is check-and-record, so consulting it before discovery would burn
 	// the whole throttle window on the overwhelmingly common no-zombie case. A
@@ -238,13 +243,7 @@ func maybeSpawnSessionSweep(ctx context.Context) {
 	if n == 0 {
 		return
 	}
-	metadata, err := sweepWorktreeMetadata(root)
-	if err != nil {
-		logging.Debug(logCtx, "skipping sweep spawn: could not resolve worktree metadata",
-			slog.String("error", err.Error()))
-		return
-	}
-	if sweepRecentlySpawned(metadata.CommonDir, time.Now()) {
+	if sweepRecentlySpawned(commonDir, time.Now()) {
 		return
 	}
 	sweepSpawn(root)
