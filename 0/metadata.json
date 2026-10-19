@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.6-nightly.202610180623.a334cb698",
+  "checkpoint_id": "01M5A3SEHXRPP1J8EM59KEN29K",
+  "session_id": "8e50718b-7c6e-42e7-b849-107a698e5c42",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-19T12:57:09.890237Z",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 5,
+  "save_step_count": 2,
+  "files_touched": [
+    "cmd/entire/cli/attach_test.go",
+    "cmd/entire/cli/integration_test/checkpoint_trailer_authority_test.go",
+    "cmd/entire/cli/integration_test/rewrite_adversarial_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance_test.go",
+    "cmd/entire/cli/strategy/manual_commit_redo.go",
+    "cmd/entire/cli/strategy/manual_commit_test.go",
+    "cmd/entire/cli/trailers/trailers.go",
+    "cmd/entire/cli/trailers/trailers_test.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "aba536f61160",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 280,
+    "cache_creation_tokens": 676741,
+    "cache_read_tokens": 48591493,
+    "output_tokens": 201317,
+    "api_call_count": 138
+  },
+  "session_metrics": {
+    "turn_count": 5
+  }
+}

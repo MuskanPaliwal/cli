@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.11.6-nightly.202610180623.a334cb698",
+  "checkpoint_id": "01M5A3SEHXRPP1J8EM59KEN29K",
+  "strategy": "manual-commit",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/entire/cli/attach_test.go",
+    "cmd/entire/cli/integration_test/checkpoint_trailer_authority_test.go",
+    "cmd/entire/cli/integration_test/rewrite_adversarial_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance_test.go",
+    "cmd/entire/cli/strategy/manual_commit_redo.go",
+    "cmd/entire/cli/strategy/manual_commit_test.go",
+    "cmd/entire/cli/trailers/trailers.go",
+    "cmd/entire/cli/trailers/trailers_test.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 280,
+    "cache_creation_tokens": 676741,
+    "cache_read_tokens": 48591493,
+    "output_tokens": 201317,
+    "api_call_count": 138
+  }
+}
