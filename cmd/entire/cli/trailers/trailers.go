@@ -168,22 +168,66 @@ var checkpointTrailerLineRegex = regexp.MustCompile(`^` + CheckpointTrailerKey +
 // `commit -v` everything below it is the diff, which git discards.
 const scissorsMarker = "------------------------ >8 ------------------------"
 
+// DefaultCommentPrefix is git's comment prefix when core.commentChar is unset.
+const DefaultCommentPrefix = "#"
+
+// autoCommentCandidates are the prefixes git tries, in order, for
+// core.commentChar=auto.
+const autoCommentCandidates = "#;@!$%^&|:"
+
+// isScissorsLine reports whether line is git's scissors line for commentPrefix.
+// Git cuts only at that exact line, never at prose that mentions the marker.
+func isScissorsLine(line, commentPrefix string) bool {
+	return strings.TrimSuffix(line, "\r") == commentPrefix+" "+scissorsMarker
+}
+
 // StripEditorComments returns an editor-written commit message without the
 // lines git's default cleanup drops before the commit is recorded: everything
-// from a scissors line down, and every line starting with "#". A -m or -F
-// message keeps "#" lines as content and must not be passed here.
-func StripEditorComments(message string) string {
+// from the scissors line down, and every line starting with commentPrefix. An
+// empty commentPrefix, for a -m or -F message whose lines git keeps as
+// written, returns message unchanged.
+func StripEditorComments(message, commentPrefix string) string {
+	if commentPrefix == "" {
+		return message
+	}
 	lines := strings.Split(message, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.Contains(line, scissorsMarker) {
+		if isScissorsLine(line, commentPrefix) {
 			break
 		}
-		if !strings.HasPrefix(line, "#") {
+		if !strings.HasPrefix(line, commentPrefix) {
 			kept = append(kept, line)
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// AutoCommentPrefix returns the prefix git chose for core.commentChar=auto in a
+// message it prepared for editing. Git picks it before adding its comment
+// block, so it is read back from git's own lines: the scissors line if there is
+// one, else the comment block that ends the message. A message without either
+// (commit.status=false writes no block) gets DefaultCommentPrefix, unless its
+// last line happens to start with a candidate.
+func AutoCommentPrefix(message string) string {
+	lines := strings.Split(message, "\n")
+	for _, line := range lines {
+		for _, candidate := range autoCommentCandidates {
+			if isScissorsLine(line, string(candidate)) {
+				return string(candidate)
+			}
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		if first := lines[i][:1]; strings.Contains(autoCommentCandidates, first) {
+			return first
+		}
+		break
+	}
+	return DefaultCommentPrefix
 }
 
 // RemoveCheckpointTrailers removes every whole Entire-Checkpoint trailer line
@@ -287,8 +331,11 @@ func FormatCheckpoint(message string, cpID checkpointID.CheckpointID) string {
 	return fmt.Sprintf("%s\n\n%s: %s\n", message, CheckpointTrailerKey, cpID.String())
 }
 
-// trailerLineRe matches git trailer format: "Key-Name: value" (no spaces before colon).
-var trailerLineRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*: `)
+// trailerLineRe matches git trailer format: "Key-Name:" at the start of the
+// line, with no space before the colon. Like git, it accepts any separator
+// after the colon ("Key:value", a tab), which also makes a line starting with a
+// URL ("https://...") trailer-shaped.
+var trailerLineRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*:`)
 
 // IsTrailerLine reports whether a line matches git trailer format.
 func IsTrailerLine(line string) bool {

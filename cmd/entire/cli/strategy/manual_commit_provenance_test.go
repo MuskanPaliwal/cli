@@ -18,14 +18,14 @@ func TestStampedTrailer_SkipsInheritedTrailers(t *testing.T) {
 	fresh := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J31")
 	msg := "Squashed\n\nEntire-Checkpoint: " + inherited.String() + "\nEntire-Checkpoint: " + fresh.String() + "\n"
 
-	got, ok := stampedTrailer(context.Background(), msg, commitSourceMessage, []id.CheckpointID{inherited})
+	got, ok := stampedTrailer(context.Background(), msg, "", []id.CheckpointID{inherited})
 	assert.True(t, ok)
 	assert.Equal(t, fresh, got)
 
-	_, ok = stampedTrailer(context.Background(), "Squashed\n\nEntire-Checkpoint: "+inherited.String()+"\n", commitSourceMessage, []id.CheckpointID{inherited})
+	_, ok = stampedTrailer(context.Background(), "Squashed\n\nEntire-Checkpoint: "+inherited.String()+"\n", "", []id.CheckpointID{inherited})
 	assert.False(t, ok, "an inherited trailer alone is not a stamp")
 
-	got, ok = stampedTrailer(context.Background(), msg, commitSourceMessage, nil)
+	got, ok = stampedTrailer(context.Background(), msg, "", nil)
 	assert.True(t, ok)
 	assert.Equal(t, inherited, got, "with nothing inherited the first trailer is the stamp, as before")
 }
@@ -117,14 +117,22 @@ func TestAddInheritedCheckpointTrailer_StaysAboveGitComments(t *testing.T) {
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J51")
 	msg := "Subject\n\n# Please enter the commit message.\n# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n"
-	got := addInheritedCheckpointTrailer(msg, inherited, "squash")
+	got := addInheritedCheckpointTrailer(msg, inherited, "#")
 	trailerAt := strings.Index(got, "Entire-Checkpoint: "+inherited.String())
 	require.GreaterOrEqual(t, trailerAt, 0, "%q", got)
 	require.Less(t, trailerAt, strings.Index(got, "# Please enter"), "%q", got)
 	require.True(t, strings.HasSuffix(got, "# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n"), "git's block is kept intact: %q", got)
 
-	require.Equal(t, addCheckpointTrailer("Subject\n", inherited), addInheritedCheckpointTrailer("Subject\n", inherited, "squash"),
+	require.Equal(t, addCheckpointTrailer("Subject\n", inherited), addInheritedCheckpointTrailer("Subject\n", inherited, "#"),
 		"a message without git comments is unchanged in behaviour")
+
+	// With another comment prefix, "#" lines are content and git's block starts
+	// at the first line with that prefix.
+	semicolon := "# Release notes\n\n; Please enter the commit message.\n; ------------------------ >8 ------------------------\n"
+	got = addInheritedCheckpointTrailer(semicolon, inherited, ";")
+	trailerAt = strings.Index(got, "Entire-Checkpoint: "+inherited.String())
+	require.Greater(t, trailerAt, strings.Index(got, "# Release notes"), "%q", got)
+	require.Less(t, trailerAt, strings.Index(got, "; Please enter"), "%q", got)
 }
 
 // An amend that inherits nothing clears a marker an aborted amend left, so the
@@ -187,7 +195,7 @@ func TestAddInheritedCheckpointTrailer_MessageSourceKeepsHashLines(t *testing.T)
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J53")
 	for _, msg := range []string{"#42 fix login\n", "Fix login\n\n#42 is the issue\n"} {
-		got := addInheritedCheckpointTrailer(msg, inherited, "message")
+		got := addInheritedCheckpointTrailer(msg, inherited, "")
 		require.True(t, strings.HasPrefix(got, strings.TrimRight(msg, "\n")), "the user's message comes first: %q", got)
 		require.True(t, strings.HasSuffix(got, "Entire-Checkpoint: "+inherited.String()+"\n"), "the trailer ends the message: %q", got)
 	}

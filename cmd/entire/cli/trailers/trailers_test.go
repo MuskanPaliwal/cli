@@ -65,6 +65,11 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n\nEntire-Checkpoint: abc123def456\n",
 		},
 		{
+			name: "trailer without a space after the colon is joined",
+			msg:  "Message\n\nEntire-Checkpoint:deadbeefcafe\n",
+			want: "Message\n\nEntire-Checkpoint:deadbeefcafe\nEntire-Checkpoint: abc123def456\n",
+		},
+		{
 			name: "trailer-shaped subject starts a new block",
 			msg:  "Entire-Checkpoint: deadbeefcafe\n",
 			want: "Entire-Checkpoint: deadbeefcafe\n\nEntire-Checkpoint: abc123def456\n",
@@ -102,6 +107,10 @@ func TestIsTrailerLine(t *testing.T) {
 		{"Entire-Checkpoint: abc123def456", true},
 		{"  Entire-Checkpoint: abc123def456", false},
 		{"\tEntire-Checkpoint: abc123def456", false},
+		{"Entire-Checkpoint:abc123def456", true},
+		{"Entire-Checkpoint:\tabc123def456", true},
+		{"  Entire-Checkpoint:abc123def456", false},
+		{"https://example.com/issue/1", true}, // git parses it as key "https" too
 		{"not a trailer", false},
 		{"error: connection refused", true}, // "error" is a valid trailer key format
 		{"", false},
@@ -381,6 +390,16 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 			want:    nil,
 		},
 		{
+			name:    "no space after the colon",
+			message: "Message\n\nEntire-Checkpoint:a1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:    "tab after the colon",
+			message: "Message\n\nSigned-off-by: Test User <test@example.com>\nEntire-Checkpoint:\ta1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
 			name:    "continuation after checkpoint remains in trailer block",
 			message: "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n continuation text\nSigned-off-by: Test User <test@example.com>\n",
 			want:    []string{"a1b2c3d4e5f6"},
@@ -436,6 +455,147 @@ func TestParseCheckpointFromFinalTrailerBlockReturnsFirst(t *testing.T) {
 	}
 	if got.String() != "a1b2c3d4e5f6" {
 		t.Errorf("ParseCheckpointFromFinalTrailerBlock() = %v, want a1b2c3d4e5f6", got)
+	}
+}
+
+// StripEditorComments must leave exactly what git's cleanup records, so the
+// final trailer block it exposes is the one the commit will carry.
+func TestStripEditorComments(t *testing.T) {
+	t.Parallel()
+
+	const scissors = "------------------------ >8 ------------------------"
+	tests := []struct {
+		name          string
+		message       string
+		commentPrefix string
+		want          string
+	}{
+		{
+			name:          "default prefix drops hash lines",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# Please enter the commit message\n#\n",
+			commentPrefix: "#",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n",
+		},
+		{
+			name:          "configured prefix drops its lines and keeps hash lines",
+			message:       "# Release notes\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n; Please enter the commit message\n;\n",
+			commentPrefix: ";",
+			want:          "# Release notes\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n",
+		},
+		{
+			name:          "multi-character prefix",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n// Please enter the commit message\n",
+			commentPrefix: "//",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+		},
+		{
+			name:          "everything from the scissors line down is dropped",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# " + scissors + "\ndiff --git a/f b/f\n+Entire-Checkpoint: b2c3d4e5f6a1\n",
+			commentPrefix: "#",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+		},
+		{
+			name:          "scissors line with the configured prefix",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n; " + scissors + "\ndiff --git a/f b/f\n",
+			commentPrefix: ";",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+		},
+		{
+			name:          "scissors line with CRLF",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# " + scissors + "\r\ndiff --git a/f b/f\n",
+			commentPrefix: "#",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+		},
+		{
+			name:          "prose mentioning the marker is not a scissors line",
+			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\nExplain " + scissors + " here.\n",
+			commentPrefix: "#",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\nExplain " + scissors + " here.\n",
+		},
+		{
+			name:          "another prefix's scissors line is content",
+			message:       "Subject\n\n# " + scissors + "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			commentPrefix: ";",
+			want:          "Subject\n\n# " + scissors + "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+		},
+		{
+			name:          "empty prefix keeps the message as written",
+			message:       "Subject\n\n# not a comment\n",
+			commentPrefix: "",
+			want:          "Subject\n\n# not a comment\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := StripEditorComments(tt.message, tt.commentPrefix); got != tt.want {
+				t.Errorf("StripEditorComments(%q, %q) = %q, want %q", tt.message, tt.commentPrefix, got, tt.want)
+			}
+		})
+	}
+}
+
+// A prose line that mentions the scissors marker must neither hide a real
+// final trailer below it nor expose a body trailer above it.
+func TestStripEditorComments_ProseMarkerKeepsTheFinalBlock(t *testing.T) {
+	t.Parallel()
+
+	const prose = "Explain ------------------------ >8 ------------------------ here."
+	below := "Subject\n\n" + prose + "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# Please enter the commit message\n"
+	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(below, "#")); len(got) != 1 || got[0].String() != "a1b2c3d4e5f6" {
+		t.Errorf("final trailer below the prose line: got %v, want [a1b2c3d4e5f6]", got)
+	}
+	above := "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n" + prose + "\n\n# Please enter the commit message\n"
+	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(above, "#")); len(got) != 0 {
+		t.Errorf("body trailer above the prose line must stay body text: got %v", got)
+	}
+}
+
+// With core.commentChar=auto git picks the prefix before it writes its comment
+// block, so the prefix is read back from git's own lines.
+func TestAutoCommentPrefix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{
+			name:    "comment block written with semicolons",
+			message: "# Release notes\n\n; Please enter the commit message for your changes.\n;\n; On branch main\n",
+			want:    ";",
+		},
+		{
+			name:    "comment block written with hashes",
+			message: "\n# Please enter the commit message for your changes.\n#\n",
+			want:    "#",
+		},
+		{
+			name:    "scissors line names the prefix above a diff",
+			message: "Subject\n\n@ Please enter the commit message\n@ ------------------------ >8 ------------------------\n@ Do not modify or remove the line above.\ndiff --git a/f b/f\n+line\n",
+			want:    "@",
+		},
+		{
+			name:    "no comment block falls back to the default",
+			message: "Subject\n\nBody text\n",
+			want:    "#",
+		},
+		{
+			name:    "empty message falls back to the default",
+			message: "",
+			want:    "#",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AutoCommentPrefix(tt.message); got != tt.want {
+				t.Errorf("AutoCommentPrefix(%q) = %q, want %q", tt.message, got, tt.want)
+			}
+		})
 	}
 }
 

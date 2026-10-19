@@ -27,12 +27,13 @@ import (
 // message (pasted, quoted, an indented squash message) names a checkpoint this
 // commit did not stamp, and would otherwise suppress the fresh trailer new
 // work needs. A checkpoint deleted from this clone never counts either.
-func stampedTrailer(ctx context.Context, message, source string, inherited []id.CheckpointID) (id.CheckpointID, bool) {
+// commentPrefix is editorCommentPrefix's answer for message.
+func stampedTrailer(ctx context.Context, message, commentPrefix string, inherited []id.CheckpointID) (id.CheckpointID, bool) {
 	skip := make(map[id.CheckpointID]bool, len(inherited))
 	for _, cpID := range inherited {
 		skip[cpID] = true
 	}
-	for _, cpID := range withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, source)) {
+	for _, cpID := range withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, commentPrefix)) {
 		if !skip[cpID] {
 			return cpID, true
 		}
@@ -43,13 +44,10 @@ func stampedTrailer(ctx context.Context, message, source string, inherited []id.
 // preparedFinalTrailers returns the checkpoint IDs in the final trailer block
 // of a message prepare-commit-msg was handed, read as git will record it. An
 // editor message still carries git's comment block and, with `commit -v`, a
-// scissors line and diff below the message; a -m/-F message (source "message")
-// keeps "#" lines as content.
-func preparedFinalTrailers(message, source string) []id.CheckpointID {
-	if source != commitSourceMessage {
-		message = trailers.StripEditorComments(message)
-	}
-	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message)
+// scissors line and diff below the message; a -m/-F message (empty
+// commentPrefix) keeps every line as content.
+func preparedFinalTrailers(message, commentPrefix string) []id.CheckpointID {
+	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(message, commentPrefix))
 }
 
 // pickCondensationTarget chooses the trailer a commit's new work condenses

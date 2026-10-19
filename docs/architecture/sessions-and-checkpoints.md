@@ -277,9 +277,13 @@ lines only as continuations of a trailer, and never the subject paragraph. An
 `Entire-Checkpoint:` line anywhere else in the message (pasted, quoted,
 indented, or mentioned in prose) names a checkpoint the commit did not stamp,
 so prepare-commit-msg stamps a fresh trailer and post-commit condenses there.
-Prepare reads the message as git will record it: an editor message loses its
-`#` lines and everything from a scissors line down, while a `-m`/`-F` message
-keeps `#` lines as content. Read-only lookups (resume, status, attribution,
+Prepare reads the message as git will record it: an editor message loses the
+lines starting with git's comment prefix and everything from the scissors line
+down, while a `-m`/`-F` message keeps every line as content. The prefix is
+`core.commentChar` or `core.commentString` (aliases; the last one set wins),
+`#` when unset, and for `auto` it is read back from the comment block git wrote
+into the message; prepare writes its own explanation with the same prefix so
+git's cleanup removes it. Read-only lookups (resume, status, attribution,
 read-only explain) and squash and redo inheritance still scan the whole
 message, because squash commits carry their squashed commits' trailers in the
 body. The trailer writer uses the same grammar, so a trailer it appends is

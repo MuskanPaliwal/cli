@@ -82,13 +82,20 @@ func advCommit(env *TestEnv, message, source string, keep func(checkpointID stri
 	if strings.TrimSpace(strings.SplitN(final, "\n", 2)[0]) == "" {
 		final = "typed in editor" + final // the subject the user types
 	}
+	commitWithPostCommit(env, final)
+	return string(prepared), final
+}
 
+// commitWithPostCommit records the staged changes with message, as git does
+// once prepare-commit-msg and the editor are done, then runs post-commit.
+func commitWithPostCommit(env *TestEnv, message string) {
+	env.T.Helper()
 	repo, err := gitrepo.OpenPath(env.RepoDir)
 	require.NoError(env.T, err)
 	defer repo.Close()
 	wt, err := repo.Worktree()
 	require.NoError(env.T, err)
-	_, err = wt.Commit(final, &git.CommitOptions{
+	_, err = wt.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{Name: testAuthorName, Email: testAuthorEmail, When: time.Now()},
 	})
 	require.NoError(env.T, err)
@@ -99,7 +106,6 @@ func advCommit(env *TestEnv, message, source string, keep func(checkpointID stri
 	if out, err := postCmd.CombinedOutput(); err != nil {
 		env.T.Logf("post-commit output: %s", out)
 	}
-	return string(prepared), final
 }
 
 func onlyID(want string) func(string) bool {

@@ -1877,9 +1877,35 @@ func TestAttach_CheckpointMentionedInProseDoesNotSelectCheckpoint(t *testing.T) 
 	assertAttachIgnoresBodyCheckpoint(t, "Subject\n\nFollow-up to Entire-Checkpoint: a1b2c3d4e5f6 from last week.\n")
 }
 
-func assertAttachIgnoresBodyCheckpoint(t *testing.T, commitMessage string) {
-	t.Helper()
+// Git reads "Entire-Checkpoint:<id>" (no space after the colon) as a trailer,
+// so attach joins that checkpoint as it would a canonical trailer.
+func TestAttach_NoSpaceTrailerJoinsCheckpoint(t *testing.T) {
 	setupAttachTestRepo(t)
+	ctx := context.Background()
+	named, state := attachToCommitNamingCheckpoint(t, "Subject\n\nEntire-Checkpoint:a1b2c3d4e5f6\n")
+	if state.LastCheckpointID != named {
+		t.Fatalf("attach wrote the session into %s, want the trailer's checkpoint %s", state.LastCheckpointID, named)
+	}
+
+	repo, err := git.PlainOpen(mustGetwd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs()).Read(ctx, named)
+	if err != nil || summary == nil {
+		t.Fatalf("read joined checkpoint: %v", err)
+	}
+	if len(summary.Sessions) != 2 {
+		t.Errorf("joined checkpoint sessions: got %d, want 2", len(summary.Sessions))
+	}
+}
+
+// attachToCommitNamingCheckpoint stores a checkpoint for an unrelated session,
+// commits with commitMessage (which names that checkpoint somewhere), and
+// attaches a new session to the commit. Returns the named checkpoint and the
+// attached session's state. Requires setupAttachTestRepo.
+func attachToCommitNamingCheckpoint(t *testing.T, commitMessage string) (id.CheckpointID, *session.State) {
+	t.Helper()
 	ctx := context.Background()
 	repoDir := mustGetwd(t)
 	named := id.MustCheckpointID("a1b2c3d4e5f6")
@@ -1916,11 +1942,20 @@ func assertAttachIgnoresBodyCheckpoint(t *testing.T, commitMessage string) {
 	if err != nil || state == nil {
 		t.Fatalf("load attached session state: %+v (%v)", state, err)
 	}
+	return named, state
+}
+
+func assertAttachIgnoresBodyCheckpoint(t *testing.T, commitMessage string) {
+	t.Helper()
+	setupAttachTestRepo(t)
+	ctx := context.Background()
+	repoDir := mustGetwd(t)
+	named, state := attachToCommitNamingCheckpoint(t, commitMessage)
 	if state.LastCheckpointID == named {
 		t.Fatalf("attach wrote the session into checkpoint %s, which the commit only mentions in its body", named)
 	}
 
-	repo, err = git.PlainOpen(repoDir)
+	repo, err := git.PlainOpen(repoDir)
 	if err != nil {
 		t.Fatal(err)
 	}
