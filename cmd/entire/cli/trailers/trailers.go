@@ -190,17 +190,30 @@ func StripEditorComments(message, commentPrefix string) string {
 	if commentPrefix == "" {
 		return message
 	}
-	lines := strings.Split(message, "\n")
+	lines := strings.Split(CutAtScissors(message, commentPrefix), "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if isScissorsLine(line, commentPrefix) {
-			break
-		}
 		if !strings.HasPrefix(line, commentPrefix) {
 			kept = append(kept, line)
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// CutAtScissors returns message without git's scissors line for commentPrefix
+// and everything below it, which git discards from a `commit -v` message. An
+// empty commentPrefix returns message unchanged.
+func CutAtScissors(message, commentPrefix string) string {
+	if commentPrefix == "" {
+		return message
+	}
+	lines := strings.Split(message, "\n")
+	for i, line := range lines {
+		if isScissorsLine(line, commentPrefix) {
+			return strings.Join(lines[:i], "\n")
+		}
+	}
+	return message
 }
 
 // AutoCommentPrefix returns the prefix git chose for core.commentChar=auto in a

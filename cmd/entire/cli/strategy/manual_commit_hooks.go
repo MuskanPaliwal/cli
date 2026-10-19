@@ -185,7 +185,7 @@ func saveCommitLinkingAlways(ctx context.Context) error {
 // If the message contains only our trailer (no actual user content), strip it
 // so git will abort the commit due to empty message.
 
-func (s *ManualCommitStrategy) CommitMsg(_ context.Context, commitMsgFile string) error { //nolint:unparam // error return is part of the hook contract; callers check it
+func (s *ManualCommitStrategy) CommitMsg(ctx context.Context, commitMsgFile string) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	content, err := os.ReadFile(commitMsgFile) //nolint:gosec // Path comes from git hook
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
@@ -199,8 +199,15 @@ func (s *ManualCommitStrategy) CommitMsg(_ context.Context, commitMsgFile string
 		return nil
 	}
 
+	// A message that ends with its trailer has no comment block for git to
+	// strip (the -m/-F shape), so the comment prefix is not needed.
+	commentPrefix := ""
+	if !strings.HasPrefix(lastNonBlankLine(message), trailers.CheckpointTrailerKey+":") {
+		commentPrefix = gitCommentPrefix(ctx, message)
+	}
+
 	// Check if there's any user content (non-comment, non-trailer lines)
-	if !hasUserContent(message) {
+	if !hasUserContent(message, commentPrefix) {
 		// No user content - strip the trailer so git aborts
 		message = stripCheckpointTrailer(message)
 		if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil {
@@ -296,27 +303,40 @@ func parsePostRewritePairs(r io.Reader) ([]rewritePair, error) {
 	return pairs, nil
 }
 
-// hasUserContent checks if the message has any content besides comments and our trailer.
-func hasUserContent(message string) bool {
+// hasUserContent reports whether git will record anything in message besides
+// Entire-Checkpoint trailers. git does not tell commit-msg how the message was
+// written, so the message has to say: an editor message ends with git's
+// comment block, and git drops every line starting with commentPrefix plus the
+// scissors line and everything below it; a -m/-F message has no such block and
+// git keeps its lines as written. A user who deletes git's block and types only
+// commentPrefix lines is therefore read as having content.
+func hasUserContent(message, commentPrefix string) bool {
+	message = trailers.CutAtScissors(message, commentPrefix)
+	commentBlock := commentPrefix != "" && strings.HasPrefix(lastNonBlankLine(message), commentPrefix)
 	trailerPrefix := trailers.CheckpointTrailerKey + ":"
 	for _, line := range strings.Split(message, "\n") {
 		trimmed := strings.TrimSpace(line)
-		// Skip empty lines
-		if trimmed == "" {
+		if trimmed == "" || strings.HasPrefix(trimmed, trailerPrefix) {
 			continue
 		}
-		// Skip comment lines
-		if strings.HasPrefix(trimmed, "#") {
+		if commentBlock && strings.HasPrefix(line, commentPrefix) {
 			continue
 		}
-		// Skip our trailer line
-		if strings.HasPrefix(trimmed, trailerPrefix) {
-			continue
-		}
-		// Found user content
 		return true
 	}
 	return false
+}
+
+// lastNonBlankLine returns the last line of message that is not blank, or ""
+// when there is none.
+func lastNonBlankLine(message string) string {
+	lines := strings.Split(message, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	return ""
 }
 
 // stripCheckpointTrailer removes the Entire-Checkpoint trailer line from the message.

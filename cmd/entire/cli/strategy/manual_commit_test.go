@@ -854,6 +854,95 @@ func TestAddCheckpointTrailerWithComment_NoPrompt(t *testing.T) {
 	}
 }
 
+// hasUserContent decides whether commit-msg may leave Entire's trailer in, so
+// it must count exactly what git's cleanup will keep. An editor message ends
+// with git's comment block; a -m/-F message does not, and keeps every line.
+func TestHasUserContent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		trailer   = "Entire-Checkpoint: a1b2c3d4e5f6"
+		scissors  = "------------------------ >8 ------------------------"
+		hashBlock = "# Please enter the commit message for your changes.\n#\n"
+	)
+	tests := []struct {
+		name          string
+		message       string
+		commentPrefix string
+		want          bool
+	}{
+		{
+			name:          "untouched editor message",
+			message:       "\n\n" + trailer + "\n# Remove the Entire-Checkpoint trailer above\n\n" + hashBlock,
+			commentPrefix: "#",
+			want:          false,
+		},
+		{
+			name:          "untouched editor message with a semicolon prefix",
+			message:       "\n\n" + trailer + "\n; Remove the Entire-Checkpoint trailer above\n\n; Please enter the commit message for your changes.\n;\n",
+			commentPrefix: ";",
+			want:          false,
+		},
+		{
+			name:          "untouched editor message with a multi-character prefix",
+			message:       "\n\n" + trailer + "\n// Remove the Entire-Checkpoint trailer above\n\n// Please enter the commit message for your changes.\n",
+			commentPrefix: "//",
+			want:          false,
+		},
+		{
+			name:          "untouched verbose message: the diff below the scissors line is not content",
+			message:       "\n\n" + trailer + "\n# Remove the Entire-Checkpoint trailer above\n\n" + hashBlock + "# " + scissors + "\n# Do not modify or remove the line above.\ndiff --git a/f b/f\n+line\n",
+			commentPrefix: "#",
+			want:          false,
+		},
+		{
+			name:          "typed subject in the editor",
+			message:       "Fix login\n\n" + trailer + "\n# Remove the Entire-Checkpoint trailer above\n\n" + hashBlock,
+			commentPrefix: "#",
+			want:          true,
+		},
+		{
+			name:          "hash heading is content under a semicolon prefix",
+			message:       "# Release notes\n\n" + trailer + "\n; Remove the Entire-Checkpoint trailer above\n\n; Please enter the commit message for your changes.\n",
+			commentPrefix: ";",
+			want:          true,
+		},
+		{
+			name:          "git's block deleted, Entire's explanation kept",
+			message:       "\n\n" + trailer + "\n# Remove the Entire-Checkpoint trailer above\n# The trailer will be added to your next commit based on this branch.\n",
+			commentPrefix: "#",
+			want:          false,
+		},
+		{
+			name:          "-m subject starting with a hash",
+			message:       "#42 fix login\n\n" + trailer + "\n",
+			commentPrefix: "#",
+			want:          true,
+		},
+		{
+			name:          "-m message without a resolved prefix",
+			message:       "#42 fix login\n\n" + trailer + "\n",
+			commentPrefix: "",
+			want:          true,
+		},
+		{
+			name:          "empty -m message",
+			message:       "\n\n" + trailer + "\n",
+			commentPrefix: "",
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasUserContent(tt.message, tt.commentPrefix); got != tt.want {
+				t.Errorf("hasUserContent(%q, %q) = %v, want %v", tt.message, tt.commentPrefix, got, tt.want)
+			}
+		})
+	}
+}
+
 // With a repository comment prefix other than "#", git keeps "#" lines, so the
 // explanation must use the prefix git strips or it lands in the commit.
 func TestAddCheckpointTrailerWithComment_UsesCommentPrefix(t *testing.T) {
