@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/entireio/cli/internal/entireclient/httpclient"
 )
 
 // ErrInsecureHTTP is returned when the base URL uses HTTP without an explicit opt-in.
@@ -35,8 +37,8 @@ const (
 	// pointing at `entire login --server`.
 	AuthBaseURLEnvVar = "ENTIRE_AUTH_BASE_URL"
 
-	schemeHTTP  = "http"
-	schemeHTTPS = "https"
+	schemeHTTP  = httpclient.SchemeHTTP
+	schemeHTTPS = httpclient.SchemeHTTPS
 )
 
 // RejectRemovedAuthEnv returns an error when ENTIRE_AUTH_BASE_URL is set
@@ -53,11 +55,23 @@ func RejectRemovedAuthEnv() error {
 // BaseURL returns the effective Entire API base URL.
 // ENTIRE_API_BASE_URL takes precedence over the production default.
 func BaseURL() string {
-	if raw := strings.TrimSpace(os.Getenv(BaseURLEnvVar)); raw != "" {
-		return normalizeBaseURL(raw)
+	if raw, ok := BaseURLOverride(); ok {
+		return raw
 	}
 
 	return DefaultBaseURL
+}
+
+// BaseURLOverride returns the normalized ENTIRE_API_BASE_URL and true when the
+// user pointed the CLI at an explicit data host, or ("", false) when BaseURL()
+// would fall back to the production default. See auth.resolveCellClientSubject
+// for a caller that must tell the two apart.
+func BaseURLOverride() (string, bool) {
+	raw := strings.TrimSpace(os.Getenv(BaseURLEnvVar))
+	if raw == "" {
+		return "", false
+	}
+	return normalizeBaseURL(raw), true
 }
 
 // ResolveURLFromBase joins an API-relative path against an explicit base URL.

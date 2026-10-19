@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/internal/entireclient/httpclient"
 	"github.com/entireio/cli/internal/entireclient/userdirs"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
@@ -83,13 +84,6 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 			}
 		}
 	}
-}
-
-// globalConfigDirPath returns the CLI's global config directory. Resolution
-// lives in userdirs.Config — the single implementation shared by all
-// config-dir consumers (contexts.json, the file token store, this cache).
-func globalConfigDirPath() string {
-	return userdirs.Config()
 }
 
 // ensureGlobalConfigDir creates the global config directory if it doesn't exist.
@@ -180,7 +174,7 @@ func fetchLatestVersion(ctx context.Context) (string, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", versioninfo.UserAgent())
 
-	client := &http.Client{}
+	client := httpclient.New(httpclient.Options{})
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching release info: %w", err)
@@ -224,7 +218,7 @@ func fetchLatestNightlyVersion(ctx context.Context) (string, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", versioninfo.UserAgent())
 
-	client := &http.Client{}
+	client := httpclient.New(httpclient.Options{})
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching releases: %w", err)
@@ -423,13 +417,6 @@ func UpdateCommandForCurrentBinary(currentVersion string) string {
 	}
 	return fallbackInstallCommand(execPath, currentVersion)
 }
-
-// UpdateCommandShell names the shell UpdateCommandForCurrentBinary's command
-// has to run in, or "" when any shell will do. Callers that print the command
-// instead of running it need it: the Windows commands are PowerShell
-// one-liners, and pasting one into cmd.exe or bash either fails or, in bash's
-// case, expands part of the command before PowerShell sees it.
-func UpdateCommandShell() string { return updateCommandShell }
 
 // printNotification prints the version update notification to the user.
 func printNotification(w io.Writer, current, latest string) {

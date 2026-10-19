@@ -123,6 +123,48 @@ func TestAlreadyRedacted(t *testing.T) {
 	}
 }
 
+// TestApplyRegions_IgnoresZeroLengthRegions pins that a zero-length region
+// replaces nothing. Applied, it would insert a token into text no layer
+// flagged, whichever layer produced it.
+func TestApplyRegions_IgnoresZeroLengthRegions(t *testing.T) {
+	t.Parallel()
+	const s = "deploy ACME-1 now"
+	tests := []struct {
+		name    string
+		regions []taggedRegion
+		want    string
+	}{
+		{
+			name: "only zero-length",
+			regions: []taggedRegion{
+				{region: region{0, 0}},
+				{region: region{6, 6}, label: labelEmail},
+				{region: region{len(s), len(s)}},
+			},
+			want: s,
+		},
+		{
+			name: "zero-length around a real region",
+			regions: []taggedRegion{
+				{region: region{0, 0}},
+				{region: region{7, 7}},
+				{region: region{7, 13}},
+				{region: region{13, 13}},
+				{region: region{len(s), len(s)}},
+			},
+			want: "deploy REDACTED now",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := applyRegions(s, tt.regions); got != tt.want {
+				t.Errorf("applyRegions() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestJSONLContent_TopLevelArray(t *testing.T) {
 	// Top-level JSON arrays are valid JSONL and should be redacted.
 	input := `["` + highEntropySecret + `","normal text"]`
@@ -322,17 +364,17 @@ func TestString_PatternDetection(t *testing.T) {
 	}{
 		{
 			name:  "AWS access key (entropy ~3.9, below 4.5 threshold)",
-			input: "key=AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture,
 			want:  "key=REDACTED",
 		},
 		{
 			name:  "two AWS keys separated by space produce two REDACTED tokens",
-			input: "key=AKIAYRWQG5EJLPZLBYNP AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture + " " + awsKeyFixture,
 			want:  "key=REDACTED REDACTED",
 		},
 		{
 			name:  "adjacent AWS keys without separator merge into single REDACTED",
-			input: "key=AKIAYRWQG5EJLPZLBYNPAKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture + awsKeyFixture,
 			want:  "key=REDACTED",
 		},
 	}
@@ -360,6 +402,17 @@ func TestString_PatternDetection(t *testing.T) {
 // and keeps secret scanners (including GitHub push protection) from flagging
 // synthetic test fixtures; the assembled runtime values exercise the redactor
 // exactly as a real token would.
+
+// awsKeyFixture is an AWS-Access-Key-ID-shaped value, assembled for the same
+// reason as the prefixes above and openSSHPrivateKeyMarker. It matters more
+// here than for those: GitHub push protection rejects this pattern outright,
+// and because this repo stores its own agent transcripts as checkpoints, a
+// literal reaches a transcript whenever someone edits redaction code and wedges
+// that checkpoint's push queue permanently. The bytes are unchanged, so the
+// AWS rule stays genuinely exercised — the "key=REDACTED" cases below fail if
+// it ever stops matching. Do not re-inline it.
+const awsKeyFixture = "AKIAYRWQG5" + "EJLPZLBYNP"
+
 func supabaseSecretPrefix() string      { return "sb" + "_secret_" }
 func supabasePersonalPrefix() string    { return "sb" + "p_" }
 func supabasePublishablePrefix() string { return "sb" + "_publishable_" }
@@ -647,6 +700,140 @@ func TestJSONLContent_SupabaseSecretMalformedLineFallback(t *testing.T) {
 	}
 	if strings.Contains(got, secret) {
 		t.Fatalf("secret survived JSONL fall-back redaction: %q", got)
+	}
+	if !strings.Contains(got, "REDACTED") {
+		t.Fatalf("expected REDACTED placeholder in %q", got)
+	}
+}
+
+func bareSKPrefix() string { return "s" + "k-" }
+
+// TestString_BareSKKeys covers issue #2728: an "sk-" key with a short body
+// (LiteLLM proxy virtual keys are sk- + 22 chars) written as a bare value in
+// prose was missed by every layer. The entropy layer structurally cannot catch
+// it (see providers.go), so the provider layer must, wherever it appears.
+func TestString_BareSKKeys(t *testing.T) {
+	t.Parallel()
+
+	issueKey := bareSKPrefix() + "Qm4Wn8Rt_bVcXzLkJhGfDs" // issue #2728 fake value
+	lowerDigitKey := bareSKPrefix() + "a1b2c3d4e5f6g7h8i9j0k1"
+	hyphenKey := bareSKPrefix() + "Qm4Wn8Rt-bVcXzLkJhGfDs"
+	body20 := bareSKPrefix() + "Qm4Wn8RtbVcXzLkJhGfD"
+	body19 := bareSKPrefix() + "Qm4Wn8RtbVcXzLkJhGf"
+	for _, low := range []string{issueKey, lowerDigitKey, body19} {
+		if e := shannonEntropy(low); e > entropyThreshold {
+			t.Fatalf("value %q has entropy %.3f > %.1f; not an entropy-miss regression case", low, e, entropyThreshold)
+		}
+	}
+
+	assertStringRedactionCases(t, []stringRedactionCase{
+		{
+			name:  "issue #2728 repro: bare key in prose",
+			input: "the first is " + issueKey + " the second",
+			want:  "the first is REDACTED the second",
+		},
+		{
+			name:  "lowercase body with digits",
+			input: "key " + lowerDigitKey + " here",
+			want:  "key REDACTED here",
+		},
+		{
+			name:  "body with a hyphen is redacted whole",
+			input: "key " + hyphenKey + " here",
+			want:  "key REDACTED here",
+		},
+		{
+			name:  "quoted value",
+			input: `"api_key": "` + issueKey + `"`,
+			want:  `"api_key": "REDACTED"`,
+		},
+		{
+			name:  "bearer header",
+			input: "Authorization: Bearer " + issueKey,
+			want:  "Authorization: Bearer REDACTED",
+		},
+		{
+			name:  "exactly 20-char body redacts",
+			input: body20,
+			want:  "REDACTED",
+		},
+		{
+			name:  "exactly 19-char body is preserved",
+			input: body19,
+			want:  body19,
+		},
+		{
+			// Raw-text fall-back shape: "\n" is a literal backslash-n, so the
+			// byte before the prefix is the word char 'n'.
+			name:  "preceded by a literal JSON escape letter",
+			input: `first line\n` + issueKey,
+			want:  `first line\nREDACTED`,
+		},
+	})
+}
+
+// TestDetectProviderTokens_BareSKKeyBoundaries pins the underscore and escape
+// boundaries on the provider layer alone: through String, the entropy layer can
+// swallow the preceding name or escape digits together with the key and mask a
+// missing boundary.
+func TestDetectProviderTokens_BareSKKeyBoundaries(t *testing.T) {
+	t.Parallel()
+
+	key := bareSKPrefix() + "Qm4Wn8Rt_bVcXzLkJhGfDs"
+	for _, prefix := range []string{`API_KEY_`, `first line\n`, `quote\u0022`} {
+		input := prefix + key
+		regions := detectProviderTokens(input)
+		if len(regions) != 1 || input[regions[0].start:regions[0].end] != key {
+			t.Errorf("detectProviderTokens(%q) = %v, want exactly the key", input, regions)
+		}
+	}
+}
+
+// TestString_BareSKKeyOverRedactionGuards pins the two guards that keep the
+// bare sk- rule off ordinary text: the prefix must not sit inside a word, and
+// an all-lowercase digit-free body is a kebab-case name, not a key.
+func TestString_BareSKKeyOverRedactionGuards(t *testing.T) {
+	t.Parallel()
+
+	inWord := "risk-assessment-2026-q4-planning-doc"
+	kebab := bareSKPrefix() + "learn-model-selection-guide"
+	for _, low := range []string{inWord, kebab} {
+		if e := shannonEntropy(low); e > entropyThreshold {
+			t.Fatalf("value %q has entropy %.3f > %.1f; entropy layer would mask the guard", low, e, entropyThreshold)
+		}
+	}
+
+	assertStringRedactionCases(t, []stringRedactionCase{
+		{
+			name:  "sk- inside a hyphenated word is preserved",
+			input: "see " + inWord + " for details",
+			want:  "see " + inWord + " for details",
+		},
+		{
+			name:  "all-lowercase digit-free body is preserved",
+			input: "read " + kebab,
+			want:  "read " + kebab,
+		},
+		{
+			name:  "bare prefix in prose is preserved",
+			input: "OpenAI keys start with " + bareSKPrefix(),
+			want:  "OpenAI keys start with " + bareSKPrefix(),
+		},
+	})
+}
+
+// TestJSONLContent_BareSKKeyRedacted drives the issue #2728 value through the
+// field-aware JSONL path used for transcript.jsonl and full.jsonl.
+func TestJSONLContent_BareSKKeyRedacted(t *testing.T) {
+	t.Parallel()
+	key := bareSKPrefix() + "Qm4Wn8Rt_bVcXzLkJhGfDs"
+	line := `{"type":"user","message":{"role":"user","content":"the first is ` + key + ` the second"}}`
+	got, err := JSONLContent(line)
+	if err != nil {
+		t.Fatalf("JSONLContent error: %v", err)
+	}
+	if strings.Contains(got, key) {
+		t.Fatalf("key survived JSONL redaction: %q", got)
 	}
 	if !strings.Contains(got, "REDACTED") {
 		t.Fatalf("expected REDACTED placeholder in %q", got)
@@ -1379,7 +1566,7 @@ func TestString_RealSecretsStillCaught(t *testing.T) {
 		},
 		{
 			name:  "AWS access key (pattern-based)",
-			input: "key=AKIAYRWQG5EJLPZLBYNP",
+			input: "key=" + awsKeyFixture,
 		},
 		{
 			name:  "GitHub personal access token",
