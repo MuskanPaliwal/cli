@@ -28,7 +28,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
@@ -684,7 +683,7 @@ func planAttachLink(ctx context.Context, repo *git.Repository, headCommit *objec
 		}
 	}
 	remotes := attachRemotesToCheck(ctx)
-	if len(trailers.ParseAllCheckpointsFromFinalTrailerBlock(target.Message)) > 0 {
+	if len(strategy.FinalCheckpointTrailers(ctx, target.Message)) > 0 {
 		// Joining changes no history, so whether the commit is pushed only
 		// decides when the checkpoint goes out: now if it is, since there may be
 		// no later push of it, else with the next git push. A remote that can't
@@ -1371,7 +1370,7 @@ func suggestFetchCommand(ctx context.Context, refspec string) string {
 // names, or a new ID. An ID elsewhere in the message is not the commit's link,
 // so attach must not write the session into it.
 func resolveCheckpointID(ctx context.Context, headCommit *object.Commit) (id.CheckpointID, bool) {
-	existing := trailers.ParseAllCheckpointsFromFinalTrailerBlock(headCommit.Message)
+	existing := strategy.FinalCheckpointTrailers(ctx, headCommit.Message)
 	if len(existing) > 0 {
 		return existing[len(existing)-1], true
 	}

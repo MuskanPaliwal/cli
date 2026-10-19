@@ -269,11 +269,13 @@ they rely on turn start having followed or re-homed first. A sibling
 worktree's hook that runs between a move and the moved home's next hook
 still reads the stored transcript copy from the hook's own worktree.
 
-**Only the final trailer block links a commit** (`stampedTrailer`,
-`stampedTrailersOf`, attach's `resolveCheckpointID`, `explain --generate`).
-Every path that writes to a checkpoint because a commit names it reads the
-commit's final trailer block by git's grammar: no leading whitespace, indented
-lines only as continuations of a trailer, and never the subject paragraph. An
+**Only the final trailer block links a commit** (`stampedTrailer` in
+prepare-commit-msg; `FinalCheckpointTrailers` in post-commit, attach, and
+`explain --generate`). Every path that writes to a checkpoint because a commit
+names it reads the commit's final trailer block by git's grammar: no leading
+whitespace, indented lines only as continuations of a trailer, lines starting
+with git's comment prefix skipped (trailing comment lines too), and never the
+subject paragraph. An
 `Entire-Checkpoint:` line anywhere else in the message (pasted, quoted,
 indented, or mentioned in prose) names a checkpoint the commit did not stamp,
 so prepare-commit-msg stamps a fresh trailer and post-commit condenses there.
@@ -283,11 +285,14 @@ down, while a `-m`/`-F` message keeps every line as content. The prefix is
 `core.commentChar` or `core.commentString` (aliases; the last one set wins),
 `#` when unset, and for `auto` it is read back from the comment block git wrote
 into the message; prepare writes its own explanation with the same prefix so
-git's cleanup removes it. Read-only lookups (resume, status, attribution,
-read-only explain) and squash and redo inheritance still scan the whole
-message, because squash commits carry their squashed commits' trailers in the
-body. The trailer writer uses the same grammar, so a trailer it appends is
-always one the readers accept.
+git's cleanup removes it. A recorded commit is read with the configured prefix
+(`auto` reads as `#`, as `git interpret-trailers` does), because
+`commit.cleanup` modes other than `strip` keep comment lines, Entire's
+explanation below the trailer among them. Read-only lookups (resume, status,
+attribution, read-only explain) and squash and redo inheritance still scan the
+whole message, because squash commits carry their squashed commits' trailers in
+the body. The trailer writer joins only a trailer block without comment lines,
+so a trailer it appends is always one the readers accept.
 
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in

@@ -1,6 +1,7 @@
 package trailers
 
 import (
+	"slices"
 	"testing"
 
 	checkpointID "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -83,14 +84,10 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("AppendCheckpointTrailer() = %q, want %q", got, tt.want)
 			}
-			found := false
-			for _, cpID := range ParseAllCheckpointsFromFinalTrailerBlock(got) {
-				if cpID.String() == "abc123def456" {
-					found = true
+			for _, commentPrefix := range []string{"", DefaultCommentPrefix} {
+				if !slices.Contains(ParseAllCheckpointsFromFinalTrailerBlock(got, commentPrefix), checkpointID.MustCheckpointID("abc123def456")) {
+					t.Errorf("ParseAllCheckpointsFromFinalTrailerBlock(%q) does not see the checkpoint AppendCheckpointTrailer just appended:\n%q", commentPrefix, got)
 				}
-			}
-			if !found {
-				t.Errorf("ParseAllCheckpointsFromFinalTrailerBlock does not see the checkpoint AppendCheckpointTrailer just appended:\n%q", got)
 			}
 		})
 	}
@@ -355,9 +352,10 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		message string
-		want    []string
+		name          string
+		message       string
+		commentPrefix string
+		want          []string
 	}{
 		{
 			name:    "checkpoint-shaped body line ignored",
@@ -424,14 +422,62 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 			message: "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
 			want:    []string{"a1b2c3d4e5f6"},
 		},
+		{
+			// commit.cleanup=scissors keeps Entire's explanation below its trailer.
+			name:          "comment lines in the block are skipped",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# Remove the Entire-Checkpoint trailer above if you want.\n# Last Prompt: add login\n",
+			commentPrefix: "#",
+			want:          []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:          "comment lines between trailers are skipped",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# note\nEntire-Checkpoint: b2c3d4e5f6a1\n",
+			commentPrefix: "#",
+			want:          []string{"a1b2c3d4e5f6", "b2c3d4e5f6a1"},
+		},
+		{
+			// commit.cleanup=whitespace keeps git's own comment block too.
+			name:          "trailing comment paragraphs are ignored",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# Please enter the commit message for your changes.\n#\n# On branch main\n",
+			commentPrefix: "#",
+			want:          []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:          "an indented line after a comment continues nothing",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# note\n  continuation text\n",
+			commentPrefix: "#",
+			want:          nil,
+		},
+		{
+			name:          "configured prefix",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n; Remove the Entire-Checkpoint trailer above if you want.\n",
+			commentPrefix: ";",
+			want:          []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:          "another prefix's lines are content",
+			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# note\n",
+			commentPrefix: ";",
+			want:          nil,
+		},
+		{
+			name:          "comment lines do not lift a trailer out of the subject",
+			message:       "# note\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			commentPrefix: "#",
+			want:          nil,
+		},
+		{
+			name:    "empty prefix reads comment-shaped lines as content",
+			message: "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# note\n",
+			want:    nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ParseAllCheckpointsFromFinalTrailerBlock(tt.message)
-			t.Logf("message=%q parsed=%v", tt.message, got)
+			got := ParseAllCheckpointsFromFinalTrailerBlock(tt.message, tt.commentPrefix)
 			if len(got) != len(tt.want) {
 				t.Fatalf("ParseAllCheckpointsFromFinalTrailerBlock() = %v, want %v", got, tt.want)
 			}
@@ -441,20 +487,6 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestParseCheckpointFromFinalTrailerBlockReturnsFirst(t *testing.T) {
-	t.Parallel()
-
-	message := "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\nEntire-Checkpoint: b2c3d4e5f6a1\n"
-	got, found := ParseCheckpointFromFinalTrailerBlock(message)
-	t.Logf("message=%q parsed=%v found=%v", message, got, found)
-	if !found {
-		t.Fatal("ParseCheckpointFromFinalTrailerBlock() did not find a checkpoint")
-	}
-	if got.String() != "a1b2c3d4e5f6" {
-		t.Errorf("ParseCheckpointFromFinalTrailerBlock() = %v, want a1b2c3d4e5f6", got)
 	}
 }
 
@@ -543,11 +575,11 @@ func TestStripEditorComments_ProseMarkerKeepsTheFinalBlock(t *testing.T) {
 
 	const prose = "Explain ------------------------ >8 ------------------------ here."
 	below := "Subject\n\n" + prose + "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# Please enter the commit message\n"
-	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(below, "#")); len(got) != 1 || got[0].String() != "a1b2c3d4e5f6" {
+	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(below, "#"), "#"); len(got) != 1 || got[0].String() != "a1b2c3d4e5f6" {
 		t.Errorf("final trailer below the prose line: got %v, want [a1b2c3d4e5f6]", got)
 	}
 	above := "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n" + prose + "\n\n# Please enter the commit message\n"
-	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(above, "#")); len(got) != 0 {
+	if got := ParseAllCheckpointsFromFinalTrailerBlock(StripEditorComments(above, "#"), "#"); len(got) != 0 {
 		t.Errorf("body trailer above the prose line must stay body text: got %v", got)
 	}
 }

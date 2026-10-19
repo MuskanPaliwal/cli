@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -47,7 +48,21 @@ func stampedTrailer(ctx context.Context, message, commentPrefix string, inherite
 // scissors line and diff below the message; a -m/-F message (empty
 // commentPrefix) keeps every line as content.
 func preparedFinalTrailers(message, commentPrefix string) []id.CheckpointID {
-	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(message, commentPrefix))
+	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(message, commentPrefix), commentPrefix)
+}
+
+// FinalCheckpointTrailers returns the checkpoint IDs in the final trailer block
+// of a recorded commit message, read by git's trailer grammar, which skips
+// comment lines: commit.cleanup modes other than strip keep them, Entire's
+// explanation below the trailer among them.
+func FinalCheckpointTrailers(ctx context.Context, message string) []id.CheckpointID {
+	// A block read without the prefix holds no comment lines, so reading with
+	// it finds the same IDs; only a message that still names a checkpoint
+	// needs the git config read.
+	if ids := trailers.ParseAllCheckpointsFromFinalTrailerBlock(message, ""); len(ids) > 0 || !strings.Contains(message, trailers.CheckpointTrailerKey) {
+		return ids
+	}
+	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message, recordedCommentPrefix(ctx))
 }
 
 // pickCondensationTarget chooses the trailer a commit's new work condenses
@@ -218,7 +233,7 @@ func stampedTrailersOf(ctx context.Context, commit *object.Commit) ([]id.Checkpo
 		parent = commit.ParentHashes[0].String()
 	}
 	inherited, redone := takeInheritedMarker(ctx, parent)
-	stamped := withoutInherited(trailers.ParseAllCheckpointsFromFinalTrailerBlock(commit.Message), inherited)
+	stamped := withoutInherited(FinalCheckpointTrailers(ctx, commit.Message), inherited)
 	return withoutDeletedCheckpoints(ctx, stamped), redone
 }
 

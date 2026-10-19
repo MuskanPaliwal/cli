@@ -312,17 +312,14 @@ func parsePostRewritePairs(r io.Reader) ([]rewritePair, error) {
 // commentPrefix lines is therefore read as having content.
 func hasUserContent(message, commentPrefix string) bool {
 	message = trailers.CutAtScissors(message, commentPrefix)
-	commentBlock := commentPrefix != "" && strings.HasPrefix(lastNonBlankLine(message), commentPrefix)
+	if commentPrefix != "" && strings.HasPrefix(lastNonBlankLine(message), commentPrefix) {
+		message = trailers.StripEditorComments(message, commentPrefix)
+	}
 	trailerPrefix := trailers.CheckpointTrailerKey + ":"
 	for _, line := range strings.Split(message, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, trailerPrefix) {
-			continue
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, trailerPrefix) {
+			return true
 		}
-		if commentBlock && strings.HasPrefix(line, commentPrefix) {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -824,15 +821,19 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 	// an ID elsewhere in the message is not this commit's link. A deleted ID
 	// still mentioned somewhere (not as a whole trailer line, so not stripped)
 	// does not count: preserving on it would keep the dead checkpoint linked.
-	if live := withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, gitCommentPrefix(ctx, message))); len(live) > 0 {
-		logging.Debug(logCtx, "prepare-commit-msg: amend preserves existing trailer",
-			slog.String("strategy", "manual-commit"),
-			slog.String("checkpoint_id", live[0].String()),
-		)
-		return nil
-	}
-	if mentioned := trailers.ParseAllCheckpoints(message); len(mentioned) > 0 && len(withoutDeletedCheckpoints(ctx, mentioned)) == 0 {
-		strippedDeleted = true
+	// Every final-block trailer is also a mention, so a message without one
+	// skips reading the comment prefix from git config.
+	if mentioned := trailers.ParseAllCheckpoints(message); len(mentioned) > 0 {
+		if live := withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, gitCommentPrefix(ctx, message))); len(live) > 0 {
+			logging.Debug(logCtx, "prepare-commit-msg: amend preserves existing trailer",
+				slog.String("strategy", "manual-commit"),
+				slog.String("checkpoint_id", live[0].String()),
+			)
+			return nil
+		}
+		if len(withoutDeletedCheckpoints(ctx, mentioned)) == 0 {
+			strippedDeleted = true
+		}
 	}
 
 	// No trailer in message — check if any session has LastCheckpointID to restore
@@ -2758,9 +2759,13 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 
 	message := string(content)
 
-	// Don't add if prepare already stamped one (inherited trailers are links)
-	if _, found := stampedTrailer(logCtx, message, editorCommentPrefix(logCtx, source, message), inherited); found {
-		return nil
+	// Don't add if prepare already stamped one (inherited trailers are links).
+	// A message that names no checkpoint has none, and skips reading the
+	// comment prefix from git config.
+	if strings.Contains(message, trailers.CheckpointTrailerKey) {
+		if _, found := stampedTrailer(logCtx, message, editorCommentPrefix(logCtx, source, message), inherited); found {
+			return nil
+		}
 	}
 
 	message = addCheckpointTrailer(message, cpID)
@@ -2811,23 +2816,42 @@ func editorCommentPrefix(ctx context.Context, source, message string) string {
 }
 
 // gitCommentPrefix returns the prefix git's cleanup strips from an editor
-// message: core.commentChar or core.commentString, which are aliases (the last
-// one set wins), else git's default. For "auto" git chooses the prefix before
-// writing its comment block into message, so it is read back from that block.
+// message (see configuredCommentPrefix). For "auto" git chooses the prefix
+// before writing its comment block into message, so it is read back from that
+// block.
 func gitCommentPrefix(ctx context.Context, message string) string {
+	if prefix := configuredCommentPrefix(ctx); prefix != autoCommentChar {
+		return prefix
+	}
+	return trailers.AutoCommentPrefix(message)
+}
+
+// recordedCommentPrefix returns the prefix git's trailer grammar skips in a
+// recorded commit message. Only `git commit` resolves "auto";
+// `git interpret-trailers` reads it as git's default.
+func recordedCommentPrefix(ctx context.Context) string {
+	if prefix := configuredCommentPrefix(ctx); prefix != autoCommentChar {
+		return prefix
+	}
+	return trailers.DefaultCommentPrefix
+}
+
+// autoCommentChar is the core.commentChar value that lets `git commit` pick
+// the prefix.
+const autoCommentChar = "auto"
+
+// configuredCommentPrefix returns core.commentChar or core.commentString,
+// which are aliases (the last one set wins), else git's default.
+func configuredCommentPrefix(ctx context.Context) string {
 	out, err := exec.CommandContext(ctx, "git", "config", "--get-regexp", `^core\.comment(char|string)$`).Output()
 	if err != nil {
 		return trailers.DefaultCommentPrefix // unset, or unreadable
 	}
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	_, prefix, _ := strings.Cut(lines[len(lines)-1], " ")
-	switch prefix {
-	case "":
-		return trailers.DefaultCommentPrefix
-	case "auto":
-		return trailers.AutoCommentPrefix(message)
+	if _, prefix, _ := strings.Cut(lines[len(lines)-1], " "); prefix != "" {
+		return prefix
 	}
-	return prefix
+	return trailers.DefaultCommentPrefix
 }
 
 // addInheritedCheckpointTrailer adds an inherited trailer above git's comment

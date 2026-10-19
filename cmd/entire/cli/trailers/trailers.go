@@ -119,21 +119,12 @@ func ParseAllCheckpoints(commitMessage string) []checkpointID.CheckpointID {
 	return ids
 }
 
-// ParseCheckpointFromFinalTrailerBlock extracts the first checkpoint ID from
-// the final trailer block. Commit body text is not considered.
-func ParseCheckpointFromFinalTrailerBlock(commitMessage string) (checkpointID.CheckpointID, bool) {
-	for _, line := range finalTrailerBlock(commitMessage) {
-		if cpID, ok := checkpointFromTrailerLine(line); ok {
-			return cpID, true
-		}
-	}
-	return checkpointID.EmptyCheckpointID, false
-}
-
 // ParseAllCheckpointsFromFinalTrailerBlock extracts checkpoint IDs from the
-// final trailer block, deduplicating them while preserving order.
-func ParseAllCheckpointsFromFinalTrailerBlock(commitMessage string) []checkpointID.CheckpointID {
-	lines := finalTrailerBlock(commitMessage)
+// final trailer block, deduplicating them while preserving order. Lines
+// starting with commentPrefix are skipped, as git's trailer grammar does; an
+// empty commentPrefix reads every line as written.
+func ParseAllCheckpointsFromFinalTrailerBlock(commitMessage, commentPrefix string) []checkpointID.CheckpointID {
+	lines := finalTrailerBlock(commitMessage, commentPrefix)
 	if len(lines) == 0 {
 		return nil
 	}
@@ -152,11 +143,11 @@ func ParseAllCheckpointsFromFinalTrailerBlock(commitMessage string) []checkpoint
 }
 
 func checkpointFromTrailerLine(line string) (checkpointID.CheckpointID, bool) {
-	key, value, ok := strings.Cut(line, ":")
-	if !ok || key != CheckpointTrailerKey {
+	match := checkpointTrailerLineRegex.FindStringSubmatch(line)
+	if match == nil {
 		return checkpointID.EmptyCheckpointID, false
 	}
-	cpID, err := checkpointID.NewCheckpointID(strings.TrimSpace(value))
+	cpID, err := checkpointID.NewCheckpointID(match[1])
 	return cpID, err == nil
 }
 
@@ -356,11 +347,9 @@ func IsTrailerLine(line string) bool {
 }
 
 // appendTrailerLine appends a single pre-formatted trailer line (e.g. "Key: value")
-// to message in trailer-block-aware format. If the message's final paragraph is a
-// trailer block by the same grammar finalTrailerBlock reads with, the line is
-// joined directly to it; otherwise a blank line is inserted first to start a new
-// trailer block. Sharing the grammar is the contract: a paragraph the writer joins
-// must be one the strict readers accept, or the appended trailer disappears with it.
+// to message in trailer-block-aware format: it is joined to a final paragraph
+// that is a trailer block (see isTrailerBlock), and otherwise starts a new block
+// after a blank line.
 func appendTrailerLine(message, trailerLine string) string {
 	trimmed := strings.TrimRight(message, "\n")
 
@@ -378,7 +367,9 @@ func appendTrailerLine(message, trailerLine string) string {
 		start--
 	}
 
-	if separated && isTrailerBlock(lines[start:]) {
+	// Read without a comment prefix, a joined block holds no comment lines, so
+	// every reader accepts the trailer whatever prefix it skips.
+	if separated && isTrailerBlock(lines[start:], "") {
 		return trimmed + "\n" + trailerLine + "\n"
 	}
 	return trimmed + "\n\n" + trailerLine + "\n"
@@ -399,7 +390,7 @@ func AppendCheckpointTrailer(message, checkpointID string) string {
 // "Entire-OPF-Applied: false" or "skipped" from accidentally meaning
 // "yes, applied."
 func HasOPFApplied(commitMessage string) bool {
-	for _, line := range finalTrailerBlock(commitMessage) {
+	for _, line := range finalTrailerBlock(commitMessage, "") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok || key != OPFAppliedTrailerKey {
 			continue
@@ -411,39 +402,43 @@ func HasOPFApplied(commitMessage string) bool {
 	return false
 }
 
-func finalTrailerBlock(message string) []string {
-	trimmed := strings.TrimRight(message, "\n")
-	if trimmed == "" {
-		return nil
+// finalTrailerBlock returns the trailer and continuation lines of message's
+// final trailer block, skipping lines that start with commentPrefix as git's
+// trailer grammar does, or nil when the final paragraph is not a trailer block.
+func finalTrailerBlock(message, commentPrefix string) []string {
+	lines := strings.Split(message, "\n")
+	// Git ignores the blank and comment lines that end a message.
+	end := len(lines)
+	for end > 0 && (isBlankLine(lines[end-1]) || isCommentLine(lines[end-1], commentPrefix)) {
+		end--
 	}
-	lines := strings.Split(trimmed, "\n")
-	i := len(lines) - 1
-	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
-		i--
+	start := end
+	for start > 0 && !isBlankLine(lines[start-1]) {
+		start--
 	}
-	end := i + 1
-	for i >= 0 && strings.TrimSpace(lines[i]) != "" {
-		i--
-	}
-	start := i + 1
 	// Git reads the first paragraph as the subject, never as trailers.
-	if start == 0 || !isTrailerBlock(lines[start:end]) {
+	if start == 0 || !isTrailerBlock(lines[start:end], commentPrefix) {
 		return nil
 	}
-	return lines[start:end]
+	return slices.DeleteFunc(lines[start:end], func(line string) bool { return isCommentLine(line, commentPrefix) })
 }
 
 // isTrailerBlock reports whether lines form a trailer block: at least one
-// trailer line, with every line either a trailer or an indented continuation
-// of a preceding trailer's value. Both finalTrailerBlock and appendTrailerLine
-// classify with this so the writer never joins onto a paragraph the readers reject.
-func isTrailerBlock(lines []string) bool {
-	seenTrailer := false
+// trailer line, with every other line an indented continuation of a trailer's
+// value or a line starting with commentPrefix, which git skips. Both
+// finalTrailerBlock and appendTrailerLine classify with this so the writer
+// never joins onto a paragraph the readers reject.
+func isTrailerBlock(lines []string, commentPrefix string) bool {
+	seenTrailer, continuable := false, false
 	for _, line := range lines {
 		switch {
+		case isCommentLine(line, commentPrefix):
+			// Git skips the line, and an indented line after it continues
+			// nothing.
+			continuable = false
 		case IsTrailerLine(line):
-			seenTrailer = true
-		case seenTrailer && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")):
+			seenTrailer, continuable = true, true
+		case continuable && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")):
 			// Git treats an indented line after a trailer as a continuation
 			// of that trailer's value, never as a new trailer.
 		default:
@@ -451,6 +446,10 @@ func isTrailerBlock(lines []string) bool {
 		}
 	}
 	return seenTrailer
+}
+
+func isCommentLine(line, commentPrefix string) bool {
+	return commentPrefix != "" && strings.HasPrefix(line, commentPrefix)
 }
 
 // AppendOPFAppliedTrailer appends `Entire-OPF-Applied: true` in

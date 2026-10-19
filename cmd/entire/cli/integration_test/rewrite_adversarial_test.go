@@ -8,9 +8,7 @@ package integration
 // for. Tests marked GUARD document workflows the PR already handles correctly.
 
 import (
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,20 +54,10 @@ func advCommit(env *TestEnv, message, source string, keep func(checkpointID stri
 	for _, f := range files {
 		env.GitAdd(f)
 	}
-	msgFile := filepath.Join(env.RepoDir, ".git", "COMMIT_EDITMSG")
-	require.NoError(env.T, os.WriteFile(msgFile, []byte(message), 0o644))
-	args := []string{msgFile}
-	if source != "" {
-		args = append(args, source)
-	}
-	if out, err := env.prepareCommitMsgCmd(true, args...).CombinedOutput(); err != nil {
-		env.T.Logf("prepare-commit-msg output: %s", out)
-	}
-	prepared, err := os.ReadFile(msgFile)
-	require.NoError(env.T, err)
+	_, prepared := runPrepareCommitMsg(env, message, source)
 
 	var kept []string
-	for _, line := range strings.Split(string(prepared), "\n") {
+	for _, line := range strings.Split(prepared, "\n") {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -83,7 +71,7 @@ func advCommit(env *TestEnv, message, source string, keep func(checkpointID stri
 		final = "typed in editor" + final // the subject the user types
 	}
 	commitWithPostCommit(env, final)
-	return string(prepared), final
+	return prepared, final
 }
 
 // commitWithPostCommit records the staged changes with message, as git does

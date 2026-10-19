@@ -1880,22 +1880,25 @@ func TestAttach_CheckpointMentionedInProseDoesNotSelectCheckpoint(t *testing.T) 
 // Git reads "Entire-Checkpoint:<id>" (no space after the colon) as a trailer,
 // so attach joins that checkpoint as it would a canonical trailer.
 func TestAttach_NoSpaceTrailerJoinsCheckpoint(t *testing.T) {
+	assertAttachJoinsNamedCheckpoint(t, "Subject\n\nEntire-Checkpoint:a1b2c3d4e5f6\n")
+}
+
+// commit.cleanup=scissors keeps Entire's explanation below the trailer. Git's
+// trailer grammar skips comment lines, so the trailer still links the commit.
+func TestAttach_TrailerFollowedByCommentLinesJoinsCheckpoint(t *testing.T) {
+	assertAttachJoinsNamedCheckpoint(t, "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n"+
+		"# Remove the Entire-Checkpoint trailer above if you don't want to link this commit to Claude Code session context.\n"+
+		"# The trailer will be added to your next commit based on this branch.\n")
+}
+
+func assertAttachJoinsNamedCheckpoint(t *testing.T, commitMessage string) {
+	t.Helper()
 	setupAttachTestRepo(t)
-	ctx := context.Background()
-	named, state := attachToCommitNamingCheckpoint(t, "Subject\n\nEntire-Checkpoint:a1b2c3d4e5f6\n")
+	named, state := attachToCommitNamingCheckpoint(t, commitMessage)
 	if state.LastCheckpointID != named {
 		t.Fatalf("attach wrote the session into %s, want the trailer's checkpoint %s", state.LastCheckpointID, named)
 	}
-
-	repo, err := git.PlainOpen(mustGetwd(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary, err := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs()).Read(ctx, named)
-	if err != nil || summary == nil {
-		t.Fatalf("read joined checkpoint: %v", err)
-	}
-	if len(summary.Sessions) != 2 {
+	if summary := readSummary(t, named.String()); len(summary.Sessions) != 2 {
 		t.Errorf("joined checkpoint sessions: got %d, want 2", len(summary.Sessions))
 	}
 }
@@ -1948,39 +1951,25 @@ func attachToCommitNamingCheckpoint(t *testing.T, commitMessage string) (id.Chec
 func assertAttachIgnoresBodyCheckpoint(t *testing.T, commitMessage string) {
 	t.Helper()
 	setupAttachTestRepo(t)
-	ctx := context.Background()
-	repoDir := mustGetwd(t)
 	named, state := attachToCommitNamingCheckpoint(t, commitMessage)
 	if state.LastCheckpointID == named {
 		t.Fatalf("attach wrote the session into checkpoint %s, which the commit only mentions in its body", named)
 	}
 
-	repo, err := git.PlainOpen(repoDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	headRef, err := repo.Head()
-	if err != nil {
-		t.Fatal(err)
-	}
-	headCommit, err := repo.CommitObject(headRef.Hash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if linked, ok := trailers.ParseCheckpointFromFinalTrailerBlock(headCommit.Message); !ok || linked != state.LastCheckpointID {
-		t.Errorf("HEAD's final trailer block should name the attached checkpoint %s, got %s (found=%v):\n%s",
-			state.LastCheckpointID, linked, ok, headCommit.Message)
+	headMessage := headCommitOf(t).Message
+	if linked := trailers.ParseAllCheckpointsFromFinalTrailerBlock(headMessage, ""); len(linked) == 0 || linked[0] != state.LastCheckpointID {
+		t.Errorf("HEAD's final trailer block should name the attached checkpoint %s, got %v:\n%s",
+			state.LastCheckpointID, linked, headMessage)
 	}
 
-	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
-	summary, err := store.Read(ctx, named)
-	if err != nil || summary == nil {
-		t.Fatalf("read unrelated checkpoint: %v", err)
-	}
-	if len(summary.Sessions) != 1 {
+	if summary := readSummary(t, named.String()); len(summary.Sessions) != 1 {
 		t.Errorf("unrelated checkpoint gained sessions: got %d, want 1", len(summary.Sessions))
 	}
-	content, err := store.ReadSessionContent(ctx, named, 0)
+	repo, err := git.PlainOpen(mustGetwd(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs()).ReadSessionContent(context.Background(), named, 0)
 	if err != nil {
 		t.Fatalf("read unrelated checkpoint session: %v", err)
 	}

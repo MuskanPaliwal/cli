@@ -954,9 +954,9 @@ func TestAddCheckpointTrailerWithComment_UsesCommentPrefix(t *testing.T) {
 	require.Contains(t, result, "; Remove the Entire-Checkpoint")
 	require.Contains(t, result, "; Last Prompt: add password hashing")
 	require.NotContains(t, result, "# ")
-	cpID, found := trailers.ParseCheckpointFromFinalTrailerBlock(trailers.StripEditorComments("Subject"+result, ";"))
-	require.True(t, found, "the trailer must end the cleaned message: %q", result)
-	require.Equal(t, testTrailerCheckpointID, cpID)
+	require.Equal(t, []id.CheckpointID{testTrailerCheckpointID},
+		trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments("Subject"+result, ";"), ";"),
+		"the trailer must end the cleaned message: %q", result)
 }
 
 // gitCommentPrefix must name the prefix git's own cleanup uses, or prepare reads
