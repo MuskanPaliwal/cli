@@ -64,6 +64,11 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			msg:  "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n",
 			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n\nEntire-Checkpoint: abc123def456\n",
 		},
+		{
+			name: "trailer-shaped subject starts a new block",
+			msg:  "Entire-Checkpoint: deadbeefcafe\n",
+			want: "Entire-Checkpoint: deadbeefcafe\n\nEntire-Checkpoint: abc123def456\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -385,6 +390,21 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 			message: "Message\n\nNotes: details\n  Entire-Checkpoint: a1b2c3d4e5f6\n",
 			want:    nil,
 		},
+		{
+			name:    "subject line is never a trailer block",
+			message: "Entire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "trailer-shaped subject paragraph is not a trailer block",
+			message: "Entire-Checkpoint: a1b2c3d4e5f6\nSigned-off-by: Test User <test@example.com>\n",
+			want:    nil,
+		},
+		{
+			name:    "leading blank line leaves an empty subject",
+			message: "\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -439,6 +459,8 @@ func TestHasOPFApplied(t *testing.T) {
 		{"empty_message", "", false},
 		{"trailer_with_extra_spaces", "msg\n\nEntire-OPF-Applied:   true   \n", true},
 		{"body_mention_not_trailer", "msg\n\nThis paragraph mentions a string that looks like metadata.\nEntire-OPF-Applied: true\n\nSigned-off-by: Test User <test@example.com>\n", false},
+		{"indented_trailer_not_applied", "msg\n\n  Entire-OPF-Applied: true\n", false},
+		{"subject_only_not_applied", "Entire-OPF-Applied: true\n", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

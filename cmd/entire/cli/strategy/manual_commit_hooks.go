@@ -512,7 +512,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	message := string(content)
 
 	// A trailer prepare already stamped is kept (e.g. amend); inherited ones are links
-	if existingCpID, found := stampedTrailer(ctx, message, inherited); found {
+	if existingCpID, found := stampedTrailer(ctx, message, source, inherited); found {
 		readCommitMessageSpan.End()
 		// Trailer already exists (e.g., amend) - keep it
 		logging.Debug(logCtx, "prepare-commit-msg: trailer already exists",
@@ -798,17 +798,18 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 
 	message := string(content)
 
-	// If message already has a live trailer, keep it unchanged. A deleted ID
+	// If the final trailer block already has a live trailer, keep it unchanged;
+	// an ID elsewhere in the message is not this commit's link. A deleted ID
 	// still mentioned somewhere (not as a whole trailer line, so not stripped)
 	// does not count: preserving on it would keep the dead checkpoint linked.
-	mentioned := trailers.ParseAllCheckpoints(message)
-	if live := withoutDeletedCheckpoints(ctx, mentioned); len(live) > 0 {
+	if live := withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, "commit")); len(live) > 0 {
 		logging.Debug(logCtx, "prepare-commit-msg: amend preserves existing trailer",
 			slog.String("strategy", "manual-commit"),
 			slog.String("checkpoint_id", live[0].String()),
 		)
 		return nil
-	} else if len(mentioned) > 0 {
+	}
+	if mentioned := trailers.ParseAllCheckpoints(message); len(mentioned) > 0 && len(withoutDeletedCheckpoints(ctx, mentioned)) == 0 {
 		strippedDeleted = true
 	}
 
@@ -2736,7 +2737,7 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 	message := string(content)
 
 	// Don't add if prepare already stamped one (inherited trailers are links)
-	if _, found := stampedTrailer(logCtx, message, inherited); found {
+	if _, found := stampedTrailer(logCtx, message, source, inherited); found {
 		return nil
 	}
 

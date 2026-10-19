@@ -269,6 +269,22 @@ they rely on turn start having followed or re-homed first. A sibling
 worktree's hook that runs between a move and the moved home's next hook
 still reads the stored transcript copy from the hook's own worktree.
 
+**Only the final trailer block links a commit** (`stampedTrailer`,
+`stampedTrailersOf`, attach's `resolveCheckpointID`, `explain --generate`).
+Every path that writes to a checkpoint because a commit names it reads the
+commit's final trailer block by git's grammar: no leading whitespace, indented
+lines only as continuations of a trailer, and never the subject paragraph. An
+`Entire-Checkpoint:` line anywhere else in the message (pasted, quoted,
+indented, or mentioned in prose) names a checkpoint the commit did not stamp,
+so prepare-commit-msg stamps a fresh trailer and post-commit condenses there.
+Prepare reads the message as git will record it: an editor message loses its
+`#` lines and everything from a scissors line down, while a `-m`/`-F` message
+keeps `#` lines as content. Read-only lookups (resume, status, attribution,
+read-only explain) and squash and redo inheritance still scan the whole
+message, because squash commits carry their squashed commits' trailers in the
+body. The trailer writer uses the same grammar, so a trailer it appends is
+always one the readers accept.
+
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in
 the per-worktree git dir) contains the squashed commits' work, so every

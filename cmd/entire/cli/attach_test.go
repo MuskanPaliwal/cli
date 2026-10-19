@@ -1862,6 +1862,98 @@ func TestAttach_NonInteractiveNeedsForce(t *testing.T) {
 	}
 }
 
+// A checkpoint ID that appears in the body of a commit message, rather than in
+// its final trailer block, does not link the commit to that checkpoint: attach
+// must not write the attached session into it.
+func TestAttach_BodyCheckpointLineDoesNotSelectCheckpoint(t *testing.T) {
+	assertAttachIgnoresBodyCheckpoint(t, "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\nSigned-off-by: Test User <test@example.com>\n")
+}
+
+func TestAttach_IndentedCheckpointLineDoesNotSelectCheckpoint(t *testing.T) {
+	assertAttachIgnoresBodyCheckpoint(t, "Subject\n\n  Entire-Checkpoint: a1b2c3d4e5f6\n")
+}
+
+func TestAttach_CheckpointMentionedInProseDoesNotSelectCheckpoint(t *testing.T) {
+	assertAttachIgnoresBodyCheckpoint(t, "Subject\n\nFollow-up to Entire-Checkpoint: a1b2c3d4e5f6 from last week.\n")
+}
+
+func assertAttachIgnoresBodyCheckpoint(t *testing.T, commitMessage string) {
+	t.Helper()
+	setupAttachTestRepo(t)
+	ctx := context.Background()
+	repoDir := mustGetwd(t)
+	named := id.MustCheckpointID("a1b2c3d4e5f6")
+
+	repo, err := git.PlainOpen(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs()).Write(ctx, cpkg.Session{
+		CheckpointID: named,
+		SessionID:    "unrelated-session",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":"unrelated"}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}); err != nil {
+		t.Fatalf("seed unrelated checkpoint: %v", err)
+	}
+
+	testutil.WriteFile(t, repoDir, "change.txt", "change")
+	testutil.GitAdd(t, repoDir, "change.txt")
+	testutil.GitCommit(t, repoDir, commitMessage)
+
+	const sessionID = "attach-body-checkpoint"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":"hi"},"uuid":"a1"}
+`)
+	var out bytes.Buffer
+	if err := runAttach(ctx, &out, &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+		t.Fatalf("runAttach: %v\n%s", err, out.String())
+	}
+
+	state, err := loadAttachState(t, sessionID)
+	if err != nil || state == nil {
+		t.Fatalf("load attached session state: %+v (%v)", state, err)
+	}
+	if state.LastCheckpointID == named {
+		t.Fatalf("attach wrote the session into checkpoint %s, which the commit only mentions in its body", named)
+	}
+
+	repo, err = git.PlainOpen(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headRef, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headCommit, err := repo.CommitObject(headRef.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked, ok := trailers.ParseCheckpointFromFinalTrailerBlock(headCommit.Message); !ok || linked != state.LastCheckpointID {
+		t.Errorf("HEAD's final trailer block should name the attached checkpoint %s, got %s (found=%v):\n%s",
+			state.LastCheckpointID, linked, ok, headCommit.Message)
+	}
+
+	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
+	summary, err := store.Read(ctx, named)
+	if err != nil || summary == nil {
+		t.Fatalf("read unrelated checkpoint: %v", err)
+	}
+	if len(summary.Sessions) != 1 {
+		t.Errorf("unrelated checkpoint gained sessions: got %d, want 1", len(summary.Sessions))
+	}
+	content, err := store.ReadSessionContent(ctx, named, 0)
+	if err != nil {
+		t.Fatalf("read unrelated checkpoint session: %v", err)
+	}
+	if content.Metadata.SessionID != "unrelated-session" {
+		t.Errorf("unrelated checkpoint session = %q, want unrelated-session", content.Metadata.SessionID)
+	}
+}
+
 // setupAttachTestRepo creates a temp git repo with one commit and enables Entire.
 // Returns the repo directory. Caller must not use t.Parallel() (uses t.Chdir).
 func setupAttachTestRepo(t *testing.T) {

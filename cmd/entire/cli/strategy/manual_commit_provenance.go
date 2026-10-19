@@ -23,20 +23,33 @@ import (
 // stampedTrailer returns the first checkpoint trailer in message that
 // prepare-commit-msg stamped itself, skipping trailers inherited from
 // squashed commits: those link existing checkpoints and never stand in for a
-// fresh one. A checkpoint deleted from this clone never counts either: an ID
-// left in the message (an indented squash message, prose) would otherwise
-// suppress the fresh trailer new work needs.
-func stampedTrailer(ctx context.Context, message string, inherited []id.CheckpointID) (id.CheckpointID, bool) {
+// fresh one. Only the final trailer block counts: an ID elsewhere in the
+// message (pasted, quoted, an indented squash message) names a checkpoint this
+// commit did not stamp, and would otherwise suppress the fresh trailer new
+// work needs. A checkpoint deleted from this clone never counts either.
+func stampedTrailer(ctx context.Context, message, source string, inherited []id.CheckpointID) (id.CheckpointID, bool) {
 	skip := make(map[id.CheckpointID]bool, len(inherited))
 	for _, cpID := range inherited {
 		skip[cpID] = true
 	}
-	for _, cpID := range withoutDeletedCheckpoints(ctx, trailers.ParseAllCheckpoints(message)) {
+	for _, cpID := range withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, source)) {
 		if !skip[cpID] {
 			return cpID, true
 		}
 	}
 	return id.EmptyCheckpointID, false
+}
+
+// preparedFinalTrailers returns the checkpoint IDs in the final trailer block
+// of a message prepare-commit-msg was handed, read as git will record it. An
+// editor message still carries git's comment block and, with `commit -v`, a
+// scissors line and diff below the message; a -m/-F message (source "message")
+// keeps "#" lines as content.
+func preparedFinalTrailers(message, source string) []id.CheckpointID {
+	if source != commitSourceMessage {
+		message = trailers.StripEditorComments(message)
+	}
+	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message)
 }
 
 // pickCondensationTarget chooses the trailer a commit's new work condenses
@@ -195,18 +208,19 @@ func commitParentCandidates(ctx context.Context) []string {
 	return out
 }
 
-// stampedTrailersOf returns the checkpoint trailers of commit that
-// prepare-commit-msg stamped, leaving out the ones it recorded as inherited
-// and any checkpoint deleted from this clone: post-commit must never condense
-// new work into a deleted ID, which would re-create it. It also returns the
-// committed paths a redo's inherited checkpoints hold.
+// stampedTrailersOf returns the checkpoint trailers in commit's final trailer
+// block that prepare-commit-msg stamped, leaving out the ones it recorded as
+// inherited and any checkpoint deleted from this clone: post-commit must never
+// condense new work into a deleted ID, which would re-create it, nor into an
+// ID the message only mentions outside its final trailer block. It also
+// returns the committed paths a redo's inherited checkpoints hold.
 func stampedTrailersOf(ctx context.Context, commit *object.Commit) ([]id.CheckpointID, map[string]bool) {
 	var parent string
 	if len(commit.ParentHashes) > 0 {
 		parent = commit.ParentHashes[0].String()
 	}
 	inherited, redone := takeInheritedMarker(ctx, parent)
-	stamped := withoutInherited(trailers.ParseAllCheckpoints(commit.Message), inherited)
+	stamped := withoutInherited(trailers.ParseAllCheckpointsFromFinalTrailerBlock(commit.Message), inherited)
 	return withoutDeletedCheckpoints(ctx, stamped), redone
 }
 

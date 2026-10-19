@@ -168,6 +168,24 @@ var checkpointTrailerLineRegex = regexp.MustCompile(`^` + CheckpointTrailerKey +
 // `commit -v` everything below it is the diff, which git discards.
 const scissorsMarker = "------------------------ >8 ------------------------"
 
+// StripEditorComments returns an editor-written commit message without the
+// lines git's default cleanup drops before the commit is recorded: everything
+// from a scissors line down, and every line starting with "#". A -m or -F
+// message keeps "#" lines as content and must not be passed here.
+func StripEditorComments(message string) string {
+	lines := strings.Split(message, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.Contains(line, scissorsMarker) {
+			break
+		}
+		if !strings.HasPrefix(line, "#") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
 // RemoveCheckpointTrailers removes every whole Entire-Checkpoint trailer line
 // whose ID drop selects, anywhere between the subject paragraph and a scissors
 // line, and returns the new message with the IDs removed (nil when the
@@ -306,9 +324,8 @@ func appendTrailerLine(message, trailerLine string) string {
 	return trimmed + "\n\n" + trailerLine + "\n"
 }
 
-// AppendCheckpointTrailer appends Entire-Checkpoint in trailer-aware format.
-// If the message already ends with a trailer paragraph, append directly to it;
-// otherwise add a blank line before starting a new trailer block.
+// AppendCheckpointTrailer appends Entire-Checkpoint in trailer-aware format
+// (see appendTrailerLine).
 func AppendCheckpointTrailer(message, checkpointID string) string {
 	trailer := fmt.Sprintf("%s: %s", CheckpointTrailerKey, checkpointID)
 	return appendTrailerLine(message, trailer)
@@ -349,7 +366,8 @@ func finalTrailerBlock(message string) []string {
 		i--
 	}
 	start := i + 1
-	if !isTrailerBlock(lines[start:end]) {
+	// Git reads the first paragraph as the subject, never as trailers.
+	if start == 0 || !isTrailerBlock(lines[start:end]) {
 		return nil
 	}
 	return lines[start:end]

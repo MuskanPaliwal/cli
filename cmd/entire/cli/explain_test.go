@@ -443,6 +443,75 @@ func TestRunExplainAuto_CommitRefWithCheckpointTrailer(t *testing.T) {
 	require.Contains(t, out.String(), cpID.String(), "expected checkpoint header resolved via trailer")
 }
 
+// --generate writes a summary into the checkpoint it resolves, so a checkpoint
+// ID mentioned only in the commit body must not reach it.
+func TestExplainGenerate_BodyCheckpointLineIsNotATrailer(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	commitHash := commitExplainBodyMention(t, repo)
+
+	tests := []struct {
+		name string
+		run  func(out, errOut io.Writer) error
+	}{
+		{
+			name: "commit flag",
+			run: func(out, errOut io.Writer) error {
+				return runExplainCommit(context.Background(), out, errOut, commitHash.String(), true, false, false, false, true, true, false, 0)
+			},
+		},
+		{
+			name: "positional commit",
+			run: func(out, errOut io.Writer) error {
+				return runExplainAuto(context.Background(), out, errOut, commitHash.String(), true, false, false, false, true, true, false, 0)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			err := tt.run(&out, &errOut)
+			require.ErrorContains(t, err, "has no Entire-Checkpoint trailer")
+			require.NotContains(t, err.Error(), "deadbeefcafe")
+		})
+	}
+}
+
+// Read-only explain keeps finding checkpoints mentioned anywhere in the
+// message: squash commits carry their squashed commits' trailers in the body.
+func TestExplainReadOnly_FindsBodyCheckpointLine(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	ctx := context.Background()
+	cpID := id.MustCheckpointID("deadbeefcafe")
+	require.NoError(t, checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs()).Write(ctx, checkpoint.Session{
+		CheckpointID: cpID,
+		SessionID:    "session-squashed",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+	commitHash := commitExplainBodyMention(t, repo)
+
+	var out, errOut bytes.Buffer
+	require.NoError(t, runExplainAuto(ctx, &out, &errOut, commitHash.String(), true, false, false, false, false, false, false, 0))
+	require.Contains(t, out.String(), cpID.String())
+}
+
+func commitExplainBodyMention(t *testing.T, repo *git.Repository) plumbing.Hash {
+	t.Helper()
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wt.Filesystem().Root(), "feature.txt"), []byte("feature"), 0o644))
+	_, err = wt.Add("feature.txt")
+	require.NoError(t, err)
+	commitHash, err := wt.Commit(
+		"Implement feature\n\nEntire-Checkpoint: deadbeefcafe\n\nSigned-off-by: Test User <test@example.com>\n",
+		&git.CommitOptions{Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}},
+	)
+	require.NoError(t, err)
+	return commitHash
+}
+
 // TestRunExplainAuto_CommitWithoutTrailer covers the trailer-less commit
 // dispatch: read-only modes print a friendly message and exit 0, while
 // --generate / --raw-transcript must error so scripts can distinguish

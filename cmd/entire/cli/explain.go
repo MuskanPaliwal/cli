@@ -634,7 +634,7 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 	if commitErr != nil {
 		return fmt.Errorf("failed to get commit %s: %w", abbreviateCommitHash(lookup.repo, hash), commitErr)
 	}
-	cpID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
+	cpID, hasCheckpoint := checkpointForCommit(commit.Message, generate)
 	linkVia := "its Entire-Checkpoint trailer"
 	if !hasCheckpoint {
 		// A commit linked by `entire session attach --commit` carries no
@@ -2768,7 +2768,7 @@ func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, 
 	}
 
 	// Extract Entire-Checkpoint trailer
-	checkpointID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
+	checkpointID, hasCheckpoint := checkpointForCommit(commit.Message, generate)
 	if !hasCheckpoint {
 		// Side-effect modes must error so scripts can distinguish "done"
 		// from "didn't happen"; read-only modes print a friendly message.
@@ -2785,6 +2785,17 @@ func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, 
 		return trailerCheckpointError(ctx, repo, hash, checkpointID, "its Entire-Checkpoint trailer", err)
 	}
 	return nil
+}
+
+// checkpointForCommit returns the checkpoint a commit's trailer names.
+// --generate writes a summary into it, so only the final trailer block counts
+// there; read-only views also find IDs elsewhere in the message, where squash
+// commits carry their squashed commits' trailers.
+func checkpointForCommit(message string, generate bool) (id.CheckpointID, bool) {
+	if generate {
+		return trailers.ParseCheckpointFromFinalTrailerBlock(message)
+	}
+	return trailers.ParseCheckpoint(message)
 }
 
 // trailerCheckpointError attributes a checkpoint failure to the commit whose
