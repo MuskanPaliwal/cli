@@ -1,0 +1,23 @@
+Background (from the session that started this one):
+I'm going through my open entireio/cli PRs that come from my fork (MuskanPaliwal/cli). Each one gets a review session in its existing worktree under ~/Work/open-source/entire/cli (a bare clone: origin = my fork, upstream = entireio/cli). The goal is to see what each PR needs before it gets reviewed and merged. Sibling sessions are reviewing my other fork PRs in their own worktrees.
+
+Task:
+Review my PR entireio/cli#2385 "fix(cleanup): fail closed before deleting shadow history" (head MuskanPaliwal:fix-session-cleanup-safety), which is checked out in this worktree.
+
+1. Reconcile the worktree with the published PR first. Local HEAD does not match the PR head (headRefOid), and the worktree has 8 uncommitted files. Review the published PR (`gh pr diff 2385 --repo entireio/cli`, or the diff of headRefOid against its merge base with upstream/main). List the local-only commits and the uncommitted changes separately, with a short summary of what they look like. Never discard, stash, reset, check out over, or overwrite local state.
+2. Follow my AGENTS.md review format. Start with a short brief for someone who has not read the diff: what it does for users, why it exists, how it works, and what it means for performance, compatibility, data, and risk, plus anything uncertain. Then give findings ranked by severity, with file:line references. Check the diff against my Review Lessons (General.md and cli.md).
+3. Report where the PR stands on getting reviewed: CI status, unresolved review comments, mergeability or conflicts with main, and the Entire trail findings if a trail exists.
+
+Keep this read-only. Do not edit files, commit, push, post comments, or write to trails. End with the next steps you recommend and wait for my go-ahead.
+
+Shared notes folder for this group of sessions (outside the repo; read siblings' notes there, leave hand-over notes or large findings there instead of pasting them into messages): /Users/muskanpaliwal/Library/Application Support/Claude/side-session-notes/local_a18af1f1-b950-49d7-90ed-9f6a41a7bce8
+
+---
+
+<task-notification>
+<task-id>bao2qcynj</task-id>
+<tool-use-id>toolu_01MJk4yDsYw9gQN5619R3aKp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-fix-session-cleanup-safety/199968ec-b436-42a9-a200-2e8047b7fa3f/tasks/bao2qcynj.output</output-file>
+<status>completed</status>
+<summary>Background command "Build, vet, test on current main with real go" completed (exit code 0)</summary>
+</task-notification>
