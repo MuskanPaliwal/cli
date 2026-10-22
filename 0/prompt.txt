@@ -1,0 +1,83 @@
+Yes, post that exact approved note to #2305's description now.
+
+---
+
+we got a new review on this: 
+
+<pasted_content id="ae4a">
+Bugs worth fixing before merge
+
+1. entire import can lose its session state or write it to the wrong repo (cmd/entire/cli/session/state.go:1136). NewStateStoreForWorktree now looks at the .git entry on disk and ignores the repository Git actually selected. Its only production caller is agentimport.writeSessionState, which gets its root from paths.WorktreeRoot. That function does honor GIT_DIR and GIT_WORK_TREE, so the two now disagree.
+
+• Split layout (GIT_DIR=/store/repo.git, GIT_WORK_TREE=/work): /work has no .git, so resolution fails with ErrWorktreeMetadataNotFound. writeSessionState only logs a Warn, and the imported sessions never appear in session list. Before this PR, the git subprocess picked up the environment and this case worked..
+• Redirect (the worktree has its own .git but GIT_DIR points at another repo): checkpoints go to the GIT_DIR repo and the session state goes to the local .git. The PR description argues against exactly this split for NewStateStore..
+• Fix: keep the env-aware common-dir lookup for this path, or resolve from the repository the caller already opened..
+1. Adoption now accepts worktrees that the hooks reject (cmd/entire/cli/session_adopt.go:653). buildAdoptedSessionState gets the target ID from the new gitrepo.ResolveWorktreeMetadata, but the hooks still use paths.GetWorktreeID (manual_commit_session.go:652)..
+• With a --separate-git-dir main worktree, or a bare-repo linked worktree named storage, adoption used to fail fast. Now it saves state with WorktreeID="" or "target"..
+• The hooks then fail with unexpected gitdir format, so the adopted session is stuck in a worktree whose hooks can't run..
+• Fix: make both paths use one resolver. Either switch the hooks to ResolveWorktreeMetadata in this PR, or keep adoption on GetWorktreeID until they move..
+2. The source store and the source worktree ID can come from different repos (cmd/entire/cli/session_adopt.go:576). stateStoreForWorktree runs git -C <wt> rev-parse, which honors GIT_DIR. bestEffortAdoptWorktreeID reads the .git file on disk and ignores the environment..
+• With GIT_DIR exported, the session list comes from one repo and the ID filter from another..
+• Real candidates get rejected, or an unrelated session whose worktree has the same basename gets adopted..
+• This is the same root cause as #1: there are now three live resolvers that disagree whenever repo-selection env vars are set..
+
+Smaller items
+
+4. Silent fallback (session_adopt.go:579): bestEffortAdoptWorktreeID throws away every resolver error and quietly falls back to matching by path. A corrupt commondir then shows up as "no recent active sessions found" with no clue why. Logging the error at Debug or Warn would fix that.
+5. Unused parameter (state.go:1132): NewStateStoreForWorktree keeps a context parameter it no longer uses (renamed to _). Drop it, or say why it stays.
+6. Misleading error message (state.go:1138): it prints the root path twice and still calls every failure a "git common dir" problem, even when the worktree registration is what broke.
+7. Duplicate lookup (session_adopt.go:143 / :515): the source worktree ID is resolved twice per adoption, and the two reads could disagree if the metadata changes in between. Resolve it once and pass it down.
+8. Weaker test guard (state.go:1155): the PR drops filepath.Abs from ensureTestIsolatedStateDir. Both current callers pass absolute paths, but a future caller passing a relative path like .git would hit the guard incorrectly. Keep the Abs call or assert filepath.IsAbs.
+</pasted_content id="ae4a">
+
+---
+
+let's suppose we fix all 8 then does it affect more part of the codebase? what is the blast radious here? /blast-radius
+
+---
+
+Go ahead: fix all 8 as scoped, adding the parity test, the new-layout session test, and the import regression test (verified failing first), then show me the description and reviewer reply.
+
+---
+
+Go with the revised plan: keep the store on the resolver with fixes 5, 6, 8 and a guard test; put adoption IDs back on GetWorktreeID behind one helper (fixes 2, 4, 7); env-strip only the source query for fix 3 with a test that fails first.
+
+---
+
+<task-notification>
+<task-id>b3zjfp5bb</task-id>
+<tool-use-id>toolu_015o3F3nQNdfU7N1B6cCVs2b</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/700e8b16-5ef9-42d0-a9f6-5f00985b07be/tasks/b3zjfp5bb.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the new tests and the affected packages with race" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqk57ahpl</task-id>
+<tool-use-id>toolu_01Sss1GtmRfqZvtrTjivkRcW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/700e8b16-5ef9-42d0-a9f6-5f00985b07be/tasks/bqk57ahpl.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun the gitrepo package tests with full output" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b727xqjr4</task-id>
+<tool-use-id>toolu_01KbLdi5bKCXCQZtVegGhxdJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/700e8b16-5ef9-42d0-a9f6-5f00985b07be/tasks/b727xqjr4.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full pre-commit check suite" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>biyfx80xx</task-id>
+<tool-use-id>toolu_01D7FDtEX3ViWqiUGPLAMnzb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-muskanpaliwal-Work-open-source-entire-cli-refactor-session-metadata-resolution/700e8b16-5ef9-42d0-a9f6-5f00985b07be/tasks/biyfx80xx.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun the three timed-out packages with a longer timeout" completed (exit code 0)</summary>
+</task-notification>
