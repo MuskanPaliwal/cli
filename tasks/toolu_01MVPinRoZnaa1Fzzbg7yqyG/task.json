@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MVPinRoZnaa1Fzzbg7yqyG",
+  "agent_id": "a6f8c94d524441aa0",
+  "subagent_type": "general-purpose",
+  "task_description": "Runner trail-confidence locally",
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 137436,
+    "cache_read_tokens": 5217170,
+    "output_tokens": 3143,
+    "api_call_count": 38
+  },
+  "started_at": "2026-10-22T21:40:41.74273+05:30",
+  "completed_at": "2026-10-22T21:52:04.753697+05:30"
+}

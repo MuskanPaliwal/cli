@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017n8wqQhX2JbdCcyqYnBchb",
+  "agent_id": "a0987a88fad4cef1a",
+  "subagent_type": "general-purpose",
+  "task_description": "Runner trail-security locally",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 90803,
+    "cache_read_tokens": 1628369,
+    "output_tokens": 458,
+    "api_call_count": 17
+  },
+  "started_at": "2026-10-22T21:40:41.743634+05:30",
+  "completed_at": "2026-10-22T21:44:52.537043+05:30"
+}

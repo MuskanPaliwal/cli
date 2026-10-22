@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ReteCQvPs1Y3oQBUqJHPVR",
+  "agent_id": "ab7b521e2f49eeaa8",
+  "subagent_type": "general-purpose",
+  "task_description": "Runner trail-review locally",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 206298,
+    "cache_read_tokens": 6456703,
+    "output_tokens": 36960,
+    "api_call_count": 41
+  },
+  "started_at": "2026-10-22T21:40:41.741857+05:30",
+  "completed_at": "2026-10-22T21:59:54.987964+05:30"
+}

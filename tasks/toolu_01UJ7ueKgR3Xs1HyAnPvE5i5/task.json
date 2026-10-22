@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UJ7ueKgR3Xs1HyAnPvE5i5",
+  "agent_id": "aacd2e4674044b96b",
+  "subagent_type": "general-purpose",
+  "task_description": "Runner trail-risk locally",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 59701,
+    "cache_read_tokens": 696760,
+    "output_tokens": 248,
+    "api_call_count": 9
+  },
+  "started_at": "2026-10-22T21:40:41.743037+05:30",
+  "completed_at": "2026-10-22T21:41:53.100433+05:30"
+}
