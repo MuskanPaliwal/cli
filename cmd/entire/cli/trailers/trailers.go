@@ -193,28 +193,40 @@ func StripEditorComments(message, commentPrefix string) string {
 }
 
 // EditorCommentBlockStart returns the index of the line where the comment
-// block git appends to an editor message starts: the first of the
-// commentPrefix lines that end the message (blank lines among them included),
-// or that end it above the scissors line, else the scissors line itself. It
-// returns -1 when the message ends with no such block, or commentPrefix is
-// empty. A commentPrefix line followed by other lines is not git's block.
+// block git appends to a message it opens in the editor starts. Git writes a
+// blank line and then only comment lines, ending the message or, with
+// `commit -v`, the part above the scissors line; under commit.cleanup=scissors
+// the scissors line can start the block itself. So the block is the run of
+// commentPrefix lines that ends the message, or ends it above the scissors
+// line, with a blank line right above it, else the scissors line. It returns -1
+// when there is neither, or commentPrefix is empty: comment lines joined to the
+// paragraph above them, or making up the whole message, are the user's.
 func EditorCommentBlockStart(lines []string, commentPrefix string) int {
 	if commentPrefix == "" {
 		return -1
 	}
-	end := slices.IndexFunc(lines, func(line string) bool { return isScissorsLine(line, commentPrefix) })
-	start := end
+	scissors := ScissorsLineIndex(lines, commentPrefix)
+	end := scissors
 	if end < 0 {
 		end = len(lines)
-	}
-	for i := end - 1; i >= 0; i-- {
-		if isCommentLine(lines[i], commentPrefix) {
-			start = i
-		} else if !isBlankLine(lines[i]) {
-			break
+		for end > 0 && isBlankLine(lines[end-1]) {
+			end--
 		}
 	}
-	return start
+	start := end
+	for start > 0 && isCommentLine(lines[start-1], commentPrefix) {
+		start--
+	}
+	if start < end && start > 0 && isBlankLine(lines[start-1]) {
+		return start
+	}
+	return scissors
+}
+
+// ScissorsLineIndex returns the index of git's scissors line for
+// commentPrefix in lines, or -1.
+func ScissorsLineIndex(lines []string, commentPrefix string) int {
+	return slices.IndexFunc(lines, func(line string) bool { return isScissorsLine(line, commentPrefix) })
 }
 
 // CutAtScissors returns message without git's scissors line for commentPrefix
@@ -225,37 +237,50 @@ func CutAtScissors(message, commentPrefix string) string {
 		return message
 	}
 	lines := strings.Split(message, "\n")
-	for i, line := range lines {
-		if isScissorsLine(line, commentPrefix) {
-			return strings.Join(lines[:i], "\n")
-		}
+	if i := ScissorsLineIndex(lines, commentPrefix); i >= 0 {
+		return strings.Join(lines[:i], "\n")
 	}
 	return message
 }
 
-// AutoCommentPrefix returns the prefix git chose for core.commentChar=auto in a
-// message it prepared for editing. Git picks it before adding its comment
-// block, so it is read back from git's own lines: the scissors line if there is
-// one, else the comment block that ends the message. A message without either
-// (commit.status=false writes no block) gets DefaultCommentPrefix, unless its
-// last line happens to start with a candidate.
-func AutoCommentPrefix(message string) string {
-	lines := strings.Split(message, "\n")
-	for _, line := range lines {
-		for _, candidate := range autoCommentCandidates {
-			if isScissorsLine(line, string(candidate)) {
-				return string(candidate)
+// AutoCommentPrefix returns the prefix git chose for core.commentChar=auto: the
+// first of autoCommentCandidates that starts no line of the message, picked
+// before git adds its comment block. When git may have written that block
+// (mayHaveBlock: commit.status is on), its lines start with the choice, so it is
+// read back from them: the scissors line if there is one, else a comment block
+// (see EditorCommentBlockStart) written with the prefix git would pick for the
+// lines above it. A message without one was not opened in the editor.
+func AutoCommentPrefix(message string, mayHaveBlock bool) string {
+	if mayHaveBlock {
+		lines := strings.Split(message, "\n")
+		for _, line := range lines {
+			for _, candidate := range autoCommentCandidates {
+				if isScissorsLine(line, string(candidate)) {
+					return string(candidate)
+				}
+			}
+		}
+		for i := range len(autoCommentCandidates) {
+			candidate := autoCommentCandidates[i : i+1]
+			if start := EditorCommentBlockStart(lines, candidate); start >= 0 && autoCommentChoice(strings.Join(lines[:start], "\n")) == candidate {
+				return candidate
 			}
 		}
 	}
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(lines[i]) == "" {
-			continue
+	return autoCommentChoice(message)
+}
+
+// autoCommentChoice is git's core.commentChar=auto rule for message.
+func autoCommentChoice(message string) string {
+	// Git treats a CR as a line start too.
+	starts := make(map[byte]bool)
+	for _, line := range strings.FieldsFunc(message, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		starts[line[0]] = true
+	}
+	for i := range len(autoCommentCandidates) {
+		if !starts[autoCommentCandidates[i]] {
+			return autoCommentCandidates[i : i+1]
 		}
-		if first := lines[i][:1]; strings.Contains(autoCommentCandidates, first) {
-			return first
-		}
-		break
 	}
 	return DefaultCommentPrefix
 }

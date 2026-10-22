@@ -658,6 +658,18 @@ func TestAutoCommentPrefix(t *testing.T) {
 			want:    "#",
 		},
 		{
+			// git writes a blank line above its block.
+			name:    "a message of comment lines alone has no block",
+			message: "#42 fix login\n",
+			want:    ";",
+		},
+		{
+			// git would have picked "#" for "Fix build".
+			name:    "a trailing paragraph git could not have written is the user's",
+			message: "Fix build\n\n$ make test passes\n",
+			want:    "#",
+		},
+		{
 			name:    "empty message falls back to the default",
 			message: "",
 			want:    "#",
@@ -667,8 +679,35 @@ func TestAutoCommentPrefix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := AutoCommentPrefix(tt.message); got != tt.want {
-				t.Errorf("AutoCommentPrefix(%q) = %q, want %q", tt.message, got, tt.want)
+			if got := AutoCommentPrefix(tt.message, true); got != tt.want {
+				t.Errorf("AutoCommentPrefix(%q, true) = %q, want %q", tt.message, got, tt.want)
+			}
+		})
+	}
+}
+
+// Without a comment block to read back (commit.status=false, a -m message),
+// git's own rule decides: the first of "#;@!$%^&|:" that starts no line.
+func TestAutoCommentPrefix_WithoutBlockFollowsGitsRule(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "a trailing ; line is the user's", message: "Release notes\n\n; reviewer note\n", want: "#"},
+		{name: "a # line moves git to ;", message: "# Release notes\n\nBody\n", want: ";"},
+		{name: "# and ; lines move git to @", message: "# Release notes\n; note\n", want: "@"},
+		{name: "# inside a line does not count", message: "Fix issue #42\n", want: "#"},
+		{name: "a CR also starts a line", message: "Subject\r\n#42 is the issue\r\n", want: ";"},
+		{name: "empty message", message: "", want: "#"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AutoCommentPrefix(tt.message, false); got != tt.want {
+				t.Errorf("AutoCommentPrefix(%q, false) = %q, want %q", tt.message, got, tt.want)
 			}
 		})
 	}

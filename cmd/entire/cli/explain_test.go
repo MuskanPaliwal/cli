@@ -444,7 +444,8 @@ func TestRunExplainAuto_CommitRefWithCheckpointTrailer(t *testing.T) {
 }
 
 // --generate writes a summary into the checkpoint it resolves, so a checkpoint
-// ID mentioned only in the commit body must not reach it.
+// ID mentioned only in the commit body must not reach it. git log still shows
+// that line, so the error names it.
 func TestExplainGenerate_BodyCheckpointLineIsNotATrailer(t *testing.T) {
 	repo, _ := runExplainAutoTestRepo(t)
 	commitHash := commitExplainBodyMention(t, repo)
@@ -470,8 +471,7 @@ func TestExplainGenerate_BodyCheckpointLineIsNotATrailer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			err := tt.run(&out, &errOut)
-			require.ErrorContains(t, err, "has no Entire-Checkpoint trailer")
-			require.NotContains(t, err.Error(), "deadbeefcafe")
+			require.ErrorContains(t, err, "names checkpoint deadbeefcafe only outside its final trailer block")
 		})
 	}
 }
@@ -529,6 +529,46 @@ func TestExplainReadOnly_FindsBodyCheckpointLine(t *testing.T) {
 	var out, errOut bytes.Buffer
 	require.NoError(t, runExplainAuto(ctx, &out, &errOut, commitHash.String(), true, false, false, false, false, false, false, 0))
 	require.Contains(t, out.String(), cpID.String())
+}
+
+// Read-only explain shows the checkpoint --generate writes and attach joins:
+// the last of the final block, not the squash's first inherited trailer.
+func TestExplainReadOnly_ShowsTheLastFinalBlockTrailer(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	inherited, stamped := id.MustCheckpointID("aaaaaaaaaaaa"), id.MustCheckpointID("bbbbbbbbbbbb")
+	for _, cpID := range []id.CheckpointID{inherited, stamped} {
+		writeCheckpointForExport(t, repo, cpID, checkpoint.WriteOptions{
+			SessionID:  "session-" + cpID.String(),
+			Transcript: redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
+		})
+	}
+	commitHash := commitExplainMessage(t, repo, "Squash feature\n\nEntire-Checkpoint: "+inherited.String()+"\nEntire-Checkpoint: "+stamped.String()+"\n")
+
+	tests := []struct {
+		name string
+		run  func(out, errOut io.Writer) error
+	}{
+		{
+			name: "commit flag",
+			run: func(out, errOut io.Writer) error {
+				return runExplainCommit(context.Background(), out, errOut, commitHash.String(), true, false, false, false, false, false, false, 0)
+			},
+		},
+		{
+			name: "positional commit",
+			run: func(out, errOut io.Writer) error {
+				return runExplainAuto(context.Background(), out, errOut, commitHash.String(), true, false, false, false, false, false, false, 0)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			require.NoError(t, tt.run(&out, &errOut))
+			require.Contains(t, out.String(), stamped.String())
+			require.NotContains(t, out.String(), inherited.String())
+		})
+	}
 }
 
 func commitExplainBodyMention(t *testing.T, repo *git.Repository) plumbing.Hash {

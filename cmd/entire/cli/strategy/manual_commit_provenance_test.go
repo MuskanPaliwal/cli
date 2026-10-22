@@ -19,16 +19,16 @@ func TestStampedTrailer_SkipsInheritedTrailers(t *testing.T) {
 	fresh := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J31")
 	msg := "Squashed\n\nEntire-Checkpoint: " + inherited.String() + "\nEntire-Checkpoint: " + fresh.String() + "\n"
 
-	got, ok := stampedTrailer(context.Background(), msg, "", []id.CheckpointID{inherited})
+	got, ok := stampedTrailer(context.Background(), msg, commentRules{}, []id.CheckpointID{inherited})
 	assert.True(t, ok)
 	assert.Equal(t, fresh, got)
 
-	_, ok = stampedTrailer(context.Background(), "Squashed\n\nEntire-Checkpoint: "+inherited.String()+"\n", "", []id.CheckpointID{inherited})
+	_, ok = stampedTrailer(context.Background(), "Squashed\n\nEntire-Checkpoint: "+inherited.String()+"\n", commentRules{}, []id.CheckpointID{inherited})
 	assert.False(t, ok, "an inherited trailer alone is not a stamp")
 
-	got, ok = stampedTrailer(context.Background(), msg, "", nil)
+	got, ok = stampedTrailer(context.Background(), msg, commentRules{}, nil)
 	assert.True(t, ok)
-	assert.Equal(t, inherited, got, "with nothing inherited the first trailer is the stamp, as before")
+	assert.Equal(t, fresh, got, "with nothing inherited the last trailer is the stamp, as post-commit picks it")
 }
 
 func TestPickCondensationTarget(t *testing.T) {
@@ -118,19 +118,19 @@ func TestAddInheritedCheckpointTrailer_StaysAboveGitComments(t *testing.T) {
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J51")
 	msg := "Subject\n\n# Please enter the commit message.\n# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n"
-	got := addCheckpointTrailerAboveComments(msg, inherited, "#")
+	got := addCheckpointTrailerAboveComments(msg, inherited, editorRules("#"))
 	trailerAt := strings.Index(got, "Entire-Checkpoint: "+inherited.String())
 	require.GreaterOrEqual(t, trailerAt, 0, "%q", got)
 	require.Less(t, trailerAt, strings.Index(got, "# Please enter"), "%q", got)
 	require.True(t, strings.HasSuffix(got, "# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n"), "git's block is kept intact: %q", got)
 
-	require.Equal(t, addCheckpointTrailer("Subject\n", inherited), addCheckpointTrailerAboveComments("Subject\n", inherited, "#"),
+	require.Equal(t, addCheckpointTrailer("Subject\n", inherited), addCheckpointTrailerAboveComments("Subject\n", inherited, editorRules("#")),
 		"a message without git comments is unchanged in behaviour")
 
 	// With another comment prefix, "#" lines are content and git's block starts
 	// at the first line with that prefix.
 	semicolon := "# Release notes\n\n; Please enter the commit message.\n; ------------------------ >8 ------------------------\n"
-	got = addCheckpointTrailerAboveComments(semicolon, inherited, ";")
+	got = addCheckpointTrailerAboveComments(semicolon, inherited, editorRules(";"))
 	trailerAt = strings.Index(got, "Entire-Checkpoint: "+inherited.String())
 	require.Greater(t, trailerAt, strings.Index(got, "# Release notes"), "%q", got)
 	require.Less(t, trailerAt, strings.Index(got, "; Please enter"), "%q", got)
@@ -201,19 +201,29 @@ func TestAddCheckpointTrailerAboveComments_AnchorsToTheEndingBlock(t *testing.T)
 		"Subject\n\nIntro\n#42 is fixed\nMore details\n\n# Please enter the commit message.\n#\n",
 		"Subject\n\n#42 is fixed\n\nMore details\n\n# Please enter the commit message.\n# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n",
 	} {
-		got := addCheckpointTrailerAboveComments(msg, cpID, "#")
+		got := addCheckpointTrailerAboveComments(msg, cpID, editorRules("#"))
 		require.Equal(t, []id.CheckpointID{cpID}, trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(got, "#"), "#"), "%q", got)
 	}
 }
 
-// A -m message keeps `#` lines as content: "#42 fix login" is the subject, not
-// git's comment block, so the inherited trailer must not go above it.
+// A message git does not open in the editor (-m, --no-edit) has no comment
+// block and keeps its `#` lines as written: "#42 fix login" is the subject, and
+// "#123" or a "#42 is the issue" paragraph that ends it is the user's, so the
+// inherited trailer follows them; git's trailer grammar skips comment lines
+// that end a message.
 func TestAddInheritedCheckpointTrailer_MessageSourceKeepsHashLines(t *testing.T) {
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J53")
-	for _, msg := range []string{"#42 fix login\n", "Fix login\n\n#42 is the issue\n"} {
-		got := addCheckpointTrailerAboveComments(msg, inherited, "")
-		require.True(t, strings.HasPrefix(got, strings.TrimRight(msg, "\n")), "the user's message comes first: %q", got)
-		require.True(t, strings.HasSuffix(got, "Entire-Checkpoint: "+inherited.String()+"\n"), "the trailer ends the message: %q", got)
+
+	for _, msg := range []string{"#42 fix login\n", "Fix login\n#123\n", "Fix login\n\n#42 is the issue\n"} {
+		got := addCheckpointTrailerAboveComments(msg, inherited, commentRules{prefix: "#", trailerPrefix: "#"})
+		require.Equal(t, msg+"\nEntire-Checkpoint: "+inherited.String()+"\n", got, "the user's lines come first")
+		require.Equal(t, []id.CheckpointID{inherited}, trailers.ParseAllCheckpointsFromFinalTrailerBlock(got, "#"), "%q", got)
 	}
+}
+
+// editorRules are the comment rules of a message git opens in the editor,
+// under git's default cleanup.
+func editorRules(prefix string) commentRules {
+	return commentRules{prefix: prefix, trailerPrefix: prefix, edited: true, stripped: true}
 }

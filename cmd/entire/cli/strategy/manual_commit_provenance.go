@@ -21,34 +21,37 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
 
-// stampedTrailer returns the first checkpoint trailer in message that
-// prepare-commit-msg stamped itself, skipping trailers inherited from
-// squashed commits: those link existing checkpoints and never stand in for a
-// fresh one. Only the final trailer block counts: an ID elsewhere in the
-// message (pasted, quoted, an indented squash message) names a checkpoint this
-// commit did not stamp, and would otherwise suppress the fresh trailer new
-// work needs. A checkpoint deleted from this clone never counts either.
-// commentPrefix is editorCommentPrefix's answer for message.
-func stampedTrailer(ctx context.Context, message, commentPrefix string, inherited []id.CheckpointID) (id.CheckpointID, bool) {
+// stampedTrailer returns the checkpoint trailer in message that
+// prepare-commit-msg stamped itself: the last one, as post-commit picks it,
+// skipping trailers inherited from squashed commits: those link existing
+// checkpoints and never stand in for a fresh one. Only the final trailer block
+// counts: an ID elsewhere in the message (pasted, quoted, an indented squash
+// message) names a checkpoint this commit did not stamp, and would otherwise
+// suppress the fresh trailer new work needs. A checkpoint deleted from this
+// clone never counts either. rules is messageCommentRules' answer for message.
+func stampedTrailer(ctx context.Context, message string, rules commentRules, inherited []id.CheckpointID) (id.CheckpointID, bool) {
 	skip := make(map[id.CheckpointID]bool, len(inherited))
 	for _, cpID := range inherited {
 		skip[cpID] = true
 	}
-	for _, cpID := range withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, commentPrefix)) {
-		if !skip[cpID] {
-			return cpID, true
-		}
+	ids := withoutInherited(withoutDeletedCheckpoints(ctx, preparedFinalTrailers(message, rules)), skip)
+	if len(ids) == 0 {
+		return id.EmptyCheckpointID, false
 	}
-	return id.EmptyCheckpointID, false
+	return ids[len(ids)-1], true
 }
 
 // preparedFinalTrailers returns the checkpoint IDs in the final trailer block
-// of a message prepare-commit-msg was handed, read as git will record it. An
-// editor message still carries git's comment block and, with `commit -v`, a
-// scissors line and diff below the message; a -m/-F message (empty
-// commentPrefix) keeps every line as content.
-func preparedFinalTrailers(message, commentPrefix string) []id.CheckpointID {
-	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(message, commentPrefix), commentPrefix)
+// of a message prepare-commit-msg was handed, as post-commit will read the
+// recorded commit: cleaned as git will clean it (an edited message still
+// carries git's comment block and, with `commit -v`, a scissors line and diff
+// below the message), then read by git's trailer grammar.
+func preparedFinalTrailers(message string, rules commentRules) []id.CheckpointID {
+	message = trailers.CutAtScissors(message, rules.prefix)
+	if rules.stripped {
+		message = trailers.StripEditorComments(message, rules.prefix)
+	}
+	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message, rules.trailerPrefix)
 }
 
 // FinalCheckpointTrailers returns the checkpoint IDs in the final trailer block
@@ -63,6 +66,19 @@ func FinalCheckpointTrailers(ctx context.Context, message string) []id.Checkpoin
 		return ids
 	}
 	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message, recordedCommentPrefix(ctx))
+}
+
+// CommitCheckpoint returns the checkpoint a recorded commit shows: the last
+// trailer of its final block, the one attach joins and `explain --generate`
+// writes, since a squash's inherited trailers come before the one prepare
+// stamped. A commit whose final block names none falls back to the first ID
+// anywhere in the message, as a squash commit can carry its squashed commits'
+// trailers in the body; only read-only views may use that fallback.
+func CommitCheckpoint(ctx context.Context, message string) (id.CheckpointID, bool) {
+	if ids := FinalCheckpointTrailers(ctx, message); len(ids) > 0 {
+		return ids[len(ids)-1], true
+	}
+	return trailers.ParseCheckpoint(message)
 }
 
 // pickCondensationTarget chooses the trailer a commit's new work condenses
@@ -233,8 +249,69 @@ func stampedTrailersOf(ctx context.Context, commit *object.Commit) ([]id.Checkpo
 		parent = commit.ParentHashes[0].String()
 	}
 	inherited, redone := takeInheritedMarker(ctx, parent)
-	stamped := withoutInherited(FinalCheckpointTrailers(ctx, commit.Message), inherited)
-	return withoutDeletedCheckpoints(ctx, stamped), redone
+	ids := FinalCheckpointTrailers(ctx, commit.Message)
+	// The trailer prepare left as this commit's link stays its link even where
+	// the user's edits moved it out of the final block (a body typed below
+	// it). Prepare generated or restored that ID, or kept it from the final
+	// block of the message git handed it, so an ID pasted into the body
+	// cannot match it.
+	if own := takeStampedTrailer(ctx, parent); !own.IsEmpty() && !slices.Contains(ids, own) && slices.Contains(trailers.ParseAllCheckpoints(commit.Message), own) {
+		ids = append(ids, own)
+	}
+	return withoutDeletedCheckpoints(ctx, withoutInherited(ids, inherited)), redone
+}
+
+// stampedTrailerFile carries the trailer prepare-commit-msg left as the link of
+// the commit it prepared, for post-commit. Per worktree, like
+// inheritedTrailersFile.
+const stampedTrailerFile = "entire-stamped-trailer.json"
+
+type stampedTrailerMarker struct {
+	Parents []string        `json:"parents"`
+	ID      id.CheckpointID `json:"id"`
+}
+
+// recordStampedTrailer tells post-commit which trailer prepare-commit-msg left
+// as the commit's link, stamped, restored or kept (see stampedTrailersOf).
+func recordStampedTrailer(ctx context.Context, cpID id.CheckpointID) {
+	root, err := perWorktreeGitRoot(ctx)
+	if err != nil {
+		return
+	}
+	data, err := json.Marshal(stampedTrailerMarker{Parents: commitParentCandidates(ctx), ID: cpID})
+	if err != nil {
+		return
+	}
+	if err := jsonutil.WriteFileAtomicIn(root, stampedTrailerFile, data, 0o600); err != nil {
+		logging.Debug(logging.WithComponent(ctx, "checkpoint"), "prepare-commit-msg: could not record the stamped trailer",
+			slog.String("error", err.Error()))
+	}
+}
+
+// clearStampedTrailer drops a stamp an earlier, abandoned commit left.
+func clearStampedTrailer(ctx context.Context) {
+	if root, err := perWorktreeGitRoot(ctx); err == nil {
+		_ = osroot.RemoveNoSymlinks(root, stampedTrailerFile) //nolint:errcheck // absent is the usual case
+	}
+}
+
+// takeStampedTrailer returns the trailer prepare-commit-msg recorded for a
+// commit on parent, or the empty ID, and consumes the marker either way.
+func takeStampedTrailer(ctx context.Context, parent string) id.CheckpointID {
+	root, err := perWorktreeGitRoot(ctx)
+	if err != nil {
+		return id.EmptyCheckpointID
+	}
+	data, err := osroot.ReadFileNoFollow(root, stampedTrailerFile)
+	if err != nil {
+		return id.EmptyCheckpointID
+	}
+	_ = osroot.RemoveNoSymlinks(root, stampedTrailerFile) //nolint:errcheck // a stale marker is ignored by its parent check
+	var marker stampedTrailerMarker
+	if json.Unmarshal(data, &marker) != nil || !slices.Contains(marker.Parents, parent) {
+		return id.EmptyCheckpointID
+	}
+	return marker.ID
 }
 
 // takeInheritedTrailers returns the trailers prepare-commit-msg recorded as

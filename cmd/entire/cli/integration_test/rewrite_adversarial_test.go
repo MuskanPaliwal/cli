@@ -78,6 +78,17 @@ func advCommit(env *TestEnv, message, source string, keep func(checkpointID stri
 // once prepare-commit-msg and the editor are done, then runs post-commit.
 func commitWithPostCommit(env *TestEnv, message string) {
 	env.T.Helper()
+	recordWithPostCommit(env, message, false)
+}
+
+// amendWithPostCommit is commitWithPostCommit for `git commit --amend`.
+func amendWithPostCommit(env *TestEnv, message string) {
+	env.T.Helper()
+	recordWithPostCommit(env, message, true)
+}
+
+func recordWithPostCommit(env *TestEnv, message string, amend bool) {
+	env.T.Helper()
 	repo, err := gitrepo.OpenPath(env.RepoDir)
 	require.NoError(env.T, err)
 	defer repo.Close()
@@ -85,6 +96,7 @@ func commitWithPostCommit(env *TestEnv, message string) {
 	require.NoError(env.T, err)
 	_, err = wt.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{Name: testAuthorName, Email: testAuthorEmail, When: time.Now()},
+		Amend:  amend,
 	})
 	require.NoError(env.T, err)
 
