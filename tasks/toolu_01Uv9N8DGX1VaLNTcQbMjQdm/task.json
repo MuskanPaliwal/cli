@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Uv9N8DGX1VaLNTcQbMjQdm",
+  "agent_id": "a37f3feaad9599821",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-run trail-review after rework",
+  "token_usage": {
+    "input_tokens": 94,
+    "cache_creation_tokens": 289235,
+    "cache_read_tokens": 8575520,
+    "output_tokens": 9339,
+    "api_call_count": 47
+  },
+  "started_at": "2026-10-22T22:35:22.338707+05:30",
+  "completed_at": "2026-10-22T22:55:48.054987+05:30"
+}
