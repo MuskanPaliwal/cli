@@ -199,10 +199,11 @@ func (s *ManualCommitStrategy) CommitMsg(ctx context.Context, commitMsgFile stri
 		return nil
 	}
 
-	// A message that ends with its trailer has no comment block for git to
-	// strip (the -m/-F shape), so the comment prefix is not needed.
+	// A message that ends with its trailer and carries no explanation from
+	// prepare-commit-msg has no comments for git to strip (the -m/-F shape),
+	// so the comment prefix is not needed.
 	commentPrefix := ""
-	if !strings.HasPrefix(lastNonBlankLine(message), trailers.CheckpointTrailerKey+":") {
+	if !strings.HasPrefix(lastNonBlankLine(message), trailers.CheckpointTrailerKey+":") || strings.Contains(message, trailerExplanation) {
 		commentPrefix = gitCommentPrefix(ctx, message)
 	}
 
@@ -306,13 +307,14 @@ func parsePostRewritePairs(r io.Reader) ([]rewritePair, error) {
 // hasUserContent reports whether git will record anything in message besides
 // Entire-Checkpoint trailers. git does not tell commit-msg how the message was
 // written, so the message has to say: an editor message ends with git's
-// comment block, and git drops every line starting with commentPrefix plus the
-// scissors line and everything below it; a -m/-F message has no such block and
-// git keeps its lines as written. A user who deletes git's block and types only
-// commentPrefix lines is therefore read as having content.
+// comment block or carries prepare-commit-msg's explanation, and git drops
+// every line starting with commentPrefix plus the scissors line and everything
+// below it; a -m/-F message has neither and git keeps its lines as written. A
+// user who deletes both and types only commentPrefix lines is therefore read
+// as having content.
 func hasUserContent(message, commentPrefix string) bool {
 	message = trailers.CutAtScissors(message, commentPrefix)
-	if commentPrefix != "" && strings.HasPrefix(lastNonBlankLine(message), commentPrefix) {
+	if commentPrefix != "" && (strings.HasPrefix(lastNonBlankLine(message), commentPrefix) || strings.Contains(message, commentPrefix+trailerExplanation)) {
 		message = trailers.StripEditorComments(message, commentPrefix)
 	}
 	trailerPrefix := trailers.CheckpointTrailerKey + ":"
@@ -709,7 +711,7 @@ func (s *ManualCommitStrategy) inheritSquashedCheckpointTrailers(ctx context.Con
 		if present[cpID.String()] {
 			continue
 		}
-		message = addInheritedCheckpointTrailer(message, cpID, commentPrefix)
+		message = addCheckpointTrailerAboveComments(message, cpID, commentPrefix)
 		added++
 	}
 	if added == 0 {
@@ -880,7 +882,7 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 		source := "LastCheckpointID"
 
 		// Restore the trailer
-		message = addCheckpointTrailer(message, cpID)
+		message = addCheckpointTrailerAboveComments(message, cpID, gitCommentPrefix(ctx, message))
 		if writeErr := os.WriteFile(commitMsgFile, []byte(message), 0o600); writeErr != nil { //nolint:gosec // path from git hook arg
 			return nil
 		}
@@ -938,7 +940,9 @@ func (s *ManualCommitStrategy) stampFreshCheckpointForAmend(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(commitMsgFile, []byte(addCheckpointTrailer(string(content), cpID)), 0o600); err != nil { //nolint:gosec // path from git hook arg
+	message := string(content)
+	message = addCheckpointTrailerAboveComments(message, cpID, gitCommentPrefix(ctx, message))
+	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil { //nolint:gosec // path from git hook arg
 		return
 	}
 	logging.Info(logCtx, "prepare-commit-msg: amend of a deleted checkpoint linked to a new one",
@@ -2759,16 +2763,14 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 
 	message := string(content)
 
-	// Don't add if prepare already stamped one (inherited trailers are links).
-	// A message that names no checkpoint has none, and skips reading the
-	// comment prefix from git config.
-	if strings.Contains(message, trailers.CheckpointTrailerKey) {
-		if _, found := stampedTrailer(logCtx, message, editorCommentPrefix(logCtx, source, message), inherited); found {
-			return nil
-		}
+	commentPrefix := editorCommentPrefix(logCtx, source, message)
+
+	// Don't add if prepare already stamped one (inherited trailers are links)
+	if _, found := stampedTrailer(logCtx, message, commentPrefix, inherited); found {
+		return nil
 	}
 
-	message = addCheckpointTrailer(message, cpID)
+	message = addCheckpointTrailerAboveComments(message, cpID, commentPrefix)
 
 	logging.Info(logCtx, "prepare-commit-msg: agent commit trailer added",
 		slog.String("strategy", "manual-commit"),
@@ -2854,34 +2856,38 @@ func configuredCommentPrefix(ctx context.Context) string {
 	return trailers.DefaultCommentPrefix
 }
 
-// addInheritedCheckpointTrailer adds an inherited trailer above git's comment
-// block rather than after it: with `commit -v` git discards everything below
-// the scissors line, and the trailer with it. Only an editor message has that
+// addCheckpointTrailerAboveComments adds a trailer above git's comment block
+// rather than after it: with `commit -v` git discards everything below the
+// scissors line, and the trailer with it, and commit-msg reads a message that
+// ends with its trailer as a `-m`/`-F` one. Only an editor message has that
 // block; a `-m`/`-F` message (empty commentPrefix) keeps every line as content,
 // so its trailer is appended as usual.
-func addInheritedCheckpointTrailer(message string, checkpointID id.CheckpointID, commentPrefix string) string {
-	if commentPrefix == "" {
-		return addCheckpointTrailer(message, checkpointID)
-	}
+func addCheckpointTrailerAboveComments(message string, checkpointID id.CheckpointID, commentPrefix string) string {
 	lines := strings.Split(message, "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, commentPrefix) {
-			head := strings.TrimRight(addCheckpointTrailer(strings.Join(lines[:i], "\n"), checkpointID), "\n")
-			return head + "\n\n" + strings.Join(lines[i:], "\n")
-		}
+	if i := trailers.EditorCommentBlockStart(lines, commentPrefix); i >= 0 {
+		head := strings.TrimRight(addCheckpointTrailer(strings.Join(lines[:i], "\n"), checkpointID), "\n")
+		return head + "\n\n" + strings.Join(lines[i:], "\n")
 	}
 	return addCheckpointTrailer(message, checkpointID)
 }
 
-// addCheckpointTrailerWithComment adds the Entire-Checkpoint trailer with an explanatory comment.
-// The trailer is placed above the git comment block but below the user's message area,
-// with a comment explaining that the user can remove it if they don't want to link the commit
-// to the agent session. If prompt is non-empty, it's shown as context. The comment is written
-// with commentPrefix, the prefix git strips (see gitCommentPrefix).
+// trailerExplanation starts the comment prepare-commit-msg writes above an
+// editor message's trailer; commit-msg reads it as the message being an editor
+// one even when no git comment block follows (commit.status=false).
+const trailerExplanation = " Remove the Entire-Checkpoint trailer below if you don't want to link this commit to "
+
+// addCheckpointTrailerWithComment adds the Entire-Checkpoint trailer to an editor message
+// above git's comment block, with a comment above the trailer explaining that the user can
+// remove it if they don't want to link the commit to the agent session. If prompt is
+// non-empty, it's shown as context. The comment is written with commentPrefix, the prefix git
+// strips (see gitCommentPrefix). The comment and the trailer are separate paragraphs below the
+// user's lines: a line typed just above the trailer would otherwise join the subject
+// paragraph, which git never reads as trailers, and cleanup modes that keep comment lines
+// would leave the comment inside the trailer block.
 func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointID, agentName, prompt, commentPrefix string) string {
 	trailer := trailers.CheckpointTrailerKey + ": " + checkpointID.String()
 	commentLines := []string{
-		commentPrefix + " Remove the Entire-Checkpoint trailer above if you don't want to link this commit to " + agentName + " session context.",
+		commentPrefix + trailerExplanation + agentName + " session context.",
 	}
 	if prompt != "" {
 		commentLines = append(commentLines, commentPrefix+" Last Prompt: "+prompt)
@@ -2890,33 +2896,24 @@ func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointI
 	comment := strings.Join(commentLines, "\n")
 
 	lines := strings.Split(message, "\n")
-
-	// Find where the git comment block starts
-	commentStart := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, commentPrefix) {
-			commentStart = i
-			break
-		}
-	}
-
+	commentStart := trailers.EditorCommentBlockStart(lines, commentPrefix)
 	if commentStart == -1 {
-		// No git comments, append trailer at the end
-		return strings.TrimRight(message, "\n") + "\n\n" + trailer + "\n" + comment + "\n"
+		// No git comments (commit.status=false): comment and trailer go last
+		return strings.TrimRight(message, "\n") + "\n\n" + comment + "\n\n" + trailer + "\n"
 	}
 
 	// Split into user content and git comments
 	userContent := strings.Join(lines[:commentStart], "\n")
 	gitComments := strings.Join(lines[commentStart:], "\n")
 
-	// Build result: user content, blank line, trailer, comment, blank line, git comments
+	// Build result: user content, comment, trailer, git comments, a blank line between each
 	userContent = strings.TrimRight(userContent, "\n")
 	if userContent == "" {
-		// No user content yet - leave space for them to type, then trailer
+		// No user content yet - leave space for them to type
 		// Two newlines: first for user's message line, second for blank separator
-		return "\n\n" + trailer + "\n" + comment + "\n\n" + gitComments
+		return "\n\n" + comment + "\n\n" + trailer + "\n\n" + gitComments
 	}
-	return userContent + "\n\n" + trailer + "\n" + comment + "\n\n" + gitComments
+	return userContent + "\n\n" + comment + "\n\n" + trailer + "\n\n" + gitComments
 }
 
 // resolveSessionAgentType picks the most reliable identifier for which agent

@@ -154,7 +154,7 @@ func TestTrailerAuthority_EditorCommitHonorsCommentChar(t *testing.T) {
 
 			final := editorCommit(env, tt.message, tt.source, tt.cleanupPrefix, cleanupStrip, "mine.txt")
 
-			require.NotContains(t, final, "Remove the Entire-Checkpoint trailer above", "git's cleanup must drop Entire's explanation: %q", final)
+			require.NotContains(t, final, "Remove the Entire-Checkpoint trailer", "git's cleanup must drop Entire's explanation: %q", final)
 			stamped := trailers.ParseAllCheckpointsFromFinalTrailerBlock(final, "")
 			require.Len(t, stamped, 1, "the recorded commit must end with its trailer: %q", final)
 			require.True(t, advCheckpointStored(env, stamped[0].String()), "post-commit condenses into the stamped checkpoint")
@@ -213,38 +213,45 @@ func TestTrailerAuthority_ProseScissorsMarkerIsNotACut(t *testing.T) {
 }
 
 // commit.cleanup=scissors and whitespace keep comment lines, so the recorded
-// commit still carries Entire's explanation below its trailer (whitespace keeps
-// git's comment block too). git's trailer grammar skips comment lines, so the
-// trailer links the commit and post-commit must condense into it.
+// commit still carries Entire's explanation (whitespace keeps git's comment
+// block too). The trailer must still link the commit, by git's grammar and for
+// post-commit, also when core.commentChar=auto picks another prefix because the
+// message has a "#" line.
 func TestTrailerAuthority_CleanupKeepingCommentsLinksTheCommit(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name        string
 		commentChar string
 		cleanup     string
+		source      string
+		gitPrefix   string // the prefix git writes its block with
 		message     string // as git hands it to prepare-commit-msg
 	}{
-		{name: "scissors", cleanup: cleanupScissors, message: "\n" + gitScissorsBlock("#")},
-		{name: "scissors with a configured prefix", commentChar: ";", cleanup: cleanupScissors, message: "\n" + gitScissorsBlock(";")},
-		{name: "whitespace", cleanup: cleanupWhitespace, message: "\n" + gitCommentBlock("#")},
+		{name: "scissors", cleanup: cleanupScissors, gitPrefix: "#", message: "\n" + gitScissorsBlock("#")},
+		{name: "scissors with a configured prefix", commentChar: ";", cleanup: cleanupScissors, gitPrefix: ";", message: "\n" + gitScissorsBlock(";")},
+		{
+			// The template's "#" heading makes git pick ";".
+			name: "scissors with auto", commentChar: "auto", cleanup: cleanupScissors, source: "template", gitPrefix: ";",
+			message: "# Release notes\n\n" + gitScissorsBlock(";"),
+		},
+		{name: "whitespace", cleanup: cleanupWhitespace, gitPrefix: "#", message: "\n" + gitCommentBlock("#")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			env := NewFeatureBranchEnv(t)
 			setRepoGitConfig(env, "commit.cleanup", tt.cleanup)
-			prefix := "#"
 			if tt.commentChar != "" {
 				setRepoGitConfig(env, "core.commentChar", tt.commentChar)
-				prefix = tt.commentChar
 			}
 			authorityAgentTurn(env, "mine.txt", "my agent work\n")
 
-			final := editorCommit(env, tt.message, "", prefix, tt.cleanup, "mine.txt")
+			final := editorCommit(env, tt.message, tt.source, tt.gitPrefix, tt.cleanup, "mine.txt")
 
 			stamped := trailers.ParseAllCheckpoints(final)
 			require.Len(t, stamped, 1, "precondition: prepare stamped one trailer: %q", final)
-			parse := exec.CommandContext(t.Context(), "git", "-c", "core.commentChar="+prefix, "interpret-trailers", "--parse")
+			parse := exec.CommandContext(t.Context(), "git", "interpret-trailers", "--parse")
+			parse.Dir = env.RepoDir
 			parse.Env = testutil.GitIsolatedEnv()
 			parse.Stdin = strings.NewReader(final)
 			gitTrailers, err := parse.Output()
@@ -254,6 +261,109 @@ func TestTrailerAuthority_CleanupKeepingCommentsLinksTheCommit(t *testing.T) {
 				"post-commit must condense into the checkpoint the commit's trailer names: %q", final)
 		})
 	}
+}
+
+// Typing the subject on the template's second blank line must not run it into
+// the trailer: git reads a trailer in the subject paragraph as no trailer, and
+// post-commit would never condense into it.
+func TestTrailerAuthority_SubjectOnTheTemplatesSecondLineLinks(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	authorityAgentTurn(env, "mine.txt", "my agent work\n")
+	env.GitAdd("mine.txt")
+	_, prepared := runPrepareCommitMsg(env, "\n"+gitCommentBlock("#"), "")
+	lines := strings.Split(prepared, "\n")
+	require.Equal(t, []string{"", ""}, lines[:2], "precondition: the template opens with two blank lines: %q", prepared)
+	lines[1] = "typed on the second line"
+
+	final := recordEditorCommit(env, strings.Join(lines, "\n"), "#", cleanupStrip)
+
+	stamped := trailers.ParseAllCheckpointsFromFinalTrailerBlock(final, "")
+	require.Len(t, stamped, 1, "the recorded commit must end with its trailer: %q", final)
+	require.True(t, advCheckpointStored(env, stamped[0].String()), "post-commit condenses into the stamped checkpoint")
+}
+
+// A trailer prepare adds to an amend or an agent's editor commit goes above
+// git's comment block: with `commit -v` everything below the scissors line is
+// the diff, which git discards with the trailer in it.
+func TestTrailerAuthority_AddedTrailerSurvivesVerboseCleanup(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		prepare func(env *TestEnv) (prepared string, notID string)
+	}{
+		{
+			name: "amend restores the session's last checkpoint",
+			prepare: func(env *TestEnv) (string, string) {
+				authorityAgentTurn(env, "mine.txt", "my agent work\n")
+				env.GitCommitWithHooks("My change", "mine.txt")
+				_, prepared := runPrepareCommitMsg(env, "My change\n\n"+gitCommentBlock("#")+gitVerboseTail, "commit")
+				return prepared, ""
+			},
+		},
+		{
+			name: "amend of a deleted checkpoint gets a fresh one",
+			prepare: func(env *TestEnv) (string, string) {
+				deleted := createCheckpointedCommit(env.T, env, "Add beta", "beta.go", "package beta\n", "Add beta")
+				env.RunCLI("checkpoint", "delete", deleted, "--force")
+				authorityAgentTurn(env, "beta2.go", "package beta\n")
+				env.GitAdd("beta2.go")
+				headMsg := strings.TrimRight(env.GetCommitMessage(env.GetHeadHash()), "\n")
+				_, prepared := runPrepareCommitMsg(env, headMsg+"\n\n"+gitCommentBlock("#")+gitVerboseTail, "commit")
+				return prepared, deleted
+			},
+		},
+		{
+			name: "agent commit through the editor",
+			prepare: func(env *TestEnv) (string, string) {
+				sess := env.NewSession()
+				require.NoError(env.T, env.SimulateUserPromptSubmitWithTranscriptPath(sess.ID, sess.TranscriptPath))
+				env.WriteFile("agent.txt", "agent work\n")
+				sess.CreateTranscript("write agent.txt", []FileChange{{Path: "agent.txt", Content: "agent work\n"}})
+				env.GitAdd("agent.txt")
+				msgFile := env.commitMsgFile()
+				require.NoError(env.T, os.WriteFile(msgFile, []byte("Agent change\n\n"+gitCommentBlock("#")+gitVerboseTail), 0o644))
+				if out, err := env.prepareCommitMsgCmd(false, msgFile).CombinedOutput(); err != nil {
+					env.T.Logf("prepare-commit-msg output: %s", out)
+				}
+				prepared, err := os.ReadFile(msgFile)
+				require.NoError(env.T, err)
+				return string(prepared), ""
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := NewFeatureBranchEnv(t)
+
+			prepared, notID := tt.prepare(env)
+
+			kept := trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(prepared, "#"), "#")
+			require.Len(t, kept, 1, "the added trailer must survive git's cleanup: %q", prepared)
+			if notID != "" {
+				require.NotEqual(t, notID, kept[0].String(), "never the deleted checkpoint")
+			}
+		})
+	}
+}
+
+// The user clears a restored amend's message to abort it. Git's comment block
+// still ends the message, so commit-msg must remove the trailer and let git
+// abort, not record a commit holding only the trailer.
+func TestTrailerAuthority_ClearedAmendMessageAborts(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	authorityAgentTurn(env, "mine.txt", "my agent work\n")
+	env.GitCommitWithHooks("My change", "mine.txt")
+	msgFile, prepared := runPrepareCommitMsg(env, "My change\n\n"+gitCommentBlock("#"), "commit")
+	require.NotEmpty(t, trailers.ParseAllCheckpoints(prepared), "precondition: the amend restored a trailer: %q", prepared)
+	require.NoError(t, os.WriteFile(msgFile, []byte(strings.Replace(prepared, "My change\n", "", 1)), 0o644))
+
+	edited := runCommitMsgHook(env, msgFile)
+
+	require.Empty(t, trailers.ParseAllCheckpoints(edited),
+		"commit-msg must remove the trailer so git aborts the empty amend: %q", edited)
 }
 
 // commit-msg removes Entire's trailer from an editor message the user left
@@ -270,15 +380,10 @@ func TestTrailerAuthority_UntouchedEditorMessageAborts(t *testing.T) {
 		// GUARD: the default prefix.
 		{name: "default prefix", message: "\n" + gitCommentBlock("#")},
 		{name: "semicolon", commentChar: ";", message: "\n" + gitCommentBlock(";")},
-		{
-			name: "verbose",
-			message: "\n" + gitCommentBlock("#") +
-				"# ------------------------ >8 ------------------------\n" +
-				"# Do not modify or remove the line above.\n" +
-				"# Everything below it will be ignored.\n" +
-				"diff --git a/mine.txt b/mine.txt\n" +
-				"+my agent work\n",
-		},
+		{name: "verbose", message: "\n" + gitCommentBlock("#") + gitVerboseTail},
+		// GUARD: commit.status=false hands prepare-commit-msg an empty message, so
+		// only Entire's own explanation marks it as an editor message.
+		{name: "no comment block", message: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -371,6 +476,14 @@ func gitScissorsBlock(prefix string) string {
 		prefix + " On branch feature/test-branch\n"
 }
 
+// gitVerboseTail is what `commit -v` adds below git's comment block: the
+// scissors line and the diff, which git discards.
+const gitVerboseTail = "# " + scissorsLine + "\n" +
+	"# Do not modify or remove the line above.\n" +
+	"# Everything below it will be ignored.\n" +
+	"diff --git a/mine.txt b/mine.txt\n" +
+	"+my agent work\n"
+
 const scissorsLine = "------------------------ >8 ------------------------"
 
 // git's commit.cleanup modes for an editor message.
@@ -391,7 +504,14 @@ func editorCommit(env *TestEnv, message, source, commentPrefix, cleanupMode stri
 	if strings.HasPrefix(edited, "\n") {
 		edited = "typed in editor" + edited
 	}
+	return recordEditorCommit(env, edited, commentPrefix, cleanupMode)
+}
 
+// recordEditorCommit applies git's cleanup (cleanupMode, with commentPrefix) to
+// the message the user saved in the editor, records the commit, and runs
+// post-commit. Returns the recorded message.
+func recordEditorCommit(env *TestEnv, edited, commentPrefix, cleanupMode string) string {
+	env.T.Helper()
 	args := []string{"-c", "core.commentChar=" + commentPrefix, "stripspace"}
 	switch cleanupMode {
 	case cleanupStrip:

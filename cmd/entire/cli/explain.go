@@ -2789,12 +2789,13 @@ func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, 
 
 // checkpointForCommit returns the checkpoint a commit's trailer names.
 // --generate writes a summary into it, so only the final trailer block counts
-// there; read-only views also find IDs elsewhere in the message, where squash
-// commits carry their squashed commits' trailers.
+// there, and its last ID, the one attach joins: inherited trailers come before
+// the one prepare stamped. Read-only views also find IDs elsewhere in the
+// message, where squash commits carry their squashed commits' trailers.
 func checkpointForCommit(ctx context.Context, message string, generate bool) (id.CheckpointID, bool) {
 	if generate {
 		if ids := strategy.FinalCheckpointTrailers(ctx, message); len(ids) > 0 {
-			return ids[0], true
+			return ids[len(ids)-1], true
 		}
 		return id.EmptyCheckpointID, false
 	}

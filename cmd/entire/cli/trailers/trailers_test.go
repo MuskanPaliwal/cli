@@ -75,6 +75,11 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			msg:  "Entire-Checkpoint: deadbeefcafe\n",
 			want: "Entire-Checkpoint: deadbeefcafe\n\nEntire-Checkpoint: abc123def456\n",
 		},
+		{
+			name: "cherry-pick note block is joined",
+			msg:  "Message\n\nEntire-Checkpoint: deadbeefcafe\n(cherry picked from commit 0123456789abcdef0123456789abcdef01234567)\n",
+			want: "Message\n\nEntire-Checkpoint: deadbeefcafe\n(cherry picked from commit 0123456789abcdef0123456789abcdef01234567)\nEntire-Checkpoint: abc123def456\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -465,6 +470,42 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 			message:       "# note\nEntire-Checkpoint: a1b2c3d4e5f6\n",
 			commentPrefix: "#",
 			want:          nil,
+		},
+		{
+			// git cherry-pick -x appends this line to the commit's trailer block.
+			name:    "cherry-pick note belongs to the block",
+			message: "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n(cherry picked from commit 0123456789abcdef0123456789abcdef01234567)\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:    "a quarter trailers with a git-generated one is a block",
+			message: "Message\n\nSigned-off-by: A <a@example.com>\np1\np2\np3\np4\np5\np6\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:    "under a quarter trailers is not a block",
+			message: "Message\n\nSigned-off-by: A <a@example.com>\np1\np2\np3\np4\np5\np6\np7\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "prose needs a git-generated trailer in the block",
+			message: "Message\n\nNotes: A\nsome prose\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "Signed-off-by is git-generated only with its space",
+			message: "Message\n\nSigned-off-by:A\nsome prose\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
+		},
+		{
+			name:    "a continuation is not prose",
+			message: "Message\n\nSigned-off-by: A <a@example.com>\n  wrapped value\nsome prose\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			name:    "a git-generated block is still never the subject",
+			message: "Signed-off-by: A <a@example.com>\nsome prose\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:    nil,
 		},
 		{
 			name:    "empty prefix reads comment-shaped lines as content",

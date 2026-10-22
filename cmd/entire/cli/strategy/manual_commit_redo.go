@@ -136,7 +136,7 @@ func (s *ManualCommitStrategy) inheritReplacedCommitsTrailers(ctx context.Contex
 	added := 0
 	for _, cpID := range inherited {
 		if !present[cpID] {
-			message = addInheritedCheckpointTrailer(message, cpID, commentPrefix)
+			message = addCheckpointTrailerAboveComments(message, cpID, commentPrefix)
 			added++
 		}
 	}

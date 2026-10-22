@@ -476,6 +476,40 @@ func TestExplainGenerate_BodyCheckpointLineIsNotATrailer(t *testing.T) {
 	}
 }
 
+// A final block can name several checkpoints: a squash's inherited trailers
+// come first and the one prepare stamped last. --generate writes into the
+// last, the checkpoint attach would join.
+func TestExplainGenerate_UsesTheLastFinalBlockTrailer(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	commitHash := commitExplainMessage(t, repo, "Squash feature\n\nEntire-Checkpoint: aaaaaaaaaaaa\nEntire-Checkpoint: bbbbbbbbbbbb\n")
+
+	tests := []struct {
+		name string
+		run  func(out, errOut io.Writer) error
+	}{
+		{
+			name: "commit flag",
+			run: func(out, errOut io.Writer) error {
+				return runExplainCommit(context.Background(), out, errOut, commitHash.String(), true, false, false, false, true, true, false, 0)
+			},
+		},
+		{
+			name: "positional commit",
+			run: func(out, errOut io.Writer) error {
+				return runExplainAuto(context.Background(), out, errOut, commitHash.String(), true, false, false, false, true, true, false, 0)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			err := tt.run(&out, &errOut)
+			require.ErrorContains(t, err, "bbbbbbbbbbbb")
+			require.NotContains(t, err.Error(), "aaaaaaaaaaaa")
+		})
+	}
+}
+
 // Read-only explain keeps finding checkpoints mentioned anywhere in the
 // message: squash commits carry their squashed commits' trailers in the body.
 func TestExplainReadOnly_FindsBodyCheckpointLine(t *testing.T) {
@@ -499,15 +533,17 @@ func TestExplainReadOnly_FindsBodyCheckpointLine(t *testing.T) {
 
 func commitExplainBodyMention(t *testing.T, repo *git.Repository) plumbing.Hash {
 	t.Helper()
+	return commitExplainMessage(t, repo, "Implement feature\n\nEntire-Checkpoint: deadbeefcafe\n\nSigned-off-by: Test User <test@example.com>\n")
+}
+
+func commitExplainMessage(t *testing.T, repo *git.Repository, message string) plumbing.Hash {
+	t.Helper()
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(wt.Filesystem().Root(), "feature.txt"), []byte("feature"), 0o644))
 	_, err = wt.Add("feature.txt")
 	require.NoError(t, err)
-	commitHash, err := wt.Commit(
-		"Implement feature\n\nEntire-Checkpoint: deadbeefcafe\n\nSigned-off-by: Test User <test@example.com>\n",
-		&git.CommitOptions{Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}},
-	)
+	commitHash, err := wt.Commit(message, &git.CommitOptions{Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}})
 	require.NoError(t, err)
 	return commitHash
 }

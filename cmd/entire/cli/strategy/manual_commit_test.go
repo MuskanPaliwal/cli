@@ -854,6 +854,18 @@ func TestAddCheckpointTrailerWithComment_NoPrompt(t *testing.T) {
 	}
 }
 
+// A template's own comment line is not git's comment block: the trailer goes
+// above the block that ends the message, below every line the user may keep.
+func TestAddCheckpointTrailerWithComment_AnchorsToTheEndingBlock(t *testing.T) {
+	t.Parallel()
+	message := "Summary:\n# what changed\n\nDetails:\n\n# Please enter the commit message for your changes.\n#\n"
+
+	result := addCheckpointTrailerWithComment(message, testTrailerCheckpointID, "Claude Code", "", "#")
+
+	require.Equal(t, []id.CheckpointID{testTrailerCheckpointID},
+		trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(result, "#"), "#"), "%q", result)
+}
+
 // hasUserContent decides whether commit-msg may leave Entire's trailer in, so
 // it must count exactly what git's cleanup will keep. An editor message ends
 // with git's comment block; a -m/-F message does not, and keeps every line.

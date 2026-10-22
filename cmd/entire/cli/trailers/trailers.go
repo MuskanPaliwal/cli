@@ -191,6 +191,31 @@ func StripEditorComments(message, commentPrefix string) string {
 	return strings.Join(kept, "\n")
 }
 
+// EditorCommentBlockStart returns the index of the line where the comment
+// block git appends to an editor message starts: the first of the
+// commentPrefix lines that end the message (blank lines among them included),
+// or that end it above the scissors line, else the scissors line itself. It
+// returns -1 when the message ends with no such block, or commentPrefix is
+// empty. A commentPrefix line followed by other lines is not git's block.
+func EditorCommentBlockStart(lines []string, commentPrefix string) int {
+	if commentPrefix == "" {
+		return -1
+	}
+	end := slices.IndexFunc(lines, func(line string) bool { return isScissorsLine(line, commentPrefix) })
+	start := end
+	if end < 0 {
+		end = len(lines)
+	}
+	for i := end - 1; i >= 0; i-- {
+		if isCommentLine(lines[i], commentPrefix) {
+			start = i
+		} else if !isBlankLine(lines[i]) {
+			break
+		}
+	}
+	return start
+}
+
 // CutAtScissors returns message without git's scissors line for commentPrefix
 // and everything below it, which git discards from a `commit -v` message. An
 // empty commentPrefix returns message unchanged.
@@ -367,9 +392,10 @@ func appendTrailerLine(message, trailerLine string) string {
 		start--
 	}
 
-	// Read without a comment prefix, a joined block holds no comment lines, so
-	// every reader accepts the trailer whatever prefix it skips.
-	if separated && isTrailerBlock(lines[start:], "") {
+	// Join only a block with no other lines, read without a comment prefix:
+	// every reader accepts it whatever prefix it skips, and the trailer never
+	// lands after prose or a kept "#" line.
+	if trailerLines, otherLines, _ := countTrailerBlock(lines[start:], ""); separated && trailerLines > 0 && otherLines == 0 {
 		return trimmed + "\n" + trailerLine + "\n"
 	}
 	return trimmed + "\n\n" + trailerLine + "\n"
@@ -423,29 +449,47 @@ func finalTrailerBlock(message, commentPrefix string) []string {
 	return slices.DeleteFunc(lines[start:end], func(line string) bool { return isCommentLine(line, commentPrefix) })
 }
 
-// isTrailerBlock reports whether lines form a trailer block: at least one
-// trailer line, with every other line an indented continuation of a trailer's
-// value or a line starting with commentPrefix, which git skips. Both
-// finalTrailerBlock and appendTrailerLine classify with this so the writer
-// never joins onto a paragraph the readers reject.
+// gitGeneratedPrefixes start the lines git itself adds to a trailer block
+// (`commit -s`, `cherry-pick -x`).
+var gitGeneratedPrefixes = []string{"Signed-off-by: ", "(cherry picked from commit "}
+
+// isTrailerBlock reports whether lines form a trailer block by git's rule: at
+// least one trailer line, with every other line an indented continuation of a
+// trailer's value or a line starting with commentPrefix, which git skips. A
+// block holding a line git generates may also hold other lines, as long as
+// they are at most three times its trailer lines.
 func isTrailerBlock(lines []string, commentPrefix string) bool {
-	seenTrailer, continuable := false, false
+	trailerLines, otherLines, generated := countTrailerBlock(lines, commentPrefix)
+	return trailerLines > 0 && (otherLines == 0 || generated && trailerLines*3 >= otherLines)
+}
+
+// countTrailerBlock counts lines' trailer lines and other lines the way git's
+// trailer grammar does, and reports whether one is a line git generates. Both
+// isTrailerBlock and appendTrailerLine classify with this so the writer never
+// joins onto a paragraph the readers reject.
+func countTrailerBlock(lines []string, commentPrefix string) (trailerLines, otherLines int, generated bool) {
+	continuable := false
 	for _, line := range lines {
 		switch {
 		case isCommentLine(line, commentPrefix):
 			// Git skips the line, and an indented line after it continues
 			// nothing.
 			continuable = false
+		case slices.ContainsFunc(gitGeneratedPrefixes, func(prefix string) bool { return strings.HasPrefix(line, prefix) }):
+			trailerLines++
+			generated, continuable = true, true
 		case IsTrailerLine(line):
-			seenTrailer, continuable = true, true
+			trailerLines++
+			continuable = true
 		case continuable && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")):
 			// Git treats an indented line after a trailer as a continuation
 			// of that trailer's value, never as a new trailer.
 		default:
-			return false
+			otherLines++
+			continuable = false
 		}
 	}
-	return seenTrailer
+	return trailerLines, otherLines, generated
 }
 
 func isCommentLine(line, commentPrefix string) bool {
