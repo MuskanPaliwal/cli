@@ -167,9 +167,10 @@ const DefaultCommentPrefix = "#"
 const autoCommentCandidates = "#;@!$%^&|:"
 
 // isScissorsLine reports whether line is git's scissors line for commentPrefix.
-// Git cuts only at that exact line, never at prose that mentions the marker.
+// Git cuts only at that exact line, ended by "\n" alone: never at prose that
+// mentions the marker, nor at the line an editor saved with CRLF.
 func isScissorsLine(line, commentPrefix string) bool {
-	return strings.TrimSuffix(line, "\r") == commentPrefix+" "+scissorsMarker
+	return line == commentPrefix+" "+scissorsMarker
 }
 
 // StripEditorComments returns an editor-written commit message without the

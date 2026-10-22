@@ -423,6 +423,24 @@ func TestTrailerAuthority_MessageSubjectStartingWithHashKeepsTrailer(t *testing.
 		"commit-msg must keep the trailer of a message with content: %q", edited)
 }
 
+// commit.cleanup=strip makes git drop comment lines from a -m message too, so
+// "#42 fix login" leaves nothing: commit-msg must remove the trailer and let git
+// abort, not record a commit holding only the trailer.
+func TestTrailerAuthority_StripCleanupMessageOfCommentsAborts(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	setRepoGitConfig(env, "commit.cleanup", cleanupStrip)
+	authorityAgentTurn(env, "mine.txt", "my agent work\n")
+	env.GitAdd("mine.txt")
+	msgFile, prepared := runPrepareCommitMsg(env, "#42 fix login\n", "message")
+	require.NotEmpty(t, trailers.ParseAllCheckpoints(prepared), "precondition: prepare stamped a trailer: %q", prepared)
+
+	edited := runCommitMsgHook(env, msgFile)
+
+	require.Empty(t, trailers.ParseAllCheckpoints(edited),
+		"commit-msg must remove the trailer so git aborts the empty commit: %q", edited)
+}
+
 // runCommitMsgHook runs the real commit-msg hook on msgFile, as git does after
 // the editor closes, and returns the message it leaves for git to record.
 func runCommitMsgHook(env *TestEnv, msgFile string) string {

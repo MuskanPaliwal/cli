@@ -574,10 +574,12 @@ func TestStripEditorComments(t *testing.T) {
 			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
 		},
 		{
-			name:          "scissors line with CRLF",
+			// git cuts only at a scissors line ending in "\n", so it keeps the
+			// diff below a CRLF one and drops just the comment lines.
+			name:          "a CRLF scissors line is not a cut",
 			message:       "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\n# " + scissors + "\r\ndiff --git a/f b/f\n",
 			commentPrefix: "#",
-			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n",
+			want:          "Subject\n\nEntire-Checkpoint: a1b2c3d4e5f6\n\ndiff --git a/f b/f\n",
 		},
 		{
 			name:          "prose mentioning the marker is not a scissors line",

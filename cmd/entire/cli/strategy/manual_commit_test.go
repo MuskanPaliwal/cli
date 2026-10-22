@@ -985,7 +985,7 @@ func TestHasUserContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := hasUserContent(tt.message, tt.commentPrefix); got != tt.want {
+			if got := hasUserContent(tt.message, tt.commentPrefix, false); got != tt.want {
 				t.Errorf("hasUserContent(%q, %q) = %v, want %v", tt.message, tt.commentPrefix, got, tt.want)
 			}
 		})

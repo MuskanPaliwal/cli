@@ -201,16 +201,12 @@ func (s *ManualCommitStrategy) CommitMsg(ctx context.Context, commitMsgFile stri
 		return nil
 	}
 
-	// A message that ends with its trailer and carries no explanation from
-	// prepare-commit-msg has no comments for git to strip (the -m/-F shape),
-	// so the comment prefix is not needed.
-	commentPrefix := ""
-	if !strings.HasPrefix(lastNonBlankLine(message), trailers.CheckpointTrailerKey+":") || strings.Contains(message, trailerExplanation) {
-		commentPrefix = gitCommentPrefix(ctx, message)
-	}
+	// One config read gives the comment prefix and whether commit.cleanup=strip
+	// drops comment lines from every message, -m/-F ones included.
+	configured, cleanup := gitCommentConfig(ctx)
 
 	// Check if there's any user content (non-comment, non-trailer lines)
-	if !hasUserContent(message, commentPrefix) {
+	if !hasUserContent(message, resolveCommentPrefix(configured, message), cleanup == cleanupStrip) {
 		// No user content - strip the trailer so git aborts
 		message = stripCheckpointTrailer(message)
 		if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil {
@@ -307,16 +303,17 @@ func parsePostRewritePairs(r io.Reader) ([]rewritePair, error) {
 }
 
 // hasUserContent reports whether git will record anything in message besides
-// Entire-Checkpoint trailers. git does not tell commit-msg how the message was
-// written, so the message has to say: an editor message ends with git's
-// comment block or carries prepare-commit-msg's explanation, and git drops
-// every line starting with commentPrefix plus the scissors line and everything
-// below it; a -m/-F message has neither and git keeps its lines as written. A
-// user who deletes both and types only commentPrefix lines is therefore read
-// as having content.
-func hasUserContent(message, commentPrefix string) bool {
+// Entire-Checkpoint trailers. With stripsComments (commit.cleanup=strip) git
+// drops every line starting with commentPrefix from any message. Otherwise git
+// does not tell commit-msg how the message was written, so the message has to
+// say: an editor message ends with git's comment block or carries
+// prepare-commit-msg's explanation, and git drops every line starting with
+// commentPrefix plus the scissors line and everything below it; a -m/-F
+// message has neither and git keeps its lines as written. A user who deletes
+// both and types only commentPrefix lines is therefore read as having content.
+func hasUserContent(message, commentPrefix string, stripsComments bool) bool {
 	message = trailers.CutAtScissors(message, commentPrefix)
-	if commentPrefix != "" && (strings.HasPrefix(lastNonBlankLine(message), commentPrefix) || strings.Contains(message, commentPrefix+trailerExplanation)) {
+	if commentPrefix != "" && (stripsComments || strings.HasPrefix(lastNonBlankLine(message), commentPrefix) || strings.Contains(message, commentPrefix+trailerExplanation)) {
 		message = trailers.StripEditorComments(message, commentPrefix)
 	}
 	trailerPrefix := trailers.CheckpointTrailerKey + ":"
@@ -2978,12 +2975,18 @@ func editorCommentPrefix(ctx context.Context, source, message string) string {
 }
 
 // gitCommentPrefix returns the prefix git's cleanup strips from an editor
-// message (see configuredCommentPrefix). For "auto" git chooses the prefix
-// before writing its comment block into message, so it is read back from that
-// block.
+// message (see gitCommentConfig and resolveCommentPrefix).
 func gitCommentPrefix(ctx context.Context, message string) string {
-	if prefix := configuredCommentPrefix(ctx); prefix != autoCommentChar {
-		return prefix
+	configured, _ := gitCommentConfig(ctx)
+	return resolveCommentPrefix(configured, message)
+}
+
+// resolveCommentPrefix returns the configured prefix git's cleanup strips from
+// an editor message. For "auto" git chooses the prefix before writing its
+// comment block into message, so it is read back from that block.
+func resolveCommentPrefix(configured, message string) string {
+	if configured != autoCommentChar {
+		return configured
 	}
 	return trailers.AutoCommentPrefix(message)
 }
@@ -2992,8 +2995,8 @@ func gitCommentPrefix(ctx context.Context, message string) string {
 // recorded commit message. Only `git commit` resolves "auto";
 // `git interpret-trailers` reads it as git's default.
 func recordedCommentPrefix(ctx context.Context) string {
-	if prefix := configuredCommentPrefix(ctx); prefix != autoCommentChar {
-		return prefix
+	if configured, _ := gitCommentConfig(ctx); configured != autoCommentChar {
+		return configured
 	}
 	return trailers.DefaultCommentPrefix
 }
@@ -3002,18 +3005,31 @@ func recordedCommentPrefix(ctx context.Context) string {
 // the prefix.
 const autoCommentChar = "auto"
 
-// configuredCommentPrefix returns core.commentChar or core.commentString,
-// which are aliases (the last one set wins), else git's default.
-func configuredCommentPrefix(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "git", "config", "--get-regexp", `^core\.comment(char|string)$`).Output()
+// cleanupStrip is the commit.cleanup mode that drops comment lines from every
+// message, not only an edited one.
+const cleanupStrip = "strip"
+
+// gitCommentConfig returns the comment prefix git is configured with,
+// core.commentChar or core.commentString (aliases; the last one set wins) or
+// git's default, and commit.cleanup ("" when unset).
+func gitCommentConfig(ctx context.Context) (prefix, cleanup string) {
+	prefix = trailers.DefaultCommentPrefix
+	out, err := exec.CommandContext(ctx, "git", "config", "--get-regexp", `^(core\.comment(char|string)|commit\.cleanup)$`).Output()
 	if err != nil {
-		return trailers.DefaultCommentPrefix // unset, or unreadable
+		return prefix, "" // unset, or unreadable
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if _, prefix, _ := strings.Cut(lines[len(lines)-1], " "); prefix != "" {
-		return prefix
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		key, value, _ := strings.Cut(line, " ")
+		switch {
+		case key == "commit.cleanup":
+			cleanup = value
+		case value == "":
+			prefix = trailers.DefaultCommentPrefix
+		default:
+			prefix = value
+		}
 	}
-	return trailers.DefaultCommentPrefix
+	return prefix, cleanup
 }
 
 // addCheckpointTrailerAboveComments adds a trailer above git's comment block
