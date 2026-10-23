@@ -61,9 +61,23 @@ func TestAppendCheckpointTrailer(t *testing.T) {
 			want: "Message\n\nEntire-Checkpoint: deadbeefcafe\n\nBody continues here.\n\nEntire-Checkpoint: abc123def456\n",
 		},
 		{
-			name: "trailing hash line starts a new block",
+			// git reads a block holding a line it generates as trailers even
+			// with other lines in it; a new paragraph would push them out.
+			name: "mixed block with a git-generated line is joined",
+			msg:  "Message\n\nSigned-off-by: Test User <test@example.com>\nReviewed on the call\n",
+			want: "Message\n\nSigned-off-by: Test User <test@example.com>\nReviewed on the call\nEntire-Checkpoint: abc123def456\n",
+		},
+		{
+			name: "hash line in a mixed block is joined",
 			msg:  "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n",
-			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\n\nEntire-Checkpoint: abc123def456\n",
+			want: "Message\n\nSigned-off-by: Test User <test@example.com>\n# retained message text\nEntire-Checkpoint: abc123def456\n",
+		},
+		{
+			// Read without a comment prefix the hash line is prose, which only
+			// a block holding a git-generated line may contain.
+			name: "hash line in a block without a git-generated line starts a new block",
+			msg:  "Message\n\nReviewed-by: Test User <test@example.com>\n# retained message text\n",
+			want: "Message\n\nReviewed-by: Test User <test@example.com>\n# retained message text\n\nEntire-Checkpoint: abc123def456\n",
 		},
 		{
 			name: "trailer without a space after the colon is joined",

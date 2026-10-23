@@ -432,10 +432,10 @@ func appendTrailerLine(message, trailerLine string) string {
 		start--
 	}
 
-	// Join only a block with no other lines, read without a comment prefix:
-	// every reader accepts it whatever prefix it skips, and the trailer never
-	// lands after prose or a kept "#" line.
-	if trailerLines, otherLines, _ := countTrailerBlock(lines[start:], ""); separated && trailerLines > 0 && otherLines == 0 {
+	// Join only a block read as one without a comment prefix: every reader
+	// accepts it whatever prefix it skips, and a new paragraph would push the
+	// block's trailers out of the final block.
+	if separated && isTrailerBlock(lines[start:], "") {
 		return trimmed + "\n" + trailerLine + "\n"
 	}
 	return trimmed + "\n\n" + trailerLine + "\n"
@@ -499,16 +499,8 @@ var gitGeneratedPrefixes = []string{"Signed-off-by: ", "(cherry picked from comm
 // block holding a line git generates may also hold other lines, as long as
 // they are at most three times its trailer lines.
 func isTrailerBlock(lines []string, commentPrefix string) bool {
-	trailerLines, otherLines, generated := countTrailerBlock(lines, commentPrefix)
-	return trailerLines > 0 && (otherLines == 0 || generated && trailerLines*3 >= otherLines)
-}
-
-// countTrailerBlock counts lines' trailer lines and other lines the way git's
-// trailer grammar does, and reports whether one is a line git generates. Both
-// isTrailerBlock and appendTrailerLine classify with this so the writer never
-// joins onto a paragraph the readers reject.
-func countTrailerBlock(lines []string, commentPrefix string) (trailerLines, otherLines int, generated bool) {
-	continuable := false
+	trailerLines, otherLines := 0, 0
+	generated, continuable := false, false
 	for _, line := range lines {
 		switch {
 		case isCommentLine(line, commentPrefix):
@@ -529,7 +521,7 @@ func countTrailerBlock(lines []string, commentPrefix string) (trailerLines, othe
 			continuable = false
 		}
 	}
-	return trailerLines, otherLines, generated
+	return trailerLines > 0 && (otherLines == 0 || generated && trailerLines*3 >= otherLines)
 }
 
 func isCommentLine(line, commentPrefix string) bool {

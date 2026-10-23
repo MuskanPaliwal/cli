@@ -342,8 +342,11 @@ post-commit will read:
   attribution, history listings) and squash and redo inheritance still scan
   the whole message, because squash commits carry their squashed commits'
   trailers in the body.
-- **Writer.** The trailer writer joins only a block of trailer lines alone,
-  so a trailer it appends is always one the readers accept.
+- **Writer.** The trailer writer joins the final paragraph when it is a
+  trailer block read without a comment prefix, the strictest reading, so
+  every reader accepts the trailer it appends and a mixed block keeps its
+  trailers in the final block. Any other paragraph gets the trailer in a new
+  block.
 
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in
