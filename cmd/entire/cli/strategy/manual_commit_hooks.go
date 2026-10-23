@@ -3038,12 +3038,14 @@ type commentConfig struct {
 type commentConfigKey struct{}
 
 type commentConfigSnapshot struct {
-	once sync.Once
+	mu   sync.Mutex
+	read bool
 	cfg  commentConfig
 }
 
 // withCommentConfig gives a commit hook one read of commentConfig, on first
-// use: prepare-commit-msg's squash, redo, amend and stamping steps each need it.
+// use under a live ctx: prepare-commit-msg's squash, redo, amend and stamping
+// steps each need it.
 func withCommentConfig(ctx context.Context) context.Context {
 	if _, ok := ctx.Value(commentConfigKey{}).(*commentConfigSnapshot); ok {
 		return ctx
@@ -3058,7 +3060,15 @@ func gitCommentConfig(ctx context.Context) commentConfig {
 	if !ok {
 		return readGitCommentConfig(ctx)
 	}
-	snap.once.Do(func() { snap.cfg = readGitCommentConfig(ctx) })
+	snap.mu.Lock()
+	defer snap.mu.Unlock()
+	if !snap.read {
+		cfg := readGitCommentConfig(ctx)
+		if ctx.Err() != nil {
+			return cfg // git's defaults, not the config: a later call reads again
+		}
+		snap.cfg, snap.read = cfg, true
+	}
 	return snap.cfg
 }
 

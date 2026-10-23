@@ -1054,6 +1054,23 @@ func TestCommentConfigPrefixFor(t *testing.T) {
 	require.Equal(t, "#", gitCommentConfig(cancelled).prefixFor(semicolonBlock, true), "an unreadable config falls back to git's default")
 }
 
+// A commit hook reads its comment config once, but a read under a done ctx
+// yields git's defaults, not the config: a later call under a live ctx must
+// read the config.
+func TestGitCommentConfig_HookDoesNotCacheAReadUnderADoneContext(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := resolvedTempDir(t)
+	testutil.InitRepo(t, dir)
+	testutil.RunGit(t, dir, "config", "core.commentChar", ";")
+	t.Chdir(dir)
+	ctx := withCommentConfig(context.Background())
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.Equal(t, "#", gitCommentConfig(cancelled).prefix, "precondition: a read under a done ctx falls back to git's default")
+	require.Equal(t, ";", gitCommentConfig(ctx).prefix, "the fallback must not be cached")
+}
+
 func TestAddCheckpointTrailer_ConventionalCommitSubject(t *testing.T) {
 	t.Parallel()
 
