@@ -1688,10 +1688,13 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 	}
 
 	commits := []associatedCommit{} // Initialize as empty slice, not nil (nil means "not searched")
-	targetID := checkpointID.String()
 
+	// Any checkpoint the commit names: a squash commit names its squashed
+	// commits' checkpoints before the one it stamped.
 	collectCommit := func(c *object.Commit) {
-		commits = append(commits, newAssociatedCommit(c))
+		if slices.Contains(trailers.ParseAllCheckpoints(c.Message), checkpointID) {
+			commits = append(commits, newAssociatedCommit(c))
+		}
 	}
 
 	if searchAll {
@@ -1710,10 +1713,7 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 			if err := ctx.Err(); err != nil {
 				return err //nolint:wrapcheck // Propagating context cancellation
 			}
-			cpID, found := trailers.ParseCheckpoint(c.Message)
-			if found && cpID.String() == targetID {
-				collectCommit(c)
-			}
+			collectCommit(c)
 			return nil
 		})
 	} else {
@@ -1728,10 +1728,7 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 				return errStopIteration
 			}
 
-			cpID, found := trailers.ParseCheckpoint(c.Message)
-			if found && cpID.String() == targetID {
-				collectCommit(c)
-			}
+			collectCommit(c)
 			return nil
 		})
 	}
@@ -2467,8 +2464,11 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 
 	var points []strategy.PendingCheckpoint
 
+	// The checkpoint explain <commit> shows; one comment config read serves
+	// every commit.
+	trailerCtx := strategy.WithCommentConfig(ctx)
 	collectCheckpoint := func(c *object.Commit) {
-		cpID, found := trailers.ParseCheckpoint(c.Message)
+		cpID, found := strategy.CommitCheckpoint(trailerCtx, c.Message)
 		if !found {
 			return
 		}

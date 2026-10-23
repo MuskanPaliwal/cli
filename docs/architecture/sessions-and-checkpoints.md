@@ -336,12 +336,14 @@ post-commit will read:
   cleanup mode that keeps comment lines, no longer links the commit.
   Post-commit, attach and `explain` agree: the commit is treated as one whose
   trailer the user removed, and `entire attach` can link it.
-- **Read-only views.** `explain <commit>`, `explain --commit`, the export
-  and the review re-run guard show the checkpoint attach and `--generate` use
-  (`CommitCheckpoint`), falling back to the first ID anywhere only when the
-  final block names none. Other read-only lookups (resume, status,
-  attribution, history listings) still scan the whole message, because
-  squash commits carry their squashed commits' trailers in the body.
+- **Read-only views.** `explain <commit>`, `explain --commit`, the branch
+  listing, the export and the review re-run guard show the checkpoint attach
+  and `--generate` use (`CommitCheckpoint`), falling back to the first ID
+  anywhere only when the final block names none. `explain --checkpoint`
+  finds every commit that names the checkpoint anywhere. Other read-only
+  lookups (resume, status, attribution, other history listings) still scan
+  the whole message, because squash commits carry their squashed commits'
+  trailers in the body.
 - **Inheritance.** Squash and redo inheritance take their IDs from the whole
   message of SQUASH_MSG and of the redone commits, for the same reason, and
   add each to the final block unless it is already there: a copy indented in

@@ -427,7 +427,7 @@ func GitOperationInProgress(ctx context.Context) string {
 //
 
 func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFile string, source string) error {
-	ctx = withGitDir(withCommentConfig(withCommitAncestry(ctx)))
+	ctx = withGitDir(WithCommentConfig(withCommitAncestry(ctx)))
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
 	// Skip during rebase, cherry-pick, or revert operations
@@ -3026,7 +3026,7 @@ type commentConfig struct {
 	status  bool   // commit.status: git writes its comment block into a message it opens in the editor
 }
 
-// commentConfigKey holds a commit hook's comment config (withCommentConfig).
+// commentConfigKey holds an operation's comment config (WithCommentConfig).
 type commentConfigKey struct{}
 
 type commentConfigSnapshot struct {
@@ -3035,18 +3035,19 @@ type commentConfigSnapshot struct {
 	cfg  commentConfig
 }
 
-// withCommentConfig gives a commit hook one read of commentConfig, on first
-// use under a live ctx: prepare-commit-msg's squash, redo, amend and stamping
-// steps each need it.
-func withCommentConfig(ctx context.Context) context.Context {
+// WithCommentConfig gives an operation one read of git's comment config, on
+// first use under a live ctx: prepare-commit-msg's squash, redo, amend and
+// stamping steps each need it, and so does every commit a listing resolves
+// with CommitCheckpoint.
+func WithCommentConfig(ctx context.Context) context.Context {
 	if _, ok := ctx.Value(commentConfigKey{}).(*commentConfigSnapshot); ok {
 		return ctx
 	}
 	return context.WithValue(ctx, commentConfigKey{}, &commentConfigSnapshot{})
 }
 
-// gitCommentConfig returns the hook's commentConfig snapshot, reading it on
-// first use; without one (a caller outside a commit hook) it reads every time.
+// gitCommentConfig returns ctx's commentConfig snapshot, reading it on first
+// use; without one (see WithCommentConfig) it reads every time.
 func gitCommentConfig(ctx context.Context) commentConfig {
 	snap, ok := ctx.Value(commentConfigKey{}).(*commentConfigSnapshot)
 	if !ok {

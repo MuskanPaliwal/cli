@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -568,6 +569,34 @@ func TestExplainReadOnly_ShowsTheLastFinalBlockTrailer(t *testing.T) {
 			require.Contains(t, out.String(), stamped.String())
 			require.NotContains(t, out.String(), inherited.String())
 		})
+	}
+}
+
+// The branch listing and the --checkpoint commit search must agree with
+// explain <commit>: a squash commit lists the checkpoint it stamped, and a
+// search for either checkpoint it names finds it.
+func TestExplainReadOnly_ListingAndSearchAgreeWithTheCommitView(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	inherited, stamped := id.MustCheckpointID("aaaaaaaaaaaa"), id.MustCheckpointID("bbbbbbbbbbbb")
+	for _, cpID := range []id.CheckpointID{inherited, stamped} {
+		writeCheckpointForExport(t, repo, cpID, checkpoint.WriteOptions{
+			SessionID:  "session-" + cpID.String(),
+			Transcript: redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
+		})
+	}
+	commitHash := commitExplainMessage(t, repo, "Squash feature\n\nEntire-Checkpoint: "+inherited.String()+"\nEntire-Checkpoint: "+stamped.String()+"\n")
+
+	points, _, err := getBranchCheckpoints(context.Background(), repo, 20)
+	require.NoError(t, err)
+	listed := slices.IndexFunc(points, func(p strategy.PendingCheckpoint) bool { return p.ID == commitHash.String() })
+	require.GreaterOrEqual(t, listed, 0, "the listing shows the squash commit: %+v", points)
+	require.Equal(t, stamped, points[listed].CheckpointID, "the listing shows the checkpoint explain <commit> shows")
+
+	for _, cpID := range []id.CheckpointID{inherited, stamped} {
+		commits, err := getAssociatedCommits(context.Background(), repo, cpID, false)
+		require.NoError(t, err)
+		require.True(t, slices.ContainsFunc(commits, func(c associatedCommit) bool { return c.SHA == commitHash.String() }),
+			"explain --checkpoint %s finds the commit that names it: %+v", cpID, commits)
 	}
 }
 

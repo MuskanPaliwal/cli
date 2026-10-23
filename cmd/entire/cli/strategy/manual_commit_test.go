@@ -1063,7 +1063,7 @@ func TestGitCommentConfig_HookDoesNotCacheAReadUnderADoneContext(t *testing.T) {
 	testutil.InitRepo(t, dir)
 	testutil.RunGit(t, dir, "config", "core.commentChar", ";")
 	t.Chdir(dir)
-	ctx := withCommentConfig(context.Background())
+	ctx := WithCommentConfig(context.Background())
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 
