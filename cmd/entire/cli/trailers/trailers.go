@@ -206,6 +206,17 @@ func EditorCommentBlockStart(lines []string, commentPrefix string) int {
 		return -1
 	}
 	scissors := ScissorsLineIndex(lines, commentPrefix)
+	if start := commentRunStart(lines, commentPrefix, scissors); start > 0 && isBlankLine(lines[start-1]) {
+		return start
+	}
+	return scissors
+}
+
+// commentRunStart returns the index of the first line of the run of
+// commentPrefix lines that ends the message, ignoring trailing blank lines, or
+// that ends right above the scissors line at index scissors (-1 for none). It
+// returns -1 when no comment line ends there.
+func commentRunStart(lines []string, commentPrefix string, scissors int) int {
 	end := scissors
 	if end < 0 {
 		end = len(lines)
@@ -217,10 +228,10 @@ func EditorCommentBlockStart(lines []string, commentPrefix string) int {
 	for start > 0 && isCommentLine(lines[start-1], commentPrefix) {
 		start--
 	}
-	if start < end && start > 0 && isBlankLine(lines[start-1]) {
-		return start
+	if start == end {
+		return -1
 	}
-	return scissors
+	return start
 }
 
 // ScissorsLineIndex returns the index of git's scissors line for
@@ -247,9 +258,12 @@ func CutAtScissors(message, commentPrefix string) string {
 // first of autoCommentCandidates that starts no line of the message, picked
 // before git adds its comment block. When git may have written that block
 // (mayHaveBlock: commit.status is on), its lines start with the choice, so it is
-// read back from them: the scissors line if there is one, else a comment block
-// (see EditorCommentBlockStart) written with the prefix git would pick for the
-// lines above it. A message without one was not opened in the editor.
+// read back from them: the scissors line if there is one, else the run of lines
+// ending the message, below at least one other line, that start with the
+// prefix git would pick for the lines above them. No blank line is needed
+// above that run: git writes its block right below a message that lacks a
+// final newline, and no line above the block can start with git's choice. A
+// message without one was not opened in the editor.
 func AutoCommentPrefix(message string, mayHaveBlock bool) string {
 	if mayHaveBlock {
 		lines := strings.Split(message, "\n")
@@ -262,7 +276,7 @@ func AutoCommentPrefix(message string, mayHaveBlock bool) string {
 		}
 		for i := range len(autoCommentCandidates) {
 			candidate := autoCommentCandidates[i : i+1]
-			if start := EditorCommentBlockStart(lines, candidate); start >= 0 && autoCommentChoice(strings.Join(lines[:start], "\n")) == candidate {
+			if start := commentRunStart(lines, candidate, -1); start > 0 && autoCommentChoice(strings.Join(lines[:start], "\n")) == candidate {
 				return candidate
 			}
 		}

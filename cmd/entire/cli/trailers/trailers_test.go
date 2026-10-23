@@ -658,7 +658,14 @@ func TestAutoCommentPrefix(t *testing.T) {
 			want:    "#",
 		},
 		{
-			// git writes a blank line above its block.
+			// git puts no blank line above its block when the message lacks
+			// a final newline.
+			name:    "comment block right below a message without a final newline",
+			message: "Subject\n\n#42 is the issue\n; Please enter the commit message for your changes.\n;\n",
+			want:    ";",
+		},
+		{
+			// git writes its block below the message, never as all of it.
 			name:    "a message of comment lines alone has no block",
 			message: "#42 fix login\n",
 			want:    ";",

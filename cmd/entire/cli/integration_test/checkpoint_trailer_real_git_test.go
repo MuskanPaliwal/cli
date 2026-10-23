@@ -30,6 +30,10 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 	files := t.TempDir()
 	template := filepath.Join(files, "template")
 	require.NoError(t, os.WriteFile(template, []byte("Subject\n\n#42 is the issue\n"), 0o600))
+	// Without a final newline git writes its comment block right below the
+	// last line, with no blank line above it.
+	templateNoNewline := filepath.Join(files, "template-no-newline")
+	require.NoError(t, os.WriteFile(templateNoNewline, []byte("Subject\n\n#42 is the issue"), 0o600))
 	ownTrailer := filepath.Join(files, "own-trailer")
 	require.NoError(t, os.WriteFile(ownTrailer, []byte("Fix login\n\nEntire-Checkpoint: "+advForeignCheckpoint+"\n#42 is the issue\n"), 0o600))
 
@@ -119,6 +123,13 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			starts: "Typed Subject\n\n#42 is the issue\n",
 		},
 		{
+			name:   "template without a final newline under auto",
+			config: map[string]string{"core.commentChar": "auto"},
+			commit: []string{"-t", templateNoNewline},
+			editor: typeSubject,
+			starts: "Typed Subject\n\n#42 is the issue\n",
+		},
+		{
 			// git's block starts at its scissors line and is cut away.
 			name:   "template under auto with scissors cleanup",
 			config: map[string]string{"core.commentChar": "auto", "commit.cleanup": "scissors"},
@@ -173,6 +184,9 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			require.Equal(t, mentioned, trailers.ParseAllCheckpointsFromFinalTrailerBlock(recorded, prefix),
 				"the trailer is the commit's final trailer block: %q", recorded)
 			require.True(t, advCheckpointStored(env, mentioned[0].String()), "post-commit condenses into it: %q", recorded)
+			if cleanup := tt.config["commit.cleanup"]; cleanup == "" || cleanup == "strip" {
+				require.NotContains(t, recorded, "Remove the Entire-Checkpoint trailer", "git's cleanup drops Entire's explanation: %q", recorded)
+			}
 		})
 	}
 }
