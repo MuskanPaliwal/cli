@@ -400,11 +400,12 @@ func FormatCheckpoint(message string, cpID checkpointID.CheckpointID) string {
 	return fmt.Sprintf("%s\n\n%s: %s\n", message, CheckpointTrailerKey, cpID.String())
 }
 
-// trailerLineRe matches git trailer format: "Key-Name:" at the start of the
-// line, with no space before the colon. Like git, it accepts any separator
-// after the colon ("Key:value", a tab), which also makes a line starting with a
-// URL ("https://...") trailer-shaped.
-var trailerLineRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*:`)
+// trailerLineRe matches git trailer format: a key of letters, digits and
+// dashes at the start of the line, then optional spaces or tabs and the colon
+// ("Reviewed-by : Bob"). Like git, it accepts any separator after the colon
+// ("Key:value", a tab), which also makes a line starting with a URL
+// ("https://...") trailer-shaped.
+var trailerLineRe = regexp.MustCompile(`^[A-Za-z0-9-]+[ \t]*:`)
 
 // IsTrailerLine reports whether a line matches git trailer format.
 func IsTrailerLine(line string) bool {

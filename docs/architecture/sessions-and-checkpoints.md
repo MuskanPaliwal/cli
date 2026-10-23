@@ -279,12 +279,13 @@ same rules, after applying git's cleanup, so it reads the final block
 post-commit will read:
 
 - **Grammar.** The block is read as git reads trailers: no leading
-  whitespace, indented lines only as continuations of a trailer, lines
-  starting with git's comment prefix skipped (trailing ones too), and never
-  the subject paragraph. Other lines are allowed only in a block holding a
-  line git generates (`Signed-off-by: `, `(cherry picked from commit `), at
-  most three per trailer line. Attach and `explain --generate` take the
-  block's last ID.
+  whitespace, a key of letters, digits and dashes with optional spaces or
+  tabs before its colon, indented lines only as continuations of a trailer,
+  lines starting with git's comment prefix skipped (trailing ones too), and
+  never the subject paragraph. Other lines are allowed only in a block
+  holding a line git generates (`Signed-off-by: `,
+  `(cherry picked from commit `), at most three per trailer line. Attach and
+  `explain --generate` take the block's last ID.
 - **Editor or not.** Git runs its commit hooks with `GIT_EDITOR=:` when it
   opens no editor (`-m`/`-F` without `-e`, `--no-edit`, `-C`). The source
   word cannot tell: `-m -e` reports `message`, and an amend reports `commit`

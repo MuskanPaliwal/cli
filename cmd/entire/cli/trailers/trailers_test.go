@@ -127,6 +127,14 @@ func TestIsTrailerLine(t *testing.T) {
 		{"Entire-Checkpoint:\tabc123def456", true},
 		{"  Entire-Checkpoint:abc123def456", false},
 		{"https://example.com/issue/1", true}, // git parses it as key "https" too
+		// git's key is letters, digits and dashes, then optional spaces or
+		// tabs before the colon.
+		{"Reviewed-by : User <user@example.com>", true},
+		{"Reviewed-by\t: User <user@example.com>", true},
+		{"1st-reviewer: User", true},
+		{"-x: y", true},
+		{"Reviewed by: User", false},
+		{": value", false},
 		{"not a trailer", false},
 		{"error: connection refused", true}, // "error" is a valid trailer key format
 		{"", false},
@@ -414,6 +422,12 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 		{
 			name:    "tab after the colon",
 			message: "Message\n\nSigned-off-by: Test User <test@example.com>\nEntire-Checkpoint:\ta1b2c3d4e5f6\n",
+			want:    []string{"a1b2c3d4e5f6"},
+		},
+		{
+			// git accepts whitespace between a trailer's key and its colon.
+			name:    "another trailer spaced before its colon",
+			message: "Message\n\nReviewed-by : Test User <test@example.com>\nEntire-Checkpoint: a1b2c3d4e5f6\n",
 			want:    []string{"a1b2c3d4e5f6"},
 		},
 		{
