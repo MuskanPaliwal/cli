@@ -271,64 +271,81 @@ still reads the stored transcript copy from the hook's own worktree.
 
 **Only the final trailer block links a commit** (`stampedTrailer` in
 prepare-commit-msg; `FinalCheckpointTrailers` in post-commit, attach, and
-`explain --generate`, which takes the block's last ID as attach does). Every
-path that writes to a checkpoint because a commit names it reads the commit's
-final trailer block by git's grammar: no leading whitespace, indented lines
-only as continuations of a trailer, lines starting with git's comment prefix
-skipped (trailing comment lines too), other lines allowed only in a block
-holding a line git generates (`Signed-off-by: `, `(cherry picked from commit `)
-and at most three per trailer line, and never the subject paragraph. An
-`Entire-Checkpoint:` line anywhere else in the message (pasted, quoted,
-indented, or mentioned in prose) names a checkpoint the commit did not stamp,
-so prepare-commit-msg stamps a fresh trailer and post-commit condenses there.
-Prepare reads the message as git will record it. Git tells its commit hooks
-whether it opens the editor (`GIT_EDITOR=:` when it does not: `-m`/`-F` without
-`-e`, `--no-edit`, `-C`); the source word cannot, since `-m -e` reports
-`message` and an amend reports `commit` either way. A `GIT_EDITOR=:` the user
-exports themselves looks the same, and git gives no other sign, so such a
-commit is read as one git does not open: its trailer goes after git's comment
-block (below the diff with `-v`, where git discards it), and a message saved
-untouched is recorded holding only the trailer instead of aborting. A message git opens loses
-the lines starting with git's comment prefix and everything from the scissors
-line down, while any other keeps its comment lines (git's trailer grammar
-still skips them), unless `commit.cleanup=strip` drops them from every
-message; `whitespace`, `verbatim` and `scissors` keep them in editor messages
-too. The prefix is `core.commentChar` or `core.commentString` (aliases; the
-last one set wins), `#` when unset, and for `auto` it is read back from the
-comment block git wrote into the message, or, with no block to read
-(`commit.status=false`, no editor), picked by git's own rule: the first of
-`#;@!$%^&|:` that starts no line. Git's comment block is the run of comment
-lines after a blank line that ends the message, or the part above the
-scissors line (which can also start it); comment lines joined to the
-paragraph above them, or a template's own prompts above the block, are the
-user's. Every trailer prepare adds to a message git opens goes above that
-block, so `commit -v` cannot cut it off, unless the block would then end the
-recorded commit unskipped: `auto` picked a prefix other than `#` under a
-cleanup that keeps comment lines. The trailer then goes below the block, above
-any scissors line, without the explanation. A message git does not open gets
-its trailer appended, so its own lines stay in place. The editor template puts
-prepare's explanation, written with the same prefix, in its own paragraph
-between the user's lines and the trailer: a line typed just above the trailer
-cannot join the subject paragraph, and `commit.cleanup` modes that keep comment
-lines leave the trailer as its own block. A message git does not open gets no
-explanation, which git would keep. Commit-msg judges an emptied message by the
-same signal. A recorded commit is read with the configured prefix (`auto`
-reads as `#`, as `git interpret-trailers` does), and prepare judges whether a
-message already ends with a trailer the same way, once git's cleanup is
-applied. Post-commit also accepts the
-one trailer prepare left as the commit's link wherever the user's edits moved
-it (`stampedTrailerFile`, like the inherited-trailers marker): prepare
-generated or restored that ID, or kept it from the final block it was handed,
-so an ID pasted into the body cannot match it. Attach and `explain --generate`
-still read only the final block, so they see such a commit as unlinked. The per-commit read-only views (`explain <commit>`,
-`explain --commit`, the export, and the review re-run guard) show the
-checkpoint attach and `--generate` use (`CommitCheckpoint`), falling back to
-the first ID anywhere only when the final block names none. Other read-only
-lookups (resume, status, attribution, history listings) and squash and redo
-inheritance still scan the whole message, because squash commits carry their
-squashed commits' trailers in the body. The trailer writer joins only a block
-of trailer lines alone, so a trailer it appends is always one the readers
-accept.
+`explain --generate`). An `Entire-Checkpoint:` line anywhere else in the
+message (pasted, quoted, indented, or mentioned in prose) names a checkpoint
+the commit did not stamp, so prepare-commit-msg stamps a fresh trailer and
+post-commit condenses there. Prepare judges the message it is handed by the
+same rules, after applying git's cleanup, so it reads the final block
+post-commit will read:
+
+- **Grammar.** The block is read as git reads trailers: no leading
+  whitespace, indented lines only as continuations of a trailer, lines
+  starting with git's comment prefix skipped (trailing ones too), and never
+  the subject paragraph. Other lines are allowed only in a block holding a
+  line git generates (`Signed-off-by: `, `(cherry picked from commit `), at
+  most three per trailer line. Attach and `explain --generate` take the
+  block's last ID.
+- **Editor or not.** Git runs its commit hooks with `GIT_EDITOR=:` when it
+  opens no editor (`-m`/`-F` without `-e`, `--no-edit`, `-C`). The source
+  word cannot tell: `-m -e` reports `message`, and an amend reports `commit`
+  either way. A `GIT_EDITOR=:` the user exports looks the same, so such a
+  commit is treated as one git does not open: its trailer goes after git's
+  comment block (below the diff with `-v`, where git discards it), and a
+  message saved untouched is recorded holding only the trailer instead of
+  aborting.
+- **Cleanup.** A message git opens loses the lines starting with git's
+  comment prefix and everything from the exact scissors line down; any other
+  message keeps its comment lines, which git's trailer grammar still skips.
+  `commit.cleanup=strip` drops comment lines from every message, and
+  `whitespace`, `verbatim` and `scissors` keep them in editor messages too.
+- **Comment prefix.** `core.commentChar` or `core.commentString` (aliases;
+  the last one set wins), `#` when unset. For `auto`, prepare reads the prefix
+  back from the comment block git wrote, which sits right below the message
+  (after a blank line only when the message ends with a newline). With no
+  block (`commit.status=false`) it applies git's rule: the first of
+  `#;@!$%^&|:` that starts no line. A recorded commit is read with the
+  configured prefix, and `auto` reads as `#`, as in `git interpret-trailers`.
+- **Command-line flags.** The hooks read `commit.cleanup` and `commit.status`
+  from git config only: `git commit --cleanup=<mode>`, `--status` and
+  `--no-status` are invisible to them. Under `auto`, prepare can then
+  misjudge git's comment block. With `--cleanup=whitespace`, for example,
+  git's kept block ends the recorded commit below the trailer, so attach and
+  `explain --generate` see the commit as unlinked, while post-commit still
+  condenses through the stamp (see moved trailers below).
+- **Placement.** Git's comment block is the run of comment lines after a
+  blank line that ends the message, or the part above the scissors line,
+  which can also start it. Every trailer prepare adds to a message git opens
+  goes above that block, so `commit -v` cannot cut it off, except when `auto`
+  picked a prefix other than `#` under a cleanup that keeps comment lines:
+  the block would then end the recorded commit unskipped, so the trailer goes
+  below it, above any scissors line, without the explanation. When no blank
+  line separates git's block from the lines above it (a message without a
+  final newline), the trailer goes after the block. A message git does not
+  open gets its trailer appended, so its own lines stay where the user put
+  them.
+- **Explanation.** In an editor message, prepare writes its explanation with
+  git's prefix, in a paragraph of its own between the user's lines and the
+  trailer: a line typed just above the trailer cannot join the subject
+  paragraph, and cleanup modes that keep comment lines leave the trailer as
+  its own block. A message git does not open gets no explanation, which git
+  would keep. Commit-msg judges an emptied message by the same editor
+  signal, prefix and scissors line.
+- **Moved trailers.** Post-commit also accepts the one trailer prepare left
+  as the commit's link wherever the user's edits moved it
+  (`stampedTrailerFile`, like the inherited-trailers marker). Prepare
+  generated or restored that ID, or kept it from the final block it was
+  handed, so an ID pasted into the body cannot match it. Attach and
+  `explain --generate` read only the final block and see such a commit as
+  unlinked.
+- **Read-only views.** `explain <commit>`, `explain --commit`, the export
+  and the review re-run guard show the checkpoint attach and `--generate` use
+  (`CommitCheckpoint`), falling back to the first ID anywhere only when the
+  final block names none. Other read-only lookups (resume, status,
+  attribution, history listings) and squash and redo inheritance still scan
+  the whole message, because squash commits carry their squashed commits'
+  trailers in the body.
+- **Writer.** The trailer writer joins only a block of trailer lines alone,
+  so a trailer it appends is always one the readers accept.
 
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in
