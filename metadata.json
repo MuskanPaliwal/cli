@@ -3,10 +3,12 @@
   "checkpoint_id": "01M5KXTK6A5X9EYAYEZKS71P1J",
   "strategy": "manual-commit",
   "branch": "fix-checkpoint-trailer-block",
-  "checkpoints_count": 1,
+  "checkpoints_count": 16,
   "files_touched": [
+    "cmd/entire/cli/integration_test/checkpoint_trailer_authority_test.go",
     "cmd/entire/cli/integration_test/checkpoint_trailer_real_git_test.go",
     "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance.go",
     "docs/architecture/sessions-and-checkpoints.md"
   ],
   "sessions": [
@@ -16,6 +18,13 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
