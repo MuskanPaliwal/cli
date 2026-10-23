@@ -648,11 +648,32 @@ func TestTrailerAuthority_MessageEndingWithHashLinesKeepsItsParagraphs(t *testin
 	}
 }
 
-// The trailer prepare leaves as a commit's link stays its link wherever the
-// user's edits put it: a body typed below it must not keep post-commit from
-// condensing into it.
-func TestTrailerAuthority_BodyTypedBelowTheTrailerStillLinks(t *testing.T) {
+// Only git's final trailer block links a commit, for post-commit as for attach
+// and explain. A trailer prepare left that the user's edits moved out of that
+// block, or commented out under a cleanup mode that keeps comment lines, no
+// longer links the commit, so post-commit must not condense into it.
+func TestTrailerAuthority_TrailerTheUserMovesOutOfTheFinalBlockUnlinks(t *testing.T) {
 	t.Parallel()
+	edits := []struct {
+		name    string
+		cleanup string
+		edit    func(prepared, trailerLine string) string
+	}{
+		{
+			name:    "body typed below the trailer",
+			cleanup: cleanupStrip,
+			edit: func(prepared, trailerLine string) string {
+				return strings.Replace(prepared, trailerLine, trailerLine+"\nBecause the cache was stale\n", 1)
+			},
+		},
+		{
+			name:    "trailer commented out",
+			cleanup: cleanupWhitespace,
+			edit: func(prepared, trailerLine string) string {
+				return strings.Replace(prepared, trailerLine, "# "+trailerLine, 1)
+			},
+		},
+	}
 	tests := []struct {
 		name string
 		// prepare returns the message prepare-commit-msg left for the editor,
@@ -693,26 +714,29 @@ func TestTrailerAuthority_BodyTypedBelowTheTrailerStillLinks(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			env := NewFeatureBranchEnv(t)
-			prepared, amend := tt.prepare(env)
-			stamped := trailers.ParseAllCheckpoints(prepared)
-			require.Len(t, stamped, 1, "precondition: the message carries one trailer: %q", prepared)
-			trailerLine := trailers.CheckpointTrailerKey + ": " + stamped[0].String() + "\n"
-			edited := strings.Replace(prepared, trailerLine, trailerLine+"\nBecause the cache was stale\n", 1)
+		for _, e := range edits {
+			t.Run(tt.name+"/"+e.name, func(t *testing.T) {
+				t.Parallel()
+				env := NewFeatureBranchEnv(t)
+				setRepoGitConfig(env, "commit.cleanup", e.cleanup)
+				prepared, amend := tt.prepare(env)
+				stamped := trailers.ParseAllCheckpoints(prepared)
+				require.Len(t, stamped, 1, "precondition: the message carries one trailer: %q", prepared)
+				trailerLine := trailers.CheckpointTrailerKey + ": " + stamped[0].String() + "\n"
 
-			recorded := cleanedEditorMessage(env, edited, "#", cleanupStrip)
-			require.Empty(t, trailers.ParseAllCheckpointsFromFinalTrailerBlock(recorded, "#"),
-				"precondition: the trailer is outside the final block: %q", recorded)
-			if amend {
-				amendWithPostCommit(env, recorded)
-			} else {
-				commitWithPostCommit(env, recorded)
-			}
+				recorded := cleanedEditorMessage(env, e.edit(prepared, trailerLine), "#", e.cleanup)
+				require.Empty(t, trailers.ParseAllCheckpointsFromFinalTrailerBlock(recorded, "#"),
+					"precondition: the trailer is outside the final block: %q", recorded)
+				if amend {
+					amendWithPostCommit(env, recorded)
+				} else {
+					commitWithPostCommit(env, recorded)
+				}
 
-			require.True(t, advCheckpointStored(env, stamped[0].String()), "post-commit condenses into the trailer prepare left: %q", recorded)
-		})
+				require.False(t, advCheckpointStored(env, stamped[0].String()),
+					"post-commit must not condense into a trailer outside the final block, which attach and explain read as unlinked: %q", recorded)
+			})
+		}
 	}
 }
 

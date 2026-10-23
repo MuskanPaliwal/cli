@@ -430,9 +430,6 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	ctx = withGitDir(withCommentConfig(withCommitAncestry(ctx)))
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
-	// A stamp recorded for a commit that never happened must not carry over.
-	clearStampedTrailer(ctx)
-
 	// Skip during rebase, cherry-pick, or revert operations
 	// These are replaying existing commits and should not be linked to agent sessions
 	if isGitSequenceOperation(ctx) {
@@ -547,7 +544,6 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 			slog.String("source", source),
 			slog.String("existing_checkpoint_id", existingCpID.String()),
 		)
-		recordStampedTrailer(ctx, existingCpID)
 		return nil
 	}
 	readCommitMessageSpan.End()
@@ -632,7 +628,6 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		return nil
 	}
 	writeCommitMessageSpan.End()
-	recordStampedTrailer(ctx, checkpointID)
 
 	return nil
 }
@@ -853,7 +848,6 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 				slog.String("strategy", "manual-commit"),
 				slog.String("checkpoint_id", live[0].String()),
 			)
-			recordStampedTrailer(ctx, live[len(live)-1]) // the stamp follows inherited trailers
 			return nil
 		}
 		if len(withoutDeletedCheckpoints(ctx, mentioned)) == 0 {
@@ -909,7 +903,6 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 		if writeErr := os.WriteFile(commitMsgFile, []byte(message), 0o600); writeErr != nil { //nolint:gosec // path from git hook arg
 			return nil
 		}
-		recordStampedTrailer(ctx, cpID)
 
 		logging.Info(logCtx, "prepare-commit-msg: restored trailer on amend",
 			slog.String("strategy", "manual-commit"),
@@ -969,7 +962,6 @@ func (s *ManualCommitStrategy) stampFreshCheckpointForAmend(ctx context.Context,
 	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil { //nolint:gosec // path from git hook arg
 		return
 	}
-	recordStampedTrailer(ctx, cpID)
 	logging.Info(logCtx, "prepare-commit-msg: amend of a deleted checkpoint linked to a new one",
 		slog.String("strategy", "manual-commit"),
 		slog.String("checkpoint_id", cpID.String()),
@@ -2938,8 +2930,7 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 	rules := messageCommentRules(logCtx, message)
 
 	// Don't add if prepare already stamped one (inherited trailers are links)
-	if existingCpID, found := stampedTrailer(logCtx, message, rules, inherited); found {
-		recordStampedTrailer(logCtx, existingCpID)
+	if _, found := stampedTrailer(logCtx, message, rules, inherited); found {
 		return nil
 	}
 
@@ -2955,7 +2946,6 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil { //nolint:gosec // path from git hook arg
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
-	recordStampedTrailer(logCtx, cpID)
 	return nil
 }
 

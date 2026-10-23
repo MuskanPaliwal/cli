@@ -307,11 +307,10 @@ post-commit will read:
   configured prefix, and `auto` reads as `#`, as in `git interpret-trailers`.
 - **Command-line flags.** The hooks read `commit.cleanup` and `commit.status`
   from git config only: `git commit --cleanup=<mode>`, `--status` and
-  `--no-status` are invisible to them. Under `auto`, prepare can then
-  misjudge git's comment block. With `--cleanup=whitespace`, for example,
-  git's kept block ends the recorded commit below the trailer, so attach and
-  `explain --generate` see the commit as unlinked, while post-commit still
-  condenses through the stamp (see moved trailers below).
+  `--no-status` are invisible to them. With `--cleanup=whitespace`, for
+  example, prepare still writes its explanation, which git then records with
+  the prompt it quotes, and under `auto` git's kept block can end the
+  recorded commit below the trailer, leaving the commit unlinked.
 - **Placement.** Git's comment block is the run of comment lines after a
   blank line that ends the message, or the part above the scissors line,
   which can also start it. Every trailer prepare adds to a message git opens
@@ -331,13 +330,11 @@ post-commit will read:
   git does not open, and one under `whitespace`, `verbatim` or `scissors`
   cleanup. Commit-msg judges an emptied message by the same editor signal,
   prefix and scissors line.
-- **Moved trailers.** Post-commit also accepts the one trailer prepare left
-  as the commit's link wherever the user's edits moved it
-  (`stampedTrailerFile`, like the inherited-trailers marker). Prepare
-  generated or restored that ID, or kept it from the final block it was
-  handed, so an ID pasted into the body cannot match it. Attach and
-  `explain --generate` read only the final block and see such a commit as
-  unlinked.
+- **Moved trailers.** A trailer the user's edits move out of the final
+  block, such as a body typed below it or the line commented out under a
+  cleanup mode that keeps comment lines, no longer links the commit.
+  Post-commit, attach and `explain` agree: the commit is treated as one whose
+  trailer the user removed, and `entire attach` can link it.
 - **Read-only views.** `explain <commit>`, `explain --commit`, the export
   and the review re-run guard show the checkpoint attach and `--generate` use
   (`CommitCheckpoint`), falling back to the first ID anywhere only when the

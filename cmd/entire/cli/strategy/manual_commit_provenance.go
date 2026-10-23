@@ -249,69 +249,8 @@ func stampedTrailersOf(ctx context.Context, commit *object.Commit) ([]id.Checkpo
 		parent = commit.ParentHashes[0].String()
 	}
 	inherited, redone := takeInheritedMarker(ctx, parent)
-	ids := FinalCheckpointTrailers(ctx, commit.Message)
-	// The trailer prepare left as this commit's link stays its link even where
-	// the user's edits moved it out of the final block (a body typed below
-	// it). Prepare generated or restored that ID, or kept it from the final
-	// block of the message git handed it, so an ID pasted into the body
-	// cannot match it.
-	if own := takeStampedTrailer(ctx, parent); !own.IsEmpty() && !slices.Contains(ids, own) && slices.Contains(trailers.ParseAllCheckpoints(commit.Message), own) {
-		ids = append(ids, own)
-	}
-	return withoutDeletedCheckpoints(ctx, withoutInherited(ids, inherited)), redone
-}
-
-// stampedTrailerFile carries the trailer prepare-commit-msg left as the link of
-// the commit it prepared, for post-commit. Per worktree, like
-// inheritedTrailersFile.
-const stampedTrailerFile = "entire-stamped-trailer.json"
-
-type stampedTrailerMarker struct {
-	Parents []string        `json:"parents"`
-	ID      id.CheckpointID `json:"id"`
-}
-
-// recordStampedTrailer tells post-commit which trailer prepare-commit-msg left
-// as the commit's link, stamped, restored or kept (see stampedTrailersOf).
-func recordStampedTrailer(ctx context.Context, cpID id.CheckpointID) {
-	root, err := perWorktreeGitRoot(ctx)
-	if err != nil {
-		return
-	}
-	data, err := json.Marshal(stampedTrailerMarker{Parents: commitParentCandidates(ctx), ID: cpID})
-	if err != nil {
-		return
-	}
-	if err := jsonutil.WriteFileAtomicIn(root, stampedTrailerFile, data, 0o600); err != nil {
-		logging.Debug(logging.WithComponent(ctx, "checkpoint"), "prepare-commit-msg: could not record the stamped trailer",
-			slog.String("error", err.Error()))
-	}
-}
-
-// clearStampedTrailer drops a stamp an earlier, abandoned commit left.
-func clearStampedTrailer(ctx context.Context) {
-	if root, err := perWorktreeGitRoot(ctx); err == nil {
-		_ = osroot.RemoveNoSymlinks(root, stampedTrailerFile) //nolint:errcheck // absent is the usual case
-	}
-}
-
-// takeStampedTrailer returns the trailer prepare-commit-msg recorded for a
-// commit on parent, or the empty ID, and consumes the marker either way.
-func takeStampedTrailer(ctx context.Context, parent string) id.CheckpointID {
-	root, err := perWorktreeGitRoot(ctx)
-	if err != nil {
-		return id.EmptyCheckpointID
-	}
-	data, err := osroot.ReadFileNoFollow(root, stampedTrailerFile)
-	if err != nil {
-		return id.EmptyCheckpointID
-	}
-	_ = osroot.RemoveNoSymlinks(root, stampedTrailerFile) //nolint:errcheck // a stale marker is ignored by its parent check
-	var marker stampedTrailerMarker
-	if json.Unmarshal(data, &marker) != nil || !slices.Contains(marker.Parents, parent) {
-		return id.EmptyCheckpointID
-	}
-	return marker.ID
+	stamped := withoutInherited(FinalCheckpointTrailers(ctx, commit.Message), inherited)
+	return withoutDeletedCheckpoints(ctx, stamped), redone
 }
 
 // takeInheritedTrailers returns the trailers prepare-commit-msg recorded as
