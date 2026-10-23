@@ -1030,12 +1030,12 @@ func TestAutoRuleForGitVersion(t *testing.T) {
 		out  string
 		want trailers.AutoRule
 	}{
-		{"git version 2.50.0\n", trailers.AutoCountsEveryLine},
-		{"git version 2.50.1 (Apple Git-155)\n", trailers.AutoCountsEveryLine},
-		{"git version 2.45.1.windows.1\n", trailers.AutoCountsEveryLine},
-		{"git version 2.51.0\n", trailers.AutoSkipsTrailingComments},
-		{"git version 2.55.0\n", trailers.AutoSkipsTrailingComments},
-		{"git version 3.0.0\n", trailers.AutoSkipsTrailingComments},
+		{"2.50.0", trailers.AutoCountsEveryLine},
+		{"2.50.1", trailers.AutoCountsEveryLine},
+		{"2.45.1.windows.1", trailers.AutoCountsEveryLine},
+		{"2.51.0", trailers.AutoSkipsTrailingComments},
+		{"2.55.0", trailers.AutoSkipsTrailingComments},
+		{"3.0.0", trailers.AutoSkipsTrailingComments},
 		{"", trailers.AutoSkipsTrailingComments},
 	}
 	for _, tt := range tests {

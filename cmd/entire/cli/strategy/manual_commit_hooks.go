@@ -38,6 +38,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
+	"github.com/entireio/cli/cmd/entire/cli/telemetry"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/perf"
@@ -3095,18 +3096,17 @@ func gitCommentConfig(ctx context.Context) commentConfig {
 func readGitCommentConfig(ctx context.Context) commentConfig {
 	cfg := readGitCommentSettings(ctx)
 	if cfg.prefix == autoCommentChar {
-		out, _ := exec.CommandContext(ctx, "git", "--version").Output() //nolint:errcheck // unreadable reads as current git
-		cfg.autoRule = autoRuleForGitVersion(string(out))
+		cfg.autoRule = autoRuleForGitVersion(telemetry.GitVersion(ctx))
 	}
 	return cfg
 }
 
-// autoRuleForGitVersion returns the core.commentChar=auto rule of the git
-// that printed out for --version. Git 2.51 changed the rule; a version that
+// autoRuleForGitVersion returns the core.commentChar=auto rule of git at
+// version (telemetry.GitVersion). Git 2.51 changed the rule; a version that
 // cannot be read is taken as current.
-func autoRuleForGitVersion(out string) trailers.AutoRule {
+func autoRuleForGitVersion(version string) trailers.AutoRule {
 	var major, minor int
-	if _, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor); err == nil && (major < 2 || major == 2 && minor < 51) {
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err == nil && (major < 2 || major == 2 && minor < 51) {
 		return trailers.AutoCountsEveryLine
 	}
 	return trailers.AutoSkipsTrailingComments
