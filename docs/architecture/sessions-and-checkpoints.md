@@ -357,8 +357,9 @@ post-commit will read:
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in
 the per-worktree git dir) contains the squashed commits' work, so every
-`Entire-Checkpoint` trailer in SQUASH_MSG is carried into the message when
-missing when a staged path is one a commit Git recorded there changed; a file
+`Entire-Checkpoint` trailer in SQUASH_MSG is carried into the message's
+final block when missing there, when a staged path is one a commit Git
+recorded there changed; a file
 touched up before committing still counts. An abandoned squash can leave
 SQUASH_MSG behind; staged work on other paths therefore inherits nothing, and inherited trailers in Git's seeded message are
 removed. git only reports source `squash` when its seeded message is accepted;
