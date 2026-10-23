@@ -3,7 +3,7 @@
   "checkpoint_id": "01M5KT74E5KY9RAK6T88803810",
   "strategy": "manual-commit",
   "branch": "fix-checkpoint-trailer-block",
-  "checkpoints_count": 15,
+  "checkpoints_count": 19,
   "files_touched": [
     "docs/architecture/sessions-and-checkpoints.md"
   ],
@@ -14,6 +14,13 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
