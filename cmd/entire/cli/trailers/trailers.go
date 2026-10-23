@@ -520,8 +520,11 @@ func AppendCheckpointTrailer(message, checkpointID string) string {
 // "true" — rather than just trailer presence — prevents a future
 // "Entire-OPF-Applied: false" or "skipped" from accidentally meaning
 // "yes, applied."
+//
+// The trailer marks commits Entire rewrites, not user commits, so a message
+// that is only a trailer block counts too.
 func HasOPFApplied(commitMessage string) bool {
-	for _, line := range finalTrailerBlock(commitMessage, "") {
+	for _, line := range lastTrailerBlock(commitMessage, "", true) {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok || key != OPFAppliedTrailerKey {
 			continue
@@ -537,6 +540,12 @@ func HasOPFApplied(commitMessage string) bool {
 // final trailer block, skipping lines that start with commentPrefix as git's
 // trailer grammar does, or nil when the final paragraph is not a trailer block.
 func finalTrailerBlock(message, commentPrefix string) []string {
+	return lastTrailerBlock(message, commentPrefix, false)
+}
+
+// lastTrailerBlock is finalTrailerBlock that, with subjectMayBeTrailers, also
+// reads a message of one paragraph as a trailer block.
+func lastTrailerBlock(message, commentPrefix string, subjectMayBeTrailers bool) []string {
 	lines := strings.Split(message, "\n")
 	// Git ignores the blank and comment lines that end a message.
 	end := len(lines)
@@ -548,7 +557,7 @@ func finalTrailerBlock(message, commentPrefix string) []string {
 		start--
 	}
 	// Git reads the first paragraph as the subject, never as trailers.
-	if start == 0 || !isTrailerBlock(lines[start:end], commentPrefix) {
+	if start == 0 && !subjectMayBeTrailers || !isTrailerBlock(lines[start:end], commentPrefix) {
 		return nil
 	}
 	return slices.DeleteFunc(lines[start:end], func(line string) bool { return isCommentLine(line, commentPrefix) })

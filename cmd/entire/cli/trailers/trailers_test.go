@@ -812,7 +812,9 @@ func TestHasOPFApplied(t *testing.T) {
 		{"trailer_with_extra_spaces", "msg\n\nEntire-OPF-Applied:   true   \n", true},
 		{"body_mention_not_trailer", "msg\n\nThis paragraph mentions a string that looks like metadata.\nEntire-OPF-Applied: true\n\nSigned-off-by: Test User <test@example.com>\n", false},
 		{"indented_trailer_not_applied", "msg\n\n  Entire-OPF-Applied: true\n", false},
-		{"subject_only_not_applied", "Entire-OPF-Applied: true\n", false},
+		{"trailer_only_message_applied", "Entire-OPF-Applied: true\n", true},
+		{"trailer_only_message_without_newline_applied", "Entire-OPF-Applied: true", true},
+		{"subject_not_a_trailer_not_applied", "Rewrite blobs\nEntire-OPF-Applied: true\n", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
