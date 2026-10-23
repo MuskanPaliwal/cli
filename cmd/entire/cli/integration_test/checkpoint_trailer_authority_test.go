@@ -212,9 +212,9 @@ func TestTrailerAuthority_ProseScissorsMarkerIsNotACut(t *testing.T) {
 		"a body line must not claim a checkpoint ID this clone does not have")
 }
 
-// commit.cleanup=scissors and whitespace keep comment lines, so the recorded
-// commit still carries Entire's explanation (whitespace keeps git's comment
-// block too). The trailer must still link the commit, by git's grammar and for
+// commit.cleanup=scissors and whitespace keep comment lines (whitespace keeps
+// git's comment block too), so prepare writes no explanation there. The
+// trailer must still link the commit, by git's grammar and for
 // post-commit, also when core.commentChar=auto picks another prefix because the
 // message has a "#" line.
 func TestTrailerAuthority_CleanupKeepingCommentsLinksTheCommit(t *testing.T) {

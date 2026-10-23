@@ -428,7 +428,8 @@ func TestParseAllCheckpointsFromFinalTrailerBlock(t *testing.T) {
 			want:    []string{"a1b2c3d4e5f6"},
 		},
 		{
-			// commit.cleanup=scissors keeps Entire's explanation below its trailer.
+			// Earlier versions recorded Entire's explanation below the trailer
+			// under commit.cleanup=scissors.
 			name:          "comment lines in the block are skipped",
 			message:       "Message\n\nEntire-Checkpoint: a1b2c3d4e5f6\n# Remove the Entire-Checkpoint trailer above if you want.\n# Last Prompt: add login\n",
 			commentPrefix: "#",

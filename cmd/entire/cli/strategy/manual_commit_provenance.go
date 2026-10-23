@@ -56,8 +56,8 @@ func preparedFinalTrailers(message string, rules commentRules) []id.CheckpointID
 
 // FinalCheckpointTrailers returns the checkpoint IDs in the final trailer block
 // of a recorded commit message, read by git's trailer grammar, which skips
-// comment lines: commit.cleanup modes other than strip keep them, Entire's
-// explanation below the trailer among them.
+// comment lines: commit.cleanup modes other than strip keep them, git's
+// comment block among them.
 func FinalCheckpointTrailers(ctx context.Context, message string) []id.CheckpointID {
 	// A block read without the prefix holds no comment lines, so reading with
 	// it finds the same IDs; only a message that still names a checkpoint

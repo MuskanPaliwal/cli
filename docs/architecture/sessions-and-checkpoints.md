@@ -323,13 +323,14 @@ post-commit will read:
   final newline), the trailer goes after the block. A message git does not
   open gets its trailer appended, so its own lines stay where the user put
   them.
-- **Explanation.** In an editor message, prepare writes its explanation with
-  git's prefix, in a paragraph of its own between the user's lines and the
-  trailer: a line typed just above the trailer cannot join the subject
-  paragraph, and cleanup modes that keep comment lines leave the trailer as
-  its own block. A message git does not open gets no explanation, which git
-  would keep. Commit-msg judges an emptied message by the same editor
-  signal, prefix and scissors line.
+- **Explanation.** In an editor message whose comment lines git's cleanup
+  drops, prepare writes its explanation with git's prefix, in a paragraph of
+  its own between the user's lines and the trailer, so a line typed just
+  above the trailer cannot join the subject paragraph. Any other message gets
+  no explanation, because git would record it and the prompt it quotes: one
+  git does not open, and one under `whitespace`, `verbatim` or `scissors`
+  cleanup. Commit-msg judges an emptied message by the same editor signal,
+  prefix and scissors line.
 - **Moved trailers.** Post-commit also accepts the one trailer prepare left
   as the commit's link wherever the user's edits moved it
   (`stampedTrailerFile`, like the inherited-trailers marker). Prepare

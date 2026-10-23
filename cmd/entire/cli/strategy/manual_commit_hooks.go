@@ -608,12 +608,12 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 			message = addCheckpointTrailerAboveComments(message, checkpointID, rules)
 		}
 	default:
-		if rules.edited && !blockEndsCommit(strings.Split(message, "\n"), rules) {
+		if rules.edited && rules.stripped {
 			// Normal editor flow: add trailer with explanatory comment (will be stripped by git)
 			message = addCheckpointTrailerWithComment(message, checkpointID, string(agentType), displayPrompt, rules.prefix)
 		} else {
-			// --no-edit, or a trailer that must follow git's kept block: the
-			// explanation, above the trailer, would be recorded with the block
+			// --no-edit, or a cleanup mode that keeps comment lines: the
+			// explanation, and the prompt it quotes, would be recorded
 			message = addCheckpointTrailerAboveComments(message, checkpointID, rules)
 		}
 	}
@@ -3172,10 +3172,10 @@ const trailerExplanation = " Remove the Entire-Checkpoint trailer below if you d
 // above git's comment block, with a comment above the trailer explaining that the user can
 // remove it if they don't want to link the commit to the agent session. If prompt is
 // non-empty, it's shown as context. The comment is written with commentPrefix, the prefix git
-// strips (see messageCommentRules). The comment and the trailer are separate paragraphs below the
-// user's lines: a line typed just above the trailer would otherwise join the subject
-// paragraph, which git never reads as trailers, and cleanup modes that keep comment lines
-// would leave the comment inside the trailer block.
+// strips (see messageCommentRules), and only into a message whose comment lines git's cleanup
+// drops. The comment and the trailer are separate paragraphs below the user's lines: a line
+// typed just above the trailer would otherwise join the subject paragraph, which git never
+// reads as trailers.
 func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointID, agentName, prompt, commentPrefix string) string {
 	trailer := trailers.CheckpointTrailerKey + ": " + checkpointID.String()
 	commentLines := []string{

@@ -81,6 +81,11 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 		{name: "editor", commit: nil, editor: typeSubject, starts: "Typed\n"},
 		{name: "editor with ; comments", config: map[string]string{"core.commentChar": ";"}, editor: typeSubject, starts: "Typed\n", prefix: ";"},
 		{name: "editor without git's comment block", config: map[string]string{"commit.status": "false"}, editor: typeSubject, starts: "Typed\n"},
+		// These cleanup modes keep comment lines, so Entire's explanation and
+		// the prompt it quotes would be recorded with the commit.
+		{name: "editor with whitespace cleanup", config: map[string]string{"commit.cleanup": "whitespace"}, editor: typeSubject, starts: "Typed\n"},
+		{name: "editor with scissors cleanup", config: map[string]string{"commit.cleanup": "scissors"}, editor: typeSubject, starts: "Typed\n"},
+		{name: "editor with verbatim cleanup", config: map[string]string{"commit.cleanup": "verbatim"}, editor: typeSubject, starts: "Typed \n"},
 		{name: "editor left untouched aborts", editor: keep, aborts: true},
 		{
 			name: "amend in the editor",
@@ -184,9 +189,8 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			require.Equal(t, mentioned, trailers.ParseAllCheckpointsFromFinalTrailerBlock(recorded, prefix),
 				"the trailer is the commit's final trailer block: %q", recorded)
 			require.True(t, advCheckpointStored(env, mentioned[0].String()), "post-commit condenses into it: %q", recorded)
-			if cleanup := tt.config["commit.cleanup"]; cleanup == "" || cleanup == "strip" {
-				require.NotContains(t, recorded, "Remove the Entire-Checkpoint trailer", "git's cleanup drops Entire's explanation: %q", recorded)
-			}
+			require.NotContains(t, recorded, "Remove the Entire-Checkpoint trailer", "Entire's explanation never reaches the commit: %q", recorded)
+			require.NotContains(t, recorded, "Last Prompt:", "the prompt never reaches the commit: %q", recorded)
 		})
 	}
 }
