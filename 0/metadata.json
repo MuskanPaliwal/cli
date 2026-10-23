@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.12.1-nightly.202610211655.29f996951",
+  "checkpoint_id": "01M5MDZRDV195NZ1NPGF8RQJJZ",
+  "session_id": "7f840c29-e089-487d-b36a-99b1b3a9c615",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-23T13:07:49.290946Z",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/integration_test/checkpoint_trailer_authority_test.go",
+    "cmd/entire/cli/integration_test/checkpoint_trailer_real_git_test.go",
+    "cmd/entire/cli/strategy/accumulation_bench_test.go",
+    "cmd/entire/cli/strategy/crlf_carry_forward_test.go",
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance.go",
+    "cmd/entire/cli/strategy/manual_commit_provenance_test.go",
+    "cmd/entire/cli/strategy/phase_postcommit_test.go",
+    "cmd/entire/cli/strategy/staged_carry_forward_test.go",
+    "cmd/entire/cli/strategy/trackable_paths_test.go",
+    "cmd/entire/cli/strategy/unclaimed_trailer_test.go",
+    "cmd/entire/cli/strategy/worktree_home_test.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "be1b479c92f4",
+  "checkpoint_transcript_start": 1079,
+  "transcript_lines_at_start": 1079,
+  "compact_transcript_start": 81,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 3017,
+    "cache_read_tokens": 793053,
+    "output_tokens": 2363,
+    "api_call_count": 2
+  }
+}
