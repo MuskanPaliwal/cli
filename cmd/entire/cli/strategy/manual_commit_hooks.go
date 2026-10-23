@@ -427,7 +427,7 @@ func GitOperationInProgress(ctx context.Context) string {
 //
 
 func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFile string, source string) error {
-	ctx = withCommentConfig(withCommitAncestry(ctx))
+	ctx = withGitDir(withCommentConfig(withCommitAncestry(ctx)))
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
 	// A stamp recorded for a commit that never happened must not carry over.
@@ -1389,7 +1389,7 @@ func SetBeforeCondense(fn func(ctx context.Context, sessions []*SessionState) bo
 }
 
 func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
-	ctx = withCommitAncestry(ctx)
+	ctx = withGitDir(withCommitAncestry(ctx))
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
 	_, openRepoSpan := perf.Start(ctx, "open_repository_and_head")
