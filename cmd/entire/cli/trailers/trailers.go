@@ -254,9 +254,21 @@ func CutAtScissors(message, commentPrefix string) string {
 	return message
 }
 
+// AutoRule is how a git version picks the character for core.commentChar=auto.
+type AutoRule int
+
+const (
+	// AutoSkipsTrailingComments is git's rule since 2.51: the empty and "#"
+	// lines that end the message, and an old "Conflicts:" block, do not
+	// count, as when git places a sign-off (ignored_log_message_bytes).
+	AutoSkipsTrailingComments AutoRule = iota
+	// AutoCountsEveryLine is git's rule before 2.51.
+	AutoCountsEveryLine
+)
+
 // AutoCommentPrefix returns the prefix git chose for core.commentChar=auto: the
-// first of autoCommentCandidates that starts no line of the message, picked
-// before git adds its comment block. When git may have written that block
+// first of autoCommentCandidates that starts no line of the message, by rule,
+// picked before git adds its comment block. When git may have written that block
 // (mayHaveBlock: commit.status is on), its lines start with the choice, so it is
 // read back from them: the scissors line if there is one, else the run of lines
 // ending the message, below at least one other line, that start with the
@@ -264,7 +276,7 @@ func CutAtScissors(message, commentPrefix string) string {
 // above that run: git writes its block right below a message that lacks a
 // final newline, and no line above the block can start with git's choice. A
 // message without one was not opened in the editor.
-func AutoCommentPrefix(message string, mayHaveBlock bool) string {
+func AutoCommentPrefix(message string, mayHaveBlock bool, rule AutoRule) string {
 	if mayHaveBlock {
 		lines := strings.Split(message, "\n")
 		for _, line := range lines {
@@ -276,19 +288,28 @@ func AutoCommentPrefix(message string, mayHaveBlock bool) string {
 		}
 		for i := range len(autoCommentCandidates) {
 			candidate := autoCommentCandidates[i : i+1]
-			if start := commentRunStart(lines, candidate, -1); start > 0 && autoCommentChoice(strings.Join(lines[:start], "\n")) == candidate {
+			if start := commentRunStart(lines, candidate, -1); start > 0 && autoCommentChoice(strings.Join(lines[:start], "\n"), rule) == candidate {
 				return candidate
 			}
 		}
 	}
-	return autoCommentChoice(message)
+	return autoCommentChoice(message, rule)
 }
 
-// autoCommentChoice is git's core.commentChar=auto rule for message.
-func autoCommentChoice(message string) string {
-	// Git treats a CR as a line start too.
+// autoCommentChoice is git's core.commentChar=auto rule for message: the
+// first candidate no line starts with. The first line always counts; the
+// lines rule skips do not.
+func autoCommentChoice(message string, rule AutoRule) string {
 	starts := make(map[byte]bool)
-	for _, line := range strings.FieldsFunc(message, func(r rune) bool { return r == '\n' || r == '\r' }) {
+	if message != "" {
+		starts[message[0]] = true
+	}
+	counted := message
+	if rule == AutoSkipsTrailingComments {
+		counted = message[:len(message)-trailingCommentBytes(message)]
+	}
+	// Git treats a CR as a line start too.
+	for _, line := range strings.FieldsFunc(counted, func(r rune) bool { return r == '\n' || r == '\r' }) {
 		starts[line[0]] = true
 	}
 	for i := range len(autoCommentCandidates) {
@@ -297,6 +318,49 @@ func autoCommentChoice(message string) string {
 		}
 	}
 	return DefaultCommentPrefix
+}
+
+// trailingCommentBytes returns how many bytes end message as git's sign-off
+// placement ignores them (ignored_log_message_bytes, with "#" as the comment
+// prefix): everything from the "#" scissors line down, and the run of empty
+// and "#" lines that ends the part above it, or an old "Conflicts:" block
+// with its tab-indented paths.
+func trailingCommentBytes(message string) int {
+	scissors := DefaultCommentPrefix + " " + scissorsMarker + "\n"
+	cutoff := len(message)
+	if strings.HasPrefix(message, scissors) {
+		cutoff = 0
+	} else if i := strings.Index(message, "\n"+scissors); i >= 0 {
+		cutoff = i + 1
+	}
+	boc, inConflicts := 0, false
+	for bol := 0; bol < cutoff; {
+		next := strings.IndexByte(message[bol:], '\n')
+		if next < 0 {
+			next = len(message)
+		} else {
+			next += bol + 1
+		}
+		switch {
+		case strings.HasPrefix(message[bol:cutoff], DefaultCommentPrefix) || message[bol] == '\n':
+			if boc == 0 {
+				boc = bol
+			}
+		case strings.HasPrefix(message[bol:], "Conflicts:\n"):
+			inConflicts = true
+			if boc == 0 {
+				boc = bol
+			}
+		case inConflicts && message[bol] == '\t':
+		case boc != 0:
+			boc, inConflicts = 0, false
+		}
+		bol = next
+	}
+	if boc != 0 {
+		return len(message) - boc
+	}
+	return len(message) - cutoff
 }
 
 // RemoveCheckpointTrailers removes every whole Entire-Checkpoint trailer line

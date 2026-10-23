@@ -1022,6 +1022,30 @@ func TestAddCheckpointTrailerWithComment_UsesCommentPrefix(t *testing.T) {
 		"the trailer must end the cleaned message: %q", result)
 }
 
+// Git 2.51 changed how core.commentChar=auto picks its character, so the rule
+// follows the installed git's version; one that cannot be read is current.
+func TestAutoRuleForGitVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		out  string
+		want trailers.AutoRule
+	}{
+		{"git version 2.50.0\n", trailers.AutoCountsEveryLine},
+		{"git version 2.50.1 (Apple Git-155)\n", trailers.AutoCountsEveryLine},
+		{"git version 2.45.1.windows.1\n", trailers.AutoCountsEveryLine},
+		{"git version 2.51.0\n", trailers.AutoSkipsTrailingComments},
+		{"git version 2.55.0\n", trailers.AutoSkipsTrailingComments},
+		{"git version 3.0.0\n", trailers.AutoSkipsTrailingComments},
+		{"", trailers.AutoSkipsTrailingComments},
+	}
+	for _, tt := range tests {
+		t.Run(tt.out, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, autoRuleForGitVersion(tt.out))
+		})
+	}
+}
+
 // prefixFor must name the prefix git's own cleanup uses, or prepare reads a
 // different final trailer block than the commit records.
 func TestCommentConfigPrefixFor(t *testing.T) {

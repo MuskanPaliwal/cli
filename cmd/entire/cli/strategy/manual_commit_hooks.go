@@ -3021,9 +3021,10 @@ const autoCommentChar = "auto"
 // commentConfig is what git's config says about comment lines in a commit
 // message.
 type commentConfig struct {
-	prefix  string // core.commentChar or core.commentString (aliases; the last one set wins), else git's default
-	cleanup string // commit.cleanup, "" when unset
-	status  bool   // commit.status: git writes its comment block into a message it opens in the editor
+	prefix   string            // core.commentChar or core.commentString (aliases; the last one set wins), else git's default
+	cleanup  string            // commit.cleanup, "" when unset
+	status   bool              // commit.status: git writes its comment block into a message it opens in the editor
+	autoRule trailers.AutoRule // how this git resolves "auto"; read only when prefix is "auto"
 }
 
 // commentConfigKey holds an operation's comment config (WithCommentConfig).
@@ -3065,8 +3066,29 @@ func gitCommentConfig(ctx context.Context) commentConfig {
 	return snap.cfg
 }
 
-// readGitCommentConfig reads commentConfig in one git config call.
+// readGitCommentConfig reads commentConfig in one git config call, and one
+// git --version call when "auto" is set.
 func readGitCommentConfig(ctx context.Context) commentConfig {
+	cfg := readGitCommentSettings(ctx)
+	if cfg.prefix == autoCommentChar {
+		out, _ := exec.CommandContext(ctx, "git", "--version").Output() //nolint:errcheck // unreadable reads as current git
+		cfg.autoRule = autoRuleForGitVersion(string(out))
+	}
+	return cfg
+}
+
+// autoRuleForGitVersion returns the core.commentChar=auto rule of the git
+// that printed out for --version. Git 2.51 changed the rule; a version that
+// cannot be read is taken as current.
+func autoRuleForGitVersion(out string) trailers.AutoRule {
+	var major, minor int
+	if _, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor); err == nil && (major < 2 || major == 2 && minor < 51) {
+		return trailers.AutoCountsEveryLine
+	}
+	return trailers.AutoSkipsTrailingComments
+}
+
+func readGitCommentSettings(ctx context.Context) commentConfig {
 	cfg := commentConfig{prefix: trailers.DefaultCommentPrefix, status: true}
 	out, err := exec.CommandContext(ctx, "git", "config", "--get-regexp", `^(core\.comment(char|string)|commit\.(cleanup|status))$`).Output()
 	if err != nil {
@@ -3096,7 +3118,7 @@ func (cfg commentConfig) prefixFor(message string, edited bool) string {
 	if cfg.prefix != autoCommentChar {
 		return cfg.prefix
 	}
-	return trailers.AutoCommentPrefix(message, edited && cfg.status)
+	return trailers.AutoCommentPrefix(message, edited && cfg.status, cfg.autoRule)
 }
 
 // trailerPrefix returns the prefix git's trailer grammar skips in a recorded

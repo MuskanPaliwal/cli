@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,7 +65,11 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 		starts string
 		// prefix is what git's trailer grammar skips in the recorded message.
 		prefix string
-		aborts bool
+		// startsBefore251 is starts on git before 2.51, where it differs:
+		// those gits count a template's trailing "#" paragraph when picking
+		// auto's character, so they pick ";" and keep the paragraph.
+		startsBefore251 string
+		aborts          bool
 	}{
 		{name: "-m subject starting with #", commit: []string{"-m", "#42 fix login"}, starts: "#42 fix login\n"},
 		{name: "-m ending in a # paragraph", commit: []string{"-m", "Fix login\n\n#42 is the issue"}, starts: "Fix login\n\n#42 is the issue\n"},
@@ -128,11 +134,24 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			starts: "Typed Subject\n\n#42 is the issue\n",
 		},
 		{
-			name:   "template without a final newline under auto",
-			config: map[string]string{"core.commentChar": "auto"},
-			commit: []string{"-t", templateNoNewline},
-			editor: typeSubject,
-			starts: "Typed Subject\n\n#42 is the issue\n",
+			// git 2.51 and later skip the template's trailing "#" paragraph
+			// when picking auto's character, so they pick "#" and strip the
+			// paragraph. Entire must read "#" too, or its explanation,
+			// written with ";", is recorded with the prompt.
+			name:            "template under auto",
+			config:          map[string]string{"core.commentChar": "auto"},
+			commit:          []string{"-t", template},
+			editor:          typeSubject,
+			starts:          "Typed Subject\n",
+			startsBefore251: "Typed Subject\n\n#42 is the issue\n",
+		},
+		{
+			name:            "template without a final newline under auto",
+			config:          map[string]string{"core.commentChar": "auto"},
+			commit:          []string{"-t", templateNoNewline},
+			editor:          typeSubject,
+			starts:          "Typed Subject\n",
+			startsBefore251: "Typed Subject\n\n#42 is the issue\n",
 		},
 		{
 			// git's block starts at its scissors line and is cut away.
@@ -150,9 +169,14 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			starts: "Typed Subject\n\n#42 is the issue\n",
 		},
 	}
+	skipsTrailingComments := gitAutoSkipsTrailingComments(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			starts := tt.starts
+			if tt.startsBefore251 != "" && !skipsTrailingComments {
+				starts = tt.startsBefore251
+			}
 			env := NewFeatureBranchEnv(t)
 			git := gitWithEntireCommitHooksEnv(t, env)
 			for key, value := range tt.config {
@@ -179,7 +203,7 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			}
 			require.NoError(t, err, out)
 			recorded := env.GetCommitMessage(env.GetHeadHash())
-			require.True(t, strings.HasPrefix(recorded, tt.starts), "the user's lines stay first and in order: %q", recorded)
+			require.True(t, strings.HasPrefix(recorded, starts), "the user's lines stay first and in order: %q", recorded)
 			mentioned := trailers.ParseAllCheckpoints(recorded)
 			require.Len(t, mentioned, 1, "the commit carries one trailer: %q", recorded)
 			prefix := tt.prefix
@@ -193,4 +217,17 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			require.NotContains(t, recorded, "Last Prompt:", "the prompt never reaches the commit: %q", recorded)
 		})
 	}
+}
+
+// gitAutoSkipsTrailingComments reports whether the installed git picks
+// core.commentChar=auto's character the way git 2.51 and later do: without
+// the empty and "#" lines that end the message.
+func gitAutoSkipsTrailingComments(t *testing.T) bool {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "--version").Output()
+	require.NoError(t, err)
+	var major, minor int
+	_, err = fmt.Sscanf(string(out), "git version %d.%d", &major, &minor)
+	require.NoError(t, err, "git --version: %q", out)
+	return major > 2 || major == 2 && minor >= 51
 }

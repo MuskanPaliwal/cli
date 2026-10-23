@@ -304,8 +304,11 @@ post-commit will read:
   back from the comment block git wrote, which sits right below the message
   (after a blank line only when the message ends with a newline). With no
   block (`commit.status=false`) it applies git's rule: the first of
-  `#;@!$%^&|:` that starts no line. A recorded commit is read with the
-  configured prefix, and `auto` reads as `#`, as in `git interpret-trailers`.
+  `#;@!$%^&|:` that starts no line. Git 2.51 changed that rule: the empty
+  and `#` lines that end the message no longer count, as when git places a
+  sign-off, so under `auto` the hooks read `git --version` once to apply the
+  installed git's rule. A recorded commit is read with the configured
+  prefix, and `auto` reads as `#`, as in `git interpret-trailers`.
 - **Command-line flags.** The hooks read `commit.cleanup` and `commit.status`
   from git config only: `git commit --cleanup=<mode>`, `--status` and
   `--no-status` are invisible to them. With `--cleanup=whitespace`, for

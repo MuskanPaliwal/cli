@@ -715,7 +715,7 @@ func TestAutoCommentPrefix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := AutoCommentPrefix(tt.message, true); got != tt.want {
+			if got := AutoCommentPrefix(tt.message, true, AutoCountsEveryLine); got != tt.want {
 				t.Errorf("AutoCommentPrefix(%q, true) = %q, want %q", tt.message, got, tt.want)
 			}
 		})
@@ -742,8 +742,50 @@ func TestAutoCommentPrefix_WithoutBlockFollowsGitsRule(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := AutoCommentPrefix(tt.message, false); got != tt.want {
+			if got := AutoCommentPrefix(tt.message, false, AutoCountsEveryLine); got != tt.want {
 				t.Errorf("AutoCommentPrefix(%q, false) = %q, want %q", tt.message, got, tt.want)
+			}
+		})
+	}
+}
+
+// Git 2.51 and later pick auto's character without looking at the empty and
+// "#" lines that end the message, or an old "Conflicts:" block, as when git
+// places a sign-off; the first line always counts. Each message is one git
+// 2.51 writes or is handed, with the block it would add where mayHaveBlock.
+func TestAutoCommentPrefix_SkipsTrailingCommentsSince251(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		message      string
+		mayHaveBlock bool
+		want         string
+	}{
+		{
+			name:         "block below a trailing # paragraph",
+			message:      "Subject\n\n#42 is the issue\n\n# Please enter the commit message for your changes.\n#\n",
+			mayHaveBlock: true,
+			want:         "#",
+		},
+		{
+			name:         "block right below a trailing # line without a final newline",
+			message:      "Subject\n\n#42 is the issue\n# Please enter the commit message for your changes.\n#\n",
+			mayHaveBlock: true,
+			want:         "#",
+		},
+		{name: "no block, trailing # paragraph", message: "Subject\n\n#42 is the issue\n", want: "#"},
+		{name: "a # paragraph followed by prose counts", message: "Subject\n\n#42 is the issue\n\nBody\n", want: ";"},
+		{name: "the first line always counts", message: "# Release notes\n\nBody\n", want: ";"},
+		{name: "a message of one # line counts", message: "#42 fix login\n", want: ";"},
+		{name: "an old Conflicts block is trailing too", message: "Subject\n\n#42 is the issue\n\nConflicts:\n\tfile\n", want: "#"},
+		{name: "nothing below a scissors line counts", message: "Subject\n\n# ------------------------ >8 ------------------------\n#42 below the cut\n", want: "#"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AutoCommentPrefix(tt.message, tt.mayHaveBlock, AutoSkipsTrailingComments); got != tt.want {
+				t.Errorf("AutoCommentPrefix(%q, %v) = %q, want %q", tt.message, tt.mayHaveBlock, got, tt.want)
 			}
 		})
 	}
