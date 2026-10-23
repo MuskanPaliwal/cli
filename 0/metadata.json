@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.12.1-nightly.202610211655.29f996951",
+  "checkpoint_id": "01M5MMRKNKARN09VK5Z3V9WE4Y",
+  "session_id": "7f840c29-e089-487d-b36a-99b1b3a9c615",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-23T15:06:12.731351Z",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 7,
+  "save_step_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_squash_test.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "807fa42d7d5a",
+  "checkpoint_transcript_start": 1219,
+  "transcript_lines_at_start": 1219,
+  "compact_transcript_start": 93,
+  "token_usage": {
+    "input_tokens": 136,
+    "cache_creation_tokens": 111958,
+    "cache_read_tokens": 30241613,
+    "output_tokens": 75082,
+    "api_call_count": 66,
+    "subagent_tokens": {
+      "input_tokens": 128,
+      "cache_creation_tokens": 248897,
+      "cache_read_tokens": 11222072,
+      "output_tokens": 75277,
+      "api_call_count": 64
+    }
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}
