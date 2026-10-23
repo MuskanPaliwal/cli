@@ -114,7 +114,7 @@ func TestInheritedTrailersMarker_TiedToParentAndConsumed(t *testing.T) {
 
 // Git discards everything below the scissors line of a `commit -v` message; an
 // inherited trailer must land above git's comment block to survive.
-func TestAddInheritedCheckpointTrailer_StaysAboveGitComments(t *testing.T) {
+func TestAddCheckpointTrailerAboveComments_StaysAboveGitComments(t *testing.T) {
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J51")
 	msg := "Subject\n\n# Please enter the commit message.\n# ------------------------ >8 ------------------------\ndiff --git a/f b/f\n"
@@ -211,7 +211,7 @@ func TestAddCheckpointTrailerAboveComments_AnchorsToTheEndingBlock(t *testing.T)
 // "#123" or a "#42 is the issue" paragraph that ends it is the user's, so the
 // inherited trailer follows them; git's trailer grammar skips comment lines
 // that end a message.
-func TestAddInheritedCheckpointTrailer_MessageSourceKeepsHashLines(t *testing.T) {
+func TestAddCheckpointTrailerAboveComments_MessageSourceKeepsHashLines(t *testing.T) {
 	t.Parallel()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J53")
 

@@ -1022,9 +1022,9 @@ func TestAddCheckpointTrailerWithComment_UsesCommentPrefix(t *testing.T) {
 		"the trailer must end the cleaned message: %q", result)
 }
 
-// gitCommentPrefix must name the prefix git's own cleanup uses, or prepare reads
-// a different final trailer block than the commit records.
-func TestGitCommentPrefix(t *testing.T) {
+// prefixFor must name the prefix git's own cleanup uses, or prepare reads a
+// different final trailer block than the commit records.
+func TestCommentConfigPrefixFor(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	dir := resolvedTempDir(t)
 	testutil.InitRepo(t, dir)

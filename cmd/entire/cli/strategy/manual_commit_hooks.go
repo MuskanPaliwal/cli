@@ -3172,7 +3172,7 @@ const trailerExplanation = " Remove the Entire-Checkpoint trailer below if you d
 // above git's comment block, with a comment above the trailer explaining that the user can
 // remove it if they don't want to link the commit to the agent session. If prompt is
 // non-empty, it's shown as context. The comment is written with commentPrefix, the prefix git
-// strips (see gitCommentPrefix). The comment and the trailer are separate paragraphs below the
+// strips (see messageCommentRules). The comment and the trailer are separate paragraphs below the
 // user's lines: a line typed just above the trailer would otherwise join the subject
 // paragraph, which git never reads as trailers, and cleanup modes that keep comment lines
 // would leave the comment inside the trailer block.
