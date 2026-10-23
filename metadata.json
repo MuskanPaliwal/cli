@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.12.1-nightly.202610211655.29f996951",
+  "checkpoint_id": "01M5ME07CXJRZYSATEJKQ6Y9K9",
+  "strategy": "manual-commit",
+  "branch": "fix-checkpoint-trailer-block",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/entire/cli/strategy/manual_commit_hooks.go",
+    "cmd/entire/cli/strategy/manual_commit_redo.go",
+    "cmd/entire/cli/strategy/manual_commit_redo_test.go",
+    "cmd/entire/cli/strategy/manual_commit_squash_test.go",
+    "docs/architecture/sessions-and-checkpoints.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1030,
+    "cache_read_tokens": 399213,
+    "output_tokens": 817,
+    "api_call_count": 1
+  }
+}
