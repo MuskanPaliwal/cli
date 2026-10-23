@@ -3,8 +3,9 @@
   "checkpoint_id": "01M5KT6EKE3AV192JMS3ZRAEFB",
   "strategy": "manual-commit",
   "branch": "fix-checkpoint-trailer-block",
-  "checkpoints_count": 15,
+  "checkpoints_count": 19,
   "files_touched": [
+    "cmd/entire/cli/strategy/global_test.go",
     "cmd/entire/cli/strategy/manual_commit_hooks.go",
     "cmd/entire/cli/strategy/manual_commit_provenance_test.go",
     "cmd/entire/cli/strategy/manual_commit_test.go"
@@ -16,13 +17,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 456,
-    "cache_creation_tokens": 608581,
-    "cache_read_tokens": 95650491,
-    "output_tokens": 328631,
-    "api_call_count": 226
+    "input_tokens": 644,
+    "cache_creation_tokens": 904737,
+    "cache_read_tokens": 117866547,
+    "output_tokens": 451802,
+    "api_call_count": 320
   }
 }
