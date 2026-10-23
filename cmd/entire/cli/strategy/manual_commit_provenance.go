@@ -68,17 +68,30 @@ func FinalCheckpointTrailers(ctx context.Context, message string) []id.Checkpoin
 	return trailers.ParseAllCheckpointsFromFinalTrailerBlock(message, recordedCommentPrefix(ctx))
 }
 
-// CommitCheckpoint returns the checkpoint a recorded commit shows: the last
-// trailer of its final block, the one attach joins and `explain --generate`
-// writes, since a squash's inherited trailers come before the one prepare
-// stamped. A commit whose final block names none falls back to the first ID
-// anywhere in the message, as a squash commit can carry its squashed commits'
-// trailers in the body; only read-only views may use that fallback.
-func CommitCheckpoint(ctx context.Context, message string) (id.CheckpointID, bool) {
+// CommitCheckpoints returns the checkpoints a recorded commit links for
+// read-only views: its final trailer block's IDs, or, when that names none,
+// the first ID anywhere in the message, as a squash commit can carry its
+// squashed commits' trailers in the body; only read-only views may use that
+// fallback.
+func CommitCheckpoints(ctx context.Context, message string) []id.CheckpointID {
 	if ids := FinalCheckpointTrailers(ctx, message); len(ids) > 0 {
-		return ids[len(ids)-1], true
+		return ids
 	}
-	return trailers.ParseCheckpoint(message)
+	if cpID, ok := trailers.ParseCheckpoint(message); ok {
+		return []id.CheckpointID{cpID}
+	}
+	return nil
+}
+
+// CommitCheckpoint returns the checkpoint a recorded commit shows: the last of
+// CommitCheckpoints, the one attach joins and `explain --generate` writes,
+// since a squash's inherited trailers come before the one prepare stamped.
+func CommitCheckpoint(ctx context.Context, message string) (id.CheckpointID, bool) {
+	ids := CommitCheckpoints(ctx, message)
+	if len(ids) == 0 {
+		return id.EmptyCheckpointID, false
+	}
+	return ids[len(ids)-1], true
 }
 
 // pickCondensationTarget chooses the trailer a commit's new work condenses

@@ -343,7 +343,9 @@ post-commit will read:
   listing, the export and the review re-run guard show the checkpoint attach
   and `--generate` use (`CommitCheckpoint`), falling back to the first ID
   anywhere only when the final block names none. `explain --checkpoint`
-  finds every commit that names the checkpoint anywhere. Other read-only
+  lists a commit under every ID that view reads from it
+  (`CommitCheckpoints`): any ID of its final block, or that first ID. Other
+  read-only
   lookups (resume, status, attribution, other history listings) still scan
   the whole message, because squash commits carry their squashed commits'
   trailers in the body.

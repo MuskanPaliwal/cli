@@ -4422,6 +4422,39 @@ func TestGetAssociatedCommits(t *testing.T) {
 	}
 }
 
+// A commit whose body mentions a checkpoint while its final trailer block
+// names another is listed only under the one it links, as explain <commit>
+// shows it. A commit without a final-block trailer is listed under the first
+// checkpoint it names, as explain <commit> falls back to it.
+func TestGetAssociatedCommits_BodyMentionIsNotALink(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	testutil.InitRepo(t, tmpDir)
+	mentioned, linked, unlinked := id.MustCheckpointID("abc123def456"), id.MustCheckpointID("def456abc123"), id.MustCheckpointID("fed654cba321")
+	testutil.WriteFile(t, tmpDir, "a.txt", "a")
+	testutil.GitAdd(t, tmpDir, "a.txt")
+	testutil.GitCommit(t, tmpDir, "Follow-up\n\nFollow-up to Entire-Checkpoint: "+mentioned.String()+"\n\nEntire-Checkpoint: "+linked.String())
+	testutil.WriteFile(t, tmpDir, "b.txt", "b")
+	testutil.GitAdd(t, tmpDir, "b.txt")
+	testutil.GitCommit(t, tmpDir, "Notes\n\nSee Entire-Checkpoint: "+unlinked.String()+" for context.")
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	commits, err := getAssociatedCommits(context.Background(), repo, mentioned, false)
+	require.NoError(t, err)
+	require.Empty(t, commits, "a body mention is not the commit's link")
+
+	commits, err = getAssociatedCommits(context.Background(), repo, linked, false)
+	require.NoError(t, err)
+	require.Len(t, commits, 1)
+	require.Contains(t, commits[0].Message, "Follow-up")
+
+	commits, err = getAssociatedCommits(context.Background(), repo, unlinked, false)
+	require.NoError(t, err)
+	require.Len(t, commits, 1, "with no final-block trailer, the first ID is what explain <commit> shows")
+	require.Contains(t, commits[0].Message, "Notes")
+}
+
 func TestGetAssociatedCommits_NoMatches(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
