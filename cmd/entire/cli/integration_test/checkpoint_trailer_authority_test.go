@@ -90,6 +90,81 @@ func TestTrailerAuthority_AgentCommitWithBodyLine(t *testing.T) {
 		"a body line must not claim a checkpoint ID this clone does not have")
 }
 
+// `git commit -C <sha>` reuses another commit's message, final trailer block
+// included. A teammate's checkpoint this clone has not fetched is not one
+// prepare-commit-msg stamped, so post-commit must not create it with this
+// session's work.
+func TestTrailerAuthority_ReusedMessageNamingUnfetchedCheckpoint(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	git := gitWithEntireCommitHooksEnv(t, env)
+	env.WriteFile("teammate.txt", "teammate work\n")
+	env.GitAdd("teammate.txt")
+	env.GitCommitWithCheckpointID("Teammate change", advForeignCheckpoint)
+	teammate := env.GetHeadHash()
+
+	authorityAgentTurn(env, "mine.txt", "my agent work\n")
+	_, err := git(nil, "add", "mine.txt")
+	require.NoError(t, err)
+	out, err := git(nil, "commit", "--no-gpg-sign", "-C", teammate)
+	require.NoError(t, err, out)
+
+	require.False(t, advCheckpointStored(env, advForeignCheckpoint),
+		"a reused message's trailer must not claim a checkpoint ID this clone does not have")
+}
+
+// A trailer typed in the editor in place of the one prepare-commit-msg stamped
+// names a checkpoint prepare did not stamp; post-commit must not create it.
+func TestTrailerAuthority_TrailerReplacedInTheEditorNamingUnfetchedCheckpoint(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	git := gitWithEntireCommitHooksEnv(t, env)
+	editors := t.TempDir()
+	writeScripts(t, editors, map[string]string{
+		"replace": "#!/bin/sh\nsed 's/^Entire-Checkpoint: .*/Entire-Checkpoint: " + advForeignCheckpoint + "/' \"$1\" > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+	})
+	authorityAgentTurn(env, "mine.txt", "my agent work\n")
+	_, err := git(nil, "add", "mine.txt")
+	require.NoError(t, err)
+
+	editor := "GIT_EDITOR=" + shellQuote(filepath.ToSlash(filepath.Join(editors, "replace")))
+	out, err := git([]string{editor}, "commit", "--no-gpg-sign", "-m", "My change", "-e")
+	require.NoError(t, err, out)
+
+	recorded := env.GetCommitMessage(env.GetHeadHash())
+	require.Equal(t, "My change\n\nEntire-Checkpoint: "+advForeignCheckpoint+"\n", recorded, "precondition: the user replaced the stamped trailer")
+	require.False(t, advCheckpointStored(env, advForeignCheckpoint),
+		"a trailer prepare did not stamp must not claim a checkpoint ID this clone does not have")
+}
+
+// The final trailer block names a checkpoint this clone does not have, then
+// one it has. Neither is one prepare-commit-msg stamped, so prepare must stamp
+// a fresh trailer, and post-commit must condense there, not into the first.
+func TestTrailerAuthority_FinalBlockNamingUnknownThenExistingCheckpoint(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	authorityAgentTurn(env, "first.txt", "first change\n")
+	env.GitCommitWithHooks("First change", "first.txt")
+	existing := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
+	require.NotEmpty(t, existing, "precondition: the first commit is linked")
+	before, ok := checkpointBlob(env, existing, paths.MetadataFileName)
+	require.True(t, ok, "precondition: the first checkpoint is stored")
+
+	authorityAgentTurn(env, "second.txt", "second change\n")
+	_, final := advCommit(env,
+		"Follow-up\n\nEntire-Checkpoint: "+advForeignCheckpoint+"\nEntire-Checkpoint: "+existing+"\n",
+		"message", keepAll, "second.txt")
+
+	require.False(t, advCheckpointStored(env, advForeignCheckpoint),
+		"an unknown checkpoint in the final block is not this commit's stamp: %q", final)
+	after, ok := checkpointBlob(env, existing, paths.MetadataFileName)
+	require.True(t, ok)
+	require.Equal(t, before, after, "the existing checkpoint must not change")
+	ids := trailers.ParseAllCheckpointsFromFinalTrailerBlock(final, "")
+	require.Len(t, ids, 3, "prepare stamps its own trailer after the two it did not stamp: %q", final)
+	require.True(t, advCheckpointStored(env, ids[2].String()), "the session's work goes into the trailer prepare stamped")
+}
+
 // GUARD: the message git hands prepare-commit-msg for `commit -v --amend` ends
 // with its comment block, a scissors line, and the diff. The commit's own
 // trailer sits above all of that and must still be recognized, or the amend
@@ -473,19 +548,26 @@ func TestTrailerAuthority_EditedMessageSourceKeepsGitsBlockLast(t *testing.T) {
 
 		require.Empty(t, trailers.ParseAllCheckpoints(edited), "commit-msg must remove the trailer so git aborts: %q", edited)
 	})
-	t.Run("fixup keeps its target's trailer", func(t *testing.T) {
+	// The target's trailer, copied into an amend! message, is a link: prepare
+	// stamps the fixup's own work after it, so the autosquashed commit links
+	// both, and git's block stays last.
+	t.Run("fixup links its target's trailer and its own", func(t *testing.T) {
 		t.Parallel()
 		env := NewFeatureBranchEnv(t)
 		authorityAgentTurn(env, "first.txt", "first change\n")
 		env.GitCommitWithHooks("My change", "first.txt")
 		headMsg := strings.TrimRight(env.GetCommitMessage(env.GetHeadHash()), "\n")
+		target := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
 		authorityAgentTurn(env, "second.txt", "second change\n")
 		env.GitAdd("second.txt")
 		fixup := "amend! My change\n\n" + headMsg + "\n\n" + gitCommentBlock("#")
 
 		_, prepared := runPrepareCommitMsgEditing(env, fixup, "message", true)
 
-		require.Equal(t, fixup, prepared, "the message already ends with a trailer, so prepare adds none")
+		require.True(t, strings.HasSuffix(prepared, "\n\n"+gitCommentBlock("#")), "git's block stays last: %q", prepared)
+		ids := trailers.ParseAllCheckpointsFromFinalTrailerBlock(trailers.StripEditorComments(prepared, "#"), "#")
+		require.Len(t, ids, 2, "prepare stamps its own trailer after the target's: %q", prepared)
+		require.Equal(t, target, ids[0].String())
 	})
 }
 

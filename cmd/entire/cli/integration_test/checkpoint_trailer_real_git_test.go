@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
 
@@ -70,18 +72,23 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 		// auto's character, so they pick ";" and keep the paragraph.
 		startsBefore251 string
 		aborts          bool
+		// links are checkpoints the user's own message names: the commit
+		// mentions them, and post-commit must not condense into them.
+		links []string
 	}{
 		{name: "-m subject starting with #", commit: []string{"-m", "#42 fix login"}, starts: "#42 fix login\n"},
 		{name: "-m ending in a # paragraph", commit: []string{"-m", "Fix login\n\n#42 is the issue"}, starts: "Fix login\n\n#42 is the issue\n"},
 		{name: "-m ending in Fixes: #123", commit: []string{"-m", "Fix login\n\nFixes:\n#123"}, starts: "Fix login\n\nFixes:\n#123\n"},
 		{
-			// git picks ";" since a line starts with "#", so "#42" stays, but its
-			// trailer grammar, and post-commit's, skip it: the message already
-			// ends with its trailer block.
+			// git picks ";" since a line starts with "#", so "#42" stays, and
+			// its trailer grammar skips it: the message ends with a trailer
+			// block naming a checkpoint prepare did not stamp, so prepare
+			// stamps its own below it.
 			name:   "-F under auto of a trailer followed by a # line",
 			config: map[string]string{"core.commentChar": "auto"},
 			commit: []string{"-F", ownTrailer},
 			starts: "Fix login\n\nEntire-Checkpoint: " + advForeignCheckpoint + "\n#42 is the issue\n",
+			links:  []string{advForeignCheckpoint},
 		},
 		{name: "-m -e -v under auto", config: map[string]string{"core.commentChar": "auto"}, commit: []string{"-m", "Fix login", "-e", "-v"}, editor: keep, starts: "Fix login\n"},
 		{name: "editor", commit: nil, editor: typeSubject, starts: "Typed\n"},
@@ -204,8 +211,13 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 			require.NoError(t, err, out)
 			recorded := env.GetCommitMessage(env.GetHeadHash())
 			require.True(t, strings.HasPrefix(recorded, starts), "the user's lines stay first and in order: %q", recorded)
-			mentioned := trailers.ParseAllCheckpoints(recorded)
-			require.Len(t, mentioned, 1, "the commit carries one trailer: %q", recorded)
+			mentioned := slices.DeleteFunc(trailers.ParseAllCheckpoints(recorded), func(cpID id.CheckpointID) bool {
+				return slices.Contains(tt.links, cpID.String())
+			})
+			require.Len(t, mentioned, 1, "the commit carries one trailer of its own: %q", recorded)
+			for _, link := range tt.links {
+				require.False(t, advCheckpointStored(env, link), "post-commit does not condense into a checkpoint the user's message names: %q", recorded)
+			}
 			prefix := tt.prefix
 			if prefix == "" {
 				prefix = trailers.DefaultCommentPrefix

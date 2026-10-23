@@ -13,22 +13,31 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
 
-func TestStampedTrailer_SkipsInheritedTrailers(t *testing.T) {
-	t.Parallel()
+// Only a trailer prepare-commit-msg recorded stamping is its stamp: the last
+// such in the final block, not an inherited or pasted one after it. Post-commit
+// consumes the record.
+func TestStampedTrailer_OnlyTrailersPrepareStamped(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := resolvedTempDir(t)
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+	ctx := context.Background()
 	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J30")
 	fresh := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J31")
-	msg := "Squashed\n\nEntire-Checkpoint: " + inherited.String() + "\nEntire-Checkpoint: " + fresh.String() + "\n"
+	pasted := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J32")
+	msg := "Squashed\n\nEntire-Checkpoint: " + inherited.String() + "\nEntire-Checkpoint: " + fresh.String() + "\nEntire-Checkpoint: " + pasted.String() + "\n"
 
-	got, ok := stampedTrailer(context.Background(), msg, commentRules{}, []id.CheckpointID{inherited})
+	_, ok := stampedTrailer(ctx, msg, commentRules{}, []id.CheckpointID{inherited})
+	assert.False(t, ok, "no trailer prepare did not stamp counts as its stamp")
+
+	recordStampedTrailer(ctx, fresh)
+	recordStampedTrailer(ctx, fresh)
+	got, ok := stampedTrailer(ctx, msg, commentRules{}, []id.CheckpointID{inherited})
 	assert.True(t, ok)
-	assert.Equal(t, fresh, got)
+	assert.Equal(t, fresh, got, "the stamp is the trailer prepare recorded, not the pasted one after it")
 
-	_, ok = stampedTrailer(context.Background(), "Squashed\n\nEntire-Checkpoint: "+inherited.String()+"\n", commentRules{}, []id.CheckpointID{inherited})
-	assert.False(t, ok, "an inherited trailer alone is not a stamp")
-
-	got, ok = stampedTrailer(context.Background(), msg, commentRules{}, nil)
-	assert.True(t, ok)
-	assert.Equal(t, fresh, got, "with nothing inherited the last trailer is the stamp, as post-commit picks it")
+	assert.Equal(t, map[id.CheckpointID]bool{fresh: true}, takeStampedTrailers(ctx))
+	assert.Empty(t, readStampedTrailers(ctx), "post-commit consumes the record")
 }
 
 func TestPickCondensationTarget(t *testing.T) {
@@ -37,53 +46,28 @@ func TestPickCondensationTarget(t *testing.T) {
 	existing := map[id.CheckpointID]bool{a: true, b: true}
 	exists := func(cpID id.CheckpointID) bool { return existing[cpID] }
 
-	got, ok := pickCondensationTarget([]id.CheckpointID{a}, nil)
-	assert.True(t, ok)
-	assert.Equal(t, a, got, "a lone trailer is the target without consulting the store")
-
-	got, ok = pickCondensationTarget([]id.CheckpointID{b, a, c}, exists)
-	assert.True(t, ok)
-	assert.Equal(t, c, got, "the stamped trailer is the one without a checkpoint")
-
-	_, ok = pickCondensationTarget([]id.CheckpointID{b, a}, exists)
-	assert.False(t, ok, "only links: nothing to condense into")
-
-	_, ok = pickCondensationTarget(nil, exists)
-	assert.False(t, ok)
-}
-
-func TestPickCondensationTargetState_RechecksSelectedTarget(t *testing.T) {
-	t.Parallel()
-	linked := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J3A")
-	target := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J3B")
-	targetChecks := 0
-	exists := func(cpID id.CheckpointID) bool {
-		if cpID == linked {
-			return true
-		}
-		targetChecks++
-		return targetChecks > 1
-	}
-
-	got, preexisting, found := pickCondensationTargetState([]id.CheckpointID{linked, target}, exists)
+	got, preexisting, found := pickCondensationTarget([]id.CheckpointID{b, c, a}, map[id.CheckpointID]bool{c: true}, exists)
 	assert.True(t, found)
-	assert.Equal(t, target, got)
-	assert.True(t, preexisting,
-		"a target created after selection must be treated as preexisting before condensation")
-}
+	assert.Equal(t, c, got, "the trailer prepare stamped, even with another after it")
+	assert.False(t, preexisting)
 
-// Amending a squash after its first post-commit: every trailer now has a
-// checkpoint and the inherited-trailer marker is gone. The last trailer, where
-// prepare stamps, is the target, preexisting, so only the session amending it
-// may write there (stampedByAnotherCommit).
-func TestPickCondensationTargetState_AllExistingFallsBackToTheStamp(t *testing.T) {
-	t.Parallel()
-	inherited := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J3C")
-	stamp := id.CheckpointID("01M2VBJBJQZ2BP1W2PBWDF3J3D")
-	got, preexisting, found := pickCondensationTargetState([]id.CheckpointID{inherited, stamp}, func(id.CheckpointID) bool { return true })
+	got, preexisting, found = pickCondensationTarget([]id.CheckpointID{c, b}, map[id.CheckpointID]bool{b: true}, exists)
 	assert.True(t, found)
-	assert.Equal(t, stamp, got)
+	assert.Equal(t, b, got, "an amend's restored trailer is stamped and already has its checkpoint")
 	assert.True(t, preexisting)
+
+	// Amending a squash after its first post-commit: prepare stamped nothing,
+	// so only an existing checkpoint can take the work, from its owner.
+	got, preexisting, found = pickCondensationTarget([]id.CheckpointID{a, b, c}, nil, exists)
+	assert.True(t, found)
+	assert.Equal(t, b, got, "without a stamp, the last trailer whose checkpoint exists")
+	assert.True(t, preexisting)
+
+	_, _, found = pickCondensationTarget([]id.CheckpointID{c}, nil, exists)
+	assert.False(t, found, "a checkpoint prepare did not stamp and this clone lacks is never created")
+
+	_, _, found = pickCondensationTarget(nil, nil, exists)
+	assert.False(t, found)
 }
 
 // The inherited-trailer marker speaks only for a commit on the parent it was

@@ -334,6 +334,17 @@ post-commit will read:
   git does not open, and one under `whitespace`, `verbatim` or `scissors`
   cleanup. Commit-msg judges an emptied message by the same editor signal,
   prefix and scissors line.
+- **Stamp.** Prepare records each trailer it stamps (an ID it generates, a
+  session's reserved one, or the one an amend restores) in the per-worktree
+  git dir until the next post-commit (`recordStampedTrailer`). Any other ID
+  in the final block (pasted, reused with `commit -C`, typed in the editor) is
+  a link only: prepare stamps its own trailer after it, and post-commit
+  creates a checkpoint only for a trailer prepare stamped
+  (`pickCondensationTarget`). Without a stamp (an amend keeping its trailer,
+  a sequence operation) post-commit condenses only into the last trailer
+  whose checkpoint exists, and only for the session that owns it
+  (`stampedByAnotherCommit`), so a teammate's checkpoint this clone has not
+  fetched is never created with local work.
 - **Moved trailers.** A trailer the user's edits move out of the final
   block, such as a body typed below it or the line commented out under a
   cleanup mode that keeps comment lines, no longer links the commit.
@@ -372,13 +383,12 @@ a squash committed with `-m` reports `message`, which used to run ordinary
 matching and either refuse or mint a fresh, empty checkpoint. Inherited
 trailers are links to checkpoints that already exist. Matching still runs, so
 work a session holds at squash time is stamped as its own trailer after the
-inherited ones, and post-commit condenses only into the trailer that has no
-checkpoint yet (`pickCondensationTarget`) among those prepare stamped: prepare
-records the inherited IDs in the per-worktree git dir, tied to the commit's
-parent (`recordInheritedTrailers`), so an inherited trailer whose checkpoint
-simply is not in this clone's store yet is never mistaken for a fresh one, rechecks whether that target appeared
-between selection and condensation, and never writes into an inherited one; a
-write into a checkpoint the session did not stamp for this commit is refused
+inherited ones, and post-commit condenses only into the trailer prepare
+stamped (`pickCondensationTarget`). Prepare also records the inherited IDs in
+the per-worktree git dir, tied to the commit's parent
+(`recordInheritedTrailers`), so post-commit never writes into an inherited
+one, even when its checkpoint is not in this clone's store yet; a write into
+a checkpoint the session did not stamp for this commit is refused
 (`stampedByAnotherCommit`). Merge commits stay unlinked by design; the
 merged commits keep their own trailers.
 
