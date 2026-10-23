@@ -360,10 +360,11 @@ post-commit will read:
   lookups (resume, status, attribution, other history listings) still scan
   the whole message, because squash commits carry their squashed commits'
   trailers in the body.
-- **Inheritance.** Squash and redo inheritance take their IDs from the whole
-  message of SQUASH_MSG and of the redone commits, for the same reason, and
-  add each to the final block unless it is already there: a copy indented in
-  the body, as git seeds an editor squash message, does not count.
+- **Inheritance.** Squash and redo inheritance take their IDs from the final
+  block of each squashed or redone commit, read from the recorded commit (git
+  indents the squashed messages in SQUASH_MSG), and add each to the final
+  block unless it is already there: a copy indented in the body, as git seeds
+  an editor squash message, does not count.
 - **Writer.** The trailer writer joins the final paragraph when it is a
   trailer block read without a comment prefix, the strictest reading, so
   every reader accepts the trailer it appends and a mixed block keeps its
@@ -372,10 +373,10 @@ post-commit will read:
 
 **Squashes inherit their trailers** (`inheritSquashedCheckpointTrailers`). A
 commit made while `git merge --squash` is in progress (SQUASH_MSG present in
-the per-worktree git dir) contains the squashed commits' work, so every
-`Entire-Checkpoint` trailer in SQUASH_MSG is carried into the message's
-final block when missing there, when a staged path is one a commit Git
-recorded there changed; a file
+the per-worktree git dir) contains the squashed commits' work, so the
+final-block trailers of every commit Git recorded in SQUASH_MSG are carried
+into the message's final block when missing there, when a staged path is one
+a commit Git recorded there changed; a file
 touched up before committing still counts. An abandoned squash can leave
 SQUASH_MSG behind; staged work on other paths therefore inherits nothing, and inherited trailers in Git's seeded message are
 removed. git only reports source `squash` when its seeded message is accepted;
@@ -400,8 +401,8 @@ last real reset left is where the dropped work starts. Dropped means only that
 tip reaches it: commits HEAD, a remote or another branch still reach (merged-in
 main, a teammate's commit an undone rebase brought in) are never inherited,
 while a backup branch pointing at the tip itself does not count. A dropped
-commit's trailers are carried into the new message when every staged file it
-changed has exactly the content it had at that tip (read from the index git is
+commit's final-block trailers are carried into the new message when every
+staged file it changed has exactly the content it had at that tip (read from the index git is
 preparing the commit in, so `git commit -a` and path-limited commits compare
 what they commit), so an agent's ten commits
 redone as three logical ones keep every checkpoint, each on the commit that now

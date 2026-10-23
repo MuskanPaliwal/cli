@@ -99,6 +99,25 @@ func TestPrepareCommitMsg_RedoWithBackupBranchAtTipStillInherits(t *testing.T) {
 	require.Equal(t, []string{redoCheckpointOne, redoCheckpointTwo}, checkpointIDs(got), "%q", got)
 }
 
+// A dropped commit links the checkpoint its final trailer block names; one its
+// body only mentions is not inherited.
+func TestPrepareCommitMsg_RedoInheritsOnlyFinalBlockTrailers(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := resolvedTempDir(t)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "README.md", "base\n")
+	testutil.GitAdd(t, dir, "README.md")
+	testutil.GitCommit(t, dir, "init")
+	testutil.WriteFile(t, dir, "feature.txt", "agent work\n")
+	testutil.GitAdd(t, dir, "feature.txt")
+	testutil.GitCommit(t, dir, "agent: feature\n\nFollow-up to\nEntire-Checkpoint: "+redoCheckpointTwo+"\n\nEntire-Checkpoint: "+redoCheckpointOne)
+	testutil.RunGit(t, dir, "reset", "-q", "--soft", "HEAD~1")
+	t.Chdir(dir)
+
+	got := prepareMessage(t, "feat: the feature\n")
+	require.Equal(t, []string{redoCheckpointOne}, checkpointIDs(got), "%q", got)
+}
+
 func TestPrepareCommitMsg_RedoDeletedFileInheritsTrailer(t *testing.T) {
 	testutil.IsolateGitConfigEnv(t)
 	dir := resolvedTempDir(t)

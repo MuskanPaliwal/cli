@@ -694,20 +694,20 @@ func (s *ManualCommitStrategy) inheritSquashedCheckpointTrailers(ctx context.Con
 		return nil
 	}
 	squashMsg, err := osroot.ReadFileNoFollow(root, "SQUASH_MSG")
-	if err != nil {
-		return nil // no squash in progress (or unreadable: fall through to normal matching)
-	}
-
-	inherited := withoutDeletedCheckpoints(ctx, trailers.ParseAllCheckpoints(string(squashMsg)))
-	if len(inherited) == 0 {
-		return nil
+	if err != nil || !strings.Contains(string(squashMsg), trailers.CheckpointTrailerKey) {
+		return nil // no squash in progress (or unreadable: fall through to normal matching), or nothing to inherit
 	}
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil
 	}
 	defer repo.Close()
-	if !squashTouchesStagedPath(ctx, repo, squashMsg) {
+	squashed := squashedCommits(repo, squashMsg)
+	inherited := withoutDeletedCheckpoints(ctx, squashedCheckpoints(ctx, squashed))
+	if len(inherited) == 0 {
+		return nil
+	}
+	if !squashTouchesStagedPath(ctx, squashed) {
 		stripInheritedCheckpointTrailers(commitMsgFile, inherited)
 		logging.Debug(logCtx, "prepare-commit-msg: ignored stale squash message whose commits changed none of the staged paths",
 			slog.String("source", source),
@@ -751,12 +751,44 @@ func (s *ManualCommitStrategy) inheritSquashedCheckpointTrailers(ctx context.Con
 	return inherited
 }
 
+// squashedCommits returns the commits Git recorded in SQUASH_MSG, in its
+// order, leaving out any this repository cannot read.
+func squashedCommits(repo *git.Repository, squashMsg []byte) []*object.Commit {
+	var commits []*object.Commit
+	for _, line := range strings.Split(string(squashMsg), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "commit" || !plumbing.IsHash(fields[1]) {
+			continue
+		}
+		if commit, err := repo.CommitObject(plumbing.NewHash(fields[1])); err == nil {
+			commits = append(commits, commit)
+		}
+	}
+	return commits
+}
+
+// squashedCheckpoints returns the checkpoints the squashed commits link: each
+// one's final trailer block, read from the recorded commit. SQUASH_MSG
+// indents their messages, so a checkpoint a body only mentions would read
+// just like a trailer there.
+func squashedCheckpoints(ctx context.Context, squashed []*object.Commit) []id.CheckpointID {
+	var ids []id.CheckpointID
+	for _, commit := range squashed {
+		for _, cpID := range FinalCheckpointTrailers(ctx, commit.Message) {
+			if !slices.Contains(ids, cpID) {
+				ids = append(ids, cpID)
+			}
+		}
+	}
+	return ids
+}
+
 // squashTouchesStagedPath reports whether a staged path is one that a
-// commit Git recorded in SQUASH_MSG changed. Git leaves SQUASH_MSG behind when a
-// squash is abandoned, so the file alone is not proof that the current staged
-// work belongs to those commits; matching paths rather than content keeps a
-// squash whose files were touched up before committing.
-func squashTouchesStagedPath(ctx context.Context, repo *git.Repository, squashMsg []byte) bool {
+// squashed commit changed. Git leaves SQUASH_MSG behind when a squash is
+// abandoned, so the file alone is not proof that the current staged work
+// belongs to those commits; matching paths rather than content keeps a squash
+// whose files were touched up before committing.
+func squashTouchesStagedPath(ctx context.Context, squashed []*object.Commit) bool {
 	files, err := getStagedFiles(ctx)
 	if err != nil || len(files) == 0 {
 		return false
@@ -765,20 +797,7 @@ func squashTouchesStagedPath(ctx context.Context, repo *git.Repository, squashMs
 	for _, f := range files {
 		staged[f] = true
 	}
-	for _, line := range strings.Split(string(squashMsg), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 || fields[0] != "commit" || !plumbing.IsHash(fields[1]) {
-			continue
-		}
-		commit, err := repo.CommitObject(plumbing.NewHash(fields[1]))
-		if err != nil {
-			continue
-		}
-		if commitChangesAnyPath(commit, staged) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(squashed, func(commit *object.Commit) bool { return commitChangesAnyPath(commit, staged) })
 }
 
 // commitChangesAnyPath reports whether c changed one of wanted relative to its

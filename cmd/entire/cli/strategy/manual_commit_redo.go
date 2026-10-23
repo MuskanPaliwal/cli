@@ -23,7 +23,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
 
 // maxReplacedCommits bounds how many dropped commits a redo considers.
@@ -66,7 +65,7 @@ func (s *ManualCommitStrategy) inheritReplacedCommitsTrailers(ctx context.Contex
 	var candidates []id.CheckpointID
 	for i := range replaced {
 		if matched[i] = recommitsFilesOf(changes[i], tipTree, staged); len(matched[i]) > 0 {
-			trailerIDs[i] = trailers.ParseAllCheckpoints(replaced[i].Message)
+			trailerIDs[i] = FinalCheckpointTrailers(ctx, replaced[i].Message)
 			candidates = append(candidates, trailerIDs[i]...)
 		}
 	}

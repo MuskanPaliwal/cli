@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -85,6 +86,30 @@ func finalBlockIDs(message string) []string {
 		out = append(out, cpID.String())
 	}
 	return out
+}
+
+// A squashed commit links the checkpoint its final trailer block names; one
+// its body only mentions is not inherited.
+func TestInheritSquashedCheckpointTrailers_TakesOnlyFinalBlockTrailers(t *testing.T) {
+	testutil.IsolateGitConfigEnv(t)
+	dir := resolvedTempDir(t)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "README.md", "base\n")
+	testutil.GitAdd(t, dir, "README.md")
+	testutil.GitCommit(t, dir, "init")
+	testutil.RunGit(t, dir, "checkout", "-q", "-b", "feature")
+	testutil.WriteFile(t, dir, "feature.txt", "agent work\n")
+	testutil.GitAdd(t, dir, "feature.txt")
+	const mentioned, linked = "01M2VBJBJQZ2BP1W2PBWDF3J40", "01M2VBJBJQZ2BP1W2PBWDF3J41"
+	testutil.GitCommit(t, dir, "agent: feature work\n\nFollow-up to\nEntire-Checkpoint: "+mentioned+"\n\nEntire-Checkpoint: "+linked)
+	testutil.RunGit(t, dir, "checkout", "-q", "-")
+	testutil.RunGit(t, dir, "merge", "--squash", "feature")
+	t.Chdir(dir)
+
+	msgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	require.NoError(t, os.WriteFile(msgFile, []byte("Feature work (squashed)\n"), 0o600))
+	s := NewManualCommitStrategy()
+	require.Equal(t, []id.CheckpointID{linked}, s.inheritSquashedCheckpointTrailers(context.Background(), msgFile, "message"))
 }
 
 // No trailers to inherit: ordinary matching must run.
