@@ -38,6 +38,8 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 	// last line, with no blank line above it.
 	templateNoNewline := filepath.Join(files, "template-no-newline")
 	require.NoError(t, os.WriteFile(templateNoNewline, []byte("Subject\n\n#42 is the issue"), 0o600))
+	templateHashAndSemicolon := filepath.Join(files, "template-hash-and-semicolon")
+	require.NoError(t, os.WriteFile(templateHashAndSemicolon, []byte("#42 Subject\n\nBody\n; see the notes\n"), 0o600))
 	ownTrailer := filepath.Join(files, "own-trailer")
 	require.NoError(t, os.WriteFile(ownTrailer, []byte("Fix login\n\nEntire-Checkpoint: "+advForeignCheckpoint+"\n#42 is the issue\n"), 0o600))
 
@@ -94,6 +96,17 @@ func TestTrailerAuthority_RealGitCommits(t *testing.T) {
 		{name: "editor", commit: nil, editor: typeSubject, starts: "Typed\n"},
 		{name: "editor with ; comments", config: map[string]string{"core.commentChar": ";"}, editor: typeSubject, starts: "Typed\n", prefix: ";"},
 		{name: "editor without git's comment block", config: map[string]string{"commit.status": "false"}, editor: typeSubject, starts: "Typed\n"},
+		{
+			// An empty commit.status is false to git: it writes no comment
+			// block, and picks "@" since lines start with "#" and ";". Read as
+			// true, Entire takes the ";" lines for git's block and writes its
+			// explanation with ";", which git keeps.
+			name:   "template under auto with an empty commit.status",
+			config: map[string]string{"core.commentChar": "auto", "commit.status": ""},
+			commit: []string{"-t", templateHashAndSemicolon},
+			editor: typeSubject,
+			starts: "Typed #42 Subject\n\nBody\n; see the notes\n",
+		},
 		// These cleanup modes keep comment lines, so Entire's explanation and
 		// the prompt it quotes would be recorded with the commit.
 		{name: "editor with whitespace cleanup", config: map[string]string{"commit.cleanup": "whitespace"}, editor: typeSubject, starts: "Typed\n"},

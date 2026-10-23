@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3118,12 +3119,12 @@ func readGitCommentSettings(ctx context.Context) commentConfig {
 		return cfg // unset, or unreadable
 	}
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		key, value, _ := strings.Cut(line, " ")
+		key, value, hasValue := strings.Cut(line, " ")
 		switch {
 		case key == "commit.cleanup":
 			cfg.cleanup = value
 		case key == "commit.status":
-			cfg.status = !slices.Contains([]string{"false", "no", "off", "0"}, strings.ToLower(value))
+			cfg.status = gitConfigBool(value, hasValue)
 		case value == "":
 			cfg.prefix = trailers.DefaultCommentPrefix
 		default:
@@ -3131,6 +3132,22 @@ func readGitCommentSettings(ctx context.Context) commentConfig {
 		}
 	}
 	return cfg
+}
+
+// gitConfigBool reads a boolean config value as git does. A key with no value,
+// which `git config --get-regexp` prints without a space, is true. An empty
+// value is false, as are false, no, off and zero. Any other value is true:
+// true, yes, on and other numbers, since git refuses the rest.
+func gitConfigBool(value string, hasValue bool) bool {
+	if !hasValue {
+		return true
+	}
+	switch strings.ToLower(value) {
+	case "", "false", "no", "off":
+		return false
+	}
+	n, err := strconv.Atoi(value)
+	return err != nil || n != 0
 }
 
 // prefixFor returns the prefix git cleans message with. For "auto" git picks
