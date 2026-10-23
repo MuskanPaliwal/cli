@@ -247,6 +247,8 @@ func runAttach(ctx context.Context, w, errW io.Writer, sessionID string, agentNa
 	// resume/clean/reset/explain do not either. Only the session is attach's to
 	// add, so its lines are filterable.
 	ctx = logging.WithSessionID(ctx, sessionID)
+	// Planning and checkpoint resolution both read the commit's trailers.
+	ctx = strategy.WithCommentConfig(ctx)
 
 	logCtx := logging.WithComponent(ctx, "attach")
 
