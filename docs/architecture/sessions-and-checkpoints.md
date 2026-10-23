@@ -340,9 +340,12 @@ post-commit will read:
   and the review re-run guard show the checkpoint attach and `--generate` use
   (`CommitCheckpoint`), falling back to the first ID anywhere only when the
   final block names none. Other read-only lookups (resume, status,
-  attribution, history listings) and squash and redo inheritance still scan
-  the whole message, because squash commits carry their squashed commits'
-  trailers in the body.
+  attribution, history listings) still scan the whole message, because
+  squash commits carry their squashed commits' trailers in the body.
+- **Inheritance.** Squash and redo inheritance take their IDs from the whole
+  message of SQUASH_MSG and of the redone commits, for the same reason, and
+  add each to the final block unless it is already there: a copy indented in
+  the body, as git seeds an editor squash message, does not count.
 - **Writer.** The trailer writer joins the final paragraph when it is a
   trailer block read without a comment prefix, the strictest reading, so
   every reader accepts the trailer it appends and a mixed block keeps its

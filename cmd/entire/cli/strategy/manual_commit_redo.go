@@ -128,11 +128,12 @@ func (s *ManualCommitStrategy) inheritReplacedCommitsTrailers(ctx context.Contex
 		return redo{}
 	}
 	message := string(content)
+	rules := messageCommentRules(ctx, message)
+	// Only the final block links; a trailer quoted in the body does not.
 	present := make(map[id.CheckpointID]bool)
-	for _, cpID := range trailers.ParseAllCheckpoints(message) {
+	for _, cpID := range preparedFinalTrailers(message, rules) {
 		present[cpID] = true
 	}
-	rules := messageCommentRules(ctx, message)
 	added := 0
 	for _, cpID := range inherited {
 		if !present[cpID] {
