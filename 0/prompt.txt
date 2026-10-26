@@ -1,0 +1,89 @@
+So you should go through entire website. I don't know maybe their branding or anything. They have some sort of purple theme. How can I apply that purple theme to my Helium and which is my browser and Herder that I use. Yeah.
+
+---
+
+Video shot, this is the thing we are looking for. I mean I would first want it to be applied to helium. And we can leave harder probably.
+
+---
+
+I am actually asking if this is the real thing we are looking for.
+
+---
+
+Can you show me the UX? Like how does it look? Show me a demo.
+
+---
+
+I am saying it was more purple-ish. This is very less.
+
+---
+
+I think I like this purple The one the bottom left one, but I mean I still see a bit White-ish can we try to make the spaces purplish too
+
+---
+
+Yeah, I like the top left one. Only question is that any website that I open, they will have their own theme, right? They cannot get in, like GitHub has the black and white theme. They will always have black and white. They will never be the purplish one, right?
+
+---
+
+Yep, save it to my dot files. Close the demo in Windows and delete the temporary files. That's it, If I want to apply the theme to harder, how do I do that? I mean I don't want to apply it now so we can skip it but yeah for future references.
+
+---
+
+commit and push
+
+---
+
+1Password is unlocked, retry the commit and push.
+
+---
+
+yupp
+
+---
+
+push the changes
+
+---
+
+Push the dotfiles herdr/config.toml change (toast delivery to terminal).
+
+---
+
+What are the uncommitted and unpushed changes in the cli worktree?
+
+---
+
+Wait, why do we want this? We are talking about some purple theme for you. You can take a bath, you won't have any problem.  But Yeah, I am saying that why would you want to push these things to PR 2285? What are you even talking about? It's not relevant to that.
+
+---
+
+noooo, we are talking about purple theme for helium. which is supposed to be in dot files
+
+---
+
+What do I have to do for it to apply to a harder? Plus I have an extension which I use for my chrome background. How do I change the theme of that too? Like Helium currently shows the theme to be applied on the top menu bar and sidebar. I want it to be all over Helium.
+
+---
+
+I don't know but I'm not liking this because on sidebar it is a bit darker but on the menu bar the top level it's a bit lighter. Why the difference?
+
+---
+
+Open two demo windows: one with the sidebar and top bar both lighter (#f0eefe), one with both in between (#e5e0ff).
+
+---
+
+Go with the in-between one on the right (#e5e0ff). Update my dotfiles theme, close the demo windows, and delete the temp files.
+
+---
+
+I think I like the in-between right one.
+
+---
+
+Commit and push the theme update, and add a .gitignore so Cached Theme.pak never gets committed.
+
+---
+
+I like this, we can come out and push these changes.
