@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.2-nightly.202610242156.e7c039372",
+  "checkpoint_id": "01M5VFQNMB6K1DY14D23WSG2N7",
+  "strategy": "manual-commit",
+  "branch": "refactor-session-metadata-resolution",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "cmd/entire/cli/agentimport/agentimport.go",
+    "cmd/entire/cli/agentimport/agentimport_test.go",
+    "cmd/entire/cli/agentimport/session_state_test.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/session/metadata_resolution_test.go",
+    "cmd/entire/cli/session/state.go",
+    "cmd/entire/cli/session/state_test.go",
+    "cmd/entire/cli/session_adopt.go",
+    "cmd/entire/cli/session_adopt_metadata_test.go",
+    "cmd/entire/cli/session_adopt_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 412454,
+    "cache_read_tokens": 2043859,
+    "output_tokens": 2838,
+    "api_call_count": 10
+  },
+  "redaction": {
+    "replacements": 30,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 30,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

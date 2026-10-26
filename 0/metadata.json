@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.2-nightly.202610242156.e7c039372",
+  "checkpoint_id": "01M5VFQNMB6K1DY14D23WSG2N7",
+  "session_id": "fc10f3c8-a181-4878-b081-887cce50bd2b",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-26T06:52:58.712363Z",
+  "branch": "refactor-session-metadata-resolution",
+  "checkpoints_count": 10,
+  "save_step_count": 10,
+  "files_touched": [
+    "cmd/entire/cli/agentimport/agentimport.go",
+    "cmd/entire/cli/agentimport/agentimport_test.go",
+    "cmd/entire/cli/agentimport/session_state_test.go",
+    "cmd/entire/cli/gitrepo/metadata_guard_test.go",
+    "cmd/entire/cli/session/metadata_resolution_test.go",
+    "cmd/entire/cli/session/state.go",
+    "cmd/entire/cli/session/state_test.go",
+    "cmd/entire/cli/session_adopt.go",
+    "cmd/entire/cli/session_adopt_metadata_test.go",
+    "cmd/entire/cli/session_adopt_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "dbfedeb5bbbe",
+  "checkpoint_transcript_start": 490,
+  "transcript_lines_at_start": 490,
+  "compact_transcript_start": 72,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 412454,
+    "cache_read_tokens": 2043859,
+    "output_tokens": 2838,
+    "api_call_count": 10
+  },
+  "redaction": {
+    "replacements": 30,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 30,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 20
+  }
+}
